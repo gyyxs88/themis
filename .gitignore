@@ -1,0 +1,33 @@
+node_modules/
+dist/
+*.log
+
+# Local agent rules and personalized workspace instructions
+AGENTS.md
+
+# Secrets and local credentials
+.env
+.env.*
+!.env.example
+.npmrc
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Personal or machine-local tool config
+.codex/
+.vscode/
+.idea/
+
+# Local-only docs and memory
+docs/local/
+docs/private/
+memory/local/
+memory/sessions/*.md
+!memory/sessions/README.md
+
+# Local infrastructure or overrides
+infra/local/
+*.local
+*.local.*
