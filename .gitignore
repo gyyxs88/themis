@@ -31,3 +31,8 @@ memory/sessions/*.md
 infra/local/
 *.local
 *.local.*
+
+# Local verification artifacts and temporary files
+.playwright-cli/
+output/
+temp/
