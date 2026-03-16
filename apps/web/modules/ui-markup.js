@@ -5,7 +5,11 @@ import {
   formatStatusLabel,
 } from "./copy.js";
 
-export function renderThreadButton(thread, { active, busy, escapeHtml }) {
+export function renderThreadButton(thread, { active, busy, status, escapeHtml }) {
+  const resolvedStatus = status ?? "idle";
+  const statusTone = badgeToneForStatus(resolvedStatus);
+  const statusLabel = formatStatusLabel(resolvedStatus);
+
   return `
     <button
       type="button"
@@ -15,11 +19,20 @@ export function renderThreadButton(thread, { active, busy, escapeHtml }) {
       ${busy ? "disabled" : ""}
     >
       <span class="thread-title">${escapeHtml(thread.title)}</span>
+      <span class="thread-status-inline ${escapeHtml(statusTone)}">
+        <span class="thread-status-dot" aria-hidden="true"></span>
+        <span>${escapeHtml(statusLabel)}</span>
+      </span>
     </button>
   `;
 }
 
 export function renderTurnMarkup(turn, index, { store, utils }) {
+  const showOperatorDetails = turn.role === "owner";
+  const assistantMessages = store.getVisibleAssistantMessages(turn);
+  const stepMarkup = showOperatorDetails && turn.steps.length
+    ? `<div class="step-list">${turn.steps.map((step, stepIndex) => renderStep(step, stepIndex, utils)).join("")}</div>`
+    : "";
   const details = JSON.stringify(
     {
       state: turn.state,
@@ -33,34 +46,56 @@ export function renderTurnMarkup(turn, index, { store, utils }) {
       sessionMode: turn.sessionMode,
       hasContext: Boolean(turn.inputText),
       createdAt: turn.createdAt,
+      assistantMessageCount: turn.assistantMessages.length,
       stepCount: turn.steps.length,
     },
     null,
     2,
   );
+  const assistantStreamMarkup = assistantMessages.length
+    ? renderAssistantMessages(assistantMessages, utils, { showOperatorDetails })
+    : "";
+  const detailsMarkup = showOperatorDetails
+    ? `
+        <details class="tools-details turn-details">
+          <summary>查看本次任务详情</summary>
+          <pre class="meta-panel">${utils.escapeHtml(details)}</pre>
+        </details>
+      `
+    : "";
 
   const resultMarkup = turn.result
     ? renderResultBlock(turn.result, utils)
+    : showOperatorDetails
+      ? `
+          <section class="result-surface placeholder">
+            <div class="result-head">
+              <div>
+                <h4>最终结果</h4>
+                <p class="result-empty">结果会在这里出现。</p>
+              </div>
+            </div>
+          </section>
+        `
+      : "";
+  const assistantSummaryMarkup = (showOperatorDetails || (!turn.result && !assistantMessages.length))
+    ? `<div class="assistant-summary">${utils.escapeHtml(store.latestTurnMessage(turn))}</div>`
+    : "";
+  const bubbleMeta = showOperatorDetails
+    ? `
+        <span>你</span>
+        <span>${utils.escapeHtml(turn.workflow)}</span>
+        <span>${utils.escapeHtml(turn.role)}</span>
+        <span>第 ${index} 条任务</span>
+      `
     : `
-      <section class="result-surface placeholder">
-        <div class="result-head">
-          <div>
-            <h4>最终结果</h4>
-            <p class="result-empty">结果会在这里出现。</p>
-          </div>
-        </div>
-      </section>
-    `;
+        <span>你</span>
+      `;
 
   return `
     <section class="message-row user-row" aria-label="用户请求">
       <article class="message-card user-card">
-        <div class="bubble-meta">
-          <span>你</span>
-          <span>${utils.escapeHtml(turn.workflow)}</span>
-          <span>${utils.escapeHtml(turn.role)}</span>
-          <span>第 ${index} 条任务</span>
-        </div>
+        <div class="bubble-meta">${bubbleMeta}</div>
         <p class="bubble-body">${utils.escapeHtml(turn.goal)}</p>
         ${turn.inputText ? `<div class="context-snippet">${utils.escapeHtml(turn.inputText)}</div>` : ""}
       </article>
@@ -75,15 +110,52 @@ export function renderTurnMarkup(turn, index, { store, utils }) {
           </div>
           <span class="badge ${badgeToneForStatus(turn.state)}">${formatStatusLabel(turn.state)}</span>
         </div>
-        <div class="assistant-summary">${utils.escapeHtml(store.latestTurnMessage(turn))}</div>
-        <div class="step-list">${turn.steps.map((step, stepIndex) => renderStep(step, stepIndex, utils)).join("")}</div>
+        ${assistantSummaryMarkup}
+        ${assistantStreamMarkup}
+        ${stepMarkup}
         ${resultMarkup}
-        <details class="tools-details turn-details">
-          <summary>查看本次任务详情</summary>
-          <pre class="meta-panel">${utils.escapeHtml(details)}</pre>
-        </details>
+        ${detailsMarkup}
       </article>
     </section>
+  `;
+}
+
+function renderAssistantMessages(messages, utils, { showOperatorDetails }) {
+  if (!Array.isArray(messages) || !messages.length) {
+    return "";
+  }
+
+  const streamClass = showOperatorDetails ? "assistant-stream operator" : "assistant-stream chat";
+  const headMarkup = showOperatorDetails
+    ? `
+      <div class="assistant-stream-head">
+        <p class="assistant-stream-kicker">过程消息</p>
+        <span class="assistant-stream-count">${messages.length} 条</span>
+      </div>
+    `
+    : "";
+
+  return `
+    <section class="${streamClass}" aria-label="${showOperatorDetails ? "过程消息" : "assistant 消息"}">
+      ${headMarkup}
+      <div class="assistant-stream-list">
+        ${messages.map((message, index) => renderAssistantMessage(message, index, utils, { showOperatorDetails })).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderAssistantMessage(message, index, utils, { showOperatorDetails }) {
+  const indexMarkup = showOperatorDetails
+    ? `<div class="assistant-stream-index">${index + 1}</div>`
+    : "";
+  const itemClass = showOperatorDetails ? "assistant-stream-item operator" : "assistant-stream-item chat";
+
+  return `
+    <article class="${itemClass}">
+      ${indexMarkup}
+      <p class="assistant-stream-copy">${utils.escapeHtml(message.text)}</p>
+    </article>
   `;
 }
 
@@ -122,7 +194,10 @@ function renderStep(step, index, utils) {
 }
 
 function renderResultBlock(result, utils) {
-  const output = result.output ? utils.renderRichText(result.output) : "";
+  const summaryText = typeof result.summary === "string" ? result.summary.trim() : "";
+  const outputText = typeof result.output === "string" ? result.output.trim() : "";
+  const summaryMarkup = summaryText && summaryText !== outputText ? utils.renderRichText(summaryText) : "";
+  const output = outputText ? utils.renderRichText(outputText) : "";
   const touchedFiles = Array.isArray(result.touchedFiles) && result.touchedFiles.length
     ? `
       <div class="file-tags">
@@ -139,7 +214,7 @@ function renderResultBlock(result, utils) {
           <p class="result-meta">状态：${utils.escapeHtml(result.status ?? "unknown")}</p>
         </div>
       </div>
-      ${utils.renderRichText(result.summary ?? "无")}
+      ${summaryMarkup || (!output ? utils.renderRichText(result.summary ?? "无") : "")}
       ${output}
       ${touchedFiles}
     </section>

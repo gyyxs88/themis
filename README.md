@@ -67,11 +67,11 @@ The memory system is intentionally plain Markdown so it can be:
 
 The project now includes a first end-to-end LAN web UI path:
 
-- chat-style task composer
+- chat-style task composer with a single-surface input area
 - local thread history in the browser
 - thread switching from the left sidebar
 - a simplified sidebar that focuses on recent conversations and navigation
-- session reset, session fork, workflow, role, model, reasoning, and approval settings inside the main workspace
+- session reset, session fork, workflow, role, model, reasoning, and approval settings inside a categorized workspace modal
 - desktop sidebar collapse and resize, plus a mobile drawer sidebar
 - real backend multi-turn session reuse keyed by `sessionId`
 - backend request normalization
@@ -126,10 +126,13 @@ You can override bind host and port with:
 
 - A layout closer to Codex app or ChatGPT, with a left sidebar and a central conversation area
 - A recent-conversations list in the sidebar, with local history preserved in the browser
+- Thread status shown on each conversation item in the sidebar instead of the workspace header
 - Session controls and runtime settings inside a workspace-level settings panel instead of the sidebar
 - A desktop sidebar that can collapse or be resized, and a drawer-style sidebar on mobile
-- A chat-style task composer at the bottom of the workspace
+- A chat-style task composer at the bottom of the workspace, with hints and actions embedded into the same input surface and no separate context panel
 - A live execution timeline inside the assistant response card while Codex is still working
+- 中途 assistant commentary 会直接显示在同一张响应卡片里，不再只看到通用进度标记
+- `employee` 视图默认更精简，只看结论和必要进展；`owner` 视图保留详细执行轨迹和任务元信息
 - A final result section that stays inside the same conversation turn
 - A `取消` button that aborts the browser request and stops the corresponding task
 - Forking that prefers real Codex session transcript replay over summary-only bootstrapping

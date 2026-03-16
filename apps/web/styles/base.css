@@ -45,6 +45,10 @@ body.sidebar-drawer-open {
   overflow: hidden;
 }
 
+body.workspace-modal-open {
+  overflow: hidden;
+}
+
 button,
 input,
 select,

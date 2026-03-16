@@ -59,6 +59,7 @@ export function createStoreModelHelpers(constants) {
       serverSessionId: null,
       sessionMode: null,
       state: "queued",
+      assistantMessages: [],
       steps: [
         {
           title: "准备执行",
@@ -127,8 +128,28 @@ export function createStoreModelHelpers(constants) {
       serverSessionId: typeof turn.serverSessionId === "string" ? turn.serverSessionId : null,
       sessionMode: typeof turn.sessionMode === "string" ? turn.sessionMode : null,
       state: typeof turn.state === "string" ? turn.state : "queued",
+      assistantMessages: Array.isArray(turn.assistantMessages)
+        ? turn.assistantMessages.map(normalizeAssistantMessage).filter(Boolean)
+        : [],
       steps: Array.isArray(turn.steps) ? turn.steps.map(normalizeStep).filter(Boolean) : [],
       result: normalizeResult(turn.result),
+    };
+  }
+
+  function normalizeAssistantMessage(message) {
+    if (!message || typeof message !== "object") {
+      return null;
+    }
+
+    const text = typeof message.text === "string" ? message.text.trim() : "";
+
+    if (!text) {
+      return null;
+    }
+
+    return {
+      id: typeof message.id === "string" && message.id ? message.id : createId("assistant-msg"),
+      text,
     };
   }
 

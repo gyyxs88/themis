@@ -212,6 +212,7 @@ export function createHistoryController(app) {
     }
 
     const result = buildResultFromStoredTurn(turn);
+    const assistantMessages = buildAssistantMessagesFromStoredTurnEvents(turn.events);
     const steps = buildStepsFromStoredTurnEvents(turn.events, turn);
 
     return {
@@ -231,6 +232,7 @@ export function createHistoryController(app) {
       serverSessionId: typeof turn.sessionId === "string" ? turn.sessionId : null,
       sessionMode: typeof turn.sessionMode === "string" ? turn.sessionMode : null,
       state: typeof turn.status === "string" ? turn.status : "completed",
+      assistantMessages,
       steps,
       result,
     };
@@ -238,12 +240,26 @@ export function createHistoryController(app) {
 
   function buildStepsFromStoredTurnEvents(events, turn) {
     if (Array.isArray(events) && events.length) {
-      return events.map((event) => ({
-        title: formatEventTitle(event.type),
-        text: event.message ?? latestStoredTurnMessage(turn),
-        tone: resolveToneFromTitle(event.type),
-        ...(event.payloadJson ? { metadata: parseJsonText(event.payloadJson) } : {}),
-      }));
+      const steps = events
+        .map((event) => {
+          const metadata = parseStoredEventPayload(event);
+
+          if (metadata?.itemType === "agent_message") {
+            return null;
+          }
+
+          return {
+            title: formatEventTitle(event.type),
+            text: event.message ?? latestStoredTurnMessage(turn),
+            tone: resolveToneFromTitle(event.type),
+            ...(metadata ? { metadata } : {}),
+          };
+        })
+        .filter(Boolean);
+
+      if (steps.length) {
+        return steps;
+      }
     }
 
     return [
@@ -253,6 +269,41 @@ export function createHistoryController(app) {
         tone: turn.status === "failed" ? "error" : "success",
       },
     ];
+  }
+
+  function buildAssistantMessagesFromStoredTurnEvents(events) {
+    if (!Array.isArray(events) || !events.length) {
+      return [];
+    }
+
+    const messages = [];
+
+    for (const event of events) {
+      const metadata = parseStoredEventPayload(event);
+
+      if (metadata?.itemType !== "agent_message") {
+        continue;
+      }
+
+      const text = resolveStoredAssistantMessageText(event, metadata);
+
+      if (!text) {
+        continue;
+      }
+
+      const messageId = typeof metadata.itemId === "string" && metadata.itemId
+        ? metadata.itemId
+        : app.utils.createId("assistant-msg");
+      const existing = messages.find((message) => message.id === messageId);
+
+      if (existing) {
+        existing.text = text;
+      } else {
+        messages.push({ id: messageId, text });
+      }
+    }
+
+    return messages;
   }
 
   function buildResultFromStoredTurn(turn) {
@@ -277,6 +328,26 @@ export function createHistoryController(app) {
 
   function latestStoredTurnMessage(turn) {
     return turn?.summary || turn?.errorMessage || turn?.goal || "已载入历史记录。";
+  }
+
+  function parseStoredEventPayload(event) {
+    return event?.payloadJson ? parseJsonText(event.payloadJson) : null;
+  }
+
+  function resolveStoredAssistantMessageText(event, metadata) {
+    if (typeof metadata?.itemText === "string" && metadata.itemText.trim()) {
+      return metadata.itemText.trim();
+    }
+
+    if (
+      typeof event?.message === "string" &&
+      event.message.trim() &&
+      event.message !== "Codex produced an assistant message."
+    ) {
+      return event.message.trim();
+    }
+
+    return "";
   }
 
   return {

@@ -95,7 +95,34 @@ export function createStoreHelpers({ app, getState, createDefaultThreadSettings,
       return turn.result.summary;
     }
 
+    const latestAssistantMessage = getVisibleAssistantMessages(turn).at(-1)?.text ?? turn?.assistantMessages?.at(-1)?.text;
+
+    if (latestAssistantMessage) {
+      return latestAssistantMessage;
+    }
+
     return turn.steps.at(-1)?.text ?? "等待任务开始。";
+  }
+
+  function getVisibleAssistantMessages(turn) {
+    if (!turn || !Array.isArray(turn.assistantMessages) || !turn.assistantMessages.length) {
+      return [];
+    }
+
+    const messages = turn.assistantMessages.filter((message) => typeof message?.text === "string" && message.text.trim());
+
+    if (!messages.length) {
+      return [];
+    }
+
+    const finalOutput = typeof turn.result?.output === "string" ? turn.result.output.trim() : "";
+    const lastMessage = messages.at(-1);
+
+    if (finalOutput && lastMessage?.text?.trim() === finalOutput) {
+      return messages.slice(0, -1);
+    }
+
+    return messages;
   }
 
   function buildThreadPreview(thread) {
@@ -169,6 +196,7 @@ export function createStoreHelpers({ app, getState, createDefaultThreadSettings,
       latestTurn?.inputText,
       latestTurn?.result?.summary,
       latestTurn?.result?.output,
+      ...(Array.isArray(latestTurn?.assistantMessages) ? latestTurn.assistantMessages.map((message) => message.text) : []),
     ]
       .filter(Boolean)
       .join(" ")
@@ -265,6 +293,7 @@ export function createStoreHelpers({ app, getState, createDefaultThreadSettings,
     describeBootstrapStatus,
     threadStatus,
     latestTurnMessage,
+    getVisibleAssistantMessages,
     buildThreadPreview,
     shouldShowThreadInList,
     syncThreadStoredState,

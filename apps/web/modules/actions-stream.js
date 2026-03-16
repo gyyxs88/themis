@@ -83,8 +83,12 @@ export function createStreamActions(app) {
   function handleDeliveryMessage(thread, turn, message) {
     if (message.kind === "event") {
       store.applyRuntimeMetadata(thread, turn, message.metadata);
-      const tone = resolveToneFromTitle(message.title);
-      store.appendStep(turn, formatEventTitle(message.title), message.text, tone, message.metadata);
+      const handledAssistantMessage = syncAssistantMessage(turn, message);
+
+      if (!handledAssistantMessage) {
+        const tone = resolveToneFromTitle(message.title);
+        store.appendStep(turn, formatEventTitle(message.title), message.text, tone, message.metadata);
+      }
 
       if (message.title === "task.failed") {
         turn.state = "failed";
@@ -113,6 +117,38 @@ export function createStreamActions(app) {
 
     store.appendStep(turn, "执行错误", message.text, "error", message.metadata);
     turn.state = "failed";
+  }
+
+  function syncAssistantMessage(turn, message) {
+    const metadata = message?.metadata;
+
+    if (!metadata || typeof metadata !== "object" || metadata.itemType !== "agent_message") {
+      return false;
+    }
+
+    const text = resolveAssistantMessageText(message, metadata);
+
+    if (!text) {
+      return false;
+    }
+
+    return store.upsertAssistantMessage(turn, typeof metadata.itemId === "string" ? metadata.itemId : null, text);
+  }
+
+  function resolveAssistantMessageText(message, metadata) {
+    if (typeof metadata.itemText === "string" && metadata.itemText.trim()) {
+      return metadata.itemText.trim();
+    }
+
+    if (
+      typeof message?.text === "string" &&
+      message.text.trim() &&
+      message.text !== "Codex produced an assistant message."
+    ) {
+      return message.text.trim();
+    }
+
+    return "";
   }
 
   function finalizeTurn(thread, turn, result) {

@@ -33,6 +33,7 @@ const app = {
     historySyncError: null,
     threadSearchQuery: "",
     workspaceToolsOpen: false,
+    workspaceToolsSection: "overview",
   },
 };
 

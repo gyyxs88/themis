@@ -128,13 +128,142 @@
   border-color: #f4d8d5;
 }
 
-.workspace-tools {
-  margin: 0 32px 8px;
-  padding: 18px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-xl);
-  background: #fcfcfd;
-  box-shadow: var(--shadow-sm);
+.settings-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.settings-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  border: none;
+  background: rgba(15, 18, 24, 0.44);
+  backdrop-filter: blur(12px);
+}
+
+.settings-modal-dialog {
+  position: relative;
+  z-index: 1;
+  width: min(1120px, calc(100vw - 48px));
+  max-height: calc(100dvh - 48px);
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  border: 1px solid rgba(216, 216, 221, 0.9);
+  border-radius: 28px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #fbfcfe 0%, #f4f6f9 100%);
+  box-shadow: 0 34px 80px rgba(15, 18, 24, 0.18);
+}
+
+.settings-modal-sidebar {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 18px;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.1), transparent 34%),
+    linear-gradient(180deg, #101214 0%, #181b20 100%);
+  color: #f5f7fa;
+}
+
+.settings-modal-brand h2,
+.settings-modal-context h3 {
+  margin: 0;
+}
+
+.settings-modal-copy {
+  margin: 8px 0 0;
+  color: rgba(245, 247, 250, 0.72);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.settings-modal-nav {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.settings-nav-button {
+  width: 100%;
+  min-height: 46px;
+  padding: 0 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(245, 247, 250, 0.88);
+  text-align: left;
+  transition:
+    transform 160ms ease,
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.settings-nav-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.settings-nav-button.active {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: #f7f8fa;
+  color: #111111;
+}
+
+.settings-modal-main {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  background: rgba(252, 252, 253, 0.96);
+}
+
+.settings-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 24px 24px 18px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(252, 252, 253, 0.92));
+}
+
+.settings-modal-head .settings-modal-copy {
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+.settings-modal-panels {
+  min-height: 0;
+  overflow: auto;
+  padding: 24px;
+}
+
+.settings-panel {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.settings-hero-card {
+  background:
+    radial-gradient(circle at top right, rgba(17, 17, 17, 0.04), transparent 36%),
+    #ffffff;
+}
+
+.settings-section-copy {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--muted);
 }
 
 .workspace-tools-copy {
@@ -232,8 +361,7 @@
   background: var(--muted-surface);
 }
 
-.tools-details,
-.context-panel {
+.tools-details {
   margin-top: 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
@@ -241,21 +369,18 @@
   overflow: hidden;
 }
 
-.tools-details summary,
-.context-panel summary {
+.tools-details summary {
   padding: 14px 16px;
   cursor: pointer;
   font-weight: 600;
   list-style: none;
 }
 
-.tools-details summary::-webkit-details-marker,
-.context-panel summary::-webkit-details-marker {
+.tools-details summary::-webkit-details-marker {
   display: none;
 }
 
-.tools-details[open] summary,
-.context-panel[open] summary {
+.tools-details[open] summary {
   border-bottom: 1px solid var(--line);
 }
 
@@ -268,7 +393,10 @@
   bottom: 16px;
   max-width: 920px;
   margin: 0 auto;
-  padding: 16px;
+}
+
+.composer-surface {
+  padding: 14px 14px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-xl);
   background: rgba(255, 255, 255, 0.96);
@@ -276,26 +404,26 @@
 }
 
 .composer textarea {
-  min-height: 78px;
-  max-height: 240px;
-  padding: 16px;
-  resize: none;
-  line-height: 1.6;
-}
-
-.context-panel {
-  background: #fafafb;
-}
-
-.context-panel textarea {
+  min-height: 112px;
+  max-height: 280px;
+  padding: 10px 12px 14px;
   border: none;
-  border-top: 1px solid var(--line);
-  border-radius: 0 0 var(--radius-md) var(--radius-md);
   background: transparent;
+  resize: none;
+  font-size: 15px;
+  line-height: 1.6;
+  box-shadow: none;
+}
+
+.composer textarea:focus {
+  box-shadow: none;
 }
 
 .composer-footer {
-  margin-top: 14px;
+  margin-top: 4px;
+  padding: 12px 8px 0;
+  border-top: 1px solid var(--line);
+  align-items: center;
 }
 
 .composer-hints,
@@ -341,7 +469,6 @@
 
 @media (max-width: 920px) {
   .workspace-header,
-  .workspace-tools,
   .composer-panel {
     margin-left: 0;
     margin-right: 0;
@@ -349,12 +476,38 @@
     padding-right: 16px;
   }
 
-  .workspace-tools {
-    margin-top: 0;
+  .settings-modal {
+    padding: 16px;
   }
 
-  .workspace-tools-grid {
+  .settings-modal-dialog {
+    width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px);
     grid-template-columns: 1fr;
+  }
+
+  .settings-modal-sidebar {
+    grid-template-rows: auto auto auto;
+    padding: 18px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .settings-modal-nav {
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(88px, 1fr);
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 4px;
+  }
+
+  .settings-modal-main {
+    max-height: min(60dvh, 620px);
+  }
+
+  .settings-modal-panels,
+  .settings-modal-head {
+    padding-left: 18px;
+    padding-right: 18px;
   }
 
   .workspace-header {
@@ -371,7 +524,7 @@
 @media (max-width: 720px) {
   .workspace-header,
   .workspace-toolbar,
-  .workspace-tools-head,
+  .settings-modal-head,
   .tool-group-head,
   .composer-footer {
     flex-direction: column;

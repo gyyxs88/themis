@@ -27,15 +27,27 @@ export function createActions(app) {
 
   function bindWorkspaceControls() {
     dom.workspaceToolsToggle.addEventListener("click", () => {
-      if (store.isBusy() || app.runtime.sessionControlBusy) {
-        return;
-      }
-
       app.renderer.setToolsPanelOpen(!app.runtime.workspaceToolsOpen);
     });
 
     dom.workspaceToolsClose.addEventListener("click", () => {
       app.renderer.setToolsPanelOpen(false);
+    });
+
+    dom.workspaceToolsBackdrop.addEventListener("click", () => {
+      app.renderer.setToolsPanelOpen(false);
+    });
+
+    dom.settingsSectionButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        app.renderer.setToolsSection(button.dataset.settingsSection);
+      });
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && app.runtime.workspaceToolsOpen) {
+        app.renderer.setToolsPanelOpen(false);
+      }
     });
 
     dom.resetSessionButton.addEventListener("click", async () => {

@@ -1,4 +1,3 @@
-import { badgeToneForStatus, formatStatusLabel } from "./copy.js";
 import {
   renderHistoryLoadingState,
   renderStoredSummaryState,
@@ -36,32 +35,30 @@ export function createRenderer(app) {
 
     dom.threadEmpty.classList.add("hidden");
     dom.threadList.innerHTML = threads
-      .map((thread) =>
-        renderThreadButton(thread, {
+      .map((thread) => {
+        const status = store.threadStatus(thread);
+
+        return renderThreadButton(thread, {
           active: thread.id === store.state.activeThreadId,
           busy: store.isBusy(),
+          status,
           escapeHtml: utils.escapeHtml,
-        }),
-      )
+        });
+      })
       .join("");
   }
 
   function renderWorkspaceHeader() {
     const thread = store.getActiveThread();
     const turnCount = app.history.getDisplayTurnCount(thread);
-    const status = store.threadStatus(thread);
 
     if (!thread || !turnCount) {
       dom.workspaceTitle.textContent = "Themis Operator Chat";
       dom.workspaceCopy.textContent = "把任务像聊天一样发出去，让 Themis 在同一条会话里持续回传进度和结果。";
-      dom.statusBadge.textContent = "空闲";
-      dom.statusBadge.className = "badge idle";
       return;
     }
 
     dom.workspaceTitle.textContent = thread.title;
-    dom.statusBadge.textContent = formatStatusLabel(status);
-    dom.statusBadge.className = `badge ${badgeToneForStatus(status)}`;
 
     if (app.runtime.historyHydratingThreadId === thread.id) {
       dom.workspaceCopy.textContent = `正在从本机 SQLite 历史中载入这个会话的 ${turnCount} 条任务记录。`;
@@ -83,18 +80,32 @@ export function createRenderer(app) {
   function renderWorkspaceTools() {
     const thread = store.getActiveThread();
     const latestTurn = thread?.turns.at(-1);
-    const summary =
-      store.resolveTransientStatus(thread?.id) ??
-      (thread?.bootstrapTranscript && !thread?.serverThreadId
-        ? store.describeBootstrapStatus(thread)
-        : store.buildThreadPreview(thread));
+    const effectiveRole = latestTurn?.role ?? store.state.selectedRole ?? app.constants.DEFAULT_ROLE;
+    const activeSection = resolveSettingsSection(effectiveRole);
+    const debugAllowed = effectiveRole === "owner";
+    const open = Boolean(app.runtime.workspaceToolsOpen);
 
-    dom.workspaceToolsPanel.classList.toggle("hidden", !app.runtime.workspaceToolsOpen);
-    dom.workspaceToolsToggle.setAttribute("aria-expanded", String(app.runtime.workspaceToolsOpen));
-    dom.activeThreadTitle.textContent = thread?.title ?? "当前状态";
-    dom.sessionStatus.textContent = summary;
+    dom.workspaceToolsPanel.classList.toggle("hidden", !open);
+    dom.workspaceToolsPanel.classList.toggle("open", open);
+    dom.workspaceToolsPanel.setAttribute("aria-hidden", String(!open));
+    dom.workspaceToolsToggle.setAttribute("aria-expanded", String(open));
+    document.body.classList.toggle("workspace-modal-open", open);
     dom.requestMeta.classList.toggle("empty", !latestTurn && !thread?.storedTurnCount);
     dom.requestMeta.textContent = JSON.stringify(store.buildThreadSummary(thread), null, 2);
+    dom.settingsSectionButtons.forEach((button) => {
+      const section = button.dataset.settingsSection;
+      const isDebug = section === "debug";
+      const active = section === activeSection;
+
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-current", active ? "true" : "false");
+      button.classList.toggle("hidden", isDebug && !debugAllowed);
+    });
+    dom.settingsPanels.forEach((panel) => {
+      const section = panel.dataset.settingsPanel;
+      const hidden = section !== activeSection || (section === "debug" && !debugAllowed);
+      panel.classList.toggle("hidden", hidden);
+    });
 
     const settings = thread?.settings ?? store.createDefaultThreadSettings();
     dom.modelInput.value = settings.model ?? "";
@@ -167,10 +178,8 @@ export function createRenderer(app) {
 
   function renderComposer() {
     const thread = store.getActiveThread();
-    dom.goalInput.value = thread?.draftGoal ?? "";
-    dom.contextInput.value = thread?.draftContext ?? "";
+    dom.goalInput.value = mergeComposerDraft(thread);
     utils.autoResizeTextarea(dom.goalInput);
-    utils.autoResizeTextarea(dom.contextInput);
   }
 
   function renderComposerMeta() {
@@ -188,13 +197,12 @@ export function createRenderer(app) {
     dom.cancelButton.disabled = !busy;
     dom.newThreadButton.disabled = controlsBusy;
     dom.historyRefreshButton.disabled = controlsBusy || app.runtime.historySyncBusy;
-    dom.workspaceToolsToggle.disabled = controlsBusy;
-    dom.workspaceToolsClose.disabled = controlsBusy;
+    dom.workspaceToolsToggle.disabled = false;
+    dom.workspaceToolsClose.disabled = false;
     dom.resetSessionButton.disabled = controlsBusy;
     dom.forkSessionButton.disabled = controlsBusy;
     dom.threadSearchInput.disabled = controlsBusy && !app.runtime.threadSearchQuery;
     dom.goalInput.disabled = controlsBusy;
-    dom.contextInput.disabled = controlsBusy;
     dom.modelInput.disabled = controlsBusy;
     dom.reasoningSelect.disabled = controlsBusy;
     dom.approvalSelect.disabled = controlsBusy;
@@ -213,6 +221,23 @@ export function createRenderer(app) {
     renderWorkspaceTools();
   }
 
+  function setToolsSection(nextSection) {
+    if (!nextSection) {
+      return;
+    }
+
+    app.runtime.workspaceToolsSection = nextSection;
+    renderWorkspaceTools();
+  }
+
+  function resolveSettingsSection(effectiveRole) {
+    if (app.runtime.workspaceToolsSection === "debug" && effectiveRole !== "owner") {
+      app.runtime.workspaceToolsSection = "overview";
+    }
+
+    return app.runtime.workspaceToolsSection ?? "overview";
+  }
+
   function setSelectedChoice(inputs, value) {
     const target = inputs.find((input) => input.value === value) ?? inputs[0];
 
@@ -221,10 +246,26 @@ export function createRenderer(app) {
     }
   }
 
+  function mergeComposerDraft(thread) {
+    const goal = typeof thread?.draftGoal === "string" ? thread.draftGoal.trim() : "";
+    const context = typeof thread?.draftContext === "string" ? thread.draftContext.trim() : "";
+
+    if (!goal) {
+      return context;
+    }
+
+    if (!context) {
+      return goal;
+    }
+
+    return `${goal}\n\n补充要求：\n${context}`;
+  }
+
   return {
     renderAll,
     renderThreadList,
     renderWorkspaceTools,
     setToolsPanelOpen,
+    setToolsSection,
   };
 }

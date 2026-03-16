@@ -4,13 +4,9 @@ export function createComposerActions(app, streamActions) {
 
   function bindComposerControls() {
     dom.goalInput.addEventListener("input", () => {
+      flattenDraftContext();
       app.utils.autoResizeTextarea(dom.goalInput);
       store.updateActiveDraft("draftGoal", dom.goalInput.value);
-    });
-
-    dom.contextInput.addEventListener("input", () => {
-      app.utils.autoResizeTextarea(dom.contextInput);
-      store.updateActiveDraft("draftContext", dom.contextInput.value);
     });
 
     dom.goalInput.addEventListener("keydown", (event) => {
@@ -67,8 +63,7 @@ export function createComposerActions(app, streamActions) {
       return;
     }
 
-    const goal = thread.draftGoal.trim();
-    const inputText = thread.draftContext.trim();
+    const goal = mergeDraftContent(thread.draftGoal, thread.draftContext).trim();
     const workflow = store.state.selectedWorkflow ?? DEFAULT_WORKFLOW;
     const role = store.state.selectedRole ?? DEFAULT_ROLE;
 
@@ -81,7 +76,7 @@ export function createComposerActions(app, streamActions) {
       workflow,
       role,
       goal,
-      inputText,
+      inputText: "",
       options: store.buildTaskOptions(thread.settings),
     });
 
@@ -118,7 +113,6 @@ export function createComposerActions(app, streamActions) {
           workflow,
           role,
           goal,
-          inputText,
           sessionId: thread.id,
           ...(turn.options ? { options: turn.options } : {}),
           ...(historyContext ? { historyContext } : {}),
@@ -179,18 +173,42 @@ export function createComposerActions(app, streamActions) {
       };
     }
 
-    if (button.dataset.goal) {
-      thread.draftGoal = button.dataset.goal;
-    }
-
-    if (button.dataset.context) {
-      thread.draftContext = button.dataset.context;
+    if (button.dataset.goal || button.dataset.context) {
+      thread.draftGoal = mergeDraftContent(button.dataset.goal ?? "", button.dataset.context ?? "");
+      thread.draftContext = "";
     }
 
     store.touchThread(thread.id);
     store.saveState();
     app.renderer.renderAll();
     dom.goalInput.focus();
+  }
+
+  function flattenDraftContext() {
+    const thread = store.getActiveThread();
+
+    if (!thread || !thread.draftContext) {
+      return;
+    }
+
+    thread.draftContext = "";
+    store.touchThread(thread.id);
+    store.saveState();
+  }
+
+  function mergeDraftContent(goal, context) {
+    const normalizedGoal = typeof goal === "string" ? goal.trim() : "";
+    const normalizedContext = typeof context === "string" ? context.trim() : "";
+
+    if (!normalizedGoal) {
+      return normalizedContext;
+    }
+
+    if (!normalizedContext) {
+      return normalizedGoal;
+    }
+
+    return `${normalizedGoal}\n\n补充要求：\n${normalizedContext}`;
   }
 
   return {

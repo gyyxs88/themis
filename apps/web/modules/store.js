@@ -50,6 +50,37 @@ export function createStore(app) {
     });
   }
 
+  function upsertAssistantMessage(turn, messageId, text) {
+    if (!turn || typeof text !== "string") {
+      return false;
+    }
+
+    const normalizedText = text.trim();
+
+    if (!normalizedText) {
+      return false;
+    }
+
+    const messages = Array.isArray(turn.assistantMessages) ? turn.assistantMessages : (turn.assistantMessages = []);
+    const normalizedId = typeof messageId === "string" && messageId ? messageId : null;
+
+    if (normalizedId) {
+      const existing = messages.find((message) => message.id === normalizedId);
+
+      if (existing) {
+        existing.text = normalizedText;
+        return true;
+      }
+    }
+
+    messages.push({
+      id: normalizedId ?? app.utils.createId("assistant-msg"),
+      text: normalizedText,
+    });
+
+    return true;
+  }
+
   function getSortedThreads() {
     return [...state.threads].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
@@ -224,6 +255,7 @@ export function createStore(app) {
     createThread: models.createThread,
     createTurn: models.createTurn,
     appendStep,
+    upsertAssistantMessage,
     normalizeBootstrapMode: models.normalizeBootstrapMode,
     repairInterruptedTurns: helpers.repairInterruptedTurns,
     ensureActiveThread,
@@ -247,6 +279,7 @@ export function createStore(app) {
     describeBootstrapStatus: helpers.describeBootstrapStatus,
     threadStatus: helpers.threadStatus,
     latestTurnMessage: helpers.latestTurnMessage,
+    getVisibleAssistantMessages: helpers.getVisibleAssistantMessages,
     setTransientStatus,
     clearTransientStatus,
     resolveTransientStatus,

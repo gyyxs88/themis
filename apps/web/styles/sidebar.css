@@ -175,6 +175,8 @@
 
 .thread-button {
   width: 100%;
+  display: grid;
+  gap: 6px;
   padding: 10px 12px;
   text-align: left;
   border: 1px solid transparent;
@@ -197,6 +199,36 @@
   line-height: 1.35;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.thread-status-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.thread-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.68;
+  flex: 0 0 auto;
+}
+
+.thread-status-inline.busy {
+  color: #9a6700;
+}
+
+.thread-status-inline.error {
+  color: var(--danger);
+}
+
+.thread-status-inline.cancelled {
+  color: #6941c6;
 }
 
 .thread-empty {

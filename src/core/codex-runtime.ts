@@ -272,10 +272,14 @@ function translateThreadEvent(taskId: string, requestId: string, event: ThreadEv
     case "item.started":
     case "item.updated":
     case "item.completed":
-      return createTaskEvent(taskId, requestId, "task.progress", "running", describeThreadItem(event.item), {
-        itemType: event.item.type,
-        itemId: event.item.id,
-      });
+      return createTaskEvent(
+        taskId,
+        requestId,
+        "task.progress",
+        "running",
+        describeThreadItem(event.item),
+        createThreadItemPayload(event.item),
+      );
     case "turn.completed":
       return createTaskEvent(taskId, requestId, "task.progress", "running", "Codex finished generating a response.", {
         usage: event.usage,
@@ -287,6 +291,14 @@ function translateThreadEvent(taskId: string, requestId: string, event: ThreadEv
     default:
       return null;
   }
+}
+
+function createThreadItemPayload(item: ThreadItem): Record<string, unknown> {
+  return {
+    itemType: item.type,
+    itemId: item.id,
+    ...(item.type === "agent_message" && item.text.trim() ? { itemText: item.text } : {}),
+  };
 }
 
 function collectThreadArtifacts(
@@ -315,7 +327,7 @@ function collectThreadArtifacts(
 function describeThreadItem(item: ThreadItem): string {
   switch (item.type) {
     case "agent_message":
-      return "Codex produced an assistant message.";
+      return item.text.trim() || "Codex produced an assistant message.";
     case "reasoning":
       return "Codex updated its reasoning summary.";
     case "command_execution":
