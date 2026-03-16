@@ -1,10 +1,8 @@
 import type { ChannelAdapter } from "../../communication/adapter.js";
-import type { TaskError, TaskEvent, TaskRequest, TaskResult, UserRole } from "../../types/index.js";
+import type { TaskError, TaskEvent, TaskRequest, TaskResult } from "../../types/index.js";
 import type { FeishuDeliveryMessage, FeishuMessageSink, FeishuTaskPayload } from "./types.js";
 
 export interface FeishuAdapterOptions {
-  defaultRole?: UserRole;
-  defaultWorkflow?: string;
   deliver?: FeishuMessageSink;
 }
 
@@ -13,13 +11,9 @@ const NOOP_DELIVERY: FeishuMessageSink = async () => {};
 export class FeishuAdapter implements ChannelAdapter<FeishuTaskPayload> {
   readonly channelId = "feishu" as const;
 
-  private readonly defaultRole: UserRole;
-  private readonly defaultWorkflow: string | undefined;
   private readonly deliver: FeishuMessageSink;
 
   constructor(options: FeishuAdapterOptions = {}) {
-    this.defaultRole = options.defaultRole ?? "employee";
-    this.defaultWorkflow = options.defaultWorkflow;
     this.deliver = options.deliver ?? NOOP_DELIVERY;
   }
 
@@ -38,12 +32,6 @@ export class FeishuAdapter implements ChannelAdapter<FeishuTaskPayload> {
   normalizeRequest(input: FeishuTaskPayload): TaskRequest {
     if (!this.canHandle(input)) {
       throw new Error("Payload is not a Feishu request.");
-    }
-
-    const workflow = normalizeText(input.workflow) ?? this.defaultWorkflow;
-
-    if (!workflow) {
-      throw new Error("Feishu payload is missing a workflow.");
     }
 
     const goal = normalizeText(input.goal) ?? normalizeText(input.message?.text);
@@ -76,8 +64,6 @@ export class FeishuAdapter implements ChannelAdapter<FeishuTaskPayload> {
         ...(displayName ? { displayName } : {}),
         ...(tenantId ? { tenantId } : {}),
       },
-      role: input.role ?? this.defaultRole,
-      workflow,
       goal,
       ...(inputText ? { inputText } : {}),
       ...(input.attachments?.length ? { attachments: input.attachments } : {}),

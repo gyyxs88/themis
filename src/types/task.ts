@@ -1,4 +1,4 @@
-import type { ChannelContext, ChannelId, ChannelUser, UserRole } from "./channel.js";
+import type { ChannelContext, ChannelId, ChannelUser } from "./channel.js";
 import type { MemoryUpdate } from "./memory.js";
 
 export const TASK_ATTACHMENT_TYPES = ["text", "link", "file", "image"] as const;
@@ -65,7 +65,6 @@ export type TaskResultStatus = (typeof TASK_RESULT_STATUSES)[number];
 
 export const TASK_ERROR_CODES = [
   "INVALID_REQUEST",
-  "UNSUPPORTED_WORKFLOW",
   "AUTH_REQUIRED",
   "PERMISSION_DENIED",
   "SESSION_BUSY",
@@ -97,8 +96,6 @@ export interface TaskRequest {
   taskId?: string;
   sourceChannel: ChannelId;
   user: ChannelUser;
-  role: UserRole;
-  workflow: string;
   goal: string;
   inputText?: string;
   historyContext?: string;

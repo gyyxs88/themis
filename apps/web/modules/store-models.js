@@ -1,8 +1,6 @@
 import { createId, nowIso } from "./utils.js";
 
-export function createStoreModelHelpers(constants) {
-  const { DEFAULT_ROLE, DEFAULT_WORKFLOW } = constants;
-
+export function createStoreModelHelpers() {
   function createDefaultThreadSettings() {
     return {
       model: "",
@@ -38,18 +36,14 @@ export function createStoreModelHelpers(constants) {
 
     return {
       activeThreadId: thread.id,
-      selectedWorkflow: DEFAULT_WORKFLOW,
-      selectedRole: DEFAULT_ROLE,
       threads: [thread],
     };
   }
 
-  function createTurn({ workflow, role, goal, inputText, options }) {
+  function createTurn({ goal, inputText, options }) {
     return {
       id: createId("turn"),
       createdAt: nowIso(),
-      workflow,
-      role,
       goal,
       inputText,
       ...(options ? { options } : {}),
@@ -78,8 +72,6 @@ export function createStoreModelHelpers(constants) {
 
     return {
       activeThreadId: typeof value?.activeThreadId === "string" ? value.activeThreadId : threads[0]?.id ?? null,
-      selectedWorkflow: typeof value?.selectedWorkflow === "string" ? value.selectedWorkflow : DEFAULT_WORKFLOW,
-      selectedRole: typeof value?.selectedRole === "string" ? value.selectedRole : DEFAULT_ROLE,
       threads: threads.length ? threads : [createThread()],
     };
   }
@@ -117,8 +109,6 @@ export function createStoreModelHelpers(constants) {
     return {
       id: typeof turn.id === "string" ? turn.id : createId("turn"),
       createdAt: typeof turn.createdAt === "string" ? turn.createdAt : nowIso(),
-      workflow: typeof turn.workflow === "string" ? turn.workflow : DEFAULT_WORKFLOW,
-      role: typeof turn.role === "string" ? turn.role : DEFAULT_ROLE,
       goal: typeof turn.goal === "string" ? turn.goal : "",
       inputText: typeof turn.inputText === "string" ? turn.inputText : "",
       options: normalizeTurnOptions(turn.options),

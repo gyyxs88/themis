@@ -2,7 +2,7 @@ import { formatEventTitle, formatStatusLabel, resolveToneFromTitle } from "./cop
 import { nowIso, parseJsonText } from "./utils.js";
 
 export function createHistoryController(app) {
-  const { DEFAULT_ROLE, DEFAULT_WORKFLOW, MAX_THREAD_COUNT } = app.constants;
+  const { MAX_THREAD_COUNT } = app.constants;
 
   function getDisplayTurnCount(thread) {
     if (!thread) {
@@ -28,34 +28,12 @@ export function createHistoryController(app) {
     );
   }
 
-  function renderHistorySyncStatus() {
-    if (app.runtime.historySyncBusy) {
-      app.dom.historySyncCopy.textContent = app.runtime.historyHydratingThreadId
-        ? "正在载入当前会话"
-        : "正在同步本机历史";
-      return;
-    }
-
-    if (app.runtime.historySyncError) {
-      app.dom.historySyncCopy.textContent = `同步失败：${app.runtime.historySyncError}`;
-      return;
-    }
-
-    if (app.runtime.historyLastSyncedAt) {
-      app.dom.historySyncCopy.textContent = `已同步 ${app.utils.formatRelativeTime(app.runtime.historyLastSyncedAt)}`;
-      return;
-    }
-
-    app.dom.historySyncCopy.textContent = "自动同步本机历史";
-  }
-
   async function refreshHistoryFromServer(options = {}) {
     if (app.runtime.historySyncBusy) {
       return;
     }
 
     app.runtime.historySyncBusy = true;
-    app.runtime.historySyncError = null;
     app.renderer.renderAll();
 
     try {
@@ -67,7 +45,6 @@ export function createHistoryController(app) {
       }
 
       mergeHistorySessions(data?.sessions ?? []);
-      app.runtime.historyLastSyncedAt = nowIso();
       app.store.saveState();
       app.renderer.renderAll();
 
@@ -77,8 +54,7 @@ export function createHistoryController(app) {
         await ensureThreadHistoryLoaded(app.store.state.activeThreadId);
       }
     } catch (error) {
-      app.runtime.historySyncError = error?.message ?? "历史同步失败";
-      app.renderer.renderAll();
+      console.error("History sync failed.", error);
     } finally {
       app.runtime.historySyncBusy = false;
       app.renderer.renderAll();
@@ -130,7 +106,6 @@ export function createHistoryController(app) {
     }
 
     app.runtime.historyHydratingThreadId = threadId;
-    app.runtime.historySyncError = null;
     app.renderer.renderAll();
 
     try {
@@ -144,7 +119,6 @@ export function createHistoryController(app) {
       }
 
       applyHistorySessionDetail(data);
-      app.runtime.historyLastSyncedAt = nowIso();
       app.store.saveState();
       app.renderer.renderAll(true);
     } catch (error) {
@@ -221,8 +195,6 @@ export function createHistoryController(app) {
         (typeof turn.requestId === "string" && turn.requestId) ||
         app.utils.createId("turn"),
       createdAt: typeof turn.createdAt === "string" ? turn.createdAt : nowIso(),
-      workflow: typeof turn.workflow === "string" ? turn.workflow : DEFAULT_WORKFLOW,
-      role: typeof turn.role === "string" ? turn.role : DEFAULT_ROLE,
       goal: typeof turn.goal === "string" ? turn.goal : "",
       inputText: typeof turn.inputText === "string" ? turn.inputText : "",
       options: parseJsonText(turn.optionsJson),
@@ -353,7 +325,6 @@ export function createHistoryController(app) {
   return {
     getDisplayTurnCount,
     threadNeedsHistoryHydration,
-    renderHistorySyncStatus,
     refreshHistoryFromServer,
     ensureThreadHistoryLoaded,
   };

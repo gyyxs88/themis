@@ -103,6 +103,7 @@
           </div>
 
           <div class="workspace-toolbar">
+            <button id="fork-thread-button" type="button" class="toolbar-button">分叉</button>
             <button
               id="workspace-tools-toggle"
               type="button"
@@ -110,7 +111,7 @@
               aria-expanded="false"
               aria-controls="workspace-tools-panel"
             >
-              会话设置
+              设置
             </button>
           </div>
         </header>
@@ -128,7 +129,6 @@
                 class="suggestion-chip"
                 data-goal="检查当前项目状态，并给我一个最值得先做的下一步。"
                 data-context="请优先考虑对员工可用性和模块化的影响。"
-                data-workflow="investigate"
               >
                 给我一个下一步
               </button>
@@ -137,7 +137,6 @@
                 class="suggestion-chip"
                 data-goal="评估当前 Web UI 是否足够像一个员工可用的产品界面。"
                 data-context="请指出体验短板，并给出可以直接实施的改进建议。"
-                data-workflow="review"
               >
                 评估当前界面
               </button>
@@ -159,8 +158,6 @@
 
               <div class="composer-footer">
                 <div class="composer-hints">
-                  <span id="active-workflow-label">工作流：implement</span>
-                  <span id="active-role-label">角色：employee</span>
                   <span id="active-thread-label">会话：新会话</span>
                   <span>Enter 发送，Shift + Enter 换行</span>
                 </div>
@@ -176,87 +173,42 @@
       </main>
 
       <section id="workspace-tools-panel" class="settings-modal hidden" aria-hidden="true">
-        <button id="workspace-tools-backdrop" type="button" class="settings-modal-backdrop" aria-label="关闭会话设置"></button>
+        <button id="workspace-tools-backdrop" type="button" class="settings-modal-backdrop" aria-label="关闭设置"></button>
 
         <div class="settings-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="workspace-tools-title">
-          <aside class="settings-modal-sidebar" aria-label="设置分类">
-            <div class="settings-modal-brand">
-              <p class="workspace-tools-kicker">Session Studio</p>
-              <h2 id="workspace-tools-title">会话设置</h2>
-              <p class="settings-modal-copy">运行中也可以打开查看；会影响当前执行状态的操作会保持禁用。</p>
-            </div>
-
-            <nav class="settings-modal-nav">
-              <button type="button" class="settings-nav-button" data-settings-section="overview">概览</button>
-              <button type="button" class="settings-nav-button" data-settings-section="session">会话</button>
-              <button type="button" class="settings-nav-button" data-settings-section="runtime">运行</button>
-              <button type="button" class="settings-nav-button" data-settings-section="workflow">工作流</button>
-              <button type="button" class="settings-nav-button" data-settings-section="role">角色</button>
-              <button type="button" class="settings-nav-button" data-settings-section="history">历史</button>
-              <button type="button" class="settings-nav-button" data-settings-section="debug">调试</button>
-            </nav>
-          </aside>
-
           <div class="settings-modal-main">
             <div class="settings-modal-head">
               <div>
-                <p class="workspace-tools-kicker">分类配置</p>
-                <p class="settings-modal-copy">你可以按分类查看和配置当前会话的运行方式。</p>
+                <p class="workspace-tools-kicker">Session Studio</p>
+                <h2 id="workspace-tools-title">设置</h2>
+                <p class="settings-modal-copy">只保留当前会话后续任务需要的运行参数。</p>
               </div>
               <button id="workspace-tools-close" type="button" class="toolbar-button subtle">关闭</button>
             </div>
 
             <div class="settings-modal-panels">
-              <section class="settings-panel" data-settings-panel="overview">
-                <div class="workspace-tool-group settings-hero-card">
-                  <div class="tool-group-head">
-                    <h3>当前状态</h3>
-                    <span class="meta-label">运行中的信息会在这里同步刷新</span>
-                  </div>
-                  <p class="settings-section-copy">
-                    这块是当前会话的总览入口。执行中的任务不会阻止你打开设置，只会暂时锁定高风险操作。
-                  </p>
-                  <p id="settings-note" class="meta-label">这些设置只作用于当前会话后续发出的任务。</p>
-                </div>
-              </section>
-
-              <section class="settings-panel hidden" data-settings-panel="session">
-                <section class="workspace-tool-group">
-                  <div class="tool-group-head">
-                    <h3>会话动作</h3>
-                    <span class="meta-label">只影响当前会话</span>
-                  </div>
-
-                  <div class="session-actions">
-                    <button id="reset-session-button" type="button" class="danger-button">重置后端上下文</button>
-                    <button id="fork-session-button" type="button" class="ghost-button">分叉当前会话</button>
-                  </div>
-                </section>
-              </section>
-
-              <section class="settings-panel hidden" data-settings-panel="runtime">
+              <section class="settings-panel">
                 <section class="workspace-tool-group">
                   <div class="tool-group-head">
                     <h3>运行参数</h3>
-                    <span class="meta-label">模型与审批</span>
+                    <span class="meta-label">模型、推理与审批</span>
                   </div>
+
+                  <p id="settings-note" class="settings-section-copy">这些设置只作用于当前会话后续发出的任务。</p>
+                  <p id="runtime-config-note" class="settings-section-copy">正在从 Codex 读取可用模型与默认配置。</p>
 
                   <div class="settings-stack">
                     <label class="settings-field">
                       <span>模型</span>
-                      <input id="model-input" type="text" placeholder="留空表示使用 Codex 默认模型" />
+                      <select id="model-select">
+                        <option value="">正在读取 Codex 模型...</option>
+                      </select>
                     </label>
 
                     <div class="settings-grid">
                       <label class="settings-field">
                         <span>推理强度</span>
-                        <select id="reasoning-select">
-                          <option value="">默认</option>
-                          <option value="low">low</option>
-                          <option value="medium">medium</option>
-                          <option value="high">high</option>
-                          <option value="xhigh">xhigh</option>
-                        </select>
+                        <select id="reasoning-select"></select>
                       </label>
 
                       <label class="settings-field">
@@ -270,90 +222,6 @@
                       </label>
                     </div>
                   </div>
-                </section>
-              </section>
-
-              <section class="settings-panel hidden" data-settings-panel="workflow">
-                <section class="workspace-tool-group">
-                  <div class="tool-group-head">
-                    <h3>工作流</h3>
-                    <span class="meta-label">任务模式</span>
-                  </div>
-
-                  <div class="choice-grid" role="radiogroup" aria-label="工作流">
-                    <input class="choice-input" type="radio" name="workflow" id="workflow-implement" value="implement" checked />
-                    <label class="choice-chip" for="workflow-implement">
-                      <strong>Implement</strong>
-                      <span>实现、改造、联调</span>
-                    </label>
-
-                    <input class="choice-input" type="radio" name="workflow" id="workflow-review" value="review" />
-                    <label class="choice-chip" for="workflow-review">
-                      <strong>Review</strong>
-                      <span>查风险、查回归、查缺口</span>
-                    </label>
-
-                    <input class="choice-input" type="radio" name="workflow" id="workflow-investigate" value="investigate" />
-                    <label class="choice-chip" for="workflow-investigate">
-                      <strong>Investigate</strong>
-                      <span>排障、调研、定位原因</span>
-                    </label>
-
-                    <input class="choice-input" type="radio" name="workflow" id="workflow-docs" value="docs" />
-                    <label class="choice-chip" for="workflow-docs">
-                      <strong>Docs</strong>
-                      <span>整理文档、说明和规范</span>
-                    </label>
-                  </div>
-                </section>
-              </section>
-
-              <section class="settings-panel hidden" data-settings-panel="role">
-                <section class="workspace-tool-group">
-                  <div class="tool-group-head">
-                    <h3>权限角色</h3>
-                    <span class="meta-label">安全默认值</span>
-                  </div>
-
-                  <div class="choice-grid" role="radiogroup" aria-label="角色">
-                    <input class="choice-input" type="radio" name="role" id="role-employee" value="employee" checked />
-                    <label class="choice-chip" for="role-employee">
-                      <strong>Employee</strong>
-                      <span>更保守，适合员工默认使用</span>
-                    </label>
-
-                    <input class="choice-input" type="radio" name="role" id="role-owner" value="owner" />
-                    <label class="choice-chip" for="role-owner">
-                      <strong>Owner</strong>
-                      <span>更灵活，适合负责人和调试场景</span>
-                    </label>
-                  </div>
-                </section>
-              </section>
-
-              <section class="settings-panel hidden" data-settings-panel="history">
-                <section class="workspace-tool-group">
-                  <div class="tool-group-head">
-                    <h3>历史同步</h3>
-                    <span class="meta-label">本机 SQLite</span>
-                  </div>
-
-                  <div class="session-actions">
-                    <button id="history-refresh-button" type="button" class="ghost-button">重新同步聊天列表</button>
-                  </div>
-
-                  <p id="history-sync-copy" class="meta-label">列表会自动同步，手动同步只在你想立刻刷新本机历史时使用。</p>
-                </section>
-              </section>
-
-              <section class="settings-panel hidden" data-settings-panel="debug">
-                <section class="workspace-tool-group">
-                  <div class="tool-group-head">
-                    <h3>会话元信息</h3>
-                    <span class="meta-label">仅负责人模式显示</span>
-                  </div>
-
-                  <pre id="request-meta" class="meta-panel empty">等待任务开始…</pre>
                 </section>
               </section>
             </div>

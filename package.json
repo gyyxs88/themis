@@ -6,7 +6,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc",
-    "dev:web": "tsx src/server/main.ts",
+    "dev:web": "tsx watch --clear-screen=false src/server/main.ts",
+    "dev:web:once": "tsx src/server/main.ts",
     "start:web": "node dist/server/main.js"
   },
   "devDependencies": {

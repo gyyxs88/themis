@@ -1,16 +1,110 @@
 import { nowIso, summarizeForSidebar } from "./utils.js";
 
-export function createStoreHelpers({ app, getState, createDefaultThreadSettings, saveState }) {
-  const { DEFAULT_ROLE, DEFAULT_WORKFLOW } = app.constants;
+export function createStoreHelpers({ app, getState, saveState }) {
+  const DEFAULT_REASONING_OPTIONS = [
+    { reasoningEffort: "low", description: "low" },
+    { reasoningEffort: "medium", description: "medium" },
+    { reasoningEffort: "high", description: "high" },
+    { reasoningEffort: "xhigh", description: "xhigh" },
+  ];
 
   function buildTaskOptions(settings) {
+    const effective = resolveEffectiveSettings(settings);
     const options = {
-      ...(settings?.model ? { model: settings.model } : {}),
-      ...(settings?.reasoning ? { reasoning: settings.reasoning } : {}),
-      ...(settings?.approvalPolicy ? { approvalPolicy: settings.approvalPolicy } : {}),
+      ...(effective.model ? { model: effective.model } : {}),
+      ...(effective.reasoning ? { reasoning: effective.reasoning } : {}),
+      ...(effective.approvalPolicy ? { approvalPolicy: effective.approvalPolicy } : {}),
     };
 
     return Object.keys(options).length ? options : undefined;
+  }
+
+  function getRuntimeConfig() {
+    return app.runtime.runtimeConfig ?? {
+      status: "idle",
+      errorMessage: "",
+      models: [],
+      defaults: {
+        model: "",
+        reasoning: "",
+        approvalPolicy: "",
+      },
+    };
+  }
+
+  function getVisibleModels(settings) {
+    const runtimeConfig = getRuntimeConfig();
+    const inherited = resolveInheritedSettings(settings);
+    const visibleModels = runtimeConfig.models.filter((model) => !model.hidden || model.model === inherited.model);
+
+    if (settings?.model && !visibleModels.some((model) => model.model === settings.model)) {
+      visibleModels.unshift(createSyntheticModel(settings.model));
+    }
+
+    if (inherited.model && !visibleModels.some((model) => model.model === inherited.model)) {
+      visibleModels.unshift(createSyntheticModel(inherited.model));
+    }
+
+    return dedupeModels(visibleModels);
+  }
+
+  function getReasoningOptions(settings) {
+    const inherited = resolveInheritedSettings(settings);
+    const model = getModelById(inherited.model, settings);
+    const options = Array.isArray(model?.supportedReasoningEfforts) && model.supportedReasoningEfforts.length
+      ? model.supportedReasoningEfforts
+      : DEFAULT_REASONING_OPTIONS;
+
+    if (settings?.reasoning && !options.some((option) => option.reasoningEffort === settings.reasoning)) {
+      return [
+        {
+          reasoningEffort: settings.reasoning,
+          description: settings.reasoning,
+        },
+        ...options,
+      ];
+    }
+
+    return options;
+  }
+
+  function resolveInheritedSettings(settings) {
+    const runtimeConfig = getRuntimeConfig();
+    const visibleModels = getVisibleModelsWithoutFallback(settings);
+    const configuredModel = normalizeText(runtimeConfig.defaults.model);
+    const inheritedModel = normalizeText(settings?.model)
+      || configuredModel
+      || runtimeConfig.models.find((model) => model.isDefault)?.model
+      || visibleModels[0]?.model
+      || "";
+    const model = getModelById(inheritedModel, settings);
+    const reasoningOptions = Array.isArray(model?.supportedReasoningEfforts) && model.supportedReasoningEfforts.length
+      ? model.supportedReasoningEfforts
+      : DEFAULT_REASONING_OPTIONS;
+    const configuredReasoning = normalizeText(runtimeConfig.defaults.reasoning);
+    const inheritedReasoning = reasoningOptions.some((option) => option.reasoningEffort === configuredReasoning)
+      ? configuredReasoning
+      : normalizeText(model?.defaultReasoningEffort);
+
+    return {
+      model: inheritedModel,
+      reasoning: inheritedReasoning || "",
+      approvalPolicy: normalizeText(runtimeConfig.defaults.approvalPolicy) || "untrusted",
+    };
+  }
+
+  function resolveEffectiveSettings(settings) {
+    const inherited = resolveInheritedSettings(settings);
+    const reasoningOptions = getReasoningOptions(settings);
+    const explicitReasoning = normalizeText(settings?.reasoning);
+
+    return {
+      model: normalizeText(settings?.model) || inherited.model,
+      reasoning: reasoningOptions.some((option) => option.reasoningEffort === explicitReasoning)
+        ? explicitReasoning
+        : inherited.reasoning,
+      approvalPolicy: normalizeText(settings?.approvalPolicy) || inherited.approvalPolicy,
+    };
   }
 
   function shouldBootstrapThread(thread) {
@@ -41,44 +135,12 @@ export function createStoreHelpers({ app, getState, createDefaultThreadSettings,
     saveState();
   }
 
-  function buildThreadSummary(thread) {
-    const state = getState();
-    const latestTurn = thread?.turns.at(-1);
-    const turnCount = app.history?.getDisplayTurnCount(thread) ?? thread?.turns.length ?? 0;
-    const status = threadStatus(thread);
-
-    return {
-      threadId: thread?.id ?? null,
-      title: thread?.title ?? "新会话",
-      turnCount,
-      workflow: latestTurn?.workflow ?? state.selectedWorkflow ?? DEFAULT_WORKFLOW,
-      role: latestTurn?.role ?? state.selectedRole ?? DEFAULT_ROLE,
-      settings: thread?.settings ?? createDefaultThreadSettings(),
-      requestId: latestTurn?.requestId ?? null,
-      taskId: latestTurn?.taskId ?? null,
-      serverThreadId: thread?.serverThreadId ?? null,
-      serverSessionId: thread?.id ?? null,
-      sessionMode: latestTurn?.sessionMode ?? null,
-      bootstrapMode: thread?.bootstrapMode ?? null,
-      bootstrapPending: Boolean(thread?.bootstrapTranscript && !thread?.serverThreadId),
-      serverHistoryAvailable: thread?.serverHistoryAvailable ?? false,
-      storedTurnCount: thread?.storedTurnCount ?? 0,
-      historyHydrated: thread?.historyHydrated ?? true,
-      state: status,
-      updatedAt: thread?.updatedAt ?? null,
-    };
-  }
-
   function describeBootstrapLabel(thread) {
     if (thread?.bootstrapMode === "session-transcript") {
       return "真实 Codex 会话的逐轮转录";
     }
 
     return "浏览器里保存的逐轮会话转录";
-  }
-
-  function describeBootstrapStatus(thread) {
-    return `这是一个分叉会话。下一次发送时，会先把${describeBootstrapLabel(thread)}导入新的 Codex 会话。`;
   }
 
   function threadStatus(thread) {
@@ -135,7 +197,7 @@ export function createStoreHelpers({ app, getState, createDefaultThreadSettings,
     }
 
     if (thread.bootstrapTranscript && !thread.serverThreadId) {
-      return `分叉会话：下一次发送会先导入${describeBootstrapLabel(thread)}。`;
+      return `fork 会话：下一次发送会先导入${describeBootstrapLabel(thread)}。`;
     }
 
     const latestTurn = thread.turns.at(-1);
@@ -245,7 +307,7 @@ export function createStoreHelpers({ app, getState, createDefaultThreadSettings,
   }
 
   function renderLocalForkTurn(turn, index) {
-    const lines = [`[Turn ${index}]`, `Workflow: ${turn.workflow}`, `Role: ${turn.role}`, "User goal:", turn.goal];
+    const lines = [`[Turn ${index}]`, "User goal:", turn.goal];
 
     if (turn.inputText) {
       lines.push("User context:");
@@ -284,13 +346,65 @@ export function createStoreHelpers({ app, getState, createDefaultThreadSettings,
     };
   }
 
+  function getVisibleModelsWithoutFallback(settings) {
+    const runtimeConfig = getRuntimeConfig();
+    const configuredModel = normalizeText(runtimeConfig.defaults.model);
+
+    return dedupeModels(
+      runtimeConfig.models.filter((model) => !model.hidden || model.model === configuredModel || model.model === settings?.model),
+    );
+  }
+
+  function getModelById(modelId, settings) {
+    if (!modelId) {
+      return null;
+    }
+
+    const models = getVisibleModelsWithoutFallback(settings);
+    return models.find((model) => model.model === modelId) ?? createSyntheticModel(modelId);
+  }
+
+  function dedupeModels(models) {
+    const unique = new Map();
+
+    for (const model of models) {
+      unique.set(model.model, model);
+    }
+
+    return [...unique.values()];
+  }
+
+  function createSyntheticModel(modelId) {
+    return {
+      id: modelId,
+      model: modelId,
+      displayName: modelId,
+      description: "当前线程记录的模型，没有出现在 Codex 当前返回的模型列表中。",
+      hidden: false,
+      supportedReasoningEfforts: DEFAULT_REASONING_OPTIONS,
+      defaultReasoningEffort: "",
+      supportsPersonality: false,
+      isDefault: false,
+    };
+  }
+
+  function normalizeText(value) {
+    if (typeof value !== "string") {
+      return "";
+    }
+
+    return value.trim();
+  }
+
   return {
     buildTaskOptions,
+    getVisibleModels,
+    getReasoningOptions,
+    resolveInheritedSettings,
+    resolveEffectiveSettings,
     shouldBootstrapThread,
     repairInterruptedTurns,
-    buildThreadSummary,
     describeBootstrapLabel,
-    describeBootstrapStatus,
     threadStatus,
     latestTurnMessage,
     getVisibleAssistantMessages,

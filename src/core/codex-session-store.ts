@@ -8,7 +8,6 @@ export interface CodexThreadSessionStoreOptions {
   codex?: Codex;
   sessionRegistry?: SqliteCodexSessionRegistry;
   databaseFile?: string;
-  legacyRegistryFile?: string;
   maxSessions?: number;
 }
 
@@ -40,7 +39,6 @@ export class CodexThreadSessionStore {
       options.sessionRegistry ??
       new SqliteCodexSessionRegistry({
         ...(options.databaseFile ? { databaseFile: options.databaseFile } : {}),
-        ...(options.legacyRegistryFile ? { legacyRegistryFile: options.legacyRegistryFile } : {}),
         ...(typeof options.maxSessions === "number" ? { maxSessions: options.maxSessions } : {}),
       });
   }
@@ -104,26 +102,6 @@ export class CodexThreadSessionStore {
         await this.release(sessionId, taskId, finalThreadId);
       },
     };
-  }
-
-  async reset(sessionId: string): Promise<boolean> {
-    const normalized = sessionId.trim();
-
-    if (!normalized) {
-      return false;
-    }
-
-    const current = this.sessionRegistry.getSession(normalized);
-
-    if (!current) {
-      return false;
-    }
-
-    if (current.activeTaskId) {
-      throw new SessionBusyError(normalized);
-    }
-
-    return this.sessionRegistry.deleteSession(normalized);
   }
 
   async resolveThreadId(sessionId: string): Promise<string | null> {

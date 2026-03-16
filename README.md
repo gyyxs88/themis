@@ -71,7 +71,7 @@ The project now includes a first end-to-end LAN web UI path:
 - local thread history in the browser
 - thread switching from the left sidebar
 - a simplified sidebar that focuses on recent conversations and navigation
-- session reset, session fork, workflow, role, model, reasoning, and approval settings inside a categorized workspace modal
+- a main-surface `分叉` action plus a simplified workspace modal whose model picker is loaded from `codex app-server`
 - desktop sidebar collapse and resize, plus a mobile drawer sidebar
 - real backend multi-turn session reuse keyed by `sessionId`
 - backend request normalization
@@ -102,6 +102,8 @@ Examples:
 npm run dev:web
 ```
 
+`dev:web` now runs in watch mode and will auto-restart when backend TypeScript files change. Browser assets still need a page refresh to reflect new HTML/CSS/JS.
+
 4. Open the printed local or LAN address in a browser.
 
 Default address:
@@ -127,12 +129,12 @@ You can override bind host and port with:
 - A layout closer to Codex app or ChatGPT, with a left sidebar and a central conversation area
 - A recent-conversations list in the sidebar, with local history preserved in the browser
 - Thread status shown on each conversation item in the sidebar instead of the workspace header
-- Session controls and runtime settings inside a workspace-level settings panel instead of the sidebar
+- A `分叉` action in the workspace header, while `设置` only keeps runtime parameters and loads the real model picker from `codex app-server`
 - A desktop sidebar that can collapse or be resized, and a drawer-style sidebar on mobile
 - A chat-style task composer at the bottom of the workspace, with hints and actions embedded into the same input surface and no separate context panel
 - A live execution timeline inside the assistant response card while Codex is still working
 - 中途 assistant commentary 会直接显示在同一张响应卡片里，不再只看到通用进度标记
-- `employee` 视图默认更精简，只看结论和必要进展；`owner` 视图保留详细执行轨迹和任务元信息
+- 默认界面更精简，只保留结论、必要进展，以及少量运行参数设置
 - A final result section that stays inside the same conversation turn
 - A `取消` button that aborts the browser request and stops the corresponding task
 - Forking that prefers real Codex session transcript replay over summary-only bootstrapping
@@ -145,8 +147,6 @@ You can override bind host and port with:
 - The backend now maps that `sessionId` to a real Codex thread and resumes it on later turns
 - Session-to-thread mapping is now persisted locally at `infra/local/themis.db`
 - The same SQLite database now also keeps task-turn records, streamed event history, and touched-file indexes for local recovery and inspection
-- On first startup after the SQLite upgrade, Themis will import any existing records from `infra/local/codex-session-registry.json`
-- Resetting a session clears the current backend thread binding but keeps local UI history
 - Forking a session creates a new local thread and tries to bootstrap its first backend turn from the persisted Codex session transcript
 - If the persisted Codex transcript is unavailable, the UI falls back to a browser-local turn-by-turn transcript instead of a short summary
 - This is closer to Codex app style branching, but it is still transcript replay into a fresh thread rather than a low-level SDK thread clone
@@ -155,7 +155,7 @@ You can override bind host and port with:
 
 If `localhost` works but another device times out when opening `http://<LAN-IP>:3100`, check the host firewall first.
 
-If the homepage loads but `/styles/*.css` or `/modules/*.js` return `404`, restart the current `npm run dev:web` process first. This usually means an older dev server instance is still running without the latest static-asset routing logic.
+If the homepage loads but `/styles/*.css` or `/modules/*.js` return `404`, first confirm the current `npm run dev:web` watch process has restarted after your backend change. If you are still connected to an older server instance, restart it once manually.
 
 For Ubuntu systems using `ufw`, a typical fix is:
 

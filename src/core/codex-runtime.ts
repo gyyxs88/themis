@@ -7,6 +7,7 @@ import {
   type ThreadItem,
   type ThreadOptions,
 } from "@openai/codex-sdk";
+import { readCodexRuntimeCatalog, type CodexRuntimeCatalog } from "./codex-app-server.js";
 import { buildTaskPrompt } from "./prompt.js";
 import { buildForkContextFromThread, type CodexForkContext } from "./codex-session-fork.js";
 import {
@@ -180,10 +181,6 @@ export class CodexTaskRuntime {
     }
   }
 
-  async resetSession(sessionId: string): Promise<boolean> {
-    return this.sessionStore.reset(sessionId);
-  }
-
   async createForkContext(sessionId: string, threadId?: string): Promise<CodexForkContext | null> {
     const resolvedThreadId = threadId?.trim() || (await this.sessionStore.resolveThreadId(sessionId));
 
@@ -192,6 +189,10 @@ export class CodexTaskRuntime {
     }
 
     return buildForkContextFromThread(resolvedThreadId);
+  }
+
+  async readRuntimeConfig(): Promise<CodexRuntimeCatalog> {
+    return readCodexRuntimeCatalog(this.workingDirectory);
   }
 
   getRuntimeStore(): SqliteCodexSessionRegistry {
@@ -233,12 +234,12 @@ function buildThreadOptions(
     ...(request.options?.sandboxMode ? { sandboxMode: request.options.sandboxMode as SandboxMode } : {}),
     ...(request.options?.approvalPolicy
       ? { approvalPolicy: request.options.approvalPolicy as ApprovalMode }
-      : { approvalPolicy: defaultApprovalPolicy(request.role) }),
+      : { approvalPolicy: defaultApprovalPolicy() }),
   };
 }
 
-function defaultApprovalPolicy(role: TaskRequest["role"]): ApprovalMode {
-  return role === "owner" ? "on-request" : "untrusted";
+function defaultApprovalPolicy(): ApprovalMode {
+  return "untrusted";
 }
 
 function createTaskEvent(

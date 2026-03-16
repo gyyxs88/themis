@@ -10,7 +10,7 @@ import {
 
 export function createStore(app) {
   const { MAX_THREAD_COUNT, STORAGE_KEY } = app.constants;
-  const models = createStoreModelHelpers(app.constants);
+  const models = createStoreModelHelpers();
 
   let state = loadState();
   let transientStatus = null;
@@ -18,7 +18,6 @@ export function createStore(app) {
   const helpers = createStoreHelpers({
     app,
     getState: () => state,
-    createDefaultThreadSettings: models.createDefaultThreadSettings,
     saveState,
   });
 
@@ -272,11 +271,13 @@ export function createStore(app) {
     createAndActivateThread,
     applyRuntimeMetadata,
     buildTaskOptions: helpers.buildTaskOptions,
+    getVisibleModels: helpers.getVisibleModels,
+    getReasoningOptions: helpers.getReasoningOptions,
+    resolveInheritedSettings: helpers.resolveInheritedSettings,
+    resolveEffectiveSettings: helpers.resolveEffectiveSettings,
     shouldBootstrapThread: helpers.shouldBootstrapThread,
-    buildThreadSummary: helpers.buildThreadSummary,
     buildThreadPreview: helpers.buildThreadPreview,
     describeBootstrapLabel: helpers.describeBootstrapLabel,
-    describeBootstrapStatus: helpers.describeBootstrapStatus,
     threadStatus: helpers.threadStatus,
     latestTurnMessage: helpers.latestTurnMessage,
     getVisibleAssistantMessages: helpers.getVisibleAssistantMessages,

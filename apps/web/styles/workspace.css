@@ -39,6 +39,7 @@
 }
 
 .workspace-heading h1,
+.settings-modal-head h2,
 .workspace-tools-head h2,
 .tool-group-head h3,
 .empty-thread h3 {
@@ -148,10 +149,8 @@
 .settings-modal-dialog {
   position: relative;
   z-index: 1;
-  width: min(1120px, calc(100vw - 48px));
+  width: min(760px, calc(100vw - 48px));
   max-height: calc(100dvh - 48px);
-  display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
   border: 1px solid rgba(216, 216, 221, 0.9);
   border-radius: 28px;
   overflow: hidden;
@@ -159,64 +158,11 @@
   box-shadow: 0 34px 80px rgba(15, 18, 24, 0.18);
 }
 
-.settings-modal-sidebar {
-  display: grid;
-  grid-template-rows: auto 1fr;
-  gap: 18px;
-  padding: 24px;
-  background:
-    radial-gradient(circle at top left, rgba(255, 255, 255, 0.1), transparent 34%),
-    linear-gradient(180deg, #101214 0%, #181b20 100%);
-  color: #f5f7fa;
-}
-
-.settings-modal-brand h2,
-.settings-modal-context h3 {
-  margin: 0;
-}
-
 .settings-modal-copy {
   margin: 8px 0 0;
-  color: rgba(245, 247, 250, 0.72);
+  color: var(--muted);
   font-size: 13px;
   line-height: 1.6;
-}
-
-.settings-modal-nav {
-  display: grid;
-  gap: 8px;
-  align-content: start;
-  min-height: 0;
-  min-width: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-.settings-nav-button {
-  width: 100%;
-  min-height: 46px;
-  padding: 0 14px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.04);
-  color: rgba(245, 247, 250, 0.88);
-  text-align: left;
-  transition:
-    transform 160ms ease,
-    background-color 160ms ease,
-    border-color 160ms ease,
-    color 160ms ease;
-}
-
-.settings-nav-button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.18);
-}
-
-.settings-nav-button.active {
-  border-color: rgba(255, 255, 255, 0.22);
-  background: #f7f8fa;
-  color: #111111;
 }
 
 .settings-modal-main {
@@ -483,21 +429,6 @@
   .settings-modal-dialog {
     width: calc(100vw - 24px);
     max-height: calc(100dvh - 24px);
-    grid-template-columns: 1fr;
-  }
-
-  .settings-modal-sidebar {
-    grid-template-rows: auto auto auto;
-    padding: 18px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  }
-
-  .settings-modal-nav {
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(88px, 1fr);
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding-bottom: 4px;
   }
 
   .settings-modal-main {

@@ -4,8 +4,9 @@ import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { serveWebAsset } from "./http-assets.js";
 import { toErrorMessage } from "./http-errors.js";
 import { handleHistorySessionDetail, handleHistorySessions } from "./http-history.js";
+import { handleRuntimeConfig } from "./http-runtime-config.js";
 import { writeJson } from "./http-responses.js";
-import { handleSessionForkContext, handleSessionReset } from "./http-session-handlers.js";
+import { handleSessionForkContext } from "./http-session-handlers.js";
 import { handleTaskRun, handleTaskStream } from "./http-task-handlers.js";
 
 export interface ThemisHttpServerOptions {
@@ -32,16 +33,16 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
         }, isHeadRequest);
       }
 
+      if ((request.method === "GET" || isHeadRequest) && url.pathname === "/api/runtime/config") {
+        return handleRuntimeConfig(response, runtime, isHeadRequest);
+      }
+
       if (request.method === "POST" && url.pathname === "/api/tasks/run") {
         return handleTaskRun(request, response, runtime, taskTimeoutMs);
       }
 
       if (request.method === "POST" && url.pathname === "/api/tasks/stream") {
         return handleTaskStream(request, response, runtime, taskTimeoutMs);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/sessions/reset") {
-        return handleSessionReset(request, response, runtime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/sessions/fork-context") {

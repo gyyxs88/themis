@@ -3,10 +3,6 @@ export const KNOWN_CHANNEL_IDS = ["web", "feishu", "cli"] as const;
 export type KnownChannelId = (typeof KNOWN_CHANNEL_IDS)[number];
 export type ChannelId = KnownChannelId | (string & {});
 
-export const USER_ROLES = ["owner", "employee"] as const;
-
-export type UserRole = (typeof USER_ROLES)[number];
-
 export interface ChannelUser {
   userId: string;
   displayName?: string;

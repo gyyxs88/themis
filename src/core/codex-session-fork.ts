@@ -18,8 +18,6 @@ export interface CodexForkContext {
 
 interface ParsedSessionTurn {
   rawUserText: string;
-  workflow?: string;
-  role?: string;
   goal?: string;
   inputText?: string;
   assistantText?: string;
@@ -183,8 +181,6 @@ function extractMessageText(content: unknown): string {
 }
 
 function parseThemisPrompt(prompt: string): Omit<ParsedSessionTurn, "rawUserText" | "assistantText"> {
-  const workflow = extractSingleLine(prompt, "Workflow:");
-  const role = extractSingleLine(prompt, "Role:");
   const goal = extractBlock(prompt, "Goal:\n", [
     "\n\nAdditional context:\n",
     "\n\nPrior conversation transcript for this forked session:\n",
@@ -200,8 +196,6 @@ function parseThemisPrompt(prompt: string): Omit<ParsedSessionTurn, "rawUserText
   ]);
 
   return {
-    ...(workflow ? { workflow } : {}),
-    ...(role ? { role } : {}),
     ...(goal ? { goal } : {}),
     ...(inputText ? { inputText } : {}),
   };
@@ -238,14 +232,6 @@ function renderForkTranscript(
 
 function renderTurnBlock(turn: ParsedSessionTurn, index: number): string {
   const lines = [`[Turn ${index}]`];
-
-  if (turn.workflow) {
-    lines.push(`Workflow: ${turn.workflow}`);
-  }
-
-  if (turn.role) {
-    lines.push(`Role: ${turn.role}`);
-  }
 
   if (turn.goal) {
     lines.push("User goal:");
@@ -299,12 +285,6 @@ function selectTranscriptBlocks(
   };
 }
 
-function extractSingleLine(prompt: string, label: string): string | undefined {
-  const match = prompt.match(new RegExp(`^${escapeRegExp(label)}\\s*(.+)$`, "m"));
-  const value = match?.[1]?.trim();
-  return value ? value : undefined;
-}
-
 function extractBlock(prompt: string, startMarker: string, endMarkers: string[]): string | undefined {
   const startIndex = prompt.indexOf(startMarker);
 
@@ -325,10 +305,6 @@ function extractBlock(prompt: string, startMarker: string, endMarkers: string[])
 
   const value = prompt.slice(contentStart, contentEnd).trim();
   return value ? value : undefined;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

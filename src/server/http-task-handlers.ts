@@ -35,7 +35,6 @@ export async function handleTaskStream(
   response.on("close", markClosed);
 
   const webAdapter = new WebAdapter({
-    defaultWorkflow: "implement",
     deliver: async (message) => {
       safeWriteNdjson(response, message, streamClosed);
     },
@@ -120,7 +119,6 @@ export async function handleTaskRun(
   const deliveries: WebDeliveryMessage[] = [];
   const router = new InMemoryCommunicationRouter();
   const webAdapter = new WebAdapter({
-    defaultWorkflow: "implement",
     deliver: async (message) => {
       deliveries.push(message);
     },

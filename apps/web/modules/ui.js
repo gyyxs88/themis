@@ -11,7 +11,6 @@ export function createRenderer(app) {
   function renderAll(scrollToBottom = false) {
     store.ensureActiveThread();
     dom.threadSearchInput.value = app.runtime.threadSearchQuery;
-    app.history.renderHistorySyncStatus();
     renderThreadList();
     renderWorkspaceHeader();
     renderWorkspaceTools();
@@ -71,18 +70,14 @@ export function createRenderer(app) {
     }
 
     dom.workspaceCopy.textContent = thread.bootstrapTranscript && !thread.serverThreadId
-      ? `当前会话已在浏览器本地保存，包含 ${turnCount} 条任务。这是一个分叉会话，下一次发送时会把${store.describeBootstrapLabel(thread)}导入新的 Codex 会话。`
+      ? `当前会话已在浏览器本地保存，包含 ${turnCount} 条任务。这是一个 fork 会话，第一次发送时会先把${store.describeBootstrapLabel(thread)}导入新的 Codex 会话。`
       : !thread.serverThreadId
-        ? `当前会话已在浏览器本地保存，包含 ${turnCount} 条任务。这个会话的后端上下文目前已重置，下一次发送会创建新的 Codex 会话。`
+        ? `当前会话已在浏览器本地保存，包含 ${turnCount} 条任务。首次发送后会创建新的 Codex 会话。`
         : `当前会话已在浏览器本地保存，包含 ${turnCount} 条任务。现在同一会话会在后端复用真实的 Codex thread，多轮上下文已经真正接通。`;
   }
 
   function renderWorkspaceTools() {
     const thread = store.getActiveThread();
-    const latestTurn = thread?.turns.at(-1);
-    const effectiveRole = latestTurn?.role ?? store.state.selectedRole ?? app.constants.DEFAULT_ROLE;
-    const activeSection = resolveSettingsSection(effectiveRole);
-    const debugAllowed = effectiveRole === "owner";
     const open = Boolean(app.runtime.workspaceToolsOpen);
 
     dom.workspaceToolsPanel.classList.toggle("hidden", !open);
@@ -90,30 +85,14 @@ export function createRenderer(app) {
     dom.workspaceToolsPanel.setAttribute("aria-hidden", String(!open));
     dom.workspaceToolsToggle.setAttribute("aria-expanded", String(open));
     document.body.classList.toggle("workspace-modal-open", open);
-    dom.requestMeta.classList.toggle("empty", !latestTurn && !thread?.storedTurnCount);
-    dom.requestMeta.textContent = JSON.stringify(store.buildThreadSummary(thread), null, 2);
-    dom.settingsSectionButtons.forEach((button) => {
-      const section = button.dataset.settingsSection;
-      const isDebug = section === "debug";
-      const active = section === activeSection;
-
-      button.classList.toggle("active", active);
-      button.setAttribute("aria-current", active ? "true" : "false");
-      button.classList.toggle("hidden", isDebug && !debugAllowed);
-    });
-    dom.settingsPanels.forEach((panel) => {
-      const section = panel.dataset.settingsPanel;
-      const hidden = section !== activeSection || (section === "debug" && !debugAllowed);
-      panel.classList.toggle("hidden", hidden);
-    });
 
     const settings = thread?.settings ?? store.createDefaultThreadSettings();
-    dom.modelInput.value = settings.model ?? "";
-    dom.reasoningSelect.value = settings.reasoning ?? "";
-    dom.approvalSelect.value = settings.approvalPolicy ?? "";
+    const effectiveSettings = store.resolveEffectiveSettings(settings);
 
-    setSelectedChoice(dom.workflowInputs, store.state.selectedWorkflow ?? app.constants.DEFAULT_WORKFLOW);
-    setSelectedChoice(dom.roleInputs, store.state.selectedRole ?? app.constants.DEFAULT_ROLE);
+    renderModelSelect(settings, effectiveSettings);
+    renderReasoningSelect(settings, effectiveSettings);
+    dom.approvalSelect.value = effectiveSettings.approvalPolicy ?? "";
+    renderRuntimeConfigNote(effectiveSettings.model);
 
     if (!thread) {
       dom.settingsNote.textContent = "这些设置只作用于当前会话后续发出的任务。";
@@ -126,11 +105,90 @@ export function createRenderer(app) {
     }
 
     if (thread.bootstrapTranscript) {
-      dom.settingsNote.textContent = `这是一个分叉会话。下一次发送时，会先把${store.describeBootstrapLabel(thread)}导入新的 Codex 会话。`;
+      dom.settingsNote.textContent = `这是一个 fork 会话。第一次发送时，会先把${store.describeBootstrapLabel(thread)}导入新的 Codex 会话。`;
       return;
     }
 
     dom.settingsNote.textContent = "当前还没有建立后端上下文。首次发送后会创建新的 Codex 会话。";
+  }
+
+  function renderModelSelect(settings, effectiveSettings) {
+    const runtimeConfig = app.runtime.runtimeConfig;
+    const models = store.getVisibleModels(settings);
+
+    if (runtimeConfig.status === "loading" && !models.length) {
+      dom.modelSelect.innerHTML = '<option value="">正在读取 Codex 模型...</option>';
+      dom.modelSelect.value = "";
+      return;
+    }
+
+    if (!models.length) {
+      dom.modelSelect.innerHTML = `<option value="">${utils.escapeHtml(resolveModelFallbackLabel(runtimeConfig))}</option>`;
+      dom.modelSelect.value = "";
+      return;
+    }
+
+    const defaultModel = runtimeConfig.defaults.model ?? "";
+
+    dom.modelSelect.innerHTML = models
+      .map((model) => {
+        const label = buildModelOptionLabel(model, defaultModel);
+        return `<option value="${utils.escapeHtml(model.model)}">${utils.escapeHtml(label)}</option>`;
+      })
+      .join("");
+
+    dom.modelSelect.value = effectiveSettings.model ?? "";
+  }
+
+  function renderReasoningSelect(settings, effectiveSettings) {
+    const inherited = store.resolveInheritedSettings(settings);
+    const options = store.getReasoningOptions(settings);
+
+    dom.reasoningSelect.innerHTML = options
+      .map((option) => {
+        const label = option.reasoningEffort === inherited.reasoning
+          ? `${option.reasoningEffort}（默认）`
+          : option.reasoningEffort;
+        return `<option value="${utils.escapeHtml(option.reasoningEffort)}">${utils.escapeHtml(label)}</option>`;
+      })
+      .join("");
+
+    dom.reasoningSelect.value = effectiveSettings.reasoning ?? options[0]?.reasoningEffort ?? "";
+  }
+
+  function renderRuntimeConfigNote(effectiveModel) {
+    const runtimeConfig = app.runtime.runtimeConfig;
+
+    if (runtimeConfig.status === "loading") {
+      dom.runtimeConfigNote.textContent = "正在通过 Codex app-server 读取模型列表与默认运行配置。";
+      return;
+    }
+
+    if (runtimeConfig.status === "error") {
+      dom.runtimeConfigNote.textContent = runtimeConfig.errorMessage
+        ? `读取 Codex 模型列表失败：${runtimeConfig.errorMessage}`
+        : "读取 Codex 模型列表失败，当前会继续使用后端默认配置。";
+      return;
+    }
+
+    if (runtimeConfig.status !== "ready") {
+      dom.runtimeConfigNote.textContent = "模型与默认值将在读取 Codex 运行配置后显示。";
+      return;
+    }
+
+    const parts = ["模型列表来自 Codex app-server。"];
+
+    if (runtimeConfig.defaults.model) {
+      parts.push(`当前默认模型：${runtimeConfig.defaults.model}。`);
+    } else if (effectiveModel) {
+      parts.push(`当前会话生效模型：${effectiveModel}。`);
+    }
+
+    if (runtimeConfig.defaults.reasoning) {
+      parts.push(`默认推理：${runtimeConfig.defaults.reasoning}。`);
+    }
+
+    dom.runtimeConfigNote.textContent = parts.join(" ");
   }
 
   function renderConversation(scrollToBottom) {
@@ -184,8 +242,6 @@ export function createRenderer(app) {
 
   function renderComposerMeta() {
     const thread = store.getActiveThread();
-    dom.activeWorkflowLabel.textContent = `工作流：${store.state.selectedWorkflow ?? app.constants.DEFAULT_WORKFLOW}`;
-    dom.activeRoleLabel.textContent = `角色：${store.state.selectedRole ?? app.constants.DEFAULT_ROLE}`;
     dom.activeThreadLabel.textContent = `会话：${thread?.title ?? "新会话"}`;
   }
 
@@ -195,55 +251,20 @@ export function createRenderer(app) {
 
     dom.submitButton.disabled = busy;
     dom.cancelButton.disabled = !busy;
+    dom.forkThreadButton.disabled = controlsBusy;
     dom.newThreadButton.disabled = controlsBusy;
-    dom.historyRefreshButton.disabled = controlsBusy || app.runtime.historySyncBusy;
     dom.workspaceToolsToggle.disabled = false;
     dom.workspaceToolsClose.disabled = false;
-    dom.resetSessionButton.disabled = controlsBusy;
-    dom.forkSessionButton.disabled = controlsBusy;
     dom.threadSearchInput.disabled = controlsBusy && !app.runtime.threadSearchQuery;
     dom.goalInput.disabled = controlsBusy;
-    dom.modelInput.disabled = controlsBusy;
+    dom.modelSelect.disabled = controlsBusy || !store.getVisibleModels(store.getActiveThread()?.settings).length;
     dom.reasoningSelect.disabled = controlsBusy;
     dom.approvalSelect.disabled = controlsBusy;
-
-    dom.workflowInputs.forEach((input) => {
-      input.disabled = controlsBusy;
-    });
-
-    dom.roleInputs.forEach((input) => {
-      input.disabled = controlsBusy;
-    });
   }
 
   function setToolsPanelOpen(nextOpen) {
     app.runtime.workspaceToolsOpen = Boolean(nextOpen);
     renderWorkspaceTools();
-  }
-
-  function setToolsSection(nextSection) {
-    if (!nextSection) {
-      return;
-    }
-
-    app.runtime.workspaceToolsSection = nextSection;
-    renderWorkspaceTools();
-  }
-
-  function resolveSettingsSection(effectiveRole) {
-    if (app.runtime.workspaceToolsSection === "debug" && effectiveRole !== "owner") {
-      app.runtime.workspaceToolsSection = "overview";
-    }
-
-    return app.runtime.workspaceToolsSection ?? "overview";
-  }
-
-  function setSelectedChoice(inputs, value) {
-    const target = inputs.find((input) => input.value === value) ?? inputs[0];
-
-    if (target) {
-      target.checked = true;
-    }
   }
 
   function mergeComposerDraft(thread) {
@@ -266,6 +287,29 @@ export function createRenderer(app) {
     renderThreadList,
     renderWorkspaceTools,
     setToolsPanelOpen,
-    setToolsSection,
   };
+}
+
+function buildModelOptionLabel(model, defaultModel) {
+  if (model.model === defaultModel) {
+    return `${model.displayName}（默认）`;
+  }
+
+  if (model.description?.includes("没有出现在")) {
+    return `${model.displayName}（当前配置）`;
+  }
+
+  return model.displayName;
+}
+
+function resolveModelFallbackLabel(runtimeConfig) {
+  if (runtimeConfig.status === "error") {
+    return "无法读取 Codex 模型列表";
+  }
+
+  if (runtimeConfig.status === "ready") {
+    return "暂无可用模型";
+  }
+
+  return "正在读取 Codex 模型...";
 }

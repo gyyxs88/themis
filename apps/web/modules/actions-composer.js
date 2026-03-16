@@ -1,5 +1,4 @@
 export function createComposerActions(app, streamActions) {
-  const { DEFAULT_ROLE, DEFAULT_WORKFLOW } = app.constants;
   const { dom, store } = app;
 
   function bindComposerControls() {
@@ -64,8 +63,6 @@ export function createComposerActions(app, streamActions) {
     }
 
     const goal = mergeDraftContent(thread.draftGoal, thread.draftContext).trim();
-    const workflow = store.state.selectedWorkflow ?? DEFAULT_WORKFLOW;
-    const role = store.state.selectedRole ?? DEFAULT_ROLE;
 
     if (!goal) {
       dom.goalInput.focus();
@@ -73,8 +70,6 @@ export function createComposerActions(app, streamActions) {
     }
 
     const turn = store.createTurn({
-      workflow,
-      role,
       goal,
       inputText: "",
       options: store.buildTaskOptions(thread.settings),
@@ -110,8 +105,6 @@ export function createComposerActions(app, streamActions) {
         signal: app.runtime.activeRequestController.signal,
         body: JSON.stringify({
           source: "web",
-          workflow,
-          role,
           goal,
           sessionId: thread.id,
           ...(turn.options ? { options: turn.options } : {}),
@@ -164,13 +157,6 @@ export function createComposerActions(app, streamActions) {
 
     if (!thread) {
       return;
-    }
-
-    if (button.dataset.workflow) {
-      store.state = {
-        ...store.state,
-        selectedWorkflow: button.dataset.workflow,
-      };
     }
 
     if (button.dataset.goal || button.dataset.context) {

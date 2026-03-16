@@ -1,14 +1,12 @@
-import type { TaskAttachment, TaskOptions, UserRole } from "../../types/index.js";
+import type { TaskAttachment, TaskOptions } from "../../types/index.js";
 
 export interface WebTaskPayload {
   source?: "web";
   requestId?: string;
   taskId?: string;
-  workflow?: string;
   goal?: string;
   inputText?: string;
   historyContext?: string;
-  role?: UserRole;
   userId?: string;
   displayName?: string;
   sessionId?: string;

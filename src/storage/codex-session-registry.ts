@@ -1,7 +1,9 @@
 import Database from "better-sqlite3";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { TaskEvent, TaskRequest, TaskResult } from "../types/index.js";
+
+const DATABASE_SCHEMA_VERSION = 3;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -18,8 +20,6 @@ export interface StoredTaskTurnRecord {
   sourceChannel: string;
   userId: string;
   userDisplayName?: string;
-  role: string;
-  workflow: string;
   goal: string;
   inputText?: string;
   historyContext?: string;
@@ -56,8 +56,6 @@ export interface StoredSessionHistorySummary {
   latestTurn: {
     requestId: string;
     taskId: string;
-    workflow: string;
-    role: string;
     goal: string;
     status: string;
     summary?: string;
@@ -85,7 +83,6 @@ export interface FailTaskTurnInput {
 
 export interface SqliteCodexSessionRegistryOptions {
   databaseFile?: string;
-  legacyRegistryFile?: string;
   maxSessions?: number;
 }
 
@@ -104,8 +101,6 @@ interface TurnRow {
   source_channel: string;
   user_id: string;
   user_display_name: string | null;
-  role: string;
-  workflow: string;
   goal: string;
   input_text: string | null;
   history_context: string | null;
@@ -141,8 +136,6 @@ interface SessionSummaryRow {
   thread_id: string | null;
   latest_request_id: string;
   latest_task_id: string;
-  latest_workflow: string;
-  latest_role: string;
   latest_goal: string;
   latest_status: string;
   latest_summary: string | null;
@@ -151,35 +144,17 @@ interface SessionSummaryRow {
   latest_updated_at: string;
 }
 
-interface LegacyPersistedSessionRecord {
-  sessionId: string;
-  threadId: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-interface LegacyPersistedSessionRegistry {
-  version: 1;
-  sessions: LegacyPersistedSessionRecord[];
-}
-
 export class SqliteCodexSessionRegistry {
   private readonly databaseFile: string;
-  private readonly legacyRegistryFile: string;
   private readonly maxSessions: number;
   private readonly db: Database.Database;
 
   constructor(options: SqliteCodexSessionRegistryOptions = {}) {
     this.databaseFile = options.databaseFile ?? resolve(process.cwd(), "infra/local/themis.db");
-    this.legacyRegistryFile = options.legacyRegistryFile ?? resolve(process.cwd(), "infra/local/codex-session-registry.json");
     this.maxSessions = options.maxSessions ?? 200;
 
     mkdirSync(dirname(this.databaseFile), { recursive: true });
-    this.db = new Database(this.databaseFile);
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma("foreign_keys = ON");
-    this.initializeSchema();
-    this.migrateLegacyRegistryIfNeeded();
+    this.db = this.openDatabase();
   }
 
   getSession(sessionId: string): StoredCodexSessionRecord | null {
@@ -332,8 +307,6 @@ export class SqliteCodexSessionRegistry {
             source_channel,
             user_id,
             user_display_name,
-            role,
-            workflow,
             goal,
             input_text,
             history_context,
@@ -348,8 +321,6 @@ export class SqliteCodexSessionRegistry {
             @source_channel,
             @user_id,
             @user_display_name,
-            @role,
-            @workflow,
             @goal,
             @input_text,
             @history_context,
@@ -364,8 +335,6 @@ export class SqliteCodexSessionRegistry {
             source_channel = excluded.source_channel,
             user_id = excluded.user_id,
             user_display_name = excluded.user_display_name,
-            role = excluded.role,
-            workflow = excluded.workflow,
             goal = excluded.goal,
             input_text = excluded.input_text,
             history_context = excluded.history_context,
@@ -380,8 +349,6 @@ export class SqliteCodexSessionRegistry {
         source_channel: request.sourceChannel,
         user_id: request.user.userId,
         user_display_name: request.user.displayName?.trim() || null,
-        role: request.role,
-        workflow: request.workflow,
         goal: request.goal,
         input_text: request.inputText?.trim() || null,
         history_context: request.historyContext?.trim() || null,
@@ -483,8 +450,6 @@ export class SqliteCodexSessionRegistry {
               source_channel = @source_channel,
               user_id = @user_id,
               user_display_name = @user_display_name,
-              role = @role,
-              workflow = @workflow,
               goal = @goal,
               input_text = @input_text,
               history_context = @history_context,
@@ -508,8 +473,6 @@ export class SqliteCodexSessionRegistry {
           source_channel: input.request.sourceChannel,
           user_id: input.request.user.userId,
           user_display_name: input.request.user.displayName?.trim() || null,
-          role: input.request.role,
-          workflow: input.request.workflow,
           goal: input.request.goal,
           input_text: input.request.inputText?.trim() || null,
           history_context: input.request.historyContext?.trim() || null,
@@ -688,8 +651,6 @@ export class SqliteCodexSessionRegistry {
             COALESCE(NULLIF(cs.thread_id, ''), latest.codex_thread_id) AS thread_id,
             latest.request_id AS latest_request_id,
             latest.task_id AS latest_task_id,
-            latest.workflow AS latest_workflow,
-            latest.role AS latest_role,
             latest.goal AS latest_goal,
             latest.status AS latest_status,
             latest.summary AS latest_summary,
@@ -725,8 +686,8 @@ export class SqliteCodexSessionRegistry {
     return rows.map(mapSessionSummaryRow);
   }
 
-  private initializeSchema(): void {
-    this.db.exec(`
+  private initializeSchema(database: Database.Database): void {
+    database.exec(`
       CREATE TABLE IF NOT EXISTS codex_sessions (
         session_id TEXT PRIMARY KEY,
         thread_id TEXT NOT NULL DEFAULT '',
@@ -748,8 +709,6 @@ export class SqliteCodexSessionRegistry {
         source_channel TEXT NOT NULL,
         user_id TEXT NOT NULL,
         user_display_name TEXT,
-        role TEXT NOT NULL,
-        workflow TEXT NOT NULL,
         goal TEXT NOT NULL,
         input_text TEXT,
         history_context TEXT,
@@ -801,7 +760,34 @@ export class SqliteCodexSessionRegistry {
 
       CREATE INDEX IF NOT EXISTS themis_turn_files_task_id_idx
       ON themis_turn_files(task_id);
+
+      PRAGMA user_version = ${DATABASE_SCHEMA_VERSION};
     `);
+  }
+
+  private openDatabase(): Database.Database {
+    let database = this.createDatabaseConnection();
+
+    if (this.readSchemaVersion(database) !== DATABASE_SCHEMA_VERSION) {
+      database.close();
+      resetDatabaseFiles(this.databaseFile);
+      database = this.createDatabaseConnection();
+    }
+
+    this.initializeSchema(database);
+    return database;
+  }
+
+  private createDatabaseConnection(): Database.Database {
+    const database = new Database(this.databaseFile);
+    database.pragma("journal_mode = WAL");
+    database.pragma("foreign_keys = ON");
+    return database;
+  }
+
+  private readSchemaVersion(database: Database.Database): number {
+    const version = database.pragma("user_version", { simple: true });
+    return typeof version === "number" ? version : 0;
   }
 
   private countSessions(): number {
@@ -815,41 +801,6 @@ export class SqliteCodexSessionRegistry {
       .get() as { total: number };
 
     return row.total;
-  }
-
-  private migrateLegacyRegistryIfNeeded(): void {
-    if (this.countSessions() > 0 || !existsSync(this.legacyRegistryFile)) {
-      return;
-    }
-
-    let parsed: LegacyPersistedSessionRegistry;
-
-    try {
-      parsed = JSON.parse(readFileSync(this.legacyRegistryFile, "utf8")) as LegacyPersistedSessionRegistry;
-    } catch {
-      return;
-    }
-
-    if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.sessions)) {
-      return;
-    }
-
-    const migrateSessions = this.db.transaction((sessions: LegacyPersistedSessionRecord[]) => {
-      for (const session of sessions) {
-        if (!session.sessionId || !session.threadId) {
-          continue;
-        }
-
-        this.saveSession({
-          sessionId: session.sessionId,
-          threadId: session.threadId,
-          createdAt: session.createdAt,
-          updatedAt: session.updatedAt,
-        });
-      }
-    });
-
-    migrateSessions(parsed.sessions);
   }
 }
 
@@ -871,8 +822,6 @@ function mapTurnRow(row: TurnRow): StoredTaskTurnRecord {
     sourceChannel: row.source_channel,
     userId: row.user_id,
     ...(row.user_display_name ? { userDisplayName: row.user_display_name } : {}),
-    role: row.role,
-    workflow: row.workflow,
     goal: row.goal,
     ...(row.input_text ? { inputText: row.input_text } : {}),
     ...(row.history_context ? { historyContext: row.history_context } : {}),
@@ -915,8 +864,6 @@ function mapSessionSummaryRow(row: SessionSummaryRow): StoredSessionHistorySumma
     latestTurn: {
       requestId: row.latest_request_id,
       taskId: row.latest_task_id,
-      workflow: row.latest_workflow,
-      role: row.latest_role,
       goal: row.latest_goal,
       status: row.latest_status,
       ...(row.latest_summary ? { summary: row.latest_summary } : {}),
@@ -965,4 +912,10 @@ function normalizeText(value: string | undefined): string | undefined {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+function resetDatabaseFiles(databaseFile: string): void {
+  rmSync(databaseFile, { force: true });
+  rmSync(`${databaseFile}-shm`, { force: true });
+  rmSync(`${databaseFile}-wal`, { force: true });
 }

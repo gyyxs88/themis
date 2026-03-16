@@ -28,74 +28,23 @@ export function renderThreadButton(thread, { active, busy, status, escapeHtml })
 }
 
 export function renderTurnMarkup(turn, index, { store, utils }) {
-  const showOperatorDetails = turn.role === "owner";
   const assistantMessages = store.getVisibleAssistantMessages(turn);
-  const stepMarkup = showOperatorDetails && turn.steps.length
-    ? `<div class="step-list">${turn.steps.map((step, stepIndex) => renderStep(step, stepIndex, utils)).join("")}</div>`
-    : "";
-  const details = JSON.stringify(
-    {
-      state: turn.state,
-      workflow: turn.workflow,
-      role: turn.role,
-      options: turn.options ?? null,
-      requestId: turn.requestId,
-      taskId: turn.taskId,
-      serverThreadId: turn.serverThreadId,
-      serverSessionId: turn.serverSessionId,
-      sessionMode: turn.sessionMode,
-      hasContext: Boolean(turn.inputText),
-      createdAt: turn.createdAt,
-      assistantMessageCount: turn.assistantMessages.length,
-      stepCount: turn.steps.length,
-    },
-    null,
-    2,
-  );
   const assistantStreamMarkup = assistantMessages.length
-    ? renderAssistantMessages(assistantMessages, utils, { showOperatorDetails })
+    ? renderAssistantMessages(assistantMessages, utils, { showOperatorDetails: false })
     : "";
-  const detailsMarkup = showOperatorDetails
-    ? `
-        <details class="tools-details turn-details">
-          <summary>查看本次任务详情</summary>
-          <pre class="meta-panel">${utils.escapeHtml(details)}</pre>
-        </details>
-      `
-    : "";
-
   const resultMarkup = turn.result
     ? renderResultBlock(turn.result, utils)
-    : showOperatorDetails
-      ? `
-          <section class="result-surface placeholder">
-            <div class="result-head">
-              <div>
-                <h4>最终结果</h4>
-                <p class="result-empty">结果会在这里出现。</p>
-              </div>
-            </div>
-          </section>
-        `
       : "";
-  const assistantSummaryMarkup = (showOperatorDetails || (!turn.result && !assistantMessages.length))
+  const assistantSummaryMarkup = !turn.result && !assistantMessages.length
     ? `<div class="assistant-summary">${utils.escapeHtml(store.latestTurnMessage(turn))}</div>`
     : "";
-  const bubbleMeta = showOperatorDetails
-    ? `
-        <span>你</span>
-        <span>${utils.escapeHtml(turn.workflow)}</span>
-        <span>${utils.escapeHtml(turn.role)}</span>
-        <span>第 ${index} 条任务</span>
-      `
-    : `
-        <span>你</span>
-      `;
 
   return `
     <section class="message-row user-row" aria-label="用户请求">
       <article class="message-card user-card">
-        <div class="bubble-meta">${bubbleMeta}</div>
+        <div class="bubble-meta">
+          <span>你</span>
+        </div>
         <p class="bubble-body">${utils.escapeHtml(turn.goal)}</p>
         ${turn.inputText ? `<div class="context-snippet">${utils.escapeHtml(turn.inputText)}</div>` : ""}
       </article>
@@ -112,9 +61,7 @@ export function renderTurnMarkup(turn, index, { store, utils }) {
         </div>
         ${assistantSummaryMarkup}
         ${assistantStreamMarkup}
-        ${stepMarkup}
         ${resultMarkup}
-        ${detailsMarkup}
       </article>
     </section>
   `;

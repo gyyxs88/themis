@@ -63,8 +63,6 @@ export function handleHistorySessionDetail(
       latestTurn: {
         requestId: latestTurn.requestId,
         taskId: latestTurn.taskId,
-        workflow: latestTurn.workflow,
-        role: latestTurn.role,
         goal: latestTurn.goal,
         status: latestTurn.status,
         ...(latestTurn.summary ? { summary: latestTurn.summary } : {}),

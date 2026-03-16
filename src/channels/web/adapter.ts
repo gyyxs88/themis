@@ -1,10 +1,8 @@
 import type { ChannelAdapter } from "../../communication/adapter.js";
-import type { TaskError, TaskEvent, TaskRequest, TaskResult, UserRole } from "../../types/index.js";
+import type { TaskError, TaskEvent, TaskRequest, TaskResult } from "../../types/index.js";
 import type { WebMessageSink, WebTaskPayload } from "./types.js";
 
 export interface WebAdapterOptions {
-  defaultRole?: UserRole;
-  defaultWorkflow?: string;
   deliver?: WebMessageSink;
 }
 
@@ -13,13 +11,9 @@ const NOOP_DELIVERY: WebMessageSink = async () => {};
 export class WebAdapter implements ChannelAdapter<WebTaskPayload> {
   readonly channelId = "web" as const;
 
-  private readonly defaultRole: UserRole;
-  private readonly defaultWorkflow: string | undefined;
   private readonly deliver: WebMessageSink;
 
   constructor(options: WebAdapterOptions = {}) {
-    this.defaultRole = options.defaultRole ?? "employee";
-    this.defaultWorkflow = options.defaultWorkflow;
     this.deliver = options.deliver ?? NOOP_DELIVERY;
   }
 
@@ -32,18 +26,12 @@ export class WebAdapter implements ChannelAdapter<WebTaskPayload> {
       return true;
     }
 
-    return typeof input.goal === "string" || typeof input.workflow === "string";
+    return typeof input.goal === "string";
   }
 
   normalizeRequest(input: WebTaskPayload): TaskRequest {
     if (!this.canHandle(input)) {
       throw new Error("Payload is not a web request.");
-    }
-
-    const workflow = normalizeText(input.workflow) ?? this.defaultWorkflow;
-
-    if (!workflow) {
-      throw new Error("Web payload is missing a workflow.");
     }
 
     const goal = normalizeText(input.goal);
@@ -67,8 +55,6 @@ export class WebAdapter implements ChannelAdapter<WebTaskPayload> {
         userId,
         ...(displayName ? { displayName } : {}),
       },
-      role: input.role ?? this.defaultRole,
-      workflow,
       goal,
       ...(inputText ? { inputText } : {}),
       ...(historyContext ? { historyContext } : {}),

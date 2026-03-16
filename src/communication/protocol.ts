@@ -13,7 +13,6 @@ export {
   TASK_EVENT_TYPES,
   TASK_RESULT_STATUSES,
   TASK_STATUSES,
-  USER_ROLES,
 } from "../types/index.js";
 
 export type {
@@ -39,7 +38,6 @@ export type {
   TaskResult,
   TaskResultStatus,
   TaskStatus,
-  UserRole,
 } from "../types/index.js";
 
 export type { ChannelAdapter, CommunicationRouter } from "./adapter.js";
