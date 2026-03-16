@@ -1,0 +1,78 @@
+import type { ServerResponse } from "node:http";
+import type { SqliteCodexSessionRegistry } from "../storage/index.js";
+import { writeJson } from "./http-responses.js";
+
+export function handleHistorySessions(
+  url: URL,
+  response: ServerResponse,
+  store: SqliteCodexSessionRegistry,
+  headOnly = false,
+): void {
+  const rawLimit = Number.parseInt(url.searchParams.get("limit") ?? "24", 10);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 24;
+  const sessions = store.listRecentSessions(limit);
+
+  writeJson(response, 200, { sessions }, headOnly);
+}
+
+export function handleHistorySessionDetail(
+  url: URL,
+  response: ServerResponse,
+  store: SqliteCodexSessionRegistry,
+  headOnly = false,
+): void {
+  const sessionId = decodeURIComponent(url.pathname.slice("/api/history/sessions/".length)).trim();
+
+  if (!sessionId) {
+    writeJson(response, 400, {
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Missing session id.",
+      },
+    }, headOnly);
+    return;
+  }
+
+  const turns = store.listSessionTurns(sessionId);
+
+  if (!turns.length) {
+    writeJson(response, 404, {
+      error: {
+        code: "NOT_FOUND",
+        message: "No stored history was found for this session.",
+      },
+    }, headOnly);
+    return;
+  }
+
+  const firstTurn = turns[0]!;
+  const latestTurn = turns.at(-1) ?? firstTurn;
+  const session = store.listRecentSessions(200).find((item) => item.sessionId === sessionId);
+  const detailedTurns = turns.map((turn) => ({
+    ...turn,
+    events: store.listTurnEvents(turn.requestId),
+    touchedFiles: store.listTurnFiles(turn.requestId),
+  }));
+
+  writeJson(response, 200, {
+    session: session ?? {
+      sessionId,
+      createdAt: firstTurn.createdAt,
+      updatedAt: latestTurn.updatedAt ?? firstTurn.createdAt,
+      turnCount: turns.length,
+      latestTurn: {
+        requestId: latestTurn.requestId,
+        taskId: latestTurn.taskId,
+        workflow: latestTurn.workflow,
+        role: latestTurn.role,
+        goal: latestTurn.goal,
+        status: latestTurn.status,
+        ...(latestTurn.summary ? { summary: latestTurn.summary } : {}),
+        ...(latestTurn.sessionMode ? { sessionMode: latestTurn.sessionMode } : {}),
+        ...(latestTurn.codexThreadId ? { codexThreadId: latestTurn.codexThreadId } : {}),
+        updatedAt: latestTurn.updatedAt,
+      },
+    },
+    turns: detailedTurns,
+  }, headOnly);
+}

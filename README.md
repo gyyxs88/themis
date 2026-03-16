@@ -62,3 +62,108 @@ The memory system is intentionally plain Markdown so it can be:
 - reviewed in Git
 - searched with simple tools
 - extended without introducing a database or service dependency
+
+## LAN Web UI
+
+The project now includes a first end-to-end LAN web UI path:
+
+- chat-style task composer
+- local thread history in the browser
+- thread switching from the left sidebar
+- a simplified sidebar that focuses on recent conversations and navigation
+- session reset, session fork, workflow, role, model, reasoning, and approval settings inside the main workspace
+- desktop sidebar collapse and resize, plus a mobile drawer sidebar
+- real backend multi-turn session reuse keyed by `sessionId`
+- backend request normalization
+- Codex SDK execution
+- incremental event delivery back to the browser
+- browser-side task cancellation
+- server-side timeout and disconnect handling
+- final result delivery back to the browser in the same conversation surface
+
+### Run Locally
+
+1. Install dependencies:
+
+```bash
+npm install
+```
+
+2. Make sure Codex authentication is available on this machine.
+
+Examples:
+
+- existing Codex / ChatGPT login already works locally
+- or `CODEX_API_KEY` is available in the environment
+
+3. Start the LAN web UI:
+
+```bash
+npm run dev:web
+```
+
+4. Open the printed local or LAN address in a browser.
+
+Default address:
+
+```text
+http://localhost:3100
+```
+
+Typical LAN address example:
+
+```text
+http://192.168.x.x:3100
+```
+
+You can override bind host and port with:
+
+- `THEMIS_HOST`
+- `THEMIS_PORT`
+- `THEMIS_TASK_TIMEOUT_MS`
+
+### What You Should See
+
+- A layout closer to Codex app or ChatGPT, with a left sidebar and a central conversation area
+- A recent-conversations list in the sidebar, with local history preserved in the browser
+- Session controls and runtime settings inside a workspace-level settings panel instead of the sidebar
+- A desktop sidebar that can collapse or be resized, and a drawer-style sidebar on mobile
+- A chat-style task composer at the bottom of the workspace
+- A live execution timeline inside the assistant response card while Codex is still working
+- A final result section that stays inside the same conversation turn
+- A `取消` button that aborts the browser request and stops the corresponding task
+- Forking that prefers real Codex session transcript replay over summary-only bootstrapping
+
+### Current Thread Model
+
+- The web UI now keeps conversation threads in browser local storage
+- Switching threads changes the visible conversation without losing recent local history
+- Each new task request includes a `sessionId`
+- The backend now maps that `sessionId` to a real Codex thread and resumes it on later turns
+- Session-to-thread mapping is now persisted locally at `infra/local/themis.db`
+- The same SQLite database now also keeps task-turn records, streamed event history, and touched-file indexes for local recovery and inspection
+- On first startup after the SQLite upgrade, Themis will import any existing records from `infra/local/codex-session-registry.json`
+- Resetting a session clears the current backend thread binding but keeps local UI history
+- Forking a session creates a new local thread and tries to bootstrap its first backend turn from the persisted Codex session transcript
+- If the persisted Codex transcript is unavailable, the UI falls back to a browser-local turn-by-turn transcript instead of a short summary
+- This is closer to Codex app style branching, but it is still transcript replay into a fresh thread rather than a low-level SDK thread clone
+
+### LAN Troubleshooting
+
+If `localhost` works but another device times out when opening `http://<LAN-IP>:3100`, check the host firewall first.
+
+If the homepage loads but `/styles/*.css` or `/modules/*.js` return `404`, restart the current `npm run dev:web` process first. This usually means an older dev server instance is still running without the latest static-asset routing logic.
+
+For Ubuntu systems using `ufw`, a typical fix is:
+
+```bash
+sudo ufw allow 3100/tcp
+sudo ufw reload
+sudo ufw status
+```
+
+If you only want to allow the current subnet, use a narrower rule such as:
+
+```bash
+sudo ufw allow from 192.168.0.0/16 to any port 3100 proto tcp
+```

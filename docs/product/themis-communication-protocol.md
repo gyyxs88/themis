@@ -107,6 +107,7 @@ type TaskRequest = {
   workflow: string;
   goal: string;
   inputText?: string;
+  historyContext?: string;
   attachments?: TaskAttachment[];
   options?: TaskOptions;
   channelContext: ChannelContext;
@@ -123,7 +124,13 @@ Required meaning:
 - `role`: role used for safety defaults
 - `workflow`: selected preset such as `implement` or `docs`
 - `goal`: the task objective in plain language
+- `historyContext`: optional imported transcript used to bootstrap a forked session into a fresh thread
 - `channelContext`: channel metadata needed outside the core runtime
+
+Important fork rule:
+
+- `historyContext` is for transcript replay into a new thread
+- it should not be treated as proof that the backend created a low-level clone of an existing Codex thread
 
 ### 2. `ChannelUser`
 
@@ -194,6 +201,12 @@ type ChannelContext = {
 Important rule:
 
 Core runtime may carry this object for tracing, but should not branch business logic on Feishu-specific fields.
+
+Session note:
+
+- `sessionId` should represent the stable Themis conversation identity
+- `threadId` may carry the currently bound backend Codex thread when known
+- a forked Themis session should usually keep a new `sessionId` even if its first request imports history from an older `threadId`
 
 ## Core Event Model
 
@@ -439,4 +452,3 @@ This protocol supports:
 - [Themis Channel Design](/home/gyyxs88/Projects/Themis/docs/product/themis-channel-design.md)
 - [Themis MVP Technical Architecture](/home/gyyxs88/Projects/Themis/docs/product/themis-mvp-technical-architecture.md)
 - [Themis Product Design Input](/home/gyyxs88/Projects/Themis/docs/product/themis-product-design-input.md)
-

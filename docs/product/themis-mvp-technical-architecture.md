@@ -116,6 +116,7 @@ This is the main application coordinator.
 Responsibilities:
 
 - create or resume a Codex thread
+- prepare fork context for branched sessions
 - construct the final task prompt package
 - apply workflow-specific options
 - subscribe to progress events
@@ -273,8 +274,21 @@ The system:
 The session orchestrator:
 
 - starts a Codex thread
+- or resumes an existing Codex thread for the same `sessionId`
+- or starts a fresh thread with imported transcript context when the request is a fork
 - sends the assembled prompt package
 - emits normalized progress events
+
+### Step 5A Forked Session Bootstrap
+
+When a user forks an existing conversation, Themis should prefer this order:
+
+1. read the persisted Codex session transcript for the source thread
+2. extract a turn-by-turn transcript that reflects prior user requests and assistant replies
+3. inject that transcript into the first prompt of a fresh thread
+4. fall back to browser-local transcript replay if the persisted Codex session is unavailable
+
+This keeps branching behavior close to Codex app style session branching while avoiding unsafe low-level manipulation of Codex session files.
 
 ### Step 6 Result Processing
 
@@ -312,6 +326,7 @@ Instead it should build a small, explicit context package:
 - relevant active session summary
 - relevant task state
 - repo-specific do and do-not instructions
+- optional imported transcript for forked sessions
 
 This follows the official Codex guidance to keep context scoped and task-oriented.
 
@@ -435,6 +450,7 @@ Avoid early complexity such as:
 - deeply branching chat workflows
 - background orchestration across many concurrent long-running tasks
 - complex multi-user session ownership models
+- unsupported low-level cloning of Codex session internals without an official SDK capability
 
 The first version should optimize for clarity over throughput.
 
@@ -477,6 +493,8 @@ Target:
 - communication-layer event routing
 - memory synchronization paths
 - structured workflow output handling
+- session fork with persisted Codex transcript replay
+- session fork fallback to browser-local transcript replay
 
 ### Manual Acceptance Tests
 

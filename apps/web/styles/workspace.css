@@ -1,0 +1,397 @@
+.workspace {
+  min-width: 0;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.workspace-header-main,
+.workspace-header,
+.workspace-toolbar,
+.workspace-tools-head,
+.tool-group-head,
+.composer-footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workspace-header {
+  padding: 28px 32px 12px;
+}
+
+.workspace-header-main,
+.workspace-heading {
+  min-width: 0;
+}
+
+.workspace-kicker,
+.workspace-tools-kicker,
+.empty-kicker {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.workspace-heading h1,
+.workspace-tools-head h2,
+.tool-group-head h3,
+.empty-thread h3 {
+  margin: 0;
+}
+
+.workspace-heading h1 {
+  font-size: clamp(28px, 2.2vw, 36px);
+  line-height: 1.08;
+}
+
+.toolbar-icon-button {
+  width: 42px;
+  min-width: 42px;
+  padding: 0;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.toolbar-icon-button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.workspace-copy {
+  margin: 10px 0 0;
+  max-width: 720px;
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.toolbar-button,
+.primary-button,
+.ghost-button,
+.danger-button,
+.suggestion-chip,
+.choice-chip {
+  border-radius: 14px;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.toolbar-button,
+.ghost-button,
+.danger-button,
+.suggestion-chip {
+  min-height: 42px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  background: #ffffff;
+  color: var(--text);
+}
+
+.toolbar-button.subtle {
+  background: transparent;
+}
+
+.primary-button {
+  min-height: 46px;
+  padding: 0 18px;
+  border: none;
+  background: #111111;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.toolbar-button:hover:not(:disabled),
+.ghost-button:hover:not(:disabled),
+.suggestion-chip:hover:not(:disabled),
+.choice-chip:hover,
+.primary-button:hover:not(:disabled),
+.danger-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.ghost-button:hover:not(:disabled),
+.toolbar-button:hover:not(:disabled),
+.suggestion-chip:hover:not(:disabled) {
+  background: var(--muted-surface);
+}
+
+.danger-button {
+  color: var(--danger);
+  background: #fff7f6;
+  border-color: #f4d8d5;
+}
+
+.workspace-tools {
+  margin: 0 32px 8px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: #fcfcfd;
+  box-shadow: var(--shadow-sm);
+}
+
+.workspace-tools-copy {
+  margin: 6px 0 0;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.workspace-tools-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.workspace-tool-group {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: #ffffff;
+}
+
+.tool-group-head {
+  margin-bottom: 12px;
+}
+
+.tool-group-head h3 {
+  font-size: 15px;
+}
+
+.meta-label {
+  font-size: 12px;
+}
+
+.session-actions,
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.settings-stack,
+.choice-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-field {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.settings-field input,
+.settings-field select,
+.composer textarea {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #ffffff;
+  color: var(--text);
+}
+
+.settings-field span {
+  color: var(--muted);
+}
+
+.choice-input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.choice-chip {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  background: #ffffff;
+}
+
+.choice-chip strong {
+  font-size: 13px;
+}
+
+.choice-chip span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.choice-input:checked + .choice-chip {
+  border-color: var(--line-strong);
+  background: var(--muted-surface);
+}
+
+.tools-details,
+.context-panel {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.tools-details summary,
+.context-panel summary {
+  padding: 14px 16px;
+  cursor: pointer;
+  font-weight: 600;
+  list-style: none;
+}
+
+.tools-details summary::-webkit-details-marker,
+.context-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.tools-details[open] summary,
+.context-panel[open] summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.composer-panel {
+  padding: 0 24px 24px;
+}
+
+.composer {
+  position: sticky;
+  bottom: 16px;
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow-md);
+}
+
+.composer textarea {
+  min-height: 78px;
+  max-height: 240px;
+  padding: 16px;
+  resize: none;
+  line-height: 1.6;
+}
+
+.context-panel {
+  background: #fafafb;
+}
+
+.context-panel textarea {
+  border: none;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: transparent;
+}
+
+.composer-footer {
+  margin-top: 14px;
+}
+
+.composer-hints,
+.composer-actions,
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.composer-hints {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.composer-actions {
+  justify-content: flex-end;
+}
+
+.empty-thread {
+  max-width: 860px;
+  margin: 8px auto 0;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: #fafafb;
+}
+
+.empty-thread h3 {
+  font-size: 28px;
+  line-height: 1.12;
+}
+
+.empty-thread p {
+  margin: 12px 0 0;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.history-placeholder {
+  background: #fcfcfd;
+}
+
+@media (max-width: 920px) {
+  .workspace-header,
+  .workspace-tools,
+  .composer-panel {
+    margin-left: 0;
+    margin-right: 0;
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .workspace-tools {
+    margin-top: 0;
+  }
+
+  .workspace-tools-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-header {
+    gap: 14px;
+    padding-top: 16px;
+    padding-bottom: 8px;
+  }
+
+  .workspace-header-main {
+    width: 100%;
+  }
+}
+
+@media (max-width: 720px) {
+  .workspace-header,
+  .workspace-toolbar,
+  .workspace-tools-head,
+  .tool-group-head,
+  .composer-footer {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .session-actions,
+  .settings-grid,
+  .composer-actions {
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .ghost-button,
+  .danger-button,
+  .primary-button {
+    width: 100%;
+  }
+
+  .composer {
+    bottom: 12px;
+  }
+}

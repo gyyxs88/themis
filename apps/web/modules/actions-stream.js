@@ -1,0 +1,157 @@
+import { formatEventTitle, resolveToneFromTitle } from "./copy.js";
+
+export function createStreamActions(app) {
+  const { store } = app;
+
+  async function consumeNdjsonStream(body) {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+
+      if (done) {
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+
+        if (!trimmed) {
+          continue;
+        }
+
+        handleStreamMessage(JSON.parse(trimmed));
+      }
+    }
+
+    const trailing = buffer.trim();
+
+    if (trailing) {
+      handleStreamMessage(JSON.parse(trailing));
+    }
+  }
+
+  function handleStreamMessage(message) {
+    const turn = store.getActiveTurn();
+    const thread = app.runtime.activeRunRef ? store.getThreadById(app.runtime.activeRunRef.threadId) : null;
+
+    if (!turn || !thread || !app.runtime.activeRunRef) {
+      return;
+    }
+
+    if (message.kind === "ack") {
+      turn.requestId = message.requestId;
+      turn.taskId = message.taskId;
+      turn.state = "running";
+      store.appendStep(turn, "任务已接收", "Themis 已接受你的请求，准备进入 Codex 执行阶段。");
+      store.touchThread(app.runtime.activeRunRef.threadId);
+      store.saveState();
+      app.renderer.renderAll(true);
+      return;
+    }
+
+    if (message.kind === "event" || message.kind === "result" || message.kind === "error") {
+      handleDeliveryMessage(thread, turn, message);
+      store.touchThread(app.runtime.activeRunRef.threadId);
+      store.saveState();
+      app.renderer.renderAll(true);
+      return;
+    }
+
+    if (message.kind === "done") {
+      finalizeTurn(thread, turn, message.result ?? {});
+      store.syncThreadStoredState(thread, turn);
+      store.clearActiveRun();
+      app.renderer.renderAll(true);
+      return;
+    }
+
+    if (message.kind === "fatal") {
+      finalizeTurnError(turn, message.text ?? "执行失败");
+      store.syncThreadStoredState(thread, turn);
+      store.clearActiveRun();
+      app.renderer.renderAll(true);
+    }
+  }
+
+  function handleDeliveryMessage(thread, turn, message) {
+    if (message.kind === "event") {
+      store.applyRuntimeMetadata(thread, turn, message.metadata);
+      const tone = resolveToneFromTitle(message.title);
+      store.appendStep(turn, formatEventTitle(message.title), message.text, tone, message.metadata);
+
+      if (message.title === "task.failed") {
+        turn.state = "failed";
+        return;
+      }
+
+      if (message.title === "task.cancelled") {
+        turn.state = "cancelled";
+        return;
+      }
+
+      if (message.title === "task.completed") {
+        turn.state = "completed";
+        return;
+      }
+
+      turn.state = "running";
+      return;
+    }
+
+    if (message.kind === "result") {
+      store.applyRuntimeMetadata(thread, turn, message.metadata?.structuredOutput);
+      store.appendStep(turn, "已生成结果", message.text, "success", message.metadata);
+      return;
+    }
+
+    store.appendStep(turn, "执行错误", message.text, "error", message.metadata);
+    turn.state = "failed";
+  }
+
+  function finalizeTurn(thread, turn, result) {
+    store.applyRuntimeMetadata(thread, turn, result.structuredOutput);
+    turn.state = result.status ?? "completed";
+    turn.result = {
+      status: result.status ?? "completed",
+      summary: result.summary ?? "任务已完成。",
+      ...(result.output ? { output: result.output } : {}),
+      ...(result.touchedFiles?.length ? { touchedFiles: result.touchedFiles } : {}),
+      ...(result.structuredOutput ? { structuredOutput: result.structuredOutput } : {}),
+    };
+
+    if (turn.state === "completed") {
+      store.appendStep(turn, "任务完成", turn.result.summary, "success");
+    }
+  }
+
+  function finalizeTurnCancelled(turn, summary) {
+    turn.state = "cancelled";
+    turn.result = {
+      status: "cancelled",
+      summary,
+    };
+    store.appendStep(turn, "任务已取消", summary, "error");
+  }
+
+  function finalizeTurnError(turn, message) {
+    turn.state = "failed";
+    turn.result = {
+      status: "failed",
+      summary: message,
+    };
+    store.appendStep(turn, "执行失败", message, "error");
+  }
+
+  return {
+    consumeNdjsonStream,
+    finalizeTurnCancelled,
+    finalizeTurnError,
+  };
+}

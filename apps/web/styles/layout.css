@@ -1,0 +1,87 @@
+.app-shell {
+  --sidebar-inline-size: var(--sidebar-width);
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--sidebar-inline-size) 12px minmax(0, 1fr);
+  min-height: 100dvh;
+  transition: grid-template-columns 220ms ease;
+}
+
+.sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  border: none;
+  background: rgba(17, 17, 17, 0.28);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+}
+
+.sidebar-resize-handle {
+  position: relative;
+  width: 12px;
+  min-width: 12px;
+  cursor: col-resize;
+  outline: none;
+}
+
+.sidebar-resize-handle::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.sidebar-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 16px;
+  bottom: 16px;
+  left: 50%;
+  width: 2px;
+  border-radius: 999px;
+  background: transparent;
+  transform: translateX(-50%);
+  transition: background-color 160ms ease;
+}
+
+.sidebar-resize-handle:hover::after,
+.sidebar-resize-handle:focus-visible::after,
+.app-shell[data-sidebar-resizing="true"] .sidebar-resize-handle::after {
+  background: #d1d1d7;
+}
+
+.app-shell[data-sidebar-collapsed="true"] {
+  grid-template-columns: 0 0 minmax(0, 1fr);
+}
+
+.app-shell[data-sidebar-collapsed="true"] .sidebar {
+  transform: translateX(calc(-1 * (var(--sidebar-inline-size) + 24px)));
+  opacity: 0;
+  pointer-events: none;
+}
+
+.app-shell[data-sidebar-collapsed="true"] .sidebar-resize-handle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (max-width: 920px) {
+  .app-shell {
+    display: block;
+    min-height: 100dvh;
+  }
+
+  .sidebar-backdrop {
+    display: block;
+  }
+
+  .app-shell[data-mobile-sidebar-open="true"] .sidebar-backdrop {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .sidebar-resize-handle {
+    display: none;
+  }
+}

@@ -4,9 +4,19 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "dev:web": "tsx src/server/main.ts",
+    "start:web": "node dist/server/main.js"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.5.0",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@openai/codex-sdk": "^0.114.0",
+    "better-sqlite3": "^12.8.0"
   }
 }

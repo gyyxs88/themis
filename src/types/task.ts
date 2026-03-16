@@ -68,6 +68,7 @@ export const TASK_ERROR_CODES = [
   "UNSUPPORTED_WORKFLOW",
   "AUTH_REQUIRED",
   "PERMISSION_DENIED",
+  "SESSION_BUSY",
   "CHANNEL_PAYLOAD_INVALID",
   "CORE_RUNTIME_ERROR",
   "MEMORY_UPDATE_FAILED",
@@ -100,6 +101,7 @@ export interface TaskRequest {
   workflow: string;
   goal: string;
   inputText?: string;
+  historyContext?: string;
   attachments?: TaskAttachment[];
   options?: TaskOptions;
   channelContext: ChannelContext;
