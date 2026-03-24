@@ -1,55 +1,56 @@
-# GitHub Safe Publish Guide
+# GitHub 安全发布说明
 
-## Goal
+## 目标
 
-Connect this project to GitHub while avoiding accidental publication of:
+把项目接到 GitHub 时，尽量避免误发布下面这些内容：
 
-- personal agent rules
-- personal memory
-- secrets
-- local machine configuration
+- 个人 Agent 规则
+- 个人会话上下文
+- 密钥和凭证
+- 本机配置
 
-## Current Default Exclusions
+## 当前默认排除项
 
-The repository ignores these categories by default:
+仓库默认忽略这些类别：
 
 - `AGENTS.md`
-- `memory/sessions/*.md` except `memory/sessions/README.md`
+- `memory/sessions/*.md`，但保留 `memory/sessions/README.md`
 - `memory/local/`
 - `docs/local/`
 - `docs/private/`
-- `.env*` except `.env.example`
+- `.env*`，但保留 `.env.example`
 - `.codex/`
-- editor directories such as `.vscode/` and `.idea/`
-- certificate and key files
-- local override files such as `*.local.*`
+- `.vscode/`、`.idea/` 等编辑器目录
+- 证书和密钥文件
+- `*.local.*` 这类本地覆盖文件
 
-## Suggested Working Rule
+## 共享内容建议放哪里
 
-Shared project knowledge should go into:
+适合进入仓库、并可安全共享的项目知识，优先放在：
 
 - `docs/`
+- `docs/memory/`
 - `memory/project/`
 - `memory/architecture/`
 - `memory/decisions/`
 - `memory/tasks/`
 
-Personal or machine-specific content should stay in ignored locations.
+个人或机器相关内容应继续放在被忽略的位置。
 
-## Before Pushing
+## 推送前检查
 
-Check these points:
+推送前至少检查下面几点：
 
-1. `git status --short` does not include personal files.
-2. No secrets or local credentials appear in staged files.
-3. Session-specific notes are not being published by mistake.
-4. Shared docs are written in a repository-safe form.
+1. `git status --short` 里没有个人文件。
+2. 暂存区里没有密钥、令牌或本机凭证。
+3. `memory/sessions/active.md` 这类会话文件没有被误提交。
+4. 准备共享的文档已经去掉仅本机有效的信息。
 
-## Recommended Future Improvement
+## 后续可选改进
 
-If needed, add a local pre-commit or pre-push check that blocks:
+如果后面需要，可以增加本地 pre-commit 或 pre-push 检查，直接拦截：
 
 - `AGENTS.md`
 - `memory/sessions/active.md`
 - `.env*`
-- key files
+- 各类密钥文件

@@ -66,12 +66,20 @@ npm run dev:web
 
 ## 会话规则
 
-- Themis 不再把飞书 `chat_id` 直接当成唯一会话 ID
-- 当前实现会为“同一个飞书聊天中的同一个用户”维护一个当前 Themis 会话
-- 会话映射保存在：
+- Themis 不再把飞书 `chat_id` 直接当成唯一会话 ID。
+- 飞书消息先带着渠道侧会话键进入 runtime，再由统一会话层解析成真正的 `conversationId`。
+- 当前实现会为“同一个飞书聊天中的同一个用户”维护一个当前激活的 conversation 指针。
+- 这个“当前激活会话指针”保存在：
 
 ```text
 infra/local/feishu-sessions.json
+```
+
+- 这个 JSON 文件只负责记录飞书侧当前激活的是哪条 conversation。
+- 真正的统一 conversation、channel binding、identity 和历史数据都保存在：
+
+```text
+infra/local/themis.db
 ```
 
 这样可以支持：
@@ -79,7 +87,7 @@ infra/local/feishu-sessions.json
 - 在同一个飞书聊天里新开会话
 - 在已有会话之间切换
 - 不影响现有 Web 端会话历史
-- 同一个 `sessionId` 下可与 Web 共用同一种服务端会话配置格式
+- 使用同一个 `conversationId` 时，与 Web 复用同一条服务端会话和上下文
 
 ## 飞书命令
 
@@ -186,8 +194,9 @@ infra/local/feishu-sessions.json
 ## 代码入口
 
 - 飞书服务入口：`src/channels/feishu/service.ts`
-- 飞书会话映射：`src/channels/feishu/session-store.ts`
+- 飞书当前激活会话指针：`src/channels/feishu/session-store.ts`
 - 飞书请求适配：`src/channels/feishu/adapter.ts`
+- 统一会话解析：`src/core/conversation-service.ts`
 - 启动挂载：`src/server/main.ts`
 
 ## 已完成验证
