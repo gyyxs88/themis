@@ -79,6 +79,88 @@ export function createSessionActions(app) {
     }
   }
 
+  async function handleResetPrincipalState() {
+    if (app.runtime.sessionControlBusy || store.isBusy()) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "这会清空当前 principal 的人格档案、对话历史和记忆，并让 Web / 飞书从头开始。确认继续？",
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    const activeThread = store.getActiveThread();
+
+    try {
+      app.runtime.sessionControlBusy = true;
+
+      if (activeThread) {
+        store.setTransientStatus(activeThread.id, "正在清空当前 principal 的人格档案、历史和记忆。");
+      }
+
+      app.renderer.renderAll();
+
+      const identity = app.identity.getRequestIdentity();
+      const response = await fetch("/api/identity/reset", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          channel: "web",
+          channelUserId: identity.userId,
+          ...(identity.displayName ? { displayName: identity.displayName } : {}),
+        }),
+      });
+      const data = await app.utils.safeReadJson(response);
+
+      if (!response.ok) {
+        throw new Error(data?.error?.message ?? "重置失败。");
+      }
+
+      const nextThread = store.createThread();
+      const reset = data?.reset ?? {};
+      const clearedConversationCount = Number.isFinite(reset.clearedConversationCount)
+        ? Number(reset.clearedConversationCount)
+        : 0;
+      const clearedTurnCount = Number.isFinite(reset.clearedTurnCount)
+        ? Number(reset.clearedTurnCount)
+        : 0;
+
+      store.state = {
+        activeThreadId: nextThread.id,
+        threads: [nextThread],
+      };
+      store.clearTransientStatus();
+      store.setTransientStatus(
+        nextThread.id,
+        `已清空当前 principal 的人格档案、历史和记忆。共删除 ${clearedConversationCount} 条会话、${clearedTurnCount} 条任务记录。`,
+      );
+      app.runtime.activeRequestController = null;
+      app.runtime.activeRunRef = null;
+      app.runtime.workspaceToolsOpen = false;
+      app.runtime.historyHydratingThreadId = null;
+      app.runtime.identity = {
+        ...app.runtime.identity,
+        linkCode: "",
+        linkCodeExpiresAt: "",
+        errorMessage: "",
+      };
+
+      store.saveState();
+      await app.sessionSettings.loadThreadSettings(nextThread.id, { quiet: true });
+      void app.identity.load({ quiet: true });
+      app.renderer.renderAll(true);
+      dom.goalInput.focus();
+    } finally {
+      app.runtime.sessionControlBusy = false;
+      app.renderer.renderAll();
+    }
+  }
+
   async function buildForkBootstrap(thread) {
     if (thread.serverThreadId) {
       try {
@@ -123,5 +205,6 @@ export function createSessionActions(app) {
   return {
     handleForkSession,
     handleJoinConversation,
+    handleResetPrincipalState,
   };
 }

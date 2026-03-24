@@ -5,10 +5,16 @@ import {
   isSessionTaskSettingsEmpty,
   normalizeSessionTaskSettings,
 } from "../core/session-task-settings.js";
-import type { TaskEvent, TaskRequest, TaskResult } from "../types/index.js";
-import type { SessionTaskSettings } from "../types/index.js";
+import type {
+  PrincipalPersonaOnboardingState,
+  PrincipalPersonaProfileData,
+  SessionTaskSettings,
+  TaskEvent,
+  TaskRequest,
+  TaskResult,
+} from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 4;
+const DATABASE_SCHEMA_VERSION = 5;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -89,6 +95,21 @@ export interface StoredPrincipalRecord {
   updatedAt: string;
 }
 
+export interface StoredPrincipalPersonaProfileRecord {
+  principalId: string;
+  profile: PrincipalPersonaProfileData;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string;
+}
+
+export interface StoredPrincipalPersonaOnboardingRecord {
+  principalId: string;
+  state: PrincipalPersonaOnboardingState;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface StoredConversationRecord {
   conversationId: string;
   principalId: string;
@@ -154,6 +175,19 @@ export interface StoredThirdPartyProviderModelRecord {
   updatedAt: string;
 }
 
+export interface ResetPrincipalStateResult {
+  principalId: string;
+  clearedConversationCount: number;
+  clearedTurnCount: number;
+  clearedSessionSettingsCount: number;
+  clearedCodexSessionCount: number;
+  clearedChannelBindingCount: number;
+  clearedLinkCodeCount: number;
+  clearedPersonaProfile: boolean;
+  clearedPersonaOnboarding: boolean;
+  resetAt: string;
+}
+
 export interface CompleteTaskTurnInput {
   request: TaskRequest;
   result: TaskResult;
@@ -193,6 +227,21 @@ interface SessionTaskSettingsRow {
 interface PrincipalRow {
   principal_id: string;
   display_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PrincipalPersonaProfileRow {
+  principal_id: string;
+  profile_json: string;
+  created_at: string;
+  updated_at: string;
+  completed_at: string;
+}
+
+interface PrincipalPersonaOnboardingRow {
+  principal_id: string;
+  state_json: string;
   created_at: string;
   updated_at: string;
 }
@@ -560,6 +609,141 @@ export class SqliteCodexSessionRegistry {
       });
   }
 
+  getPrincipalPersonaProfile(principalId: string): StoredPrincipalPersonaProfileRecord | null {
+    const normalized = principalId.trim();
+
+    if (!normalized) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT principal_id, profile_json, created_at, updated_at, completed_at
+          FROM themis_principal_persona_profiles
+          WHERE principal_id = ?
+        `,
+      )
+      .get(normalized) as PrincipalPersonaProfileRow | undefined;
+
+    return row ? mapPrincipalPersonaProfileRow(row) : null;
+  }
+
+  savePrincipalPersonaProfile(record: StoredPrincipalPersonaProfileRecord): void {
+    const principalId = record.principalId.trim();
+
+    if (!principalId) {
+      throw new Error("Principal persona profile is missing principal id.");
+    }
+
+    const normalizedProfile = normalizePrincipalPersonaProfileData(record.profile);
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_principal_persona_profiles (
+            principal_id,
+            profile_json,
+            created_at,
+            updated_at,
+            completed_at
+          ) VALUES (
+            @principal_id,
+            @profile_json,
+            @created_at,
+            @updated_at,
+            @completed_at
+          )
+          ON CONFLICT(principal_id) DO UPDATE SET
+            profile_json = excluded.profile_json,
+            updated_at = excluded.updated_at,
+            completed_at = excluded.completed_at
+        `,
+      )
+      .run({
+        principal_id: principalId,
+        profile_json: JSON.stringify(normalizedProfile),
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+        completed_at: record.completedAt,
+      });
+  }
+
+  getPrincipalPersonaOnboarding(principalId: string): StoredPrincipalPersonaOnboardingRecord | null {
+    const normalized = principalId.trim();
+
+    if (!normalized) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT principal_id, state_json, created_at, updated_at
+          FROM themis_principal_persona_onboarding
+          WHERE principal_id = ?
+        `,
+      )
+      .get(normalized) as PrincipalPersonaOnboardingRow | undefined;
+
+    return row ? mapPrincipalPersonaOnboardingRow(row) : null;
+  }
+
+  savePrincipalPersonaOnboarding(record: StoredPrincipalPersonaOnboardingRecord): void {
+    const principalId = record.principalId.trim();
+
+    if (!principalId) {
+      throw new Error("Principal persona onboarding record is missing principal id.");
+    }
+
+    const normalizedState = normalizePrincipalPersonaOnboardingState(record.state);
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_principal_persona_onboarding (
+            principal_id,
+            state_json,
+            created_at,
+            updated_at
+          ) VALUES (
+            @principal_id,
+            @state_json,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(principal_id) DO UPDATE SET
+            state_json = excluded.state_json,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        principal_id: principalId,
+        state_json: JSON.stringify(normalizedState),
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+  }
+
+  deletePrincipalPersonaOnboarding(principalId: string): boolean {
+    const normalized = principalId.trim();
+
+    if (!normalized) {
+      return false;
+    }
+
+    const result = this.db
+      .prepare(
+        `
+          DELETE FROM themis_principal_persona_onboarding
+          WHERE principal_id = ?
+        `,
+      )
+      .run(normalized);
+
+    return result.changes > 0;
+  }
+
   saveChannelIdentity(record: StoredChannelIdentityRecord): void {
     const channel = record.channel.trim();
     const channelUserId = record.channelUserId.trim();
@@ -892,6 +1076,170 @@ export class SqliteCodexSessionRegistry {
     return result.changes;
   }
 
+  resetPrincipalState(principalId: string, resetAt: string): ResetPrincipalStateResult {
+    const normalizedPrincipalId = principalId.trim();
+
+    if (!normalizedPrincipalId) {
+      throw new Error("Principal id is required.");
+    }
+
+    const existingPrincipal = this.getPrincipal(normalizedPrincipalId);
+
+    if (!existingPrincipal) {
+      throw new Error("Principal does not exist.");
+    }
+
+    const conversationIds = this.db
+      .prepare(
+        `
+          SELECT conversation_id
+          FROM themis_conversations
+          WHERE principal_id = ?
+          ORDER BY created_at ASC
+        `,
+      )
+      .all(normalizedPrincipalId) as Array<{ conversation_id: string }>;
+
+    const activeSessionIds = new Set<string>();
+    const findActiveSession = this.db.prepare(
+      `
+        SELECT session_id
+        FROM codex_sessions
+        WHERE active_task_id IS NOT NULL
+          AND active_task_id <> ''
+          AND (
+            session_id = @session_id
+            OR session_id LIKE @namespaced_session_id
+          )
+      `,
+    );
+
+    for (const conversation of conversationIds) {
+      const rows = findActiveSession.all({
+        session_id: conversation.conversation_id,
+        namespaced_session_id: `%::${conversation.conversation_id}`,
+      }) as Array<{ session_id: string }>;
+
+      for (const row of rows) {
+        activeSessionIds.add(row.session_id);
+      }
+    }
+
+    if (activeSessionIds.size > 0) {
+      throw new Error("当前还有运行中的任务，暂时不能重置。请先等待任务结束，或取消当前任务后再试。");
+    }
+
+    const reset = this.db.transaction(() => {
+      let clearedSessionSettingsCount = 0;
+      let clearedTurnCount = 0;
+      let clearedCodexSessionCount = 0;
+
+      const deleteSessionSettings = this.db.prepare(
+        `
+          DELETE FROM themis_session_settings
+          WHERE session_id = ?
+        `,
+      );
+      const deleteTurns = this.db.prepare(
+        `
+          DELETE FROM themis_turns
+          WHERE session_id = ?
+        `,
+      );
+      const deleteCodexSessions = this.db.prepare(
+        `
+          DELETE FROM codex_sessions
+          WHERE session_id = @session_id
+             OR session_id LIKE @namespaced_session_id
+        `,
+      );
+
+      for (const conversation of conversationIds) {
+        clearedSessionSettingsCount += deleteSessionSettings.run(conversation.conversation_id).changes;
+        clearedTurnCount += deleteTurns.run(conversation.conversation_id).changes;
+        clearedCodexSessionCount += deleteCodexSessions.run({
+          session_id: conversation.conversation_id,
+          namespaced_session_id: `%::${conversation.conversation_id}`,
+        }).changes;
+      }
+
+      const clearedChannelBindingCount = this.db
+        .prepare(
+          `
+            DELETE FROM themis_channel_bindings
+            WHERE principal_id = ?
+          `,
+        )
+        .run(normalizedPrincipalId)
+        .changes;
+
+      const clearedConversationCount = this.db
+        .prepare(
+          `
+            DELETE FROM themis_conversations
+            WHERE principal_id = ?
+          `,
+        )
+        .run(normalizedPrincipalId)
+        .changes;
+
+      const clearedPersonaProfile = this.db
+        .prepare(
+          `
+            DELETE FROM themis_principal_persona_profiles
+            WHERE principal_id = ?
+          `,
+        )
+        .run(normalizedPrincipalId)
+        .changes > 0;
+
+      const clearedPersonaOnboarding = this.db
+        .prepare(
+          `
+            DELETE FROM themis_principal_persona_onboarding
+            WHERE principal_id = ?
+          `,
+        )
+        .run(normalizedPrincipalId)
+        .changes > 0;
+
+      const clearedLinkCodeCount = this.db
+        .prepare(
+          `
+            DELETE FROM themis_identity_link_codes
+            WHERE source_principal_id = ?
+          `,
+        )
+        .run(normalizedPrincipalId)
+        .changes;
+
+      this.db
+        .prepare(
+          `
+            UPDATE themis_principals
+            SET updated_at = ?
+            WHERE principal_id = ?
+          `,
+        )
+        .run(resetAt, normalizedPrincipalId);
+
+      return {
+        principalId: normalizedPrincipalId,
+        clearedConversationCount,
+        clearedTurnCount,
+        clearedSessionSettingsCount,
+        clearedCodexSessionCount,
+        clearedChannelBindingCount,
+        clearedLinkCodeCount,
+        clearedPersonaProfile,
+        clearedPersonaOnboarding,
+        resetAt,
+      } satisfies ResetPrincipalStateResult;
+    });
+
+    return reset();
+  }
+
   mergePrincipals(sourcePrincipalId: string, targetPrincipalId: string, updatedAt: string): void {
     const sourceId = sourcePrincipalId.trim();
     const targetId = targetPrincipalId.trim();
@@ -958,6 +1306,42 @@ export class SqliteCodexSessionRegistry {
           target_principal_id: targetId,
           updated_at: updatedAt,
         });
+
+      const sourcePersonaProfile = this.getPrincipalPersonaProfile(sourceId);
+      const targetPersonaProfile = this.getPrincipalPersonaProfile(targetId);
+
+      if (sourcePersonaProfile) {
+        this.savePrincipalPersonaProfile({
+          principalId: targetId,
+          profile: mergePrincipalPersonaProfileData(targetPersonaProfile?.profile, sourcePersonaProfile.profile),
+          createdAt: targetPersonaProfile?.createdAt ?? sourcePersonaProfile.createdAt,
+          updatedAt,
+          completedAt: targetPersonaProfile?.completedAt ?? sourcePersonaProfile.completedAt,
+        });
+      }
+
+      const sourcePersonaOnboarding = this.getPrincipalPersonaOnboarding(sourceId);
+      const targetPersonaOnboarding = this.getPrincipalPersonaOnboarding(targetId);
+
+      if (sourcePersonaOnboarding && !targetPersonaOnboarding) {
+        this.savePrincipalPersonaOnboarding({
+          principalId: targetId,
+          state: sourcePersonaOnboarding.state,
+          createdAt: sourcePersonaOnboarding.createdAt,
+          updatedAt,
+        });
+      }
+
+      this.deletePrincipalPersonaOnboarding(sourceId);
+
+      this.db
+        .prepare(
+          `
+            DELETE FROM themis_principal_persona_profiles
+            WHERE principal_id = ?
+          `,
+        )
+        .run(sourceId);
 
       const sourceBindings = this.db
         .prepare(
@@ -1826,6 +2210,29 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_principals_updated_at_idx
       ON themis_principals(updated_at DESC);
 
+      CREATE TABLE IF NOT EXISTS themis_principal_persona_profiles (
+        principal_id TEXT PRIMARY KEY,
+        profile_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT NOT NULL,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_principal_persona_profiles_updated_at_idx
+      ON themis_principal_persona_profiles(updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS themis_principal_persona_onboarding (
+        principal_id TEXT PRIMARY KEY,
+        state_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_principal_persona_onboarding_updated_at_idx
+      ON themis_principal_persona_onboarding(updated_at DESC);
+
       CREATE TABLE IF NOT EXISTS themis_channel_identities (
         channel TEXT NOT NULL,
         channel_user_id TEXT NOT NULL,
@@ -2092,6 +2499,27 @@ function mapPrincipalRow(row: PrincipalRow): StoredPrincipalRecord {
   };
 }
 
+function mapPrincipalPersonaProfileRow(row: PrincipalPersonaProfileRow): StoredPrincipalPersonaProfileRecord {
+  return {
+    principalId: row.principal_id,
+    profile: normalizePrincipalPersonaProfileData(safeParseJson(row.profile_json)),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at,
+  };
+}
+
+function mapPrincipalPersonaOnboardingRow(
+  row: PrincipalPersonaOnboardingRow,
+): StoredPrincipalPersonaOnboardingRecord {
+  return {
+    principalId: row.principal_id,
+    state: normalizePrincipalPersonaOnboardingState(safeParseJson(row.state_json)),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function mapConversationRow(row: ConversationRow): StoredConversationRecord {
   return {
     conversationId: row.conversation_id,
@@ -2204,6 +2632,74 @@ function mapThirdPartyProviderModelRow(row: ThirdPartyProviderModelRow): StoredT
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function normalizePrincipalPersonaProfileData(value: unknown): PrincipalPersonaProfileData {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  const preferredAddress = normalizeOptionalText(value.preferredAddress);
+  const assistantName = normalizeOptionalText(value.assistantName);
+  const workSummary = normalizeOptionalText(value.workSummary);
+  const collaborationStyle = normalizeOptionalText(value.collaborationStyle);
+  const boundaries = normalizeOptionalText(value.boundaries);
+  const defaultProfileId = normalizeOptionalText(value.defaultProfileId);
+
+  return {
+    ...(preferredAddress ? { preferredAddress } : {}),
+    ...(assistantName ? { assistantName } : {}),
+    ...(workSummary ? { workSummary } : {}),
+    ...(collaborationStyle ? { collaborationStyle } : {}),
+    ...(boundaries ? { boundaries } : {}),
+    ...(defaultProfileId ? { defaultProfileId } : {}),
+  };
+}
+
+function normalizePrincipalPersonaOnboardingState(value: unknown): PrincipalPersonaOnboardingState {
+  if (!isRecord(value)) {
+    return {
+      stepIndex: 0,
+      draft: {},
+    };
+  }
+
+  const stepIndex = Number.isInteger(value.stepIndex) && Number(value.stepIndex) >= 0
+    ? Number(value.stepIndex)
+    : 0;
+
+  return {
+    stepIndex,
+    draft: normalizePrincipalPersonaProfileData(value.draft),
+  };
+}
+
+function mergePrincipalPersonaProfileData(
+  base: PrincipalPersonaProfileData | undefined,
+  patch: PrincipalPersonaProfileData,
+): PrincipalPersonaProfileData {
+  const normalizedBase = normalizePrincipalPersonaProfileData(base);
+  const normalizedPatch = normalizePrincipalPersonaProfileData(patch);
+
+  return {
+    ...normalizedBase,
+    ...Object.fromEntries(
+      Object.entries(normalizedPatch).filter((entry) => typeof entry[1] === "string" && entry[1].trim()),
+    ),
+  };
+}
+
+function normalizeOptionalText(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const normalized = value.trim();
+  return normalized ? normalized : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function extractSessionMetadata(

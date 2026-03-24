@@ -17,7 +17,16 @@ import {
 } from "./codex-app-server.js";
 import { ConversationService } from "./conversation-service.js";
 import { IdentityLinkService } from "./identity-link-service.js";
-import { buildTaskPrompt } from "./prompt.js";
+import { buildBootstrapPrompt, buildTaskPrompt } from "./prompt.js";
+import {
+  DEFAULT_PERSONA_PROFILE_ID,
+  listThemisPersonaProfiles,
+  resolveThemisPersonaProfile,
+} from "./persona-profiles.js";
+import {
+  PrincipalPersonaService,
+  type PrincipalPersonaOnboardingInterceptResult,
+} from "./principal-persona-service.js";
 import { buildForkContextFromThread, type CodexForkContext } from "./codex-session-fork.js";
 import {
   CodexThreadSessionStore,
@@ -65,6 +74,7 @@ export class CodexTaskRuntime {
   private readonly runtimeStore: SqliteCodexSessionRegistry;
   private readonly identityLinkService: IdentityLinkService;
   private readonly conversationService: ConversationService;
+  private readonly principalPersonaService: PrincipalPersonaService;
   private providerConfigs: OpenAICompatibleProviderConfig[];
   private readonly providerClients = new Map<string, Codex>();
   private readonly providerSessionStores = new Map<string, CodexThreadSessionStore>();
@@ -79,6 +89,7 @@ export class CodexTaskRuntime {
       ?? new SqliteCodexSessionRegistry();
     this.identityLinkService = new IdentityLinkService(this.runtimeStore);
     this.conversationService = new ConversationService(this.runtimeStore, this.identityLinkService);
+    this.principalPersonaService = new PrincipalPersonaService(this.runtimeStore);
     this.providerConfigs = options.providerConfigs
       ?? (options.providerConfig
         ? [options.providerConfig]
@@ -92,21 +103,23 @@ export class CodexTaskRuntime {
   }
 
   async runTask(request: TaskRequest, hooks: CodexTaskRuntimeHooks = {}): Promise<TaskResult> {
-    request = this.conversationService.resolveRequest(request).request;
+    const resolvedRequest = this.conversationService.resolveRequest(request);
+    request = resolvedRequest.request;
+    const principalId = resolvedRequest.principalId;
+    const onboardingIntercept = principalId && this.principalPersonaService.shouldRunOnboarding(request, principalId)
+      ? this.principalPersonaService.maybeHandleOnboardingTurn(principalId, request)
+      : null;
+
+    if (!onboardingIntercept) {
+      request = this.principalPersonaService.applyProfileDefaults(principalId, request);
+    }
+
     const taskId = request.taskId ?? createId("task");
-    const target = this.resolveRuntimeTarget(request, hooks.allowUnsupportedThirdPartyModel === true);
     const emit = async (event: TaskEvent): Promise<void> => {
       this.runtimeStore.appendTaskEvent(event);
       await hooks.onEvent?.(event);
     };
     const { signal, cleanup } = createExecutionSignal(hooks.signal, hooks.timeoutMs);
-    const threadOptions = buildThreadOptions(
-      request,
-      this.workingDirectory,
-      this.skipGitRepoCheck,
-      target.accessMode,
-      target.providerConfig,
-    );
     let sessionLease: CodexSessionLease | null = null;
     let failureMessage: string | null = null;
 
@@ -114,9 +127,22 @@ export class CodexTaskRuntime {
       this.runtimeStore.upsertTurnFromRequest(request, taskId);
       await emit(createTaskEvent(taskId, request.requestId, "task.received", "queued", "Themis accepted the web request."));
 
+      const target = this.resolveRuntimeTarget(request, hooks.allowUnsupportedThirdPartyModel === true);
+      const threadOptions = buildThreadOptions(
+        request,
+        this.workingDirectory,
+        this.skipGitRepoCheck,
+        target.accessMode,
+        target.providerConfig,
+      );
       sessionLease = await target.sessionStore.acquire(request, threadOptions);
       const thread = sessionLease.thread;
-      const prompt = buildTaskPrompt(request);
+      const prompt = onboardingIntercept
+        ? buildBootstrapPrompt(request, onboardingIntercept)
+        : buildTaskPrompt(request, {
+          personalizedProfileContext: this.principalPersonaService.buildPromptContext(principalId),
+        });
+      const persona = resolveThemisPersonaProfile(request.options?.profile);
       const touchedFiles = new Set<string>();
       let finalResponse = "";
 
@@ -133,7 +159,15 @@ export class CodexTaskRuntime {
         ),
       );
 
-      await emit(createTaskEvent(taskId, request.requestId, "task.started", "running", "Codex task started."));
+      await emit(
+        createTaskEvent(
+          taskId,
+          request.requestId,
+          "task.started",
+          "running",
+          onboardingIntercept ? "Persona bootstrap turn started." : "Codex task started.",
+        ),
+      );
 
       const { events } = await thread.runStreamed(prompt, { signal });
 
@@ -163,7 +197,8 @@ export class CodexTaskRuntime {
         throw new Error(failureMessage);
       }
 
-      const summary = summarizeResponse(finalResponse);
+      const output = resolveFinalOutput(finalResponse, onboardingIntercept);
+      const summary = summarizeResponse(output);
       const touched = [...touchedFiles];
       const resolvedThreadId = thread.id ?? sessionLease.threadId ?? undefined;
       const result: TaskResult = {
@@ -171,18 +206,15 @@ export class CodexTaskRuntime {
         requestId: request.requestId,
         status: "completed",
         summary,
-        ...(finalResponse ? { output: finalResponse } : {}),
+        ...(output ? { output } : {}),
         ...(touched.length ? { touchedFiles: touched } : {}),
-        structuredOutput: {
-          session: {
-            ...(sessionLease.sessionId ? { sessionId: sessionLease.sessionId } : {}),
-            ...(sessionLease.sessionId ? { conversationId: sessionLease.sessionId } : {}),
-            ...(resolvedThreadId ? { threadId: resolvedThreadId } : {}),
-            mode: sessionLease.sessionMode,
-            accessMode: target.accessMode,
-            ...(target.providerId ? { thirdPartyProviderId: target.providerId } : {}),
-          },
-        },
+        structuredOutput: createStructuredOutput(
+          sessionLease,
+          target,
+          persona,
+          resolvedThreadId,
+          onboardingIntercept,
+        ),
         completedAt: new Date().toISOString(),
       };
 
@@ -193,11 +225,15 @@ export class CodexTaskRuntime {
       });
 
       await emit(
-        createTaskEvent(taskId, request.requestId, "task.completed", "completed", "Codex task completed.", {
-          ...(touched.length ? { touchedFiles: touched } : {}),
-          ...(resolvedThreadId ? { threadId: resolvedThreadId } : {}),
-          ...createSessionPayload(sessionLease, target, resolvedThreadId),
-        }),
+        createCompletionEvent(
+          taskId,
+          request.requestId,
+          sessionLease,
+          target,
+          resolvedThreadId,
+          touched,
+          onboardingIntercept,
+        ),
       );
 
       return result;
@@ -368,6 +404,84 @@ export class CodexTaskRuntime {
   }
 }
 
+function resolveFinalOutput(
+  finalResponse: string,
+  onboardingIntercept: PrincipalPersonaOnboardingInterceptResult | null,
+): string {
+  const normalized = finalResponse.trim();
+
+  if (normalized) {
+    return normalized;
+  }
+
+  return onboardingIntercept?.message ?? "";
+}
+
+function createStructuredOutput(
+  sessionLease: CodexSessionLease,
+  target: ResolvedRuntimeTarget,
+  persona: ReturnType<typeof resolveThemisPersonaProfile>,
+  resolvedThreadId: string | undefined,
+  onboardingIntercept: PrincipalPersonaOnboardingInterceptResult | null,
+): Record<string, unknown> {
+  return {
+    session: {
+      ...(sessionLease.sessionId ? { sessionId: sessionLease.sessionId } : {}),
+      ...(sessionLease.sessionId ? { conversationId: sessionLease.sessionId } : {}),
+      ...(resolvedThreadId ? { threadId: resolvedThreadId } : {}),
+      mode: sessionLease.sessionMode,
+      accessMode: target.accessMode,
+      ...(target.providerId ? { thirdPartyProviderId: target.providerId } : {}),
+      profile: persona.id,
+      profileLabel: persona.label,
+    },
+    ...(onboardingIntercept ? { personaOnboarding: createPersonaOnboardingPayload(onboardingIntercept) } : {}),
+  };
+}
+
+function createCompletionEvent(
+  taskId: string,
+  requestId: string,
+  sessionLease: CodexSessionLease,
+  target: ResolvedRuntimeTarget,
+  resolvedThreadId: string | undefined,
+  touchedFiles: string[],
+  onboardingIntercept: PrincipalPersonaOnboardingInterceptResult | null,
+): TaskEvent {
+  const payload = {
+    ...(touchedFiles.length ? { touchedFiles } : {}),
+    ...(resolvedThreadId ? { threadId: resolvedThreadId } : {}),
+    ...createSessionPayload(sessionLease, target, resolvedThreadId),
+    ...(onboardingIntercept ? { personaOnboarding: createPersonaOnboardingPayload(onboardingIntercept) } : {}),
+  };
+
+  if (!onboardingIntercept) {
+    return createTaskEvent(taskId, requestId, "task.completed", "completed", "Codex task completed.", payload);
+  }
+
+  if (onboardingIntercept.status === "completed") {
+    return createTaskEvent(taskId, requestId, "task.completed", "completed", "Persona bootstrap completed.", payload);
+  }
+
+  return createTaskEvent(taskId, requestId, "task.action_required", "waiting", "Persona bootstrap is waiting for the next answer.", payload);
+}
+
+function createPersonaOnboardingPayload(
+  onboardingIntercept: PrincipalPersonaOnboardingInterceptResult,
+): Record<string, unknown> {
+  return {
+    status: onboardingIntercept.status,
+    phase: onboardingIntercept.phase,
+    stepIndex: onboardingIntercept.stepIndex,
+    stepNumber: onboardingIntercept.status === "completed"
+      ? onboardingIntercept.totalSteps
+      : onboardingIntercept.stepIndex + 1,
+    totalSteps: onboardingIntercept.totalSteps,
+    ...(onboardingIntercept.questionKey ? { questionKey: onboardingIntercept.questionKey } : {}),
+    ...(onboardingIntercept.questionPrompt ? { questionPrompt: onboardingIntercept.questionPrompt } : {}),
+  };
+}
+
 function resolveSessionPersistence(
   sessionLease: CodexSessionLease | null,
   resolvedThreadId?: string,
@@ -461,11 +575,9 @@ function createUnifiedRuntimeCatalog(
   runtimeCatalog: CodexRuntimeCatalog,
   providerConfigs: OpenAICompatibleProviderConfig[],
 ): CodexRuntimeCatalog {
-  if (!providerConfigs.length) {
-    return runtimeCatalog;
-  }
-
-  const accessModes = runtimeCatalog.accessModes.some((mode) => mode.id === "third-party")
+  const personas = listThemisPersonaProfiles();
+  const hasThirdPartyAccessMode = runtimeCatalog.accessModes.some((mode) => mode.id === "third-party");
+  const accessModes = !providerConfigs.length || hasThirdPartyAccessMode
     ? runtimeCatalog.accessModes
     : [
       ...runtimeCatalog.accessModes,
@@ -478,7 +590,12 @@ function createUnifiedRuntimeCatalog(
 
   return {
     ...runtimeCatalog,
+    defaults: {
+      ...runtimeCatalog.defaults,
+      profile: runtimeCatalog.defaults.profile ?? DEFAULT_PERSONA_PROFILE_ID,
+    },
     accessModes,
+    personas,
     thirdPartyProviders: [
       ...providerConfigs.map((providerConfig) => createThirdPartyProviderCatalog(providerConfig)),
       ...runtimeCatalog.thirdPartyProviders.filter(

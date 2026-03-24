@@ -40,6 +40,10 @@ export function createActions(app) {
       await sessionActions.handleForkSession();
     });
 
+    dom.resetPrincipalButton.addEventListener("click", async () => {
+      await sessionActions.handleResetPrincipalState();
+    });
+
     dom.conversationLinkButton.addEventListener("click", async () => {
       await sessionActions.handleJoinConversation();
     });

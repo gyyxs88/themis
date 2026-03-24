@@ -6,7 +6,7 @@ import { serveWebAsset } from "./http-assets.js";
 import { handleAuthLogin, handleAuthLoginCancel, handleAuthLogout, handleAuthStatus } from "./http-auth.js";
 import { toErrorMessage } from "./http-errors.js";
 import { handleHistorySessionDetail, handleHistorySessions } from "./http-history.js";
-import { handleIdentityLinkCodeCreate, handleIdentityStatus } from "./http-identity.js";
+import { handleIdentityLinkCodeCreate, handleIdentityReset, handleIdentityStatus } from "./http-identity.js";
 import { handleRuntimeConfig } from "./http-runtime-config.js";
 import { writeJson } from "./http-responses.js";
 import {
@@ -78,6 +78,10 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/identity/link-code") {
         return handleIdentityLinkCodeCreate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/identity/reset") {
+        return handleIdentityReset(request, response, runtime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/login") {

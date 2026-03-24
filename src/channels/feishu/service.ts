@@ -59,6 +59,14 @@ interface FeishuActiveSessionTask {
   completed: Promise<void>;
 }
 
+interface FeishuMessageMutationResponse {
+  code?: number | undefined;
+  msg?: string | undefined;
+  data?: {
+    message_id?: string | undefined;
+  } | undefined;
+}
+
 export interface FeishuChannelServiceOptions {
   runtime: CodexTaskRuntime;
   authRuntime: CodexAuthRuntime;
@@ -275,6 +283,16 @@ export class FeishuChannelService {
       case "approval":
         await this.updateApprovalPolicy(command.args, context);
         return;
+      case "msgupdate":
+      case "updateprobe":
+      case "testupdate":
+        await this.probeMessageUpdate(context);
+        return;
+      case "reset":
+      case "restart":
+      case "wipe":
+        await this.resetPrincipalState(command.args, context);
+        return;
       default:
         await this.sendUnknownCommand(context.chatId, command.raw);
     }
@@ -285,9 +303,9 @@ export class FeishuChannelService {
     const sessionId = this.sessionStore.ensureActiveSessionId(conversationKey);
     const taskLease = await this.acquireSessionTaskLease(sessionId);
     const bridge = new FeishuTaskMessageBridge({
-      send: async (text) => {
-        await this.safeSendText(context.chatId, text);
-      },
+      createText: async (text) => this.createTextMessage(context.chatId, text),
+      updateText: async (messageId, text) => this.updateTextMessage(messageId, text),
+      sendText: async (text) => this.safeSendText(context.chatId, text),
     });
     const router = new InMemoryCommunicationRouter();
     const adapter = new FeishuAdapter({
@@ -332,13 +350,11 @@ export class FeishuChannelService {
 
   private async acquireSessionTaskLease(sessionId: string): Promise<FeishuSessionTaskLease> {
     return this.withSessionMutation(sessionId, async () => {
-      const existingTask = this.activeSessionTasks.get(sessionId);
-
-      if (existingTask) {
-        this.logger.info(`[themis/feishu] 新消息将打断当前会话任务：session=${sessionId}`);
-        existingTask.abortController.abort(new Error("FEISHU_SESSION_REPLACED"));
-        await existingTask.completed;
-      }
+      await this.abortActiveSessionTask(
+        sessionId,
+        "FEISHU_SESSION_REPLACED",
+        `[themis/feishu] 新消息将打断当前会话任务：session=${sessionId}`,
+      );
 
       const abortController = new AbortController();
       const token = Symbol(sessionId);
@@ -366,6 +382,19 @@ export class FeishuChannelService {
         },
       };
     });
+  }
+
+  private async abortActiveSessionTask(sessionId: string, reason: string, logMessage: string): Promise<boolean> {
+    const existingTask = this.activeSessionTasks.get(sessionId);
+
+    if (!existingTask) {
+      return false;
+    }
+
+    this.logger.info(logMessage);
+    existingTask.abortController.abort(new Error(reason));
+    await existingTask.completed;
+    return true;
   }
 
   private async withSessionMutation<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
@@ -585,11 +614,13 @@ export class FeishuChannelService {
       "/use <序号|conversationId> 切换到已有会话",
       "/current 查看当前会话",
       "/link <绑定码> 可选：认领一个旧 Web 浏览器身份",
+      "/reset confirm 清空当前 principal 的人格档案、历史和记忆，并重新开始",
       "/settings 查看当前会话配置",
       "/sandbox <default|read-only|workspace-write|danger-full-access>",
       "/search <default|disabled|cached|live>",
       "/network <default|on|off>",
       "/approval <default|never|on-request|on-failure|untrusted>",
+      "/msgupdate 测试机器人是否能原地更新自己刚发出的文本消息",
       "/quota 查看当前 Codex / ChatGPT 额度信息",
       "",
       "Web 和飞书默认共享同一套会话列表；切到同一个 conversationId 后，会继续复用后端已有上下文。",
@@ -673,6 +704,52 @@ export class FeishuChannelService {
     await this.safeSendText(chatId, `当前会话：${sessionId}`);
   }
 
+  private async resetPrincipalState(args: string[], context: FeishuIncomingContext): Promise<void> {
+    if (!isResetConfirmed(args)) {
+      await this.safeSendText(
+        context.chatId,
+        [
+          "这个命令会清空当前私人助理 principal 的人格档案、对话历史和记忆，并重新开始。",
+          "执行方式：/reset confirm",
+        ].join("\n"),
+      );
+      return;
+    }
+
+    const conversationKey = toConversationKey(context);
+    const currentSessionId = this.sessionStore.getActiveSessionId(conversationKey);
+    const lockKey = currentSessionId || `feishu-reset:${context.chatId}:${context.userId}`;
+
+    await this.withSessionMutation(lockKey, async () => {
+      if (currentSessionId) {
+        await this.abortActiveSessionTask(
+          currentSessionId,
+          "FEISHU_PRINCIPAL_RESET",
+          `[themis/feishu] 当前会话因重置命令被中断：session=${currentSessionId}`,
+        );
+      }
+
+      const identity = this.runtime.getIdentityLinkService().ensureIdentity({
+        channel: "feishu",
+        channelUserId: context.userId,
+      });
+      const resetAt = new Date().toISOString();
+      const reset = this.runtime.getRuntimeStore().resetPrincipalState(identity.principalId, resetAt);
+      const nextSessionId = this.sessionStore.createAndActivateSession(conversationKey);
+      const lines = [
+        `已重置 principal：${identity.principalId}`,
+        `清空会话：${reset.clearedConversationCount} 条`,
+        `清空任务记录：${reset.clearedTurnCount} 条`,
+        `清空人格档案：${reset.clearedPersonaProfile ? "是" : "否"}`,
+        `清空进行中建档：${reset.clearedPersonaOnboarding ? "是" : "否"}`,
+        `新会话：${nextSessionId}`,
+        "现在直接发消息，就会从头开始重新建档。",
+      ];
+
+      await this.safeSendText(context.chatId, lines.join("\n"));
+    });
+  }
+
   private async linkIdentity(args: string[], context: FeishuIncomingContext): Promise<void> {
     const code = normalizeText(args.join(" "))?.toUpperCase();
 
@@ -721,25 +798,116 @@ export class FeishuChannelService {
     await this.safeSendText(chatId, `未知命令：/${rawCommand}\n发送 /help 查看可用命令。`);
   }
 
-  private async safeSendText(chatId: string, text: string): Promise<void> {
+  private async probeMessageUpdate(context: FeishuIncomingContext): Promise<void> {
+    if (!this.client) {
+      await this.safeSendText(context.chatId, "飞书客户端当前未启动，暂时无法执行消息更新探针。");
+      return;
+    }
+
+    const probeId = createId("feishu-msgupdate");
+    const startedAt = new Date().toISOString();
+    const initialText = [
+      "飞书消息更新探针",
+      `探针 ID：${probeId}`,
+      `开始时间：${formatTimestamp(startedAt)}`,
+      "预期：这条消息会在约 2 秒内原地更新，而不是再发一条新消息。",
+    ].join("\n");
+
+    try {
+      const created = await this.createTextMessage(context.chatId, initialText);
+      const messageId = normalizeText(created.data?.message_id);
+
+      if (!messageId) {
+        await this.safeSendTaggedText(
+          context.chatId,
+          "消息更新探针失败：测试消息已经发出，但飞书接口没有返回 message_id，暂时无法继续验证更新能力。",
+          "消息更新探针失败",
+        );
+        return;
+      }
+
+      await delay(1800);
+
+      const updatedAt = new Date().toISOString();
+      const updatedText = [
+        "飞书消息更新探针",
+        `探针 ID：${probeId}`,
+        `开始时间：${formatTimestamp(startedAt)}`,
+        `更新时间：${formatTimestamp(updatedAt)}`,
+        "结果：这条消息已经被机器人原地更新。",
+        "如果你最终只看到这一条消息，说明飞书文本消息 update 能力可用。",
+      ].join("\n");
+
+      await this.updateTextMessage(messageId, updatedText);
+    } catch (error) {
+      const message = formatFeishuMessageUpdateProbeError(error);
+      this.logger.error(`[themis/feishu] 消息更新探针失败：${message}`);
+      await this.safeSendTaggedText(context.chatId, message, "消息更新探针失败");
+    }
+  }
+
+  private async createTextMessage(
+    chatId: string,
+    text: string,
+  ): Promise<FeishuMessageMutationResponse> {
     const client = this.client;
-    const normalizedText = text.trim();
+    const normalizedText = normalizeText(text);
 
     if (!client || !normalizedText) {
+      throw new Error("飞书客户端未就绪，或消息内容为空。");
+    }
+
+    if (splitForFeishuText(normalizedText).length > 1) {
+      throw new Error("消息内容过长，无法作为单条飞书文本消息发送。");
+    }
+
+    return client.im.v1.message.create({
+      params: {
+        receive_id_type: "chat_id",
+      },
+      data: {
+        receive_id: chatId,
+        msg_type: "text",
+        content: JSON.stringify({ text: normalizedText }),
+      },
+    });
+  }
+
+  private async updateTextMessage(
+    messageId: string,
+    text: string,
+  ): Promise<FeishuMessageMutationResponse> {
+    const client = this.client;
+    const normalizedText = normalizeText(text);
+
+    if (!client || !normalizedText) {
+      throw new Error("飞书客户端未就绪，或消息内容为空。");
+    }
+
+    if (splitForFeishuText(normalizedText).length > 1) {
+      throw new Error("消息内容过长，无法作为单条飞书文本消息更新。");
+    }
+
+    return client.im.v1.message.update({
+      path: {
+        message_id: messageId,
+      },
+      data: {
+        msg_type: "text",
+        content: JSON.stringify({ text: normalizedText }),
+      },
+    });
+  }
+
+  private async safeSendText(chatId: string, text: string): Promise<void> {
+    const normalizedText = text.trim();
+
+    if (!this.client || !normalizedText) {
       return;
     }
 
     for (const chunk of splitForFeishuText(normalizedText)) {
-      await client.im.v1.message.create({
-        params: {
-          receive_id_type: "chat_id",
-        },
-        data: {
-          receive_id: chatId,
-          msg_type: "text",
-          content: JSON.stringify({ text: chunk }),
-        },
-      });
+      await this.createTextMessage(chatId, chunk);
     }
   }
 
@@ -752,12 +920,21 @@ export class FeishuChannelService {
 
 class FeishuTaskMessageBridge {
   private readonly deliveredProgress = new Map<string, string>();
-  private readonly send: (text: string) => Promise<void>;
+  private readonly createText: (text: string) => Promise<FeishuMessageMutationResponse>;
+  private readonly updateText: (messageId: string, text: string) => Promise<FeishuMessageMutationResponse>;
+  private readonly sendText: (text: string) => Promise<void>;
+  private primaryMessageId: string | null = null;
+  private primaryMessageText: string | null = null;
+  private primaryMessageUpdatable = true;
 
   constructor(options: {
-    send: (text: string) => Promise<void>;
+    createText: (text: string) => Promise<FeishuMessageMutationResponse>;
+    updateText: (messageId: string, text: string) => Promise<FeishuMessageMutationResponse>;
+    sendText: (text: string) => Promise<void>;
   }) {
-    this.send = options.send;
+    this.createText = options.createText;
+    this.updateText = options.updateText;
+    this.sendText = options.sendText;
   }
 
   async deliver(message: FeishuDeliveryMessage): Promise<void> {
@@ -769,7 +946,7 @@ class FeishuTaskMessageBridge {
         await this.deliverResult(message);
         return;
       case "error":
-        await this.deliverTagged(message.text, "执行异常");
+        await this.deliverTerminalText(buildFeishuTerminalStateText("执行异常", message.text));
         return;
       default:
         return;
@@ -799,30 +976,104 @@ class FeishuTaskMessageBridge {
     }
 
     this.deliveredProgress.set(itemId, text);
-    await this.deliverTagged(text, "中途回复");
+    await this.deliverProgressText(text);
   }
 
   private async deliverResult(message: FeishuDeliveryMessage): Promise<void> {
     const metadata = asRecord(message.metadata);
     const status = normalizeText(metadata?.status) ?? "completed";
-    const tag = status === "completed"
-      ? "最终回复"
-      : status === "cancelled"
-        ? "任务已取消"
-        : "任务失败";
     const text = resolveDeliveryText(message, metadata);
 
-    if (!text) {
+    if (status === "completed") {
+      if (!text) {
+        return;
+      }
+
+      await this.deliverTerminalText(text);
       return;
     }
 
-    await this.deliverTagged(text, tag);
+    if (status === "cancelled") {
+      await this.deliverTerminalText(buildFeishuTerminalStateText("任务已取消", text));
+      return;
+    }
+
+    await this.deliverTerminalText(buildFeishuTerminalStateText("任务失败", text));
   }
 
-  private async deliverTagged(text: string, tag: string): Promise<void> {
-    for (const chunk of decorateTaggedChunks(text, tag)) {
-      await this.send(chunk);
+  private async deliverProgressText(text: string): Promise<void> {
+    const chunks = splitForFeishuText(text);
+
+    if (!chunks.length) {
+      return;
     }
+
+    const [firstChunk] = chunks;
+
+    if (!firstChunk) {
+      return;
+    }
+
+    const primaryText = chunks.length === 1
+      ? `${firstChunk}\n\n处理中...`
+      : `${firstChunk}\n\n处理中，完整内容会在结束后补全。`;
+
+    await this.upsertPrimaryMessage(primaryText);
+  }
+
+  private async deliverTerminalText(text: string): Promise<void> {
+    const chunks = splitForFeishuText(text);
+
+    if (!chunks.length) {
+      return;
+    }
+
+    const [firstChunk, ...remainingChunks] = chunks;
+
+    if (!firstChunk) {
+      return;
+    }
+
+    await this.upsertPrimaryMessage(firstChunk);
+
+    for (const chunk of remainingChunks) {
+      await this.sendText(chunk);
+    }
+  }
+
+  private async upsertPrimaryMessage(text: string): Promise<void> {
+    const normalizedText = normalizeText(text);
+
+    if (!normalizedText) {
+      return;
+    }
+
+    if (this.primaryMessageText === normalizedText) {
+      return;
+    }
+
+    if (!this.primaryMessageUpdatable) {
+      await this.sendText(normalizedText);
+      this.primaryMessageText = normalizedText;
+      return;
+    }
+
+    if (this.primaryMessageId) {
+      await this.updateText(this.primaryMessageId, normalizedText);
+      this.primaryMessageText = normalizedText;
+      return;
+    }
+
+    const created = await this.createText(normalizedText);
+    const messageId = normalizeText(created.data?.message_id);
+    this.primaryMessageText = normalizedText;
+
+    if (!messageId) {
+      this.primaryMessageUpdatable = false;
+      return;
+    }
+
+    this.primaryMessageId = messageId;
   }
 }
 
@@ -916,6 +1167,13 @@ function parseFeishuCommand(text: string): ParsedFeishuCommand | null {
   };
 }
 
+function isResetConfirmed(args: string[]): boolean {
+  return args.some((arg) => {
+    const normalized = arg.trim().toLowerCase();
+    return normalized === "confirm" || normalized === "确认";
+  });
+}
+
 function toConversationKey(context: FeishuIncomingContext): FeishuConversationKey {
   return {
     chatId: context.chatId,
@@ -992,6 +1250,16 @@ function splitForFeishuText(text: string, reservedChars = 0): string[] {
   }
 
   return chunks.filter(Boolean);
+}
+
+function buildFeishuTerminalStateText(label: string, text: string | null): string {
+  const normalizedText = normalizeText(text);
+
+  if (!normalizedText) {
+    return label;
+  }
+
+  return `${normalizedText}\n\n${label}`;
 }
 
 function formatRateLimitLine(
@@ -1232,6 +1500,58 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 function createId(prefix: string): string {
   const randomPart = Math.random().toString(36).slice(2, 10);
   return `${prefix}-${Date.now()}-${randomPart}`;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function extractFeishuApiErrorDetail(error: unknown): { code: number | string | null; message: string | null } | null {
+  const topLevel = asRecord(error);
+  const response = asRecord(topLevel?.response);
+  const data = asRecord(response?.data);
+  const codeValue = data?.code;
+  const code = typeof codeValue === "number" || typeof codeValue === "string" ? codeValue : null;
+  const message = normalizeText(data?.msg) ?? normalizeText(topLevel?.message);
+
+  if (code === null && !message) {
+    return null;
+  }
+
+  return { code, message };
+}
+
+function formatFeishuMessageUpdateProbeError(error: unknown): string {
+  const detail = extractFeishuApiErrorDetail(error);
+
+  if (!detail) {
+    return `消息更新探针失败：${toErrorMessage(error)}`;
+  }
+
+  if (detail.code === 230027) {
+    return "消息更新探针失败：飞书返回缺少必要权限。请在开放平台为应用补齐并发布 `im:message`、`im:message:send_as_bot` 或 `im:message:update` 中至少一项。";
+  }
+
+  if (detail.code === 230006) {
+    return "消息更新探针失败：应用未启用机器人能力，或新配置还没有发布生效。";
+  }
+
+  if (detail.code === 230071) {
+    return "消息更新探针失败：飞书判定当前操作者不是这条消息的发送者，因此不允许原地更新。";
+  }
+
+  if (detail.code === 230075) {
+    return "消息更新探针失败：这条消息已超出企业允许的可编辑时间窗口。";
+  }
+
+  const detailParts = [
+    detail.code !== null ? `code=${detail.code}` : null,
+    detail.message ?? null,
+  ].filter((part): part is string => typeof part === "string" && part.trim().length > 0);
+
+  return `消息更新探针失败：${detailParts.join("｜") || toErrorMessage(error)}`;
 }
 
 function toErrorMessage(error: unknown): string {

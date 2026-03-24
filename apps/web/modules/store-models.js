@@ -3,6 +3,7 @@ import { createId, nowIso } from "./utils.js";
 export function createStoreModelHelpers() {
   function createDefaultThreadSettings() {
     return {
+      profile: "",
       accessMode: "",
       model: "",
       reasoning: "",
@@ -168,6 +169,7 @@ export function createStoreModelHelpers() {
     }
 
       return {
+        profile: typeof value.profile === "string" ? value.profile : "",
         accessMode: typeof value.accessMode === "string" ? value.accessMode : "",
         model: typeof value.model === "string" ? value.model : "",
         reasoning: typeof value.reasoning === "string" ? value.reasoning : "",
@@ -186,6 +188,7 @@ export function createStoreModelHelpers() {
     }
 
       const normalized = {
+        ...(typeof value.profile === "string" && value.profile ? { profile: value.profile } : {}),
         ...(typeof value.accessMode === "string" && value.accessMode ? { accessMode: value.accessMode } : {}),
         ...(typeof value.model === "string" && value.model ? { model: value.model } : {}),
         ...(typeof value.reasoning === "string" && value.reasoning ? { reasoning: value.reasoning } : {}),

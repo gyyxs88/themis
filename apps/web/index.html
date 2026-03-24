@@ -104,6 +104,7 @@
 
           <div class="workspace-toolbar">
             <button id="fork-thread-button" type="button" class="toolbar-button">分叉</button>
+            <button id="reset-principal-button" type="button" class="danger-button">重置</button>
             <button
               id="workspace-tools-toggle"
               type="button"
@@ -259,6 +260,15 @@
                   <p id="runtime-config-note" class="settings-section-copy">正在从 Codex 读取可用模型与默认配置。</p>
 
                   <div class="settings-stack">
+                    <label class="settings-field">
+                      <span>人格预设</span>
+                      <select id="persona-select">
+                        <option value="">正在读取人格预设...</option>
+                      </select>
+                    </label>
+
+                    <p id="persona-note" class="settings-section-copy">人格会影响表达风格和协作方式，不改变模型、权限和工具能力。</p>
+
                     <label class="settings-field">
                       <span>认证模式模型</span>
                       <select id="model-select">

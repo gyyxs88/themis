@@ -18,6 +18,7 @@ export function normalizeSessionTaskSettings(value: unknown): SessionTaskSetting
     return {};
   }
 
+  const profile = normalizeText(value.profile);
   const accessMode = normalizeEnum<TaskAccessMode>(value.accessMode, TASK_ACCESS_MODES);
   const model = normalizeText(value.model);
   const reasoning = normalizeEnum<ReasoningLevel>(value.reasoning, REASONING_LEVELS);
@@ -29,6 +30,7 @@ export function normalizeSessionTaskSettings(value: unknown): SessionTaskSetting
   const thirdPartyModel = normalizeText(value.thirdPartyModel);
 
   return {
+    ...(profile ? { profile } : {}),
     ...(accessMode ? { accessMode } : {}),
     ...(model ? { model } : {}),
     ...(reasoning ? { reasoning } : {}),
@@ -70,6 +72,7 @@ export function buildTaskOptionsFromSessionTaskSettings(
     : normalized.model || undefined;
 
   const options: TaskOptions = {
+    ...(normalized.profile ? { profile: normalized.profile } : {}),
     ...(accessMode ? { accessMode } : {}),
     ...(model ? { model } : {}),
     ...(normalized.reasoning ? { reasoning: normalized.reasoning } : {}),

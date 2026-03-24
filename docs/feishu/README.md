@@ -9,8 +9,8 @@
 ## 当前落地状态
 
 - Themis 已接入飞书长连接，`im.message.receive_v1` 能进入现有 runtime 主链路。
-- 当前已支持飞书文本收发、`/help`、`/sessions`、`/new`、`/use`、`/current`、`/link`、`/settings`、`/sandbox`、`/search`、`/network`、`/approval`、`/quota`。
-- Codex 中途回复与最终结果都会回推到飞书，并在消息末尾追加状态标志。
+- 当前已支持飞书文本收发、`/help`、`/sessions`、`/new`、`/use`、`/current`、`/link`、`/settings`、`/sandbox`、`/search`、`/network`、`/approval`、`/msgupdate`、`/quota`。
+- Codex 在飞书里的中途回复与最终结果会优先复用同一条机器人消息；短回复通常会原地更新，避免重复刷屏。
 - Web 与飞书当前都统一采用“新消息默认打断旧任务”的跟进行为。
 - 飞书与 Web 现在默认共享同一套 conversation 视图；飞书 `/sessions` 可看到 Web 创建的会话，切到同一个 `conversationId` 后会继续复用后端已有上下文。
 - 当前激活会话不会跨端自动同步；Web 和飞书各自保留“当前正在聊哪一条”的本地状态，需要手动切到目标 `conversationId`。
@@ -163,7 +163,7 @@
 
 - 已支持文本收发。
 - 已支持单聊和群里 @ 机器人进入任务链路。
-- 已把飞书消息转成 Themis 现有任务请求，并回推中途回复与最终结果。
+- 已把飞书消息转成 Themis 现有任务请求，并优先通过同一条机器人消息承载中途与最终文本结果。
 - 当前仍不做复杂卡片，只保留纯文本消息与命令。
 
 ### 第二版再做

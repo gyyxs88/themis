@@ -22,12 +22,20 @@ export interface CodexRuntimeModel {
 }
 
 export interface CodexRuntimeDefaults {
+  profile: string | null;
   model: string | null;
   reasoning: string | null;
   approvalPolicy: string | null;
   sandboxMode: string | null;
   webSearchMode: string | null;
   networkAccessEnabled: boolean | null;
+}
+
+export interface CodexRuntimePersonaProfile {
+  id: string;
+  label: string;
+  description: string;
+  vibe: string | null;
 }
 
 export interface CodexRuntimeProviderInfo {
@@ -61,6 +69,7 @@ export interface CodexRuntimeCatalog {
   provider: CodexRuntimeProviderInfo | null;
   accessModes: CodexRuntimeAccessMode[];
   thirdPartyProviders: CodexRuntimeThirdPartyProvider[];
+  personas: CodexRuntimePersonaProfile[];
 }
 
 export interface CodexAuthAccount {
@@ -181,6 +190,7 @@ export async function readCodexRuntimeCatalog(cwd: string): Promise<CodexRuntime
     return {
       models,
       defaults: {
+        profile: defaults.profile,
         model: defaults.model ?? models.find((model) => model.isDefault)?.model ?? models[0]?.model ?? null,
         reasoning: defaults.reasoning,
         approvalPolicy: defaults.approvalPolicy,
@@ -203,6 +213,7 @@ export async function readCodexRuntimeCatalog(cwd: string): Promise<CodexRuntime
         },
       ],
       thirdPartyProviders: [],
+      personas: [],
     };
   } finally {
     await session.close();
@@ -421,6 +432,7 @@ function normalizeRuntimeDefaults(response: AppServerConfigReadResponse): CodexR
   const config = isRecord(response.config) ? response.config : {};
 
   return {
+    profile: null,
     model: normalizeOptionalText(config.model),
     reasoning: normalizeOptionalText(config.model_reasoning_effort),
     approvalPolicy: normalizeOptionalText(config.approval_policy),

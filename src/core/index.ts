@@ -4,5 +4,7 @@ export * from "./conversation-service.js";
 export * from "./codex-session-fork.js";
 export * from "./codex-session-store.js";
 export * from "./identity-link-service.js";
+export * from "./persona-profiles.js";
+export * from "./principal-persona-service.js";
 export * from "./prompt.js";
 export * from "./session-task-settings.js";

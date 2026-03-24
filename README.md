@@ -10,7 +10,7 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 - 飞书长连接渠道已经接入，可与 Web 共享同一套通信层、运行时和本地持久化。
 - 后端围绕 `@openai/codex-sdk` 做会话复用、流式输出、分叉上下文和历史恢复。
 - 本地 SQLite `infra/local/themis.db` 负责持久化 conversation、turn、event、touched files、identity 和第三方兼容 provider 配置。
-- Web 端已支持 Codex 认证、设备码登录、历史加载、会话分叉、第三方兼容接入和运行参数设置。
+- Web 端已支持 Codex 认证、设备码登录、历史加载、会话分叉、第三方兼容接入、首次对话长期画像建档、会话级人格预设和运行参数设置。
 
 ## 目录说明
 
@@ -49,8 +49,11 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 - 统一会话层：外部渠道先提供 `channelSessionKey`，运行时再解析成统一 `conversationId`。
 - 后端 Codex thread 复用：同一 `conversationId` 会恢复到同一条 Codex thread。
 - NDJSON 流式任务输出：支持中途事件、最终结果、取消和断连中止。
-- 飞书长连接主链路：普通文本消息、会话切换、命令、额度查询、中途/最终消息回推。
+- 飞书长连接主链路：普通文本消息、会话切换、命令、额度查询，以及同一条消息内的中途/最终回复更新。
 - 身份与会话辅助：Web 浏览器身份、一次性绑定码、跨端接入已有 `conversationId`。
+- 长期协作档案：首次对话会进入一次性 bootstrap，引导采集称呼、长期背景、协作偏好和边界，并按 `principal` 持久化，后续跨 Web / 飞书复用。
+- principal 重置：Web 顶部按钮和飞书 `/reset confirm` 都可以清空当前 principal 的人格档案、对话历史、会话设置和后端线程索引，并重新开始。
+- 会话级人格系统：内置 `Themis / 推进官 / 带教搭档 / 审查官` 四套预设，可按会话切换表达和协作风格；长期协作档案也会给后续回合补充默认人格倾向。
 - 第三方兼容接入：供应商/模型管理、真实只读任务探测、`supportsCodexTasks` 写回。
 
 ## 当前未落地能力

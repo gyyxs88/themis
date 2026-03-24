@@ -13,6 +13,7 @@ export function createStoreHelpers({ app, getState, saveState }) {
     const effective = resolveEffectiveSettings(settings);
     const activeModel = effective.accessMode === "third-party" ? effective.thirdPartyModel : effective.model;
     const options = {
+      ...(effective.profile ? { profile: effective.profile } : {}),
       accessMode: effective.accessMode,
       ...(activeModel ? { model: activeModel } : {}),
       ...(effective.reasoning ? { reasoning: effective.reasoning } : {}),
@@ -36,6 +37,7 @@ export function createStoreHelpers({ app, getState, saveState }) {
       errorMessage: "",
       models: [],
       defaults: {
+        profile: "",
         model: "",
         reasoning: "",
         approvalPolicy: "",
@@ -45,6 +47,33 @@ export function createStoreHelpers({ app, getState, saveState }) {
       },
       accessModes: [],
       thirdPartyProviders: [],
+      personas: [],
+    };
+  }
+
+  function getPersonas() {
+    const runtimeConfig = getRuntimeConfig();
+    return Array.isArray(runtimeConfig.personas) ? runtimeConfig.personas : [];
+  }
+
+  function resolvePersonaProfile(profileId) {
+    const normalized = normalizeText(profileId);
+    const personas = getPersonas();
+
+    if (normalized) {
+      return personas.find((persona) => persona.id === normalized) ?? {
+        id: normalized,
+        label: normalized,
+        description: "当前线程记录的人格预设，没有出现在服务端返回的人格列表中。",
+        vibe: "",
+      };
+    }
+
+    return personas[0] ?? {
+      id: "themis-default",
+      label: "Themis",
+      description: "默认人格。",
+      vibe: "",
     };
   }
 
@@ -149,6 +178,7 @@ export function createStoreHelpers({ app, getState, saveState }) {
     const runtimeConfig = getRuntimeConfig();
     const visibleModels = getVisibleModelsWithoutFallback(settings);
     const configuredModel = normalizeText(runtimeConfig.defaults.model);
+    const configuredProfile = normalizeText(runtimeConfig.defaults.profile);
     const inheritedModel = normalizeText(settings?.model)
       || configuredModel
       || runtimeConfig.models.find((model) => model.isDefault)?.model
@@ -177,6 +207,7 @@ export function createStoreHelpers({ app, getState, saveState }) {
       );
 
     return {
+      profile: normalizeText(settings?.profile) || configuredProfile || getPersonas()[0]?.id || "",
       accessMode,
       model: inheritedModel,
       thirdPartyProviderId: thirdPartySelection.providerId,
@@ -195,6 +226,7 @@ export function createStoreHelpers({ app, getState, saveState }) {
     const explicitReasoning = normalizeText(settings?.reasoning);
 
     return {
+      profile: normalizeText(settings?.profile) || inherited.profile,
       accessMode: inherited.accessMode,
       model: normalizeText(settings?.model) || inherited.model,
       thirdPartyProviderId: normalizeText(settings?.thirdPartyProviderId) || inherited.thirdPartyProviderId,
@@ -532,10 +564,12 @@ export function createStoreHelpers({ app, getState, saveState }) {
 
   return {
     buildTaskOptions,
+    getPersonas,
     getVisibleModels,
     getThirdPartyProviders,
     getThirdPartyModels,
     getReasoningOptions,
+    resolvePersonaProfile,
     resolveAccessMode,
     resolveThirdPartySelection,
     resolveInheritedSettings,

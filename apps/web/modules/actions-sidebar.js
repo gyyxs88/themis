@@ -2,6 +2,22 @@ export function createSidebarActions(app) {
   const { dom, store } = app;
 
   function bindSettingsControls() {
+    dom.personaSelect.addEventListener("change", () => {
+      const thread = store.getActiveThread();
+
+      if (!thread) {
+        return;
+      }
+
+      const inherited = store.resolveInheritedSettings(thread.settings);
+      const selectedProfile = dom.personaSelect.value;
+
+      store.updateThreadSettings({
+        profile: selectedProfile && selectedProfile !== inherited.profile ? selectedProfile : "",
+      });
+      app.renderer.renderAll();
+    });
+
     dom.modelSelect.addEventListener("change", () => {
       const thread = store.getActiveThread();
 

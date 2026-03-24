@@ -1,11 +1,21 @@
 function createDefaultRuntimeDefaults() {
   return {
+    profile: "",
     model: "",
     reasoning: "",
     approvalPolicy: "",
     sandboxMode: "",
     webSearchMode: "",
     networkAccessEnabled: null,
+  };
+}
+
+function createDefaultPersona() {
+  return {
+    id: "",
+    label: "",
+    description: "",
+    vibe: "",
   };
 }
 
@@ -49,6 +59,7 @@ export function createDefaultRuntimeConfigState() {
     provider: createDefaultRuntimeProvider(),
     accessModes: [createDefaultAccessMode("auth")],
     thirdPartyProviders: [],
+    personas: [],
   };
 }
 
@@ -99,12 +110,16 @@ function normalizeRuntimeConfigState(payload) {
   const thirdPartyProviders = Array.isArray(payload?.thirdPartyProviders)
     ? payload.thirdPartyProviders.map(normalizeThirdPartyProvider).filter(Boolean)
     : [];
+  const personas = Array.isArray(payload?.personas)
+    ? payload.personas.map(normalizePersona).filter(Boolean)
+    : [];
 
   return {
     status: "ready",
     errorMessage: "",
     models,
     defaults: {
+      profile: normalizeOptionalText(defaults.profile) || personas[0]?.id || "",
       model: fallbackDefaultModel,
       reasoning: normalizeOptionalText(defaults.reasoning),
       approvalPolicy: normalizeOptionalText(defaults.approvalPolicy),
@@ -115,6 +130,7 @@ function normalizeRuntimeConfigState(payload) {
     provider: normalizeProvider(payload?.provider),
     accessModes: normalizeAccessModes(payload?.accessModes, thirdPartyProviders),
     thirdPartyProviders,
+    personas,
   };
 }
 
@@ -254,6 +270,26 @@ function normalizeThirdPartyProvider(value) {
     lockedModel: Boolean(value.lockedModel),
     defaultModel: fallbackDefaultModel,
     models,
+  };
+}
+
+function normalizePersona(value) {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const id = normalizeOptionalText(value.id);
+
+  if (!id) {
+    return null;
+  }
+
+  return {
+    ...createDefaultPersona(),
+    id,
+    label: normalizeOptionalText(value.label) || id,
+    description: normalizeOptionalText(value.description),
+    vibe: normalizeOptionalText(value.vibe),
   };
 }
 

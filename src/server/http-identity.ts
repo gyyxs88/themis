@@ -48,6 +48,29 @@ export async function handleIdentityLinkCodeCreate(
   }
 }
 
+export async function handleIdentityReset(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  try {
+    const payload = normalizeIdentityPayload(await readJsonBody(request));
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const resetAt = new Date().toISOString();
+    const reset = runtime.getRuntimeStore().resetPrincipalState(identity.principalId, resetAt);
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      reset,
+    });
+  } catch (error) {
+    writeJson(response, resolveErrorStatusCode(error, true), {
+      error: createTaskError(error, true),
+    });
+  }
+}
+
 function normalizeIdentityPayload(value: unknown): {
   channel: string;
   channelUserId: string;

@@ -93,6 +93,7 @@ export function createRenderer(app) {
     const settings = thread?.settings ?? store.createDefaultThreadSettings();
     const effectiveSettings = store.resolveEffectiveSettings(settings);
 
+    renderPersonaSelect(settings, effectiveSettings);
     renderModelSelect(settings, effectiveSettings);
     renderThirdPartyProviderSelect(settings, effectiveSettings);
     renderThirdPartyModelSelect(settings, effectiveSettings);
@@ -102,6 +103,7 @@ export function createRenderer(app) {
     renderSandboxSelect(effectiveSettings);
     renderWebSearchSelect(effectiveSettings);
     renderNetworkAccessSelect(effectiveSettings);
+    renderPersonaNote(effectiveSettings);
     renderRuntimeConfigNote(settings, effectiveSettings);
     renderConversationLinkState(thread);
     renderIdentityState();
@@ -228,6 +230,45 @@ export function createRenderer(app) {
       .join("");
 
     dom.modelSelect.value = effectiveSettings.model ?? "";
+  }
+
+  function renderPersonaSelect(settings, effectiveSettings) {
+    const runtimeConfig = app.runtime.runtimeConfig;
+    const personas = store.getPersonas();
+    const defaultProfileId = runtimeConfig.defaults?.profile ?? personas[0]?.id ?? "";
+    const selectedProfileId = effectiveSettings.profile || defaultProfileId;
+    const options = personas.some((persona) => persona.id === selectedProfileId)
+      ? personas
+      : selectedProfileId
+        ? [store.resolvePersonaProfile(selectedProfileId), ...personas]
+        : personas;
+
+    if (runtimeConfig.status === "loading" && !options.length) {
+      dom.personaSelect.innerHTML = '<option value="">正在读取人格预设...</option>';
+      dom.personaSelect.value = "";
+      return;
+    }
+
+    if (!options.length) {
+      dom.personaSelect.innerHTML = '<option value="">Themis 默认人格</option>';
+      dom.personaSelect.value = "";
+      return;
+    }
+
+    dom.personaSelect.innerHTML = options
+      .map((persona) => {
+        const label = persona.id === defaultProfileId ? `${persona.label}（默认）` : persona.label;
+        return `<option value="${utils.escapeHtml(persona.id)}">${utils.escapeHtml(label)}</option>`;
+      })
+      .join("");
+
+    dom.personaSelect.value = selectedProfileId || defaultProfileId;
+  }
+
+  function renderPersonaNote(effectiveSettings) {
+    const persona = store.resolvePersonaProfile(effectiveSettings.profile);
+    const vibeText = persona.vibe ? ` 当前气质：${persona.vibe}。` : "";
+    dom.personaNote.textContent = `当前人格：${persona.label}。${persona.description}${vibeText} 人格只影响提示词和表达风格，不改变模型、权限和工具能力。`;
   }
 
   function renderReasoningSelect(settings, effectiveSettings) {
@@ -361,6 +402,11 @@ export function createRenderer(app) {
     }
 
     const parts = ["模型列表来自 Codex app-server。"];
+    const defaultPersona = store.resolvePersonaProfile(runtimeConfig.defaults.profile);
+
+    if (defaultPersona?.id) {
+      parts.push(`默认人格：${defaultPersona.label}。`);
+    }
 
     if (runtimeConfig.defaults.model) {
       parts.push(`当前默认模型：${runtimeConfig.defaults.model}。`);
@@ -763,7 +809,8 @@ export function createRenderer(app) {
       || thirdPartyUnavailable
       || (accessMode === "auth" && app.runtime.auth.status === "loading");
     dom.cancelButton.disabled = !runBusy;
-    dom.forkThreadButton.disabled = app.runtime.sessionControlBusy;
+    dom.forkThreadButton.disabled = app.runtime.sessionControlBusy || runBusy;
+    dom.resetPrincipalButton.disabled = controlsBusy || runBusy;
     dom.newThreadButton.disabled = app.runtime.sessionControlBusy;
     dom.workspaceToolsToggle.disabled = false;
     dom.workspaceToolsClose.disabled = false;
@@ -772,6 +819,7 @@ export function createRenderer(app) {
     dom.modelSelect.disabled = controlsBusy
       || !store.getVisibleModels(store.getActiveThread()?.settings).length
       || Boolean(app.runtime.runtimeConfig.provider?.lockedModel);
+    dom.personaSelect.disabled = controlsBusy || !store.getPersonas().length;
     dom.reasoningSelect.disabled = controlsBusy;
     dom.approvalSelect.disabled = controlsBusy;
     dom.sandboxSelect.disabled = controlsBusy;

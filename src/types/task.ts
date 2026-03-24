@@ -109,6 +109,7 @@ export interface TaskOptions {
 }
 
 export interface SessionTaskSettings {
+  profile?: string;
   accessMode?: TaskAccessMode;
   model?: string;
   reasoning?: ReasoningLevel;
