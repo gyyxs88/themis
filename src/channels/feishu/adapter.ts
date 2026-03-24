@@ -50,7 +50,8 @@ export class FeishuAdapter implements ChannelAdapter<FeishuTaskPayload> {
     const displayName = normalizeText(input.sender?.name);
     const tenantId = normalizeText(input.sender?.tenantKey);
     const inputText = normalizeText(input.inputText);
-    const sessionId = normalizeText(input.message?.chatId);
+    const channelSessionKey = normalizeText(input.sessionId) ?? normalizeText(input.message?.chatId);
+    const replyTarget = normalizeText(input.message?.chatId);
     const threadId = normalizeText(input.message?.threadId);
     const messageId = normalizeText(input.message?.messageId);
     const locale = normalizeText(input.message?.locale);
@@ -69,10 +70,10 @@ export class FeishuAdapter implements ChannelAdapter<FeishuTaskPayload> {
       ...(input.attachments?.length ? { attachments: input.attachments } : {}),
       ...(input.options ? { options: input.options } : {}),
       channelContext: {
-        ...(sessionId ? { sessionId } : {}),
+        ...(channelSessionKey ? { channelSessionKey } : {}),
         ...(threadId ? { threadId } : {}),
         ...(messageId ? { messageId } : {}),
-        ...(sessionId ? { replyTarget: sessionId } : {}),
+        ...(replyTarget ? { replyTarget } : {}),
         ...(locale ? { locale } : {}),
       },
       createdAt: normalizeText(input.createdAt) ?? new Date().toISOString(),
@@ -80,33 +81,38 @@ export class FeishuAdapter implements ChannelAdapter<FeishuTaskPayload> {
   }
 
   async handleEvent(event: TaskEvent): Promise<void> {
+    const payload = isRecord(event.payload) ? event.payload : undefined;
+    const itemType = normalizeText(typeof payload?.itemType === "string" ? payload.itemType : undefined);
+
+    if (event.type !== "task.progress" || itemType !== "agent_message") {
+      return;
+    }
+
     await this.deliver({
       kind: "event",
       requestId: event.requestId,
       taskId: event.taskId,
       title: event.type,
       text: event.message ?? `Task status changed to ${event.status}.`,
-      ...(event.payload ? { metadata: event.payload } : {}),
+      ...(payload ? { metadata: payload } : {}),
     });
   }
 
   async handleResult(result: TaskResult): Promise<void> {
-    const textParts = [result.summary];
-
-    if (result.nextSteps?.length) {
-      textParts.push(`Next: ${result.nextSteps.join("; ")}`);
-    }
+    const text = normalizeText(result.output) ?? normalizeText(result.summary) ?? "任务已结束。";
 
     await this.deliver({
       kind: "result",
       requestId: result.requestId,
       taskId: result.taskId,
       title: `task.${result.status}`,
-      text: textParts.join("\n"),
+      text,
       metadata: {
+        status: result.status,
         ...(result.output ? { output: result.output } : {}),
         ...(result.touchedFiles?.length ? { touchedFiles: result.touchedFiles } : {}),
         ...(result.memoryUpdates?.length ? { memoryUpdates: result.memoryUpdates } : {}),
+        ...(result.structuredOutput ? { structuredOutput: result.structuredOutput } : {}),
       },
     });
   }

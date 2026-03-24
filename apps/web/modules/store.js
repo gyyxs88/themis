@@ -167,6 +167,7 @@ export function createStore(app) {
     };
     touchThread(thread.id);
     saveState();
+    void app.sessionSettings?.persistThreadSettings(thread.id, thread.settings, { quiet: true });
   }
 
   function createAndActivateThread() {
@@ -232,6 +233,14 @@ export function createStore(app) {
     return Boolean(app.runtime.activeRequestController && app.runtime.activeRunRef);
   }
 
+  function getRunningThreadId() {
+    return isBusy() ? app.runtime.activeRunRef.threadId : null;
+  }
+
+  function isThreadRunning(threadId) {
+    return Boolean(threadId) && getRunningThreadId() === threadId;
+  }
+
   function clearActiveRun() {
     if (app.runtime.activeRunRef) {
       touchThread(app.runtime.activeRunRef.threadId);
@@ -272,7 +281,11 @@ export function createStore(app) {
     applyRuntimeMetadata,
     buildTaskOptions: helpers.buildTaskOptions,
     getVisibleModels: helpers.getVisibleModels,
+    getThirdPartyProviders: helpers.getThirdPartyProviders,
+    getThirdPartyModels: helpers.getThirdPartyModels,
     getReasoningOptions: helpers.getReasoningOptions,
+    resolveAccessMode: helpers.resolveAccessMode,
+    resolveThirdPartySelection: helpers.resolveThirdPartySelection,
     resolveInheritedSettings: helpers.resolveInheritedSettings,
     resolveEffectiveSettings: helpers.resolveEffectiveSettings,
     shouldBootstrapThread: helpers.shouldBootstrapThread,
@@ -286,6 +299,8 @@ export function createStore(app) {
     resolveTransientStatus,
     syncThreadStoredState: helpers.syncThreadStoredState,
     isBusy,
+    getRunningThreadId,
+    isThreadRunning,
     clearActiveRun,
     isDefaultThreadTitle: helpers.isDefaultThreadTitle,
     buildLocalForkTranscript: helpers.buildLocalForkTranscript,

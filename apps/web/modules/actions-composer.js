@@ -1,5 +1,8 @@
 export function createComposerActions(app, streamActions) {
   const { dom, store } = app;
+  app.runtime.resumeInterruptedSubmit = () => {
+    void resumeInterruptedSubmit();
+  };
 
   function bindComposerControls() {
     dom.goalInput.addEventListener("input", () => {
@@ -58,15 +61,102 @@ export function createComposerActions(app, streamActions) {
 
     const thread = store.getActiveThread();
 
-    if (!thread || store.isBusy() || app.runtime.sessionControlBusy) {
+    if (!thread || app.runtime.sessionControlBusy) {
       return;
     }
 
-    const goal = mergeDraftContent(thread.draftGoal, thread.draftContext).trim();
+    const runningThreadId = store.getRunningThreadId();
+
+    if (runningThreadId) {
+      requestInterruptSubmit(thread);
+      return;
+    }
+
+    await submitThread(thread);
+  }
+
+  function requestInterruptSubmit(thread) {
+    const draftGoal = typeof thread?.draftGoal === "string" ? thread.draftGoal : "";
+    const draftContext = typeof thread?.draftContext === "string" ? thread.draftContext : "";
+    const goal = mergeDraftContent(draftGoal, draftContext).trim();
 
     if (!goal) {
-      dom.goalInput.focus();
+      if (store.getActiveThread()?.id === thread.id) {
+        dom.goalInput.focus();
+      }
       return;
+    }
+
+    if (!store.isBusy() || !app.runtime.activeRequestController) {
+      void submitThread(thread, {
+        goal,
+        draftGoal,
+        draftContext,
+      });
+      return;
+    }
+
+    app.runtime.pendingInterruptSubmit = {
+      targetThreadId: thread.id,
+      goal,
+      draftGoal,
+      draftContext,
+    };
+    app.renderer.renderAll();
+    app.runtime.activeRequestController.abort(new Error("WEB_SUBMIT_REPLACED"));
+  }
+
+  async function submitThread(thread, pendingSubmission = null) {
+    const goal = (pendingSubmission?.goal ?? mergeDraftContent(thread.draftGoal, thread.draftContext)).trim();
+
+    if (!goal) {
+      if (store.getActiveThread()?.id === thread.id) {
+        dom.goalInput.focus();
+      }
+      return;
+    }
+
+    const accessMode = store.resolveAccessMode(thread.settings);
+
+    if (accessMode === "auth") {
+      const authCheck = await app.auth.ensureAuthenticated();
+
+      if (!authCheck.ok) {
+        store.setTransientStatus(thread.id, authCheck.message);
+        app.runtime.workspaceToolsSection = "auth";
+        app.runtime.workspaceToolsOpen = true;
+        app.renderer.renderAll();
+        return;
+      }
+    } else {
+      const thirdPartySelection = store.resolveThirdPartySelection(thread.settings);
+
+      if (!thirdPartySelection.provider) {
+        store.setTransientStatus(thread.id, "当前会话切到了第三方模式，但还没有可用的第三方供应商。");
+        app.runtime.workspaceToolsSection = "third-party";
+        app.runtime.workspaceToolsOpen = true;
+        app.renderer.renderAll();
+        return;
+      }
+
+      if (!thirdPartySelection.model) {
+        store.setTransientStatus(thread.id, "当前第三方供应商没有可用模型，请先在设置中选择模型。");
+        app.runtime.workspaceToolsSection = "mode-switch";
+        app.runtime.workspaceToolsOpen = true;
+        app.renderer.renderAll();
+        return;
+      }
+
+      if (thirdPartySelection.model.supportsCodexTasks === false) {
+        store.setTransientStatus(
+          thread.id,
+          "当前第三方模型未声明支持 Codex agent 任务。请先更换模型，或在模型能力里明确开启该能力。",
+        );
+        app.runtime.workspaceToolsSection = "third-party";
+        app.runtime.workspaceToolsOpen = true;
+        app.renderer.renderAll();
+        return;
+      }
     }
 
     const turn = store.createTurn({
@@ -77,8 +167,7 @@ export function createComposerActions(app, streamActions) {
 
     thread.turns.push(turn);
     thread.updatedAt = app.utils.nowIso();
-    thread.draftGoal = "";
-    thread.draftContext = "";
+    clearSubmittedDraft(thread, pendingSubmission);
 
     if (store.isDefaultThreadTitle(thread.title)) {
       thread.title = app.utils.titleFromGoal(goal);
@@ -93,10 +182,11 @@ export function createComposerActions(app, streamActions) {
     store.clearTransientStatus();
     store.trimThreads();
     store.saveState();
-    app.renderer.renderAll(true);
+    app.renderer.renderAll(shouldScrollThread(thread.id));
 
     try {
       const historyContext = store.shouldBootstrapThread(thread) ? thread.bootstrapTranscript : "";
+      const identity = app.identity.getRequestIdentity();
       const response = await fetch("/api/tasks/stream", {
         method: "POST",
         headers: {
@@ -106,6 +196,8 @@ export function createComposerActions(app, streamActions) {
         body: JSON.stringify({
           source: "web",
           goal,
+          userId: identity.userId,
+          ...(identity.displayName ? { displayName: identity.displayName } : {}),
           sessionId: thread.id,
           ...(turn.options ? { options: turn.options } : {}),
           ...(historyContext ? { historyContext } : {}),
@@ -126,14 +218,21 @@ export function createComposerActions(app, streamActions) {
   function finalizeSubmitError(thread, error) {
     if (error?.name === "AbortError") {
       const currentTurn = store.getActiveTurn();
+      const summary = app.runtime.pendingInterruptSubmit
+        ? "已为新消息打断当前任务，浏览器已中止本次流式请求。"
+        : "你已取消当前任务，浏览器已中止本次流式请求。";
 
       if (currentTurn) {
-        streamActions.finalizeTurnCancelled(currentTurn, "你已取消当前任务，浏览器已中止本次流式请求。");
+        streamActions.finalizeTurnCancelled(currentTurn, summary);
         store.syncThreadStoredState(thread, currentTurn);
       }
 
       store.clearActiveRun();
-      app.renderer.renderAll(true);
+      app.renderer.renderAll(shouldScrollThread(thread.id));
+
+      if (app.runtime.pendingInterruptSubmit) {
+        app.runtime.resumeInterruptedSubmit?.();
+      }
       return;
     }
 
@@ -145,14 +244,28 @@ export function createComposerActions(app, streamActions) {
     }
 
     store.clearActiveRun();
-    app.renderer.renderAll(true);
+    app.renderer.renderAll(shouldScrollThread(thread.id));
   }
 
-  function applySuggestion(button) {
-    if (store.isBusy()) {
+  async function resumeInterruptedSubmit() {
+    const pending = app.runtime.pendingInterruptSubmit;
+    app.runtime.pendingInterruptSubmit = null;
+
+    if (!pending) {
       return;
     }
 
+    const targetThread = store.getThreadById(pending.targetThreadId);
+
+    if (!targetThread) {
+      app.renderer.renderAll();
+      return;
+    }
+
+    await submitThread(targetThread, pending);
+  }
+
+  function applySuggestion(button) {
     const thread = store.getActiveThread();
 
     if (!thread) {
@@ -195,6 +308,26 @@ export function createComposerActions(app, streamActions) {
     }
 
     return `${normalizedGoal}\n\n补充要求：\n${normalizedContext}`;
+  }
+
+  function clearSubmittedDraft(thread, pendingSubmission) {
+    if (!pendingSubmission) {
+      thread.draftGoal = "";
+      thread.draftContext = "";
+      return;
+    }
+
+    if ((thread.draftGoal ?? "") === pendingSubmission.draftGoal) {
+      thread.draftGoal = "";
+    }
+
+    if ((thread.draftContext ?? "") === pendingSubmission.draftContext) {
+      thread.draftContext = "";
+    }
+  }
+
+  function shouldScrollThread(threadId) {
+    return store.state.activeThreadId === threadId;
   }
 
   return {

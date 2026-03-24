@@ -4,7 +4,7 @@ export function createSessionActions(app) {
   async function handleForkSession() {
     const source = store.getActiveThread();
 
-    if (!source || store.isBusy() || app.runtime.sessionControlBusy) {
+    if (!source || app.runtime.sessionControlBusy) {
       return;
     }
 
@@ -34,6 +34,42 @@ export function createSessionActions(app) {
         bootstrap.message ?? `已创建 fork 会话。第一次发送时会把${store.describeBootstrapLabel(fork)}导入新的 Codex 会话。`,
       );
       store.saveState();
+      void app.sessionSettings.persistThreadSettings(fork.id, fork.settings, { quiet: true });
+      app.runtime.workspaceToolsOpen = false;
+      app.renderer.renderAll(true);
+      dom.goalInput.focus();
+    } finally {
+      app.runtime.sessionControlBusy = false;
+      app.renderer.renderAll();
+    }
+  }
+
+  async function handleJoinConversation() {
+    const rawConversationId = typeof dom.conversationLinkInput?.value === "string"
+      ? dom.conversationLinkInput.value.trim()
+      : "";
+
+    if (!rawConversationId || app.runtime.sessionControlBusy) {
+      return;
+    }
+
+    try {
+      app.runtime.sessionControlBusy = true;
+      app.renderer.renderAll();
+
+      const result = await app.history.attachConversationById(rawConversationId);
+      const thread = result.thread ?? store.getThreadById(rawConversationId);
+
+      if (thread) {
+        store.setTransientStatus(
+          thread.id,
+          result.foundHistory
+            ? `已切到 conversation ${thread.id}，本机历史和会话设置已载入。`
+            : `已切到 conversation ${thread.id}。当前还没有本机历史，下一次发送会直接接到这个统一会话。`,
+        );
+      }
+
+      dom.conversationLinkInput.value = "";
       app.runtime.workspaceToolsOpen = false;
       app.renderer.renderAll(true);
       dom.goalInput.focus();
@@ -86,5 +122,6 @@ export function createSessionActions(app) {
 
   return {
     handleForkSession,
+    handleJoinConversation,
   };
 }

@@ -27,6 +27,16 @@ export function createSidebarActions(app) {
       }
 
       store.updateThreadSettings(nextSettings);
+      app.thirdPartyProbe.clearIfSelectionChanged(
+        store.resolveThirdPartySelection({
+          ...thread.settings,
+          ...nextSettings,
+        }).provider?.id || "",
+        store.resolveThirdPartySelection({
+          ...thread.settings,
+          ...nextSettings,
+        }).model?.model || "",
+      );
       app.renderer.renderAll();
     });
 
@@ -61,6 +71,139 @@ export function createSidebarActions(app) {
       });
       app.renderer.renderAll();
     });
+
+    dom.sandboxSelect.addEventListener("change", () => {
+      const thread = store.getActiveThread();
+
+      if (!thread) {
+        return;
+      }
+
+      const inherited = store.resolveInheritedSettings(thread.settings);
+      const selectedSandbox = dom.sandboxSelect.value;
+
+      store.updateThreadSettings({
+        sandboxMode: selectedSandbox && selectedSandbox !== inherited.sandboxMode ? selectedSandbox : "",
+      });
+      app.renderer.renderAll();
+    });
+
+    dom.webSearchSelect.addEventListener("change", () => {
+      const thread = store.getActiveThread();
+
+      if (!thread) {
+        return;
+      }
+
+      const inherited = store.resolveInheritedSettings(thread.settings);
+      const selectedWebSearch = dom.webSearchSelect.value;
+
+      store.updateThreadSettings({
+        webSearchMode: selectedWebSearch && selectedWebSearch !== inherited.webSearchMode ? selectedWebSearch : "",
+      });
+      app.renderer.renderAll();
+    });
+
+    dom.networkAccessSelect.addEventListener("change", () => {
+      const thread = store.getActiveThread();
+
+      if (!thread) {
+        return;
+      }
+
+      const inherited = store.resolveInheritedSettings(thread.settings);
+      const selectedNetworkAccess = normalizeBooleanSelectValue(dom.networkAccessSelect.value);
+
+      store.updateThreadSettings({
+        networkAccessEnabled: selectedNetworkAccess !== null && selectedNetworkAccess !== inherited.networkAccessEnabled
+          ? selectedNetworkAccess
+          : "",
+      });
+      app.renderer.renderAll();
+    });
+
+    dom.thirdPartyProviderSelect.addEventListener("change", () => {
+      const thread = store.getActiveThread();
+
+      if (!thread) {
+        return;
+      }
+
+      const providers = store.getThirdPartyProviders();
+      const selectedProviderId = dom.thirdPartyProviderSelect.value;
+      const defaultProviderId = providers[0]?.id ?? "";
+      const nextSettings = {
+        thirdPartyProviderId: selectedProviderId && selectedProviderId !== defaultProviderId ? selectedProviderId : "",
+      };
+      const thirdPartyModels = store.getThirdPartyModels({
+        ...thread.settings,
+        ...nextSettings,
+      });
+
+      if (
+        thread.settings.thirdPartyModel
+        && !thirdPartyModels.some((model) => model.model === thread.settings.thirdPartyModel)
+      ) {
+        nextSettings.thirdPartyModel = "";
+      }
+
+      const reasoningOptions = store.getReasoningOptions({
+        ...thread.settings,
+        ...nextSettings,
+      });
+
+      if (
+        thread.settings.reasoning
+        && !reasoningOptions.some((option) => option.reasoningEffort === thread.settings.reasoning)
+      ) {
+        nextSettings.reasoning = "";
+      }
+
+      store.updateThreadSettings(nextSettings);
+      app.thirdPartyProbe.clearIfSelectionChanged(
+        store.resolveThirdPartySelection({
+          ...thread.settings,
+          ...nextSettings,
+        }).provider?.id || "",
+        store.resolveThirdPartySelection({
+          ...thread.settings,
+          ...nextSettings,
+        }).model?.model || "",
+      );
+      app.renderer.renderAll();
+    });
+
+    const handleThirdPartyModelChange = (selectedModel) => {
+      const thread = store.getActiveThread();
+
+      if (!thread) {
+        return;
+      }
+
+      const selection = store.resolveThirdPartySelection(thread.settings);
+      const nextSettings = {
+        thirdPartyModel: selectedModel && selectedModel !== selection.modelId ? selectedModel : "",
+      };
+      const reasoningOptions = store.getReasoningOptions({
+        ...thread.settings,
+        ...nextSettings,
+      });
+
+      if (
+        thread.settings.reasoning
+        && !reasoningOptions.some((option) => option.reasoningEffort === thread.settings.reasoning)
+      ) {
+        nextSettings.reasoning = "";
+      }
+
+      store.updateThreadSettings(nextSettings);
+      app.renderer.renderAll();
+    };
+
+    dom.thirdPartyModelSelect.addEventListener("change", () => {
+      handleThirdPartyModelChange(dom.thirdPartyModelSelect.value);
+    });
+
   }
 
   function bindSidebarControls() {
@@ -70,7 +213,7 @@ export function createSidebarActions(app) {
     });
 
     dom.newThreadButton.addEventListener("click", () => {
-      if (store.isBusy() || app.runtime.sessionControlBusy) {
+      if (app.runtime.sessionControlBusy) {
         return;
       }
 
@@ -85,7 +228,7 @@ export function createSidebarActions(app) {
     dom.threadList.addEventListener("click", async (event) => {
       const button = event.target.closest("[data-thread-id]");
 
-      if (!button || store.isBusy() || app.runtime.sessionControlBusy) {
+      if (!button || app.runtime.sessionControlBusy) {
         return;
       }
 
@@ -98,6 +241,7 @@ export function createSidebarActions(app) {
       app.renderer.renderAll(true);
       app.layout.closeMobileSidebar();
       await app.history.ensureThreadHistoryLoaded(button.dataset.threadId);
+      await app.sessionSettings.loadThreadSettings(button.dataset.threadId, { quiet: true });
     });
   }
 
@@ -105,4 +249,16 @@ export function createSidebarActions(app) {
     bindSettingsControls,
     bindSidebarControls,
   };
+}
+
+function normalizeBooleanSelectValue(value) {
+  if (value === "true") {
+    return true;
+  }
+
+  if (value === "false") {
+    return false;
+  }
+
+  return null;
 }

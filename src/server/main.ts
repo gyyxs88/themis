@@ -1,9 +1,24 @@
+import { FeishuChannelService } from "../channels/index.js";
+import { CodexAuthRuntime, CodexTaskRuntime } from "../core/index.js";
 import { createThemisHttpServer, resolveListenAddresses } from "./http-server.js";
 
 const host = process.env.THEMIS_HOST ?? "0.0.0.0";
 const port = Number.parseInt(process.env.THEMIS_PORT ?? "3100", 10);
 const taskTimeoutMs = Number.parseInt(process.env.THEMIS_TASK_TIMEOUT_MS ?? "300000", 10);
-const server = createThemisHttpServer({ host, port, taskTimeoutMs });
+const runtime = new CodexTaskRuntime();
+const authRuntime = new CodexAuthRuntime();
+const feishuService = new FeishuChannelService({
+  runtime,
+  authRuntime,
+  taskTimeoutMs,
+});
+const server = createThemisHttpServer({
+  host,
+  port,
+  runtime,
+  authRuntime,
+  taskTimeoutMs,
+});
 
 server.listen(port, host, () => {
   console.log("[themis] LAN web UI is ready.");
@@ -16,4 +31,9 @@ server.listen(port, host, () => {
   }
 
   console.log("[themis] POST /api/tasks/stream to stream a request into Codex.");
+
+  void feishuService.start().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[themis/feishu] 飞书长连接启动失败：${message}`);
+  });
 });

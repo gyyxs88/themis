@@ -45,7 +45,7 @@ export class WebAdapter implements ChannelAdapter<WebTaskPayload> {
     const historyContext = normalizeText(input.historyContext);
     const userId = normalizeText(input.userId) ?? "webui";
     const displayName = normalizeText(input.displayName);
-    const sessionId = normalizeText(input.sessionId);
+    const channelSessionKey = normalizeText(input.sessionId);
 
     return {
       requestId: normalizeText(input.requestId) ?? createId("web-req"),
@@ -61,7 +61,7 @@ export class WebAdapter implements ChannelAdapter<WebTaskPayload> {
       ...(input.attachments?.length ? { attachments: input.attachments } : {}),
       ...(input.options ? { options: input.options } : {}),
       channelContext: {
-        ...(sessionId ? { sessionId } : {}),
+        ...(channelSessionKey ? { channelSessionKey } : {}),
       },
       createdAt: normalizeText(input.createdAt) ?? new Date().toISOString(),
     };

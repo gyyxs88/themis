@@ -52,7 +52,7 @@ export function createStreamActions(app) {
       store.appendStep(turn, "任务已接收", "Themis 已接受你的请求，准备进入 Codex 执行阶段。");
       store.touchThread(app.runtime.activeRunRef.threadId);
       store.saveState();
-      app.renderer.renderAll(true);
+      app.renderer.renderAll(shouldScrollRunningThread(thread.id));
       return;
     }
 
@@ -60,7 +60,7 @@ export function createStreamActions(app) {
       handleDeliveryMessage(thread, turn, message);
       store.touchThread(app.runtime.activeRunRef.threadId);
       store.saveState();
-      app.renderer.renderAll(true);
+      app.renderer.renderAll(shouldScrollRunningThread(thread.id));
       return;
     }
 
@@ -68,7 +68,10 @@ export function createStreamActions(app) {
       finalizeTurn(thread, turn, message.result ?? {});
       store.syncThreadStoredState(thread, turn);
       store.clearActiveRun();
-      app.renderer.renderAll(true);
+      app.renderer.renderAll(shouldScrollRunningThread(thread.id));
+      if (app.runtime.pendingInterruptSubmit) {
+        app.runtime.resumeInterruptedSubmit?.();
+      }
       return;
     }
 
@@ -76,7 +79,10 @@ export function createStreamActions(app) {
       finalizeTurnError(turn, message.text ?? "执行失败");
       store.syncThreadStoredState(thread, turn);
       store.clearActiveRun();
-      app.renderer.renderAll(true);
+      app.renderer.renderAll(shouldScrollRunningThread(thread.id));
+      if (app.runtime.pendingInterruptSubmit) {
+        app.runtime.resumeInterruptedSubmit?.();
+      }
     }
   }
 
@@ -183,6 +189,10 @@ export function createStreamActions(app) {
       summary: message,
     };
     store.appendStep(turn, "执行失败", message, "error");
+  }
+
+  function shouldScrollRunningThread(threadId) {
+    return store.state.activeThreadId === threadId;
   }
 
   return {

@@ -17,6 +17,7 @@ export interface CodexRuntimeModel {
   supportedReasoningEfforts: CodexRuntimeReasoningOption[];
   defaultReasoningEffort: string | null;
   supportsPersonality: boolean;
+  supportsCodexTasks: boolean;
   isDefault: boolean;
 }
 
@@ -24,11 +25,77 @@ export interface CodexRuntimeDefaults {
   model: string | null;
   reasoning: string | null;
   approvalPolicy: string | null;
+  sandboxMode: string | null;
+  webSearchMode: string | null;
+  networkAccessEnabled: boolean | null;
+}
+
+export interface CodexRuntimeProviderInfo {
+  type: "codex-default" | "openai-compatible";
+  name: string;
+  baseUrl: string | null;
+  model: string | null;
+  lockedModel: boolean;
+}
+
+export interface CodexRuntimeAccessMode {
+  id: "auth" | "third-party";
+  label: string;
+  description: string;
+}
+
+export interface CodexRuntimeThirdPartyProvider {
+  id: string;
+  type: "openai-compatible";
+  name: string;
+  baseUrl: string | null;
+  source: "env" | "db" | null;
+  lockedModel: boolean;
+  defaultModel: string | null;
+  models: CodexRuntimeModel[];
 }
 
 export interface CodexRuntimeCatalog {
   models: CodexRuntimeModel[];
   defaults: CodexRuntimeDefaults;
+  provider: CodexRuntimeProviderInfo | null;
+  accessModes: CodexRuntimeAccessMode[];
+  thirdPartyProviders: CodexRuntimeThirdPartyProvider[];
+}
+
+export interface CodexAuthAccount {
+  type: "apiKey" | "chatgpt";
+  email: string | null;
+  planType: string | null;
+}
+
+export interface CodexAuthRateLimitWindow {
+  usedPercent: number;
+  windowDurationMins: number;
+  resetsAt: string | null;
+}
+
+export interface CodexAuthRateLimitCredits {
+  hasCredits: boolean;
+  unlimited: boolean;
+  balance: string | null;
+}
+
+export interface CodexAuthRateLimits {
+  limitId: string | null;
+  limitName: string | null;
+  planType: string | null;
+  primary: CodexAuthRateLimitWindow | null;
+  secondary: CodexAuthRateLimitWindow | null;
+  credits: CodexAuthRateLimitCredits | null;
+}
+
+export interface CodexAuthStatus {
+  authenticated: boolean;
+  authMethod: string | null;
+  requiresOpenaiAuth: boolean;
+  account: CodexAuthAccount | null;
+  rateLimits: CodexAuthRateLimits | null;
 }
 
 interface JsonRpcSuccess<TResult> {
@@ -47,6 +114,11 @@ interface JsonRpcFailure {
 
 type JsonRpcResponse<TResult> = JsonRpcSuccess<TResult> | JsonRpcFailure;
 
+export interface CodexAppServerNotification {
+  method: string;
+  params?: unknown;
+}
+
 interface AppServerModelListResponse {
   data?: unknown;
 }
@@ -55,9 +127,28 @@ interface AppServerConfigReadResponse {
   config?: Record<string, unknown>;
 }
 
+interface AppServerGetAuthStatusResponse {
+  authMethod?: unknown;
+  requiresOpenaiAuth?: unknown;
+}
+
+interface AppServerAccountReadResponse {
+  account?: unknown;
+  requiresOpenaiAuth?: unknown;
+}
+
+interface AppServerAccountRateLimitsResponse {
+  rateLimits?: unknown;
+  rateLimitsByLimitId?: unknown;
+}
+
 interface PendingRequest<TResult> {
   resolve: (value: TResult) => void;
   reject: (error: Error) => void;
+}
+
+interface CodexAppServerSessionOptions {
+  onNotification?: (notification: CodexAppServerNotification) => void;
 }
 
 const DEFAULT_REASONING_OPTIONS: CodexRuntimeReasoningOption[] = [
@@ -93,21 +184,79 @@ export async function readCodexRuntimeCatalog(cwd: string): Promise<CodexRuntime
         model: defaults.model ?? models.find((model) => model.isDefault)?.model ?? models[0]?.model ?? null,
         reasoning: defaults.reasoning,
         approvalPolicy: defaults.approvalPolicy,
+        sandboxMode: defaults.sandboxMode,
+        webSearchMode: defaults.webSearchMode,
+        networkAccessEnabled: defaults.networkAccessEnabled,
       },
+      provider: {
+        type: "codex-default",
+        name: "Codex CLI",
+        baseUrl: null,
+        model: defaults.model ?? models.find((model) => model.isDefault)?.model ?? models[0]?.model ?? null,
+        lockedModel: false,
+      },
+      accessModes: [
+        {
+          id: "auth",
+          label: "认证",
+          description: "通过 Codex / ChatGPT 认证运行任务。",
+        },
+      ],
+      thirdPartyProviders: [],
     };
   } finally {
     await session.close();
   }
 }
 
-class CodexAppServerSession {
+export async function readCodexAuthStatus(cwd: string): Promise<CodexAuthStatus> {
+  const session = new CodexAppServerSession(cwd);
+
+  try {
+    await session.initialize();
+    return await readCodexAuthStatusFromSession(session);
+  } finally {
+    await session.close();
+  }
+}
+
+export async function readCodexAuthStatusFromSession(session: CodexAppServerSession): Promise<CodexAuthStatus> {
+  const [authStatus, accountRead, rateLimits] = await Promise.all([
+    session.request<AppServerGetAuthStatusResponse>("getAuthStatus", {
+      includeToken: false,
+      refreshToken: false,
+    }),
+    session.request<AppServerAccountReadResponse>("account/read", {
+      refreshToken: false,
+    }),
+    readCodexAuthRateLimits(session),
+  ]);
+
+  const authMethod = normalizeOptionalText(authStatus.authMethod);
+  const account = normalizeAuthAccount(accountRead.account);
+  const requiresOpenaiAuth = normalizeBoolean(authStatus.requiresOpenaiAuth)
+    ?? normalizeBoolean(accountRead.requiresOpenaiAuth)
+    ?? true;
+
+  return {
+    authenticated: Boolean(authMethod || account),
+    authMethod,
+    requiresOpenaiAuth,
+    account,
+    rateLimits,
+  };
+}
+
+export class CodexAppServerSession {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<number, PendingRequest<unknown>>();
   private readonly stderrChunks: string[] = [];
+  private readonly onNotification?: CodexAppServerSessionOptions["onNotification"];
   private nextId = 1;
   private closed = false;
 
-  constructor(cwd: string) {
+  constructor(cwd: string, options: CodexAppServerSessionOptions = {}) {
+    this.onNotification = options.onNotification;
     this.child = spawn(resolveCodexBinary(), ["app-server"], {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
@@ -231,6 +380,15 @@ class CodexAppServerSession {
     }
 
     if (typeof parsed.id !== "number") {
+      const method = isRecord(parsed) ? normalizeOptionalText(parsed.method) : null;
+
+      if (method) {
+        this.onNotification?.({
+          method,
+          ...(isRecord(parsed) && "params" in parsed ? { params: parsed.params } : {}),
+        });
+      }
+
       return;
     }
 
@@ -266,6 +424,11 @@ function normalizeRuntimeDefaults(response: AppServerConfigReadResponse): CodexR
     model: normalizeOptionalText(config.model),
     reasoning: normalizeOptionalText(config.model_reasoning_effort),
     approvalPolicy: normalizeOptionalText(config.approval_policy),
+    sandboxMode: normalizeOptionalText(config.sandbox_mode),
+    webSearchMode: normalizeOptionalText(config.web_search),
+    networkAccessEnabled: normalizeBoolean(
+      isRecord(config.sandbox_workspace_write) ? config.sandbox_workspace_write.network_access : null,
+    ),
   };
 }
 
@@ -306,6 +469,7 @@ function normalizeRuntimeModel(value: unknown): CodexRuntimeModel | null {
     supportedReasoningEfforts: normalizeReasoningOptions(value.supportedReasoningEfforts),
     defaultReasoningEffort: normalizeOptionalText(value.defaultReasoningEffort),
     supportsPersonality: Boolean(value.supportsPersonality),
+    supportsCodexTasks: true,
     isDefault: Boolean(value.isDefault),
   };
 }
@@ -345,6 +509,7 @@ function createSyntheticConfiguredModel(model: string, reasoning: string | null)
     supportedReasoningEfforts: [...DEFAULT_REASONING_OPTIONS],
     defaultReasoningEffort: reasoning,
     supportsPersonality: false,
+    supportsCodexTasks: true,
     isDefault: false,
   };
 }
@@ -359,6 +524,168 @@ function resolveCodexBinary(): string {
   }
 
   return process.platform === "win32" ? "codex.cmd" : "codex";
+}
+
+export function resolveCodexCliBinary(): string {
+  return resolveCodexBinary();
+}
+
+function normalizeAuthAccount(value: unknown): CodexAuthAccount | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const type = normalizeOptionalText(value.type);
+
+  if (type === "apiKey") {
+    return {
+      type,
+      email: null,
+      planType: null,
+    };
+  }
+
+  if (type === "chatgpt") {
+    return {
+      type,
+      email: normalizeOptionalText(value.email),
+      planType: normalizeOptionalText(value.planType),
+    };
+  }
+
+  return null;
+}
+
+async function readCodexAuthRateLimits(session: CodexAppServerSession): Promise<CodexAuthRateLimits | null> {
+  try {
+    const response = await session.request<AppServerAccountRateLimitsResponse>("account/rateLimits/read", {});
+    return normalizeAuthRateLimitsResponse(response);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeAuthRateLimitsResponse(response: AppServerAccountRateLimitsResponse): CodexAuthRateLimits | null {
+  const directRateLimits = normalizeAuthRateLimits(response.rateLimits);
+
+  if (directRateLimits) {
+    return directRateLimits;
+  }
+
+  if (!isRecord(response.rateLimitsByLimitId)) {
+    return null;
+  }
+
+  for (const value of Object.values(response.rateLimitsByLimitId)) {
+    const rateLimits = normalizeAuthRateLimits(value);
+
+    if (rateLimits) {
+      return rateLimits;
+    }
+  }
+
+  return null;
+}
+
+function normalizeAuthRateLimits(value: unknown): CodexAuthRateLimits | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const primary = normalizeAuthRateLimitWindow(value.primary);
+  const secondary = normalizeAuthRateLimitWindow(value.secondary);
+  const credits = normalizeAuthRateLimitCredits(value.credits);
+
+  if (!primary && !secondary && !credits) {
+    return null;
+  }
+
+  return {
+    limitId: normalizeOptionalText(value.limitId),
+    limitName: normalizeOptionalText(value.limitName),
+    planType: normalizeOptionalText(value.planType),
+    primary,
+    secondary,
+    credits,
+  };
+}
+
+function normalizeAuthRateLimitWindow(value: unknown): CodexAuthRateLimitWindow | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const usedPercent = normalizePercent(value.usedPercent);
+  const windowDurationMins = normalizePositiveNumber(value.windowDurationMins);
+  const resetsAt = normalizeUnixTimestamp(value.resetsAt);
+
+  if (usedPercent === null || windowDurationMins === null) {
+    return null;
+  }
+
+  return {
+    usedPercent,
+    windowDurationMins,
+    resetsAt,
+  };
+}
+
+function normalizeAuthRateLimitCredits(value: unknown): CodexAuthRateLimitCredits | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const hasCredits = normalizeBoolean(value.hasCredits);
+  const unlimited = normalizeBoolean(value.unlimited);
+  const balance = normalizeOptionalText(value.balance) ?? normalizeNumberText(value.balance);
+
+  if (hasCredits === null && unlimited === null && !balance) {
+    return null;
+  }
+
+  return {
+    hasCredits: hasCredits ?? false,
+    unlimited: unlimited ?? false,
+    balance,
+  };
+}
+
+function normalizeBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function normalizePercent(value: unknown): number | null {
+  const parsed = normalizePositiveNumber(value);
+
+  if (parsed === null) {
+    return null;
+  }
+
+  return Math.max(0, Math.min(100, parsed));
+}
+
+function normalizePositiveNumber(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+
+  return value;
+}
+
+function normalizeNumberText(value: unknown): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+
+  return String(value);
+}
+
+function normalizeUnixTimestamp(value: unknown): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+
+  return new Date(value * 1000).toISOString();
 }
 
 function normalizeOptionalText(value: unknown): string | null {

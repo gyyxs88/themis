@@ -2,6 +2,7 @@ import { nowIso, summarizeForSidebar } from "./utils.js";
 
 export function createStoreHelpers({ app, getState, saveState }) {
   const DEFAULT_REASONING_OPTIONS = [
+    { reasoningEffort: "minimal", description: "minimal" },
     { reasoningEffort: "low", description: "low" },
     { reasoningEffort: "medium", description: "medium" },
     { reasoningEffort: "high", description: "high" },
@@ -10,10 +11,20 @@ export function createStoreHelpers({ app, getState, saveState }) {
 
   function buildTaskOptions(settings) {
     const effective = resolveEffectiveSettings(settings);
+    const activeModel = effective.accessMode === "third-party" ? effective.thirdPartyModel : effective.model;
     const options = {
-      ...(effective.model ? { model: effective.model } : {}),
+      accessMode: effective.accessMode,
+      ...(activeModel ? { model: activeModel } : {}),
       ...(effective.reasoning ? { reasoning: effective.reasoning } : {}),
+      ...(effective.sandboxMode ? { sandboxMode: effective.sandboxMode } : {}),
+      ...(effective.webSearchMode ? { webSearchMode: effective.webSearchMode } : {}),
+      ...(shouldIncludeNetworkAccess(effective)
+        ? { networkAccessEnabled: effective.networkAccessEnabled }
+        : {}),
       ...(effective.approvalPolicy ? { approvalPolicy: effective.approvalPolicy } : {}),
+      ...(effective.accessMode === "third-party" && effective.thirdPartyProviderId
+        ? { thirdPartyProviderId: effective.thirdPartyProviderId }
+        : {}),
     };
 
     return Object.keys(options).length ? options : undefined;
@@ -28,7 +39,12 @@ export function createStoreHelpers({ app, getState, saveState }) {
         model: "",
         reasoning: "",
         approvalPolicy: "",
+        sandboxMode: "",
+        webSearchMode: "",
+        networkAccessEnabled: null,
       },
+      accessModes: [],
+      thirdPartyProviders: [],
     };
   }
 
@@ -48,24 +64,85 @@ export function createStoreHelpers({ app, getState, saveState }) {
     return dedupeModels(visibleModels);
   }
 
+  function getThirdPartyProviders() {
+    const runtimeConfig = getRuntimeConfig();
+    return Array.isArray(runtimeConfig.thirdPartyProviders) ? runtimeConfig.thirdPartyProviders : [];
+  }
+
+  function getThirdPartyModels(settings, resolvedProvider = null) {
+    const provider = resolvedProvider ?? resolveThirdPartyProvider(settings);
+
+    if (!provider) {
+      const configuredModel = normalizeText(settings?.thirdPartyModel);
+      return configuredModel
+        ? [createSyntheticModel(configuredModel, "当前线程记录的第三方模型，不在当前供应商返回的模型列表中。", false)]
+        : [];
+    }
+
+    const visibleModels = provider.models.filter((model) => !model.hidden || model.model === provider.defaultModel);
+    const configuredModel = normalizeText(settings?.thirdPartyModel);
+
+    if (configuredModel && !visibleModels.some((model) => model.model === configuredModel)) {
+      visibleModels.unshift(createSyntheticModel(configuredModel, "当前线程记录的第三方模型，不在当前供应商返回的模型列表中。", false));
+    }
+
+    if (provider.defaultModel && !visibleModels.some((model) => model.model === provider.defaultModel)) {
+      visibleModels.unshift(createSyntheticModel(provider.defaultModel, "当前第三方供应商配置的默认模型，没有出现在返回列表中。", false));
+    }
+
+    return dedupeModels(visibleModels);
+  }
+
   function getReasoningOptions(settings) {
+    const accessMode = resolveAccessMode(settings);
     const inherited = resolveInheritedSettings(settings);
-    const model = getModelById(inherited.model, settings);
-    const options = Array.isArray(model?.supportedReasoningEfforts) && model.supportedReasoningEfforts.length
+    const model = accessMode === "third-party"
+      ? getThirdPartyModelById(inherited.thirdPartyModel, settings)
+      : getAuthModelById(inherited.model, settings);
+    const resolvedOptions = Array.isArray(model?.supportedReasoningEfforts) && model.supportedReasoningEfforts.length
       ? model.supportedReasoningEfforts
       : DEFAULT_REASONING_OPTIONS;
+    const explicitReasoning = normalizeText(settings?.reasoning);
 
-    if (settings?.reasoning && !options.some((option) => option.reasoningEffort === settings.reasoning)) {
+    if (explicitReasoning && !resolvedOptions.some((option) => option.reasoningEffort === explicitReasoning)) {
       return [
         {
-          reasoningEffort: settings.reasoning,
-          description: settings.reasoning,
+          reasoningEffort: explicitReasoning,
+          description: explicitReasoning,
         },
-        ...options,
+        ...resolvedOptions,
       ];
     }
 
-    return options;
+    return resolvedOptions;
+  }
+
+  function resolveAccessMode(settings) {
+    const configuredAccessMode = normalizeText(settings?.accessMode);
+
+    if (configuredAccessMode === "third-party" && getThirdPartyProviders().length) {
+      return "third-party";
+    }
+
+    return "auth";
+  }
+
+  function resolveThirdPartySelection(settings) {
+    const provider = resolveThirdPartyProvider(settings);
+    const models = getThirdPartyModels(settings, provider);
+    const configuredModel = normalizeText(settings?.thirdPartyModel);
+    const model = models.find((entry) => entry.model === configuredModel)
+      ?? models.find((entry) => entry.model === provider?.defaultModel)
+      ?? models[0]
+      ?? null;
+
+    return {
+      provider,
+      models,
+      model,
+      providerId: provider?.id ?? "",
+      modelId: model?.model ?? "",
+    };
   }
 
   function resolveInheritedSettings(settings) {
@@ -77,18 +154,37 @@ export function createStoreHelpers({ app, getState, saveState }) {
       || runtimeConfig.models.find((model) => model.isDefault)?.model
       || visibleModels[0]?.model
       || "";
-    const model = getModelById(inheritedModel, settings);
-    const reasoningOptions = Array.isArray(model?.supportedReasoningEfforts) && model.supportedReasoningEfforts.length
-      ? model.supportedReasoningEfforts
+    const accessMode = resolveAccessMode(settings);
+    const thirdPartySelection = resolveThirdPartySelection(settings);
+    const activeModel = accessMode === "third-party"
+      ? getThirdPartyModelById(thirdPartySelection.modelId, settings)
+      : getAuthModelById(inheritedModel, settings);
+    const reasoningOptions = Array.isArray(activeModel?.supportedReasoningEfforts) && activeModel.supportedReasoningEfforts.length
+      ? activeModel.supportedReasoningEfforts
       : DEFAULT_REASONING_OPTIONS;
     const configuredReasoning = normalizeText(runtimeConfig.defaults.reasoning);
-    const inheritedReasoning = reasoningOptions.some((option) => option.reasoningEffort === configuredReasoning)
-      ? configuredReasoning
-      : normalizeText(model?.defaultReasoningEffort);
+    const modelDefaultReasoning = normalizeText(activeModel?.defaultReasoningEffort);
+    const inheritedReasoning = accessMode === "third-party"
+      ? (
+        reasoningOptions.some((option) => option.reasoningEffort === modelDefaultReasoning)
+          ? modelDefaultReasoning
+          : configuredReasoning
+      )
+      : (
+        reasoningOptions.some((option) => option.reasoningEffort === configuredReasoning)
+          ? configuredReasoning
+          : modelDefaultReasoning
+      );
 
     return {
+      accessMode,
       model: inheritedModel,
+      thirdPartyProviderId: thirdPartySelection.providerId,
+      thirdPartyModel: thirdPartySelection.modelId,
       reasoning: inheritedReasoning || "",
+      sandboxMode: normalizeText(runtimeConfig.defaults.sandboxMode),
+      webSearchMode: normalizeText(runtimeConfig.defaults.webSearchMode),
+      networkAccessEnabled: normalizeBooleanSetting(runtimeConfig.defaults.networkAccessEnabled),
       approvalPolicy: normalizeText(runtimeConfig.defaults.approvalPolicy) || "untrusted",
     };
   }
@@ -99,10 +195,16 @@ export function createStoreHelpers({ app, getState, saveState }) {
     const explicitReasoning = normalizeText(settings?.reasoning);
 
     return {
+      accessMode: inherited.accessMode,
       model: normalizeText(settings?.model) || inherited.model,
+      thirdPartyProviderId: normalizeText(settings?.thirdPartyProviderId) || inherited.thirdPartyProviderId,
+      thirdPartyModel: normalizeText(settings?.thirdPartyModel) || inherited.thirdPartyModel,
       reasoning: reasoningOptions.some((option) => option.reasoningEffort === explicitReasoning)
         ? explicitReasoning
         : inherited.reasoning,
+      sandboxMode: normalizeText(settings?.sandboxMode) || inherited.sandboxMode,
+      webSearchMode: normalizeText(settings?.webSearchMode) || inherited.webSearchMode,
+      networkAccessEnabled: normalizeBooleanSetting(settings?.networkAccessEnabled) ?? inherited.networkAccessEnabled,
       approvalPolicy: normalizeText(settings?.approvalPolicy) || inherited.approvalPolicy,
     };
   }
@@ -355,13 +457,30 @@ export function createStoreHelpers({ app, getState, saveState }) {
     );
   }
 
-  function getModelById(modelId, settings) {
+  function resolveThirdPartyProvider(settings) {
+    const providers = getThirdPartyProviders();
+    const configuredProviderId = normalizeText(settings?.thirdPartyProviderId);
+    return providers.find((entry) => entry.id === configuredProviderId) ?? providers[0] ?? null;
+  }
+
+  function getAuthModelById(modelId, settings) {
     if (!modelId) {
       return null;
     }
 
     const models = getVisibleModelsWithoutFallback(settings);
-    return models.find((model) => model.model === modelId) ?? createSyntheticModel(modelId);
+    return models.find((model) => model.model === modelId)
+      ?? createSyntheticModel(modelId, "当前线程记录的模型，没有出现在 Codex 当前返回的模型列表中。");
+  }
+
+  function getThirdPartyModelById(modelId, settings) {
+    if (!modelId) {
+      return null;
+    }
+
+    const models = getThirdPartyModels(settings);
+    return models.find((model) => model.model === modelId)
+      ?? createSyntheticModel(modelId, "当前线程记录的第三方模型，没有出现在供应商返回的模型列表中。");
   }
 
   function dedupeModels(models) {
@@ -374,16 +493,21 @@ export function createStoreHelpers({ app, getState, saveState }) {
     return [...unique.values()];
   }
 
-  function createSyntheticModel(modelId) {
+  function createSyntheticModel(
+    modelId,
+    description = "当前线程记录的模型，没有出现在 Codex 当前返回的模型列表中。",
+    supportsCodexTasks = true,
+  ) {
     return {
       id: modelId,
       model: modelId,
       displayName: modelId,
-      description: "当前线程记录的模型，没有出现在 Codex 当前返回的模型列表中。",
+      description,
       hidden: false,
       supportedReasoningEfforts: DEFAULT_REASONING_OPTIONS,
       defaultReasoningEffort: "",
       supportsPersonality: false,
+      supportsCodexTasks,
       isDefault: false,
     };
   }
@@ -396,10 +520,24 @@ export function createStoreHelpers({ app, getState, saveState }) {
     return value.trim();
   }
 
+  function normalizeBooleanSetting(value) {
+    return typeof value === "boolean" ? value : null;
+  }
+
+  function shouldIncludeNetworkAccess(settings) {
+    return typeof settings.networkAccessEnabled === "boolean"
+      && settings.sandboxMode !== "read-only"
+      && settings.sandboxMode !== "danger-full-access";
+  }
+
   return {
     buildTaskOptions,
     getVisibleModels,
+    getThirdPartyProviders,
+    getThirdPartyModels,
     getReasoningOptions,
+    resolveAccessMode,
+    resolveThirdPartySelection,
     resolveInheritedSettings,
     resolveEffectiveSettings,
     shouldBootstrapThread,

@@ -11,6 +11,7 @@ export interface ChannelUser {
 
 export interface ChannelContext {
   sessionId?: string;
+  channelSessionKey?: string;
   threadId?: string;
   messageId?: string;
   replyTarget?: string;

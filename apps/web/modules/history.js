@@ -50,8 +50,10 @@ export function createHistoryController(app) {
 
       if (options.force && app.store.state.activeThreadId) {
         await ensureThreadHistoryLoaded(app.store.state.activeThreadId, { force: true });
+        await app.sessionSettings.loadThreadSettings(app.store.state.activeThreadId, { quiet: true });
       } else if (app.store.state.activeThreadId) {
         await ensureThreadHistoryLoaded(app.store.state.activeThreadId);
+        await app.sessionSettings.loadThreadSettings(app.store.state.activeThreadId, { quiet: true });
       }
     } catch (error) {
       console.error("History sync failed.", error);
@@ -121,6 +123,7 @@ export function createHistoryController(app) {
       applyHistorySessionDetail(data);
       app.store.saveState();
       app.renderer.renderAll(true);
+      await app.sessionSettings.loadThreadSettings(threadId, { quiet: true });
     } catch (error) {
       if (error?.statusCode === 404) {
         thread.historyHydrated = true;
@@ -142,6 +145,74 @@ export function createHistoryController(app) {
 
       app.store.setTransientStatus(threadId, error?.message ?? "载入会话详情失败。");
       app.renderer.renderAll();
+    } finally {
+      app.runtime.historyHydratingThreadId = null;
+      app.renderer.renderAll();
+    }
+  }
+
+  async function attachConversationById(conversationId) {
+    const normalizedConversationId = typeof conversationId === "string" ? conversationId.trim() : "";
+
+    if (!normalizedConversationId) {
+      return {
+        foundHistory: false,
+        thread: null,
+      };
+    }
+
+    let thread = app.store.getThreadById(normalizedConversationId);
+
+    if (!thread) {
+      thread = app.store.createThread();
+      thread.id = normalizedConversationId;
+      thread.title = `会话 ${normalizedConversationId.slice(0, 12)}`;
+      thread.historyHydrated = true;
+      app.store.state.threads.unshift(thread);
+    }
+
+    app.store.state.activeThreadId = thread.id;
+    app.store.trimThreads();
+    app.store.saveState();
+    app.renderer.renderAll(true);
+
+    app.runtime.historyHydratingThreadId = thread.id;
+    app.renderer.renderAll();
+
+    try {
+      const response = await fetch(`/api/history/sessions/${encodeURIComponent(thread.id)}`);
+      const data = await app.utils.safeReadJson(response);
+
+      if (response.ok) {
+        applyHistorySessionDetail(data);
+        thread = app.store.getThreadById(thread.id) ?? thread;
+        await app.sessionSettings.loadThreadSettings(thread.id, { quiet: true });
+        app.store.saveState();
+        app.renderer.renderAll(true);
+        return {
+          foundHistory: true,
+          thread,
+        };
+      }
+
+      if (response.status !== 404) {
+        throw new Error(data?.error?.message ?? "载入会话详情失败。");
+      }
+
+      thread.serverHistoryAvailable = false;
+      thread.serverThreadId = null;
+      thread.storedTurnCount = 0;
+      thread.storedSummary = "";
+      thread.storedStatus = null;
+      thread.historyHydrated = true;
+      await app.sessionSettings.loadThreadSettings(thread.id, { quiet: true });
+      app.store.saveState();
+      app.renderer.renderAll(true);
+
+      return {
+        foundHistory: false,
+        thread,
+      };
     } finally {
       app.runtime.historyHydratingThreadId = null;
       app.renderer.renderAll();
@@ -323,6 +394,7 @@ export function createHistoryController(app) {
   }
 
   return {
+    attachConversationById,
     getDisplayTurnCount,
     threadNeedsHistoryHydration,
     refreshHistoryFromServer,

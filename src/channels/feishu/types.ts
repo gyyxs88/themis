@@ -19,6 +19,7 @@ export interface FeishuTaskPayload {
   source?: "feishu";
   requestId?: string;
   taskId?: string;
+  sessionId?: string;
   goal?: string;
   inputText?: string;
   sender?: FeishuSender;

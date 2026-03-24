@@ -1,23 +1,38 @@
 import { createServer, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
+import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { serveWebAsset } from "./http-assets.js";
+import { handleAuthLogin, handleAuthLoginCancel, handleAuthLogout, handleAuthStatus } from "./http-auth.js";
 import { toErrorMessage } from "./http-errors.js";
 import { handleHistorySessionDetail, handleHistorySessions } from "./http-history.js";
+import { handleIdentityLinkCodeCreate, handleIdentityStatus } from "./http-identity.js";
 import { handleRuntimeConfig } from "./http-runtime-config.js";
 import { writeJson } from "./http-responses.js";
-import { handleSessionForkContext } from "./http-session-handlers.js";
+import {
+  handleSessionForkContext,
+  handleSessionSettingsRead,
+  handleSessionSettingsWrite,
+} from "./http-session-handlers.js";
 import { handleTaskRun, handleTaskStream } from "./http-task-handlers.js";
+import {
+  handleThirdPartyCapabilityWriteback,
+  handleThirdPartyModelCreate,
+  handleThirdPartyProbe,
+  handleThirdPartyProviderCreate,
+} from "./http-third-party-probe.js";
 
 export interface ThemisHttpServerOptions {
   host?: string;
   port?: number;
   runtime?: CodexTaskRuntime;
+  authRuntime?: CodexAuthRuntime;
   taskTimeoutMs?: number;
 }
 
 export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): Server {
   const runtime = options.runtime ?? new CodexTaskRuntime();
+  const authRuntime = options.authRuntime ?? new CodexAuthRuntime();
   const runtimeStore = runtime.getRuntimeStore();
   const taskTimeoutMs = options.taskTimeoutMs ?? resolveTaskTimeoutMs();
 
@@ -37,16 +52,64 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
         return handleRuntimeConfig(response, runtime, isHeadRequest);
       }
 
+      if (request.method === "POST" && url.pathname === "/api/runtime/third-party/probe") {
+        return handleThirdPartyProbe(request, response, runtime, taskTimeoutMs);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/runtime/third-party/codex-task-support") {
+        return handleThirdPartyCapabilityWriteback(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/runtime/third-party/providers") {
+        return handleThirdPartyProviderCreate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/runtime/third-party/models") {
+        return handleThirdPartyModelCreate(request, response, runtime);
+      }
+
+      if ((request.method === "GET" || isHeadRequest) && url.pathname === "/api/auth/status") {
+        return handleAuthStatus(request, response, authRuntime, isHeadRequest);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/identity/status") {
+        return handleIdentityStatus(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/identity/link-code") {
+        return handleIdentityLinkCodeCreate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/auth/login") {
+        return handleAuthLogin(request, response, authRuntime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/auth/login/cancel") {
+        return handleAuthLoginCancel(request, response, authRuntime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/auth/logout") {
+        return handleAuthLogout(request, response, authRuntime);
+      }
+
       if (request.method === "POST" && url.pathname === "/api/tasks/run") {
-        return handleTaskRun(request, response, runtime, taskTimeoutMs);
+        return handleTaskRun(request, response, runtime, authRuntime, taskTimeoutMs);
       }
 
       if (request.method === "POST" && url.pathname === "/api/tasks/stream") {
-        return handleTaskStream(request, response, runtime, taskTimeoutMs);
+        return handleTaskStream(request, response, runtime, authRuntime, taskTimeoutMs);
       }
 
       if (request.method === "POST" && url.pathname === "/api/sessions/fork-context") {
         return handleSessionForkContext(request, response, runtime);
+      }
+
+      if ((request.method === "GET" || isHeadRequest) && url.pathname.startsWith("/api/sessions/") && url.pathname.endsWith("/settings")) {
+        return handleSessionSettingsRead(url, response, runtimeStore, isHeadRequest);
+      }
+
+      if ((request.method === "PUT" || request.method === "POST") && url.pathname.startsWith("/api/sessions/") && url.pathname.endsWith("/settings")) {
+        return handleSessionSettingsWrite(request, response, runtimeStore);
       }
 
       if ((request.method === "GET" || isHeadRequest) && url.pathname === "/api/history/sessions") {

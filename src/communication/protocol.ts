@@ -13,6 +13,7 @@ export {
   TASK_EVENT_TYPES,
   TASK_RESULT_STATUSES,
   TASK_STATUSES,
+  WEB_SEARCH_MODES,
 } from "../types/index.js";
 
 export type {
@@ -38,6 +39,7 @@ export type {
   TaskResult,
   TaskResultStatus,
   TaskStatus,
+  WebSearchMode,
 } from "../types/index.js";
 
 export type { ChannelAdapter, CommunicationRouter } from "./adapter.js";

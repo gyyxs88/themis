@@ -156,6 +156,8 @@
                 required
               ></textarea>
 
+              <p id="composer-auth-note" class="composer-auth-note hidden"></p>
+
               <div class="composer-footer">
                 <div class="composer-hints">
                   <span id="active-thread-label">会话：新会话</span>
@@ -176,18 +178,77 @@
         <button id="workspace-tools-backdrop" type="button" class="settings-modal-backdrop" aria-label="关闭设置"></button>
 
         <div class="settings-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="workspace-tools-title">
-          <div class="settings-modal-main">
-            <div class="settings-modal-head">
-              <div>
-                <p class="workspace-tools-kicker">Session Studio</p>
-                <h2 id="workspace-tools-title">设置</h2>
-                <p class="settings-modal-copy">只保留当前会话后续任务需要的运行参数。</p>
-              </div>
-              <button id="workspace-tools-close" type="button" class="toolbar-button subtle">关闭</button>
+          <div class="settings-modal-head">
+            <div>
+              <p class="workspace-tools-kicker">Session Studio</p>
+              <h2 id="workspace-tools-title">设置</h2>
+              <p class="settings-modal-copy">按分类整理当前会话要用到的运行参数和认证方式。</p>
             </div>
+            <button id="workspace-tools-close" type="button" class="toolbar-button subtle">关闭</button>
+          </div>
 
-            <div class="settings-modal-panels">
-              <section class="settings-panel">
+          <div class="settings-modal-body">
+            <aside class="settings-modal-sidebar" aria-label="设置分类">
+              <p class="settings-sidebar-kicker">当前会话</p>
+
+              <div class="settings-modal-nav" role="tablist" aria-label="设置分类">
+                <button
+                  id="settings-runtime-tab"
+                  type="button"
+                  class="settings-nav-button"
+                  data-settings-section="runtime"
+                  role="tab"
+                  aria-controls="settings-runtime-section"
+                  aria-selected="true"
+                >
+                  <span class="settings-nav-title">运行参数</span>
+                </button>
+
+                <button
+                  id="settings-auth-tab"
+                  type="button"
+                  class="settings-nav-button"
+                  data-settings-section="auth"
+                  role="tab"
+                  aria-controls="settings-auth-section"
+                  aria-selected="false"
+                >
+                  <span class="settings-nav-title">认证</span>
+                </button>
+
+                <button
+                  id="settings-third-party-tab"
+                  type="button"
+                  class="settings-nav-button"
+                  data-settings-section="third-party"
+                  role="tab"
+                  aria-controls="settings-third-party-section"
+                  aria-selected="false"
+                >
+                  <span class="settings-nav-title">第三方配置</span>
+                </button>
+
+                <button
+                  id="settings-mode-switch-tab"
+                  type="button"
+                  class="settings-nav-button"
+                  data-settings-section="mode-switch"
+                  role="tab"
+                  aria-controls="settings-mode-switch-section"
+                  aria-selected="false"
+                >
+                  <span class="settings-nav-title">模式切换</span>
+                </button>
+              </div>
+            </aside>
+
+            <div class="settings-modal-content">
+              <section
+                id="settings-runtime-section"
+                class="settings-panel"
+                role="tabpanel"
+                aria-labelledby="settings-runtime-tab"
+              >
                 <section class="workspace-tool-group">
                   <div class="tool-group-head">
                     <h3>运行参数</h3>
@@ -199,7 +260,7 @@
 
                   <div class="settings-stack">
                     <label class="settings-field">
-                      <span>模型</span>
+                      <span>认证模式模型</span>
                       <select id="model-select">
                         <option value="">正在读取 Codex 模型...</option>
                       </select>
@@ -216,10 +277,327 @@
                         <select id="approval-select">
                           <option value="">默认</option>
                           <option value="never">never</option>
-                          <option value="untrusted">untrusted</option>
                           <option value="on-request">on-request</option>
+                          <option value="on-failure">on-failure</option>
+                          <option value="untrusted">untrusted</option>
                         </select>
                       </label>
+                    </div>
+
+                    <div class="settings-grid">
+                      <label class="settings-field">
+                        <span>沙箱模式</span>
+                        <select id="sandbox-select">
+                          <option value="">默认</option>
+                          <option value="read-only">read-only</option>
+                          <option value="workspace-write">workspace-write</option>
+                          <option value="danger-full-access">danger-full-access</option>
+                        </select>
+                      </label>
+
+                      <label class="settings-field">
+                        <span>联网搜索</span>
+                        <select id="web-search-select">
+                          <option value="">默认</option>
+                          <option value="disabled">disabled</option>
+                          <option value="cached">cached</option>
+                          <option value="live">live</option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <div class="settings-grid">
+                      <label class="settings-field">
+                        <span>网络访问</span>
+                        <select id="network-access-select">
+                          <option value="">默认</option>
+                          <option value="true">开启</option>
+                          <option value="false">关闭</option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <p class="settings-section-copy">网络访问只在 `workspace-write` 沙箱下生效；联网搜索控制 Codex 内置 web search。</p>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>会话接入</h3>
+                    <span class="meta-label">切到已有 conversationId</span>
+                  </div>
+
+                  <div class="settings-stack">
+                    <p id="conversation-link-current" class="settings-probe-note">
+                      当前 conversationId：尚未确定
+                    </p>
+
+                    <label class="settings-field">
+                      <span>已有 conversationId</span>
+                      <input
+                        id="conversation-link-input"
+                        type="text"
+                        placeholder="粘贴飞书 /current 或其他渠道拿到的 conversationId"
+                        autocomplete="off"
+                        spellcheck="false"
+                      />
+                    </label>
+
+                    <div class="settings-inline-actions">
+                      <button id="conversation-link-button" type="button" class="toolbar-button subtle">接入这个会话</button>
+                      <p id="conversation-link-note" class="settings-inline-copy">
+                        Web 会切到这个 conversationId，并尝试加载本机历史和服务端会话设置。
+                      </p>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>可选身份绑定</h3>
+                    <span class="meta-label">默认已共享同一私人助理 principal</span>
+                  </div>
+
+                  <div class="settings-stack">
+                    <p id="identity-browser-note" class="settings-probe-note">当前浏览器身份：正在初始化</p>
+                    <p id="identity-principal-note" class="settings-section-copy">当前 principal：正在读取</p>
+
+                    <div class="settings-inline-actions">
+                      <button id="identity-link-code-button" type="button" class="toolbar-button subtle">生成飞书绑定码</button>
+                      <p id="identity-link-note" class="settings-inline-copy">
+                        默认情况下 Web 和飞书已经共享同一套会话；只有要认领旧浏览器身份时，才需要到飞书发送 `/link 绑定码`。
+                      </p>
+                    </div>
+
+                    <p id="identity-link-code" class="settings-probe-note hidden"></p>
+                  </div>
+                </section>
+              </section>
+
+              <section
+                id="settings-third-party-section"
+                class="settings-panel hidden"
+                role="tabpanel"
+                aria-labelledby="settings-third-party-tab"
+              >
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>第三方配置</h3>
+                    <span class="meta-label">供应商与模型</span>
+                  </div>
+
+                  <p id="third-party-provider-note" class="settings-section-copy">正在检查可用的第三方兼容供应商。</p>
+
+                  <div class="settings-stack">
+                    <div class="settings-inline-actions">
+                      <button id="third-party-add-provider-button" type="button" class="toolbar-button subtle">添加供应商</button>
+                      <button id="third-party-add-model-button" type="button" class="ghost-button">添加模型</button>
+                      <p class="settings-inline-copy">新增后会直接写入本地第三方配置，并立即刷新当前列表。</p>
+                    </div>
+
+                    <label class="settings-field">
+                      <span>供应商</span>
+                      <select id="third-party-provider-select">
+                        <option value="">当前没有可用第三方供应商</option>
+                      </select>
+                    </label>
+
+                    <label class="settings-field">
+                      <span>第三方模型</span>
+                      <select id="third-party-model-select">
+                        <option value="">请先选择供应商</option>
+                      </select>
+                    </label>
+
+                    <p id="third-party-model-note" class="settings-section-copy">第三方模型列表会跟随所选供应商切换。</p>
+
+                    <div class="settings-inline-actions">
+                      <button id="third-party-probe-button" type="button" class="ghost-button">测试这个模型</button>
+                      <p class="settings-inline-copy">会发起一次只读兼容性检查，不会修改文件。</p>
+                    </div>
+
+                    <p id="third-party-probe-note" class="settings-section-copy settings-probe-note">
+                      不确定这个模型能不能跑 Themis 时，可以点上面的按钮做一次真实探测。
+                    </p>
+
+                    <div id="third-party-probe-apply-row" class="settings-inline-actions hidden">
+                      <button id="third-party-probe-apply-button" type="button" class="toolbar-button subtle">
+                        按本次结果写回模型能力
+                      </button>
+                      <p id="third-party-probe-apply-note" class="settings-inline-copy hidden"></p>
+                    </div>
+                  </div>
+                </section>
+              </section>
+
+              <section
+                id="settings-mode-switch-section"
+                class="settings-panel hidden"
+                role="tabpanel"
+                aria-labelledby="settings-mode-switch-tab"
+              >
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>模式切换</h3>
+                    <span class="meta-label">当前会话接入方式</span>
+                  </div>
+
+                  <div class="settings-stack">
+                    <label class="settings-field">
+                      <span>接入方式</span>
+                      <select id="access-mode-select">
+                        <option value="auth">认证</option>
+                      </select>
+                    </label>
+
+                    <label id="mode-switch-third-party-model-row" class="settings-field hidden">
+                      <span>第三方模式模型</span>
+                      <select id="mode-switch-third-party-model-select">
+                        <option value="">请先选择第三方供应商</option>
+                      </select>
+                    </label>
+
+                    <div class="settings-inline-actions">
+                      <button id="access-mode-apply-button" type="button" class="toolbar-button subtle">确定切换</button>
+                      <p id="access-mode-pending-note" class="settings-inline-copy hidden" aria-live="polite"></p>
+                    </div>
+                  </div>
+
+                  <p id="access-mode-note" class="settings-section-copy">当前会话默认通过认证模式发送任务。</p>
+                </section>
+              </section>
+
+              <section
+                id="settings-auth-section"
+                class="settings-panel hidden"
+                role="tabpanel"
+                aria-labelledby="settings-auth-tab"
+              >
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>认证</h3>
+                    <span class="meta-label">ChatGPT 浏览器登录、设备码或 API Key</span>
+                  </div>
+
+                  <p id="auth-status-note" class="settings-section-copy">正在检查 Codex 认证状态。</p>
+
+                  <section id="auth-rate-limits-panel" class="auth-rate-limits hidden" aria-live="polite">
+                    <div class="auth-rate-limits-head">
+                      <h4>额度</h4>
+                      <span id="auth-rate-limits-plan" class="auth-rate-limits-plan hidden"></span>
+                    </div>
+
+                    <div id="auth-rate-limits-grid" class="auth-rate-limits-grid hidden">
+                      <article id="auth-rate-limit-primary-card" class="auth-rate-limit-card hidden" data-level="healthy">
+                        <p id="auth-rate-limit-primary-label" class="auth-rate-limit-label">主额度窗口</p>
+                        <p class="auth-rate-limit-value">
+                          <strong id="auth-rate-limit-primary-remaining">0%</strong>
+                          <span>剩余</span>
+                        </p>
+                        <div
+                          id="auth-rate-limit-primary-progress"
+                          class="auth-rate-limit-progress"
+                          role="progressbar"
+                          aria-labelledby="auth-rate-limit-primary-label"
+                          aria-valuemin="0"
+                          aria-valuemax="100"
+                          aria-valuenow="0"
+                        >
+                          <span id="auth-rate-limit-primary-fill" class="auth-rate-limit-progress-fill"></span>
+                        </div>
+                        <p id="auth-rate-limit-primary-reset" class="auth-rate-limit-reset">重置时间待确认</p>
+                      </article>
+
+                      <article id="auth-rate-limit-secondary-card" class="auth-rate-limit-card hidden" data-level="warning">
+                        <p id="auth-rate-limit-secondary-label" class="auth-rate-limit-label">次额度窗口</p>
+                        <p class="auth-rate-limit-value">
+                          <strong id="auth-rate-limit-secondary-remaining">0%</strong>
+                          <span>剩余</span>
+                        </p>
+                        <div
+                          id="auth-rate-limit-secondary-progress"
+                          class="auth-rate-limit-progress"
+                          role="progressbar"
+                          aria-labelledby="auth-rate-limit-secondary-label"
+                          aria-valuemin="0"
+                          aria-valuemax="100"
+                          aria-valuenow="0"
+                        >
+                          <span id="auth-rate-limit-secondary-fill" class="auth-rate-limit-progress-fill"></span>
+                        </div>
+                        <p id="auth-rate-limit-secondary-reset" class="auth-rate-limit-reset">重置时间待确认</p>
+                      </article>
+                    </div>
+
+                    <p id="auth-rate-limits-empty" class="settings-probe-note hidden">当前账户暂时没有可展示的额度窗口。</p>
+                    <p id="auth-rate-limits-credits" class="settings-section-copy hidden"></p>
+                  </section>
+
+                  <div id="auth-remote-login-panel" class="auth-remote-login hidden">
+                    <p id="auth-remote-login-copy" class="settings-section-copy">当前浏览器不是运行 Themis 的这台机器。远端访问时，优先用设备码登录；只有你已经打通 localhost:1455 回调时，才适合继续浏览器登录。</p>
+                    <code id="auth-remote-login-command" class="auth-remote-login-command hidden"></code>
+                  </div>
+
+                  <div id="auth-browser-login-panel" class="auth-browser-login hidden">
+                    <div class="auth-browser-login-actions">
+                      <a
+                        id="auth-browser-login-link"
+                        class="toolbar-button"
+                        href="#"
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      >
+                        打开登录页
+                      </a>
+                      <span class="meta-label">需在本机浏览器完成</span>
+                    </div>
+                    <p id="auth-browser-login-note" class="settings-section-copy">授权完成后会回到这台机器的 localhost:1455。</p>
+                  </div>
+
+                  <div id="auth-device-login-panel" class="auth-device-login hidden">
+                    <div class="auth-device-login-actions">
+                      <a
+                        id="auth-device-login-link"
+                        class="toolbar-button"
+                        href="#"
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      >
+                        打开设备码授权页
+                      </a>
+                      <span class="meta-label">任意浏览器都可以完成</span>
+                    </div>
+                    <div class="auth-device-login-code-row">
+                      <div id="auth-device-login-code" class="auth-device-login-code"></div>
+                      <button id="auth-device-login-copy-button" type="button" class="ghost-button">复制设备码</button>
+                    </div>
+                    <p id="auth-device-login-note" class="settings-section-copy">打开授权页后，输入这里显示的一次性 code。</p>
+                  </div>
+
+                  <div class="session-actions">
+                    <button id="auth-chatgpt-login-button" type="button" class="toolbar-button">浏览器登录</button>
+                    <button id="auth-chatgpt-device-login-button" type="button" class="toolbar-button">设备码登录</button>
+                  </div>
+
+                  <div class="session-actions">
+                    <button id="auth-logout-button" type="button" class="danger-button">退出登录</button>
+                    <button id="auth-login-cancel-button" type="button" class="ghost-button hidden">取消登录</button>
+                  </div>
+
+                  <div class="settings-stack">
+                    <label class="settings-field">
+                      <span>API Key</span>
+                      <input
+                        id="auth-api-key-input"
+                        type="password"
+                        placeholder="粘贴 OpenAI / Codex API Key"
+                        autocomplete="off"
+                      />
+                    </label>
+
+                    <div class="session-actions">
+                      <button id="auth-api-key-button" type="button" class="toolbar-button">保存 API Key</button>
+                      <span class="meta-label">API Key 会交给本机 Codex CLI 保存</span>
                     </div>
                   </div>
                 </section>
@@ -227,6 +605,145 @@
             </div>
           </div>
         </div>
+
+        <section id="third-party-editor-modal" class="settings-submodal hidden" aria-hidden="true">
+          <button
+            id="third-party-editor-backdrop"
+            type="button"
+            class="settings-submodal-backdrop"
+            aria-label="关闭第三方配置弹窗"
+          ></button>
+
+          <div class="settings-submodal-dialog" role="dialog" aria-modal="true" aria-labelledby="third-party-editor-title">
+            <div class="settings-submodal-head">
+              <div>
+                <p class="workspace-tools-kicker">Third-Party Setup</p>
+                <h3 id="third-party-editor-title">添加供应商</h3>
+                <p id="third-party-editor-copy" class="settings-modal-copy">把新的第三方兼容供应商写入本地配置。</p>
+              </div>
+              <button id="third-party-editor-close" type="button" class="toolbar-button subtle">关闭</button>
+            </div>
+
+            <div class="settings-submodal-body">
+              <p id="third-party-editor-error" class="settings-section-copy settings-probe-note hidden" data-state="error"></p>
+
+              <form id="third-party-provider-form" class="settings-submodal-form hidden">
+                <div class="settings-submodal-grid">
+                  <label class="settings-field">
+                    <span>供应商 ID（可选）</span>
+                    <input id="third-party-provider-id-input" name="id" type="text" placeholder="例如 openrouter" />
+                  </label>
+
+                  <label class="settings-field">
+                    <span>供应商名称</span>
+                    <input id="third-party-provider-name-input" name="name" type="text" placeholder="例如 OpenRouter" required />
+                  </label>
+
+                  <label class="settings-field">
+                    <span>Base URL</span>
+                    <input
+                      id="third-party-provider-base-url-input"
+                      name="baseUrl"
+                      type="url"
+                      placeholder="https://example.com/api/v1"
+                      required
+                    />
+                  </label>
+
+                  <label class="settings-field">
+                    <span>API Key</span>
+                    <input id="third-party-provider-api-key-input" name="apiKey" type="text" placeholder="sk-..." required />
+                  </label>
+
+                  <label class="settings-field">
+                    <span>Wire API</span>
+                    <select id="third-party-provider-wire-api-select" name="wireApi">
+                      <option value="responses">responses</option>
+                      <option value="chat">chat</option>
+                    </select>
+                  </label>
+
+                  <label class="settings-checkbox">
+                    <input id="third-party-provider-websocket-input" name="supportsWebsockets" type="checkbox" />
+                    <span>这个供应商支持 websocket 流式链路</span>
+                  </label>
+                </div>
+
+                <div class="settings-submodal-actions">
+                  <button id="third-party-provider-submit-button" type="submit" class="toolbar-button">保存供应商</button>
+                  <button id="third-party-provider-cancel-button" type="button" class="ghost-button">取消</button>
+                </div>
+              </form>
+
+              <form id="third-party-model-form" class="settings-submodal-form hidden">
+                <div class="settings-submodal-grid">
+                  <label class="settings-field">
+                    <span>供应商</span>
+                    <select id="third-party-model-provider-select" name="providerId" required>
+                      <option value="">请先选择供应商</option>
+                    </select>
+                  </label>
+
+                  <label class="settings-field">
+                    <span>模型名称</span>
+                    <input
+                      id="third-party-model-id-input"
+                      name="model"
+                      type="text"
+                      placeholder="例如 openrouter/hunter-alpha"
+                      required
+                    />
+                  </label>
+
+                  <label class="settings-field">
+                    <span>显示名称</span>
+                    <input id="third-party-model-display-name-input" name="displayName" type="text" placeholder="不填则直接用模型名称" />
+                  </label>
+
+                  <label class="settings-field">
+                    <span>默认推理</span>
+                    <select id="third-party-model-default-reasoning-select" name="defaultReasoningLevel">
+                      <option value="low">low</option>
+                      <option value="medium">medium</option>
+                      <option value="high">high</option>
+                      <option value="xhigh">xhigh</option>
+                    </select>
+                  </label>
+
+                  <label class="settings-field">
+                    <span>上下文窗口（可选）</span>
+                    <input id="third-party-model-context-window-input" name="contextWindow" type="number" min="1" step="1" placeholder="例如 1048576" />
+                  </label>
+
+                  <label class="settings-field settings-field-wide">
+                    <span>描述（可选）</span>
+                    <textarea id="third-party-model-description-input" name="description" rows="3" placeholder="补充说明这个模型的用途或限制"></textarea>
+                  </label>
+
+                  <label class="settings-checkbox">
+                    <input id="third-party-model-supports-codex-input" name="supportsCodexTasks" type="checkbox" checked />
+                    <span>默认标记为支持 Codex 任务</span>
+                  </label>
+
+                  <label class="settings-checkbox">
+                    <input id="third-party-model-image-input" name="imageInput" type="checkbox" />
+                    <span>支持图片输入</span>
+                  </label>
+
+                  <label class="settings-checkbox">
+                    <input id="third-party-model-default-input" name="setAsDefault" type="checkbox" checked />
+                    <span>设为这个供应商的默认模型</span>
+                  </label>
+                </div>
+
+                <div class="settings-submodal-actions">
+                  <button id="third-party-model-submit-button" type="submit" class="toolbar-button">保存模型</button>
+                  <button id="third-party-model-cancel-button" type="button" class="ghost-button">取消</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </section>
       </section>
     </div>
 

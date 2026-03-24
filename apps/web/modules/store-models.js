@@ -3,9 +3,15 @@ import { createId, nowIso } from "./utils.js";
 export function createStoreModelHelpers() {
   function createDefaultThreadSettings() {
     return {
+      accessMode: "",
       model: "",
       reasoning: "",
       approvalPolicy: "",
+      sandboxMode: "",
+      webSearchMode: "",
+      networkAccessEnabled: "",
+      thirdPartyProviderId: "",
+      thirdPartyModel: "",
     };
   }
 
@@ -161,11 +167,17 @@ export function createStoreModelHelpers() {
       return createDefaultThreadSettings();
     }
 
-    return {
-      model: typeof value.model === "string" ? value.model : "",
-      reasoning: typeof value.reasoning === "string" ? value.reasoning : "",
-      approvalPolicy: typeof value.approvalPolicy === "string" ? value.approvalPolicy : "",
-    };
+      return {
+        accessMode: typeof value.accessMode === "string" ? value.accessMode : "",
+        model: typeof value.model === "string" ? value.model : "",
+        reasoning: typeof value.reasoning === "string" ? value.reasoning : "",
+        approvalPolicy: typeof value.approvalPolicy === "string" ? value.approvalPolicy : "",
+        sandboxMode: typeof value.sandboxMode === "string" ? value.sandboxMode : "",
+        webSearchMode: typeof value.webSearchMode === "string" ? value.webSearchMode : "",
+        networkAccessEnabled: normalizeOptionalBooleanSetting(value.networkAccessEnabled),
+        thirdPartyProviderId: typeof value.thirdPartyProviderId === "string" ? value.thirdPartyProviderId : "",
+        thirdPartyModel: typeof value.thirdPartyModel === "string" ? value.thirdPartyModel : "",
+      };
   }
 
   function normalizeTurnOptions(value) {
@@ -173,13 +185,23 @@ export function createStoreModelHelpers() {
       return undefined;
     }
 
-    const normalized = {
-      ...(typeof value.model === "string" && value.model ? { model: value.model } : {}),
-      ...(typeof value.reasoning === "string" && value.reasoning ? { reasoning: value.reasoning } : {}),
-      ...(typeof value.approvalPolicy === "string" && value.approvalPolicy
-        ? { approvalPolicy: value.approvalPolicy }
-        : {}),
-    };
+      const normalized = {
+        ...(typeof value.accessMode === "string" && value.accessMode ? { accessMode: value.accessMode } : {}),
+        ...(typeof value.model === "string" && value.model ? { model: value.model } : {}),
+        ...(typeof value.reasoning === "string" && value.reasoning ? { reasoning: value.reasoning } : {}),
+        ...(typeof value.approvalPolicy === "string" && value.approvalPolicy
+          ? { approvalPolicy: value.approvalPolicy }
+          : {}),
+        ...(typeof value.sandboxMode === "string" && value.sandboxMode ? { sandboxMode: value.sandboxMode } : {}),
+        ...(typeof value.webSearchMode === "string" && value.webSearchMode ? { webSearchMode: value.webSearchMode } : {}),
+        ...(typeof value.networkAccessEnabled === "boolean" ? { networkAccessEnabled: value.networkAccessEnabled } : {}),
+        ...(typeof value.thirdPartyProviderId === "string" && value.thirdPartyProviderId
+          ? { thirdPartyProviderId: value.thirdPartyProviderId }
+          : {}),
+        ...(Array.isArray(value.additionalDirectories)
+          ? { additionalDirectories: value.additionalDirectories.filter((entry) => typeof entry === "string") }
+          : {}),
+      };
 
     return Object.keys(normalized).length ? normalized : undefined;
   }
@@ -206,6 +228,10 @@ export function createStoreModelHelpers() {
     }
 
     return null;
+  }
+
+  function normalizeOptionalBooleanSetting(value) {
+    return typeof value === "boolean" ? value : "";
   }
 
   return {

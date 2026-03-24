@@ -9,6 +9,7 @@ export interface CodexThreadSessionStoreOptions {
   sessionRegistry?: SqliteCodexSessionRegistry;
   databaseFile?: string;
   maxSessions?: number;
+  sessionIdNamespace?: string;
 }
 
 export interface CodexSessionLease {
@@ -32,6 +33,7 @@ export class SessionBusyError extends Error {
 export class CodexThreadSessionStore {
   private readonly codex: Codex;
   private readonly sessionRegistry: SqliteCodexSessionRegistry;
+  private readonly sessionIdNamespace: string;
 
   constructor(options: CodexThreadSessionStoreOptions = {}) {
     this.codex = options.codex ?? new Codex();
@@ -41,6 +43,7 @@ export class CodexThreadSessionStore {
         ...(options.databaseFile ? { databaseFile: options.databaseFile } : {}),
         ...(typeof options.maxSessions === "number" ? { maxSessions: options.maxSessions } : {}),
       });
+    this.sessionIdNamespace = normalizeSessionId(options.sessionIdNamespace);
   }
 
   getSessionRegistry(): SqliteCodexSessionRegistry {
@@ -48,7 +51,8 @@ export class CodexThreadSessionStore {
   }
 
   async acquire(request: TaskRequest, threadOptions: ThreadOptions): Promise<CodexSessionLease> {
-    const sessionId = request.channelContext.sessionId?.trim();
+    const sessionId = normalizeSessionId(request.channelContext.sessionId);
+    const storageSessionId = this.toStorageSessionId(sessionId);
 
     if (!sessionId) {
       return {
@@ -60,7 +64,7 @@ export class CodexThreadSessionStore {
 
     const taskId = request.taskId ?? request.requestId;
     const now = nowIso();
-    const existing = this.sessionRegistry.getSession(sessionId);
+    const existing = this.sessionRegistry.getSession(storageSessionId);
 
     if (existing?.activeTaskId && existing.activeTaskId !== taskId) {
       throw new SessionBusyError(sessionId);
@@ -68,7 +72,7 @@ export class CodexThreadSessionStore {
 
     if (existing?.threadId) {
       this.sessionRegistry.saveSession({
-        sessionId,
+        sessionId: storageSessionId,
         threadId: existing.threadId,
         createdAt: existing.createdAt,
         updatedAt: now,
@@ -81,13 +85,13 @@ export class CodexThreadSessionStore {
         thread: this.codex.resumeThread(existing.threadId, threadOptions),
         sessionMode: "resumed",
         release: async (finalThreadId) => {
-          await this.release(sessionId, taskId, finalThreadId);
+          await this.release(storageSessionId, taskId, finalThreadId);
         },
       };
     }
 
     this.sessionRegistry.saveSession({
-      sessionId,
+      sessionId: storageSessionId,
       threadId: existing?.threadId ?? "",
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -99,19 +103,19 @@ export class CodexThreadSessionStore {
       thread: this.codex.startThread(threadOptions),
       sessionMode: "created",
       release: async (finalThreadId) => {
-        await this.release(sessionId, taskId, finalThreadId);
+        await this.release(storageSessionId, taskId, finalThreadId);
       },
     };
   }
 
   async resolveThreadId(sessionId: string): Promise<string | null> {
-    const normalized = sessionId.trim();
+    const normalized = normalizeSessionId(sessionId);
 
     if (!normalized) {
       return null;
     }
 
-    return this.sessionRegistry.resolveThreadId(normalized);
+    return this.sessionRegistry.resolveThreadId(this.toStorageSessionId(normalized));
   }
 
   private async release(sessionId: string, taskId: string, finalThreadId?: string | null): Promise<void> {
@@ -136,8 +140,20 @@ export class CodexThreadSessionStore {
     });
     this.sessionRegistry.pruneInactiveSessions();
   }
+
+  private toStorageSessionId(sessionId: string): string {
+    if (!sessionId || !this.sessionIdNamespace) {
+      return sessionId;
+    }
+
+    return `${this.sessionIdNamespace}::${sessionId}`;
+  }
 }
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function normalizeSessionId(value: string | undefined): string {
+  return typeof value === "string" ? value.trim() : "";
 }

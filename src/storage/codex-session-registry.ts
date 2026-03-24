@@ -1,9 +1,14 @@
 import Database from "better-sqlite3";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import {
+  isSessionTaskSettingsEmpty,
+  normalizeSessionTaskSettings,
+} from "../core/session-task-settings.js";
 import type { TaskEvent, TaskRequest, TaskResult } from "../types/index.js";
+import type { SessionTaskSettings } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 3;
+const DATABASE_SCHEMA_VERSION = 4;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -65,6 +70,90 @@ export interface StoredSessionHistorySummary {
   };
 }
 
+export interface StoredSessionHistoryFilter {
+  sourceChannel?: string;
+  userId?: string;
+}
+
+export interface StoredSessionTaskSettingsRecord {
+  sessionId: string;
+  settings: SessionTaskSettings;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoredPrincipalRecord {
+  principalId: string;
+  displayName?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoredConversationRecord {
+  conversationId: string;
+  principalId: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoredChannelIdentityRecord {
+  channel: string;
+  channelUserId: string;
+  principalId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoredChannelConversationBindingRecord {
+  channel: string;
+  principalId: string;
+  channelSessionKey: string;
+  conversationId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoredIdentityLinkCodeRecord {
+  code: string;
+  sourceChannel: string;
+  sourceChannelUserId: string;
+  sourcePrincipalId: string;
+  createdAt: string;
+  expiresAt: string;
+  consumedAt?: string;
+  consumedByChannel?: string;
+  consumedByUserId?: string;
+}
+
+export interface StoredThirdPartyProviderRecord {
+  providerId: string;
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  defaultModel?: string;
+  wireApi: "responses" | "chat";
+  supportsWebsockets: boolean;
+  modelCatalogPath?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoredThirdPartyProviderModelRecord {
+  providerId: string;
+  model: string;
+  displayName: string;
+  description: string;
+  defaultReasoningLevel: string;
+  supportedReasoningLevelsJson: string;
+  contextWindow?: number;
+  truncationMode: "tokens" | "bytes";
+  truncationLimit: number;
+  capabilitiesJson: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CompleteTaskTurnInput {
   request: TaskRequest;
   result: TaskResult;
@@ -92,6 +181,57 @@ interface SessionRow {
   created_at: string;
   updated_at: string;
   active_task_id: string | null;
+}
+
+interface SessionTaskSettingsRow {
+  session_id: string;
+  settings_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PrincipalRow {
+  principal_id: string;
+  display_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ConversationRow {
+  conversation_id: string;
+  principal_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ChannelIdentityRow {
+  channel: string;
+  channel_user_id: string;
+  principal_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ChannelConversationBindingRow {
+  channel: string;
+  principal_id: string;
+  channel_session_key: string;
+  conversation_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface IdentityLinkCodeRow {
+  code: string;
+  source_channel: string;
+  source_channel_user_id: string;
+  source_principal_id: string;
+  created_at: string;
+  expires_at: string;
+  consumed_at: string | null;
+  consumed_by_channel: string | null;
+  consumed_by_user_id: string | null;
 }
 
 interface TurnRow {
@@ -142,6 +282,34 @@ interface SessionSummaryRow {
   latest_session_mode: string | null;
   latest_codex_thread_id: string | null;
   latest_updated_at: string;
+}
+
+interface ThirdPartyProviderRow {
+  provider_id: string;
+  name: string;
+  base_url: string;
+  api_key: string;
+  default_model: string | null;
+  wire_api: string;
+  supports_websockets: number;
+  model_catalog_path: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ThirdPartyProviderModelRow {
+  provider_id: string;
+  model: string;
+  display_name: string;
+  description: string;
+  default_reasoning_level: string;
+  supported_reasoning_levels_json: string;
+  context_window: number | null;
+  truncation_mode: string;
+  truncation_limit: number;
+  capabilities_json: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export class SqliteCodexSessionRegistry {
@@ -235,6 +403,619 @@ export class SqliteCodexSessionRegistry {
     return result.changes > 0;
   }
 
+  getSessionTaskSettings(sessionId: string): StoredSessionTaskSettingsRecord | null {
+    const normalized = sessionId.trim();
+
+    if (!normalized) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT session_id, settings_json, created_at, updated_at
+          FROM themis_session_settings
+          WHERE session_id = ?
+        `,
+      )
+      .get(normalized) as SessionTaskSettingsRow | undefined;
+
+    return row ? mapSessionTaskSettingsRow(row) : null;
+  }
+
+  saveSessionTaskSettings(record: StoredSessionTaskSettingsRecord): void {
+    const sessionId = record.sessionId.trim();
+
+    if (!sessionId) {
+      throw new Error("Session id is required.");
+    }
+
+    const normalizedSettings = normalizeSessionTaskSettings(record.settings);
+
+    if (isSessionTaskSettingsEmpty(normalizedSettings)) {
+      this.deleteSessionTaskSettings(sessionId);
+      return;
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_session_settings (
+            session_id,
+            settings_json,
+            created_at,
+            updated_at
+          ) VALUES (
+            @session_id,
+            @settings_json,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(session_id) DO UPDATE SET
+            settings_json = excluded.settings_json,
+            created_at = excluded.created_at,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        session_id: sessionId,
+        settings_json: JSON.stringify(normalizedSettings),
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+  }
+
+  deleteSessionTaskSettings(sessionId: string): boolean {
+    const normalized = sessionId.trim();
+
+    if (!normalized) {
+      return false;
+    }
+
+    const result = this.db
+      .prepare(
+        `
+          DELETE FROM themis_session_settings
+          WHERE session_id = ?
+        `,
+      )
+      .run(normalized);
+
+    return result.changes > 0;
+  }
+
+  getPrincipal(principalId: string): StoredPrincipalRecord | null {
+    const normalized = principalId.trim();
+
+    if (!normalized) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT principal_id, display_name, created_at, updated_at
+          FROM themis_principals
+          WHERE principal_id = ?
+        `,
+      )
+      .get(normalized) as PrincipalRow | undefined;
+
+    return row ? mapPrincipalRow(row) : null;
+  }
+
+  getChannelIdentity(channel: string, channelUserId: string): StoredChannelIdentityRecord | null {
+    const normalizedChannel = channel.trim();
+    const normalizedUserId = channelUserId.trim();
+
+    if (!normalizedChannel || !normalizedUserId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT channel, channel_user_id, principal_id, created_at, updated_at
+          FROM themis_channel_identities
+          WHERE channel = ?
+            AND channel_user_id = ?
+        `,
+      )
+      .get(normalizedChannel, normalizedUserId) as ChannelIdentityRow | undefined;
+
+    return row ? mapChannelIdentityRow(row) : null;
+  }
+
+  savePrincipal(record: StoredPrincipalRecord): void {
+    const principalId = record.principalId.trim();
+
+    if (!principalId) {
+      throw new Error("Principal id is required.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_principals (
+            principal_id,
+            display_name,
+            created_at,
+            updated_at
+          ) VALUES (
+            @principal_id,
+            @display_name,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(principal_id) DO UPDATE SET
+            display_name = excluded.display_name,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        principal_id: principalId,
+        display_name: record.displayName?.trim() || null,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+  }
+
+  saveChannelIdentity(record: StoredChannelIdentityRecord): void {
+    const channel = record.channel.trim();
+    const channelUserId = record.channelUserId.trim();
+    const principalId = record.principalId.trim();
+
+    if (!channel || !channelUserId || !principalId) {
+      throw new Error("Channel identity record is incomplete.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_channel_identities (
+            channel,
+            channel_user_id,
+            principal_id,
+            created_at,
+            updated_at
+          ) VALUES (
+            @channel,
+            @channel_user_id,
+            @principal_id,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(channel, channel_user_id) DO UPDATE SET
+            principal_id = excluded.principal_id,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        channel,
+        channel_user_id: channelUserId,
+        principal_id: principalId,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+  }
+
+  getConversation(conversationId: string): StoredConversationRecord | null {
+    const normalized = conversationId.trim();
+
+    if (!normalized) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT conversation_id, principal_id, title, created_at, updated_at
+          FROM themis_conversations
+          WHERE conversation_id = ?
+        `,
+      )
+      .get(normalized) as ConversationRow | undefined;
+
+    return row ? mapConversationRow(row) : null;
+  }
+
+  hasConversation(conversationId: string): boolean {
+    return Boolean(this.getConversation(conversationId));
+  }
+
+  saveConversation(record: StoredConversationRecord): void {
+    const conversationId = record.conversationId.trim();
+    const principalId = record.principalId.trim();
+
+    if (!conversationId || !principalId) {
+      throw new Error("Conversation record is incomplete.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_conversations (
+            conversation_id,
+            principal_id,
+            title,
+            created_at,
+            updated_at
+          ) VALUES (
+            @conversation_id,
+            @principal_id,
+            @title,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(conversation_id) DO UPDATE SET
+            principal_id = excluded.principal_id,
+            title = excluded.title,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        conversation_id: conversationId,
+        principal_id: principalId,
+        title: record.title.trim(),
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+  }
+
+  touchConversation(conversationId: string, updatedAt: string, title?: string): void {
+    const normalizedConversationId = conversationId.trim();
+
+    if (!normalizedConversationId) {
+      return;
+    }
+
+    this.db
+      .prepare(
+        `
+          UPDATE themis_conversations
+          SET
+            title = CASE
+              WHEN @title IS NOT NULL AND @title <> '' THEN @title
+              ELSE title
+            END,
+            updated_at = @updated_at
+          WHERE conversation_id = @conversation_id
+        `,
+      )
+      .run({
+        conversation_id: normalizedConversationId,
+        title: title?.trim() || null,
+        updated_at: updatedAt,
+      });
+  }
+
+  getChannelConversationBinding(
+    channel: string,
+    principalId: string,
+    channelSessionKey: string,
+  ): StoredChannelConversationBindingRecord | null {
+    const normalizedChannel = channel.trim();
+    const normalizedPrincipalId = principalId.trim();
+    const normalizedSessionKey = channelSessionKey.trim();
+
+    if (!normalizedChannel || !normalizedPrincipalId || !normalizedSessionKey) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT channel, principal_id, channel_session_key, conversation_id, created_at, updated_at
+          FROM themis_channel_bindings
+          WHERE channel = ?
+            AND principal_id = ?
+            AND channel_session_key = ?
+        `,
+      )
+      .get(normalizedChannel, normalizedPrincipalId, normalizedSessionKey) as ChannelConversationBindingRow | undefined;
+
+    return row ? mapChannelConversationBindingRow(row) : null;
+  }
+
+  saveChannelConversationBinding(record: StoredChannelConversationBindingRecord): void {
+    const channel = record.channel.trim();
+    const principalId = record.principalId.trim();
+    const channelSessionKey = record.channelSessionKey.trim();
+    const conversationId = record.conversationId.trim();
+
+    if (!channel || !principalId || !channelSessionKey || !conversationId) {
+      throw new Error("Channel conversation binding is incomplete.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_channel_bindings (
+            channel,
+            principal_id,
+            channel_session_key,
+            conversation_id,
+            created_at,
+            updated_at
+          ) VALUES (
+            @channel,
+            @principal_id,
+            @channel_session_key,
+            @conversation_id,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(channel, principal_id, channel_session_key) DO UPDATE SET
+            conversation_id = excluded.conversation_id,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        channel,
+        principal_id: principalId,
+        channel_session_key: channelSessionKey,
+        conversation_id: conversationId,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+  }
+
+  getIdentityLinkCode(code: string): StoredIdentityLinkCodeRecord | null {
+    const normalized = code.trim().toUpperCase();
+
+    if (!normalized) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            code,
+            source_channel,
+            source_channel_user_id,
+            source_principal_id,
+            created_at,
+            expires_at,
+            consumed_at,
+            consumed_by_channel,
+            consumed_by_user_id
+          FROM themis_identity_link_codes
+          WHERE code = ?
+        `,
+      )
+      .get(normalized) as IdentityLinkCodeRow | undefined;
+
+    return row ? mapIdentityLinkCodeRow(row) : null;
+  }
+
+  saveIdentityLinkCode(record: StoredIdentityLinkCodeRecord): void {
+    const code = record.code.trim().toUpperCase();
+
+    if (!code) {
+      throw new Error("Link code is required.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_identity_link_codes (
+            code,
+            source_channel,
+            source_channel_user_id,
+            source_principal_id,
+            created_at,
+            expires_at,
+            consumed_at,
+            consumed_by_channel,
+            consumed_by_user_id
+          ) VALUES (
+            @code,
+            @source_channel,
+            @source_channel_user_id,
+            @source_principal_id,
+            @created_at,
+            @expires_at,
+            @consumed_at,
+            @consumed_by_channel,
+            @consumed_by_user_id
+          )
+          ON CONFLICT(code) DO UPDATE SET
+            source_channel = excluded.source_channel,
+            source_channel_user_id = excluded.source_channel_user_id,
+            source_principal_id = excluded.source_principal_id,
+            created_at = excluded.created_at,
+            expires_at = excluded.expires_at,
+            consumed_at = excluded.consumed_at,
+            consumed_by_channel = excluded.consumed_by_channel,
+            consumed_by_user_id = excluded.consumed_by_user_id
+        `,
+      )
+      .run({
+        code,
+        source_channel: record.sourceChannel,
+        source_channel_user_id: record.sourceChannelUserId,
+        source_principal_id: record.sourcePrincipalId,
+        created_at: record.createdAt,
+        expires_at: record.expiresAt,
+        consumed_at: record.consumedAt ?? null,
+        consumed_by_channel: record.consumedByChannel ?? null,
+        consumed_by_user_id: record.consumedByUserId ?? null,
+      });
+  }
+
+  consumeIdentityLinkCode(
+    code: string,
+    consumedByChannel: string,
+    consumedByUserId: string,
+    consumedAt: string,
+  ): boolean {
+    const normalizedCode = code.trim().toUpperCase();
+
+    if (!normalizedCode) {
+      return false;
+    }
+
+    const result = this.db
+      .prepare(
+        `
+          UPDATE themis_identity_link_codes
+          SET
+            consumed_at = @consumed_at,
+            consumed_by_channel = @consumed_by_channel,
+            consumed_by_user_id = @consumed_by_user_id
+          WHERE code = @code
+            AND (consumed_at IS NULL OR consumed_at = '')
+        `,
+      )
+      .run({
+        code: normalizedCode,
+        consumed_at: consumedAt,
+        consumed_by_channel: consumedByChannel.trim(),
+        consumed_by_user_id: consumedByUserId.trim(),
+      });
+
+    return result.changes > 0;
+  }
+
+  deleteExpiredIdentityLinkCodes(now: string): number {
+    const result = this.db
+      .prepare(
+        `
+          DELETE FROM themis_identity_link_codes
+          WHERE expires_at <= ?
+            OR (consumed_at IS NOT NULL AND consumed_at <> '')
+        `,
+      )
+      .run(now);
+
+    return result.changes;
+  }
+
+  mergePrincipals(sourcePrincipalId: string, targetPrincipalId: string, updatedAt: string): void {
+    const sourceId = sourcePrincipalId.trim();
+    const targetId = targetPrincipalId.trim();
+
+    if (!sourceId || !targetId || sourceId === targetId) {
+      return;
+    }
+
+    const merge = this.db.transaction(() => {
+      const sourcePrincipal = this.getPrincipal(sourceId);
+      const targetPrincipal = this.getPrincipal(targetId);
+
+      if (!sourcePrincipal || !targetPrincipal) {
+        return;
+      }
+
+      if (!targetPrincipal.displayName && sourcePrincipal.displayName) {
+        this.savePrincipal({
+          principalId: targetPrincipal.principalId,
+          displayName: sourcePrincipal.displayName,
+          createdAt: targetPrincipal.createdAt,
+          updatedAt,
+        });
+      } else {
+        this.db
+          .prepare(
+            `
+              UPDATE themis_principals
+              SET updated_at = ?
+              WHERE principal_id = ?
+            `,
+          )
+          .run(updatedAt, targetId);
+      }
+
+      this.db
+        .prepare(
+          `
+            UPDATE themis_channel_identities
+            SET
+              principal_id = @target_principal_id,
+              updated_at = @updated_at
+            WHERE principal_id = @source_principal_id
+          `,
+        )
+        .run({
+          source_principal_id: sourceId,
+          target_principal_id: targetId,
+          updated_at: updatedAt,
+        });
+
+      this.db
+        .prepare(
+          `
+            UPDATE themis_conversations
+            SET
+              principal_id = @target_principal_id,
+              updated_at = @updated_at
+            WHERE principal_id = @source_principal_id
+          `,
+        )
+        .run({
+          source_principal_id: sourceId,
+          target_principal_id: targetId,
+          updated_at: updatedAt,
+        });
+
+      const sourceBindings = this.db
+        .prepare(
+          `
+            SELECT channel, principal_id, channel_session_key, conversation_id, created_at, updated_at
+            FROM themis_channel_bindings
+            WHERE principal_id = ?
+          `,
+        )
+        .all(sourceId) as ChannelConversationBindingRow[];
+
+      const upsertBinding = this.db.prepare(
+        `
+          INSERT INTO themis_channel_bindings (
+            channel,
+            principal_id,
+            channel_session_key,
+            conversation_id,
+            created_at,
+            updated_at
+          ) VALUES (
+            @channel,
+            @principal_id,
+            @channel_session_key,
+            @conversation_id,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(channel, principal_id, channel_session_key) DO UPDATE SET
+            conversation_id = excluded.conversation_id,
+            updated_at = excluded.updated_at
+        `,
+      );
+
+      for (const binding of sourceBindings) {
+        upsertBinding.run({
+          channel: binding.channel,
+          principal_id: targetId,
+          channel_session_key: binding.channel_session_key,
+          conversation_id: binding.conversation_id,
+          created_at: binding.created_at,
+          updated_at: updatedAt,
+        });
+      }
+
+      this.db
+        .prepare(
+          `
+            DELETE FROM themis_channel_bindings
+            WHERE principal_id = ?
+          `,
+        )
+        .run(sourceId);
+    });
+
+    merge();
+  }
+
   resolveThreadId(sessionId: string): string | null {
     const normalized = sessionId.trim();
 
@@ -297,6 +1078,8 @@ export class SqliteCodexSessionRegistry {
   }
 
   upsertTurnFromRequest(request: TaskRequest, taskId: string): void {
+    const conversationId = request.channelContext.sessionId?.trim() || null;
+
     this.db
       .prepare(
         `
@@ -345,7 +1128,7 @@ export class SqliteCodexSessionRegistry {
       .run({
         request_id: request.requestId,
         task_id: taskId,
-        session_id: request.channelContext.sessionId?.trim() || null,
+        session_id: conversationId,
         source_channel: request.sourceChannel,
         user_id: request.user.userId,
         user_display_name: request.user.displayName?.trim() || null,
@@ -357,6 +1140,10 @@ export class SqliteCodexSessionRegistry {
         created_at: request.createdAt,
         updated_at: request.createdAt,
       });
+
+    if (conversationId) {
+      this.touchConversation(conversationId, request.createdAt, summarizeConversationTitle(request.goal));
+    }
   }
 
   appendTaskEvent(event: TaskEvent): void {
@@ -438,6 +1225,7 @@ export class SqliteCodexSessionRegistry {
     const structuredOutputJson = stringifyJson(input.result.structuredOutput);
     const optionsJson = stringifyJson(input.request.options);
     const touchedFiles = dedupeStrings(input.result.touchedFiles ?? []);
+    const conversationId = input.request.channelContext.sessionId?.trim() || null;
 
     const completeTurn = this.db.transaction(() => {
       this.db
@@ -515,6 +1303,10 @@ export class SqliteCodexSessionRegistry {
       for (const filePath of touchedFiles) {
         insertFile.run(input.request.requestId, input.result.taskId, filePath, input.result.completedAt);
       }
+
+      if (conversationId) {
+        this.touchConversation(conversationId, input.result.completedAt, summarizeConversationTitle(input.request.goal));
+      }
     });
 
     completeTurn();
@@ -553,6 +1345,12 @@ export class SqliteCodexSessionRegistry {
         updated_at: completedAt,
         completed_at: completedAt,
       });
+
+    const conversationId = input.request.channelContext.sessionId?.trim();
+
+    if (conversationId) {
+      this.touchConversation(conversationId, completedAt, summarizeConversationTitle(input.request.goal));
+    }
   }
 
   getTurn(requestId: string): StoredTaskTurnRecord | null {
@@ -686,8 +1484,404 @@ export class SqliteCodexSessionRegistry {
     return rows.map(mapSessionSummaryRow);
   }
 
+  listRecentSessionsByFilter(filter: StoredSessionHistoryFilter, limit = 24): StoredSessionHistorySummary[] {
+    const clauses: string[] = [
+      "session_id IS NOT NULL",
+      "session_id <> ''",
+    ];
+    const params: Array<string | number> = [];
+
+    if (typeof filter.sourceChannel === "string" && filter.sourceChannel.trim()) {
+      clauses.push("source_channel = ?");
+      params.push(filter.sourceChannel.trim());
+    }
+
+    if (typeof filter.userId === "string" && filter.userId.trim()) {
+      clauses.push("user_id = ?");
+      params.push(filter.userId.trim());
+    }
+
+    const resolvedLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 24;
+    params.push(resolvedLimit);
+
+    const whereClause = clauses.join("\n              AND ");
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            grouped.session_id,
+            grouped.created_at,
+            grouped.updated_at,
+            grouped.turn_count,
+            COALESCE(NULLIF(cs.thread_id, ''), latest.codex_thread_id) AS thread_id,
+            latest.request_id AS latest_request_id,
+            latest.task_id AS latest_task_id,
+            latest.goal AS latest_goal,
+            latest.status AS latest_status,
+            latest.summary AS latest_summary,
+            latest.session_mode AS latest_session_mode,
+            latest.codex_thread_id AS latest_codex_thread_id,
+            latest.updated_at AS latest_updated_at
+          FROM (
+            SELECT
+              session_id,
+              MIN(created_at) AS created_at,
+              MAX(updated_at) AS updated_at,
+              COUNT(*) AS turn_count
+            FROM themis_turns
+            WHERE ${whereClause}
+            GROUP BY session_id
+          ) grouped
+          INNER JOIN themis_turns latest
+            ON latest.request_id = (
+              SELECT request_id
+              FROM themis_turns latest_turn
+              WHERE latest_turn.session_id = grouped.session_id
+              ORDER BY latest_turn.updated_at DESC, latest_turn.created_at DESC, latest_turn.request_id DESC
+              LIMIT 1
+            )
+          LEFT JOIN codex_sessions cs
+            ON cs.session_id = grouped.session_id
+          ORDER BY grouped.updated_at DESC
+          LIMIT ?
+        `,
+      )
+      .all(...params) as SessionSummaryRow[];
+
+    return rows.map(mapSessionSummaryRow);
+  }
+
+  hasSessionTurn(filter: StoredSessionHistoryFilter & { sessionId: string }): boolean {
+    const sessionId = filter.sessionId.trim();
+
+    if (!sessionId) {
+      return false;
+    }
+
+    const clauses: string[] = ["session_id = ?"];
+    const params: Array<string | number> = [sessionId];
+
+    if (typeof filter.sourceChannel === "string" && filter.sourceChannel.trim()) {
+      clauses.push("source_channel = ?");
+      params.push(filter.sourceChannel.trim());
+    }
+
+    if (typeof filter.userId === "string" && filter.userId.trim()) {
+      clauses.push("user_id = ?");
+      params.push(filter.userId.trim());
+    }
+
+    const whereClause = clauses.join("\n            AND ");
+    const row = this.db
+      .prepare(
+        `
+          SELECT 1 AS matched
+          FROM themis_turns
+          WHERE ${whereClause}
+          LIMIT 1
+        `,
+      )
+      .get(...params) as { matched: number } | undefined;
+
+    return row?.matched === 1;
+  }
+
+  listThirdPartyProviders(): StoredThirdPartyProviderRecord[] {
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            provider_id,
+            name,
+            base_url,
+            api_key,
+            default_model,
+            wire_api,
+            supports_websockets,
+            model_catalog_path,
+            created_at,
+            updated_at
+          FROM themis_third_party_providers
+          ORDER BY name COLLATE NOCASE ASC, provider_id ASC
+        `,
+      )
+      .all() as ThirdPartyProviderRow[];
+
+    return rows.map(mapThirdPartyProviderRow);
+  }
+
+  listThirdPartyProviderModels(providerId?: string): StoredThirdPartyProviderModelRecord[] {
+    const normalizedProviderId = providerId?.trim();
+    const rows = normalizedProviderId
+      ? this.db
+        .prepare(
+          `
+            SELECT
+              provider_id,
+              model,
+              display_name,
+              description,
+              default_reasoning_level,
+              supported_reasoning_levels_json,
+              context_window,
+              truncation_mode,
+              truncation_limit,
+              capabilities_json,
+              created_at,
+              updated_at
+            FROM themis_third_party_models
+            WHERE provider_id = ?
+            ORDER BY model COLLATE NOCASE ASC
+          `,
+        )
+        .all(normalizedProviderId)
+      : this.db
+        .prepare(
+          `
+            SELECT
+              provider_id,
+              model,
+              display_name,
+              description,
+              default_reasoning_level,
+              supported_reasoning_levels_json,
+              context_window,
+              truncation_mode,
+              truncation_limit,
+              capabilities_json,
+              created_at,
+              updated_at
+            FROM themis_third_party_models
+            ORDER BY provider_id ASC, model COLLATE NOCASE ASC
+          `,
+        )
+        .all();
+
+    return (rows as ThirdPartyProviderModelRow[]).map(mapThirdPartyProviderModelRow);
+  }
+
+  saveThirdPartyProvider(record: StoredThirdPartyProviderRecord): void {
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_third_party_providers (
+            provider_id,
+            name,
+            base_url,
+            api_key,
+            default_model,
+            wire_api,
+            supports_websockets,
+            model_catalog_path,
+            created_at,
+            updated_at
+          ) VALUES (
+            @provider_id,
+            @name,
+            @base_url,
+            @api_key,
+            @default_model,
+            @wire_api,
+            @supports_websockets,
+            @model_catalog_path,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(provider_id) DO UPDATE SET
+            name = excluded.name,
+            base_url = excluded.base_url,
+            api_key = excluded.api_key,
+            default_model = excluded.default_model,
+            wire_api = excluded.wire_api,
+            supports_websockets = excluded.supports_websockets,
+            model_catalog_path = excluded.model_catalog_path,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        provider_id: record.providerId,
+        name: record.name,
+        base_url: record.baseUrl,
+        api_key: record.apiKey,
+        default_model: record.defaultModel ?? null,
+        wire_api: record.wireApi,
+        supports_websockets: record.supportsWebsockets ? 1 : 0,
+        model_catalog_path: record.modelCatalogPath ?? null,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+  }
+
+  saveThirdPartyProviderModel(record: StoredThirdPartyProviderModelRecord): void {
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_third_party_models (
+            provider_id,
+            model,
+            display_name,
+            description,
+            default_reasoning_level,
+            supported_reasoning_levels_json,
+            context_window,
+            truncation_mode,
+            truncation_limit,
+            capabilities_json,
+            created_at,
+            updated_at
+          ) VALUES (
+            @provider_id,
+            @model,
+            @display_name,
+            @description,
+            @default_reasoning_level,
+            @supported_reasoning_levels_json,
+            @context_window,
+            @truncation_mode,
+            @truncation_limit,
+            @capabilities_json,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(provider_id, model) DO UPDATE SET
+            display_name = excluded.display_name,
+            description = excluded.description,
+            default_reasoning_level = excluded.default_reasoning_level,
+            supported_reasoning_levels_json = excluded.supported_reasoning_levels_json,
+            context_window = excluded.context_window,
+            truncation_mode = excluded.truncation_mode,
+            truncation_limit = excluded.truncation_limit,
+            capabilities_json = excluded.capabilities_json,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        provider_id: record.providerId,
+        model: record.model,
+        display_name: record.displayName,
+        description: record.description,
+        default_reasoning_level: record.defaultReasoningLevel,
+        supported_reasoning_levels_json: record.supportedReasoningLevelsJson,
+        context_window: record.contextWindow ?? null,
+        truncation_mode: record.truncationMode,
+        truncation_limit: record.truncationLimit,
+        capabilities_json: record.capabilitiesJson,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+  }
+
+  updateThirdPartyProviderDefaultModel(providerId: string, defaultModel: string | null, updatedAt: string): void {
+    this.db
+      .prepare(
+        `
+          UPDATE themis_third_party_providers
+          SET
+            default_model = @default_model,
+            updated_at = @updated_at
+          WHERE provider_id = @provider_id
+        `,
+      )
+      .run({
+        provider_id: providerId,
+        default_model: defaultModel?.trim() || null,
+        updated_at: updatedAt,
+      });
+  }
+
+  updateThirdPartyModelCapabilities(
+    providerId: string,
+    model: string,
+    capabilitiesJson: string,
+    updatedAt: string,
+  ): void {
+    this.db
+      .prepare(
+        `
+          UPDATE themis_third_party_models
+          SET
+            capabilities_json = @capabilities_json,
+            updated_at = @updated_at
+          WHERE provider_id = @provider_id
+            AND model = @model
+        `,
+      )
+      .run({
+        provider_id: providerId,
+        model,
+        capabilities_json: capabilitiesJson,
+        updated_at: updatedAt,
+      });
+  }
+
   private initializeSchema(database: Database.Database): void {
     database.exec(`
+      CREATE TABLE IF NOT EXISTS themis_principals (
+        principal_id TEXT PRIMARY KEY,
+        display_name TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_principals_updated_at_idx
+      ON themis_principals(updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS themis_channel_identities (
+        channel TEXT NOT NULL,
+        channel_user_id TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (channel, channel_user_id),
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_channel_identities_principal_idx
+      ON themis_channel_identities(principal_id, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS themis_conversations (
+        conversation_id TEXT PRIMARY KEY,
+        principal_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_conversations_principal_idx
+      ON themis_conversations(principal_id, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS themis_channel_bindings (
+        channel TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        channel_session_key TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (channel, principal_id, channel_session_key),
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE,
+        FOREIGN KEY (conversation_id) REFERENCES themis_conversations(conversation_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_channel_bindings_conversation_idx
+      ON themis_channel_bindings(conversation_id, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS themis_identity_link_codes (
+        code TEXT PRIMARY KEY,
+        source_channel TEXT NOT NULL,
+        source_channel_user_id TEXT NOT NULL,
+        source_principal_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        consumed_at TEXT,
+        consumed_by_channel TEXT,
+        consumed_by_user_id TEXT,
+        FOREIGN KEY (source_principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_identity_link_codes_expires_idx
+      ON themis_identity_link_codes(expires_at ASC);
+
       CREATE TABLE IF NOT EXISTS codex_sessions (
         session_id TEXT PRIMARY KEY,
         thread_id TEXT NOT NULL DEFAULT '',
@@ -701,6 +1895,16 @@ export class SqliteCodexSessionRegistry {
 
       CREATE INDEX IF NOT EXISTS codex_sessions_active_task_id_idx
       ON codex_sessions(active_task_id);
+
+      CREATE TABLE IF NOT EXISTS themis_session_settings (
+        session_id TEXT PRIMARY KEY,
+        settings_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_session_settings_updated_at_idx
+      ON themis_session_settings(updated_at DESC);
 
       CREATE TABLE IF NOT EXISTS themis_turns (
         request_id TEXT PRIMARY KEY,
@@ -761,19 +1965,48 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_turn_files_task_id_idx
       ON themis_turn_files(task_id);
 
+      CREATE TABLE IF NOT EXISTS themis_third_party_providers (
+        provider_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        base_url TEXT NOT NULL,
+        api_key TEXT NOT NULL,
+        default_model TEXT,
+        wire_api TEXT NOT NULL DEFAULT 'responses',
+        supports_websockets INTEGER NOT NULL DEFAULT 0,
+        model_catalog_path TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_third_party_providers_updated_at_idx
+      ON themis_third_party_providers(updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS themis_third_party_models (
+        provider_id TEXT NOT NULL,
+        model TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        default_reasoning_level TEXT NOT NULL,
+        supported_reasoning_levels_json TEXT NOT NULL,
+        context_window INTEGER,
+        truncation_mode TEXT NOT NULL DEFAULT 'tokens',
+        truncation_limit INTEGER NOT NULL,
+        capabilities_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (provider_id, model),
+        FOREIGN KEY (provider_id) REFERENCES themis_third_party_providers(provider_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_third_party_models_provider_idx
+      ON themis_third_party_models(provider_id, updated_at DESC);
+
       PRAGMA user_version = ${DATABASE_SCHEMA_VERSION};
     `);
   }
 
   private openDatabase(): Database.Database {
-    let database = this.createDatabaseConnection();
-
-    if (this.readSchemaVersion(database) !== DATABASE_SCHEMA_VERSION) {
-      database.close();
-      resetDatabaseFiles(this.databaseFile);
-      database = this.createDatabaseConnection();
-    }
-
+    const database = this.createDatabaseConnection();
     this.initializeSchema(database);
     return database;
   }
@@ -839,6 +2072,73 @@ function mapTurnRow(row: TurnRow): StoredTaskTurnRecord {
   };
 }
 
+function mapSessionTaskSettingsRow(row: SessionTaskSettingsRow): StoredSessionTaskSettingsRecord {
+  const settings = normalizeSessionTaskSettings(safeParseJson(row.settings_json));
+
+  return {
+    sessionId: row.session_id,
+    settings,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapPrincipalRow(row: PrincipalRow): StoredPrincipalRecord {
+  return {
+    principalId: row.principal_id,
+    ...(row.display_name ? { displayName: row.display_name } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapConversationRow(row: ConversationRow): StoredConversationRecord {
+  return {
+    conversationId: row.conversation_id,
+    principalId: row.principal_id,
+    title: row.title,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapChannelIdentityRow(row: ChannelIdentityRow): StoredChannelIdentityRecord {
+  return {
+    channel: row.channel,
+    channelUserId: row.channel_user_id,
+    principalId: row.principal_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapChannelConversationBindingRow(
+  row: ChannelConversationBindingRow,
+): StoredChannelConversationBindingRecord {
+  return {
+    channel: row.channel,
+    principalId: row.principal_id,
+    channelSessionKey: row.channel_session_key,
+    conversationId: row.conversation_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapIdentityLinkCodeRow(row: IdentityLinkCodeRow): StoredIdentityLinkCodeRecord {
+  return {
+    code: row.code,
+    sourceChannel: row.source_channel,
+    sourceChannelUserId: row.source_channel_user_id,
+    sourcePrincipalId: row.source_principal_id,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    ...(row.consumed_at ? { consumedAt: row.consumed_at } : {}),
+    ...(row.consumed_by_channel ? { consumedByChannel: row.consumed_by_channel } : {}),
+    ...(row.consumed_by_user_id ? { consumedByUserId: row.consumed_by_user_id } : {}),
+  };
+}
+
 function mapEventRow(row: EventRow): StoredTaskEventRecord {
   return {
     eventId: row.event_id,
@@ -874,6 +2174,38 @@ function mapSessionSummaryRow(row: SessionSummaryRow): StoredSessionHistorySumma
   };
 }
 
+function mapThirdPartyProviderRow(row: ThirdPartyProviderRow): StoredThirdPartyProviderRecord {
+  return {
+    providerId: row.provider_id,
+    name: row.name,
+    baseUrl: row.base_url,
+    apiKey: row.api_key,
+    ...(row.default_model ? { defaultModel: row.default_model } : {}),
+    wireApi: row.wire_api === "chat" ? "chat" : "responses",
+    supportsWebsockets: row.supports_websockets === 1,
+    ...(row.model_catalog_path ? { modelCatalogPath: row.model_catalog_path } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapThirdPartyProviderModelRow(row: ThirdPartyProviderModelRow): StoredThirdPartyProviderModelRecord {
+  return {
+    providerId: row.provider_id,
+    model: row.model,
+    displayName: row.display_name,
+    description: row.description,
+    defaultReasoningLevel: row.default_reasoning_level,
+    supportedReasoningLevelsJson: row.supported_reasoning_levels_json,
+    ...(typeof row.context_window === "number" ? { contextWindow: row.context_window } : {}),
+    truncationMode: row.truncation_mode === "bytes" ? "bytes" : "tokens",
+    truncationLimit: row.truncation_limit,
+    capabilitiesJson: row.capabilities_json,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function extractSessionMetadata(
   payload: Record<string, unknown> | undefined,
 ): {
@@ -905,6 +2237,24 @@ function stringifyJson(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }
 
+function summarizeConversationTitle(goal: string): string {
+  const normalized = goal.trim().replace(/\s+/g, " ");
+
+  if (!normalized) {
+    return "新对话";
+  }
+
+  return normalized.slice(0, 80);
+}
+
+function safeParseJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
 function normalizeText(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
@@ -912,10 +2262,4 @@ function normalizeText(value: string | undefined): string | undefined {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
-}
-
-function resetDatabaseFiles(databaseFile: string): void {
-  rmSync(databaseFile, { force: true });
-  rmSync(`${databaseFile}-shm`, { force: true });
-  rmSync(`${databaseFile}-wal`, { force: true });
 }

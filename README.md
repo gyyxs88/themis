@@ -138,6 +138,7 @@ You can override bind host and port with:
 - A final result section that stays inside the same conversation turn
 - A `取消` button that aborts the browser request and stops the corresponding task
 - Forking that prefers real Codex session transcript replay over summary-only bootstrapping
+- A running web task no longer locks the whole UI: you can switch, create, or fork threads while it runs, and sending a new message will interrupt the current run before automatically sending the new request
 
 ### Current Thread Model
 

@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { InMemoryCommunicationRouter } from "../communication/router.js";
 import { WebAdapter, type WebDeliveryMessage, type WebTaskPayload } from "../channels/index.js";
+import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import type { TaskRequest } from "../types/index.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
@@ -11,6 +12,7 @@ export async function handleTaskStream(
   request: IncomingMessage,
   response: ServerResponse,
   runtime: CodexTaskRuntime,
+  authRuntime: CodexAuthRuntime,
   taskTimeoutMs: number,
 ): Promise<void> {
   const payload = (await readJsonBody(request)) as WebTaskPayload;
@@ -50,6 +52,8 @@ export async function handleTaskStream(
       source: "web",
       taskId: payload.taskId ?? createId("task"),
     });
+
+    await ensureAuthAvailable(authRuntime, normalizedRequest);
 
     writeNdjson(response, {
       kind: "ack",
@@ -113,6 +117,7 @@ export async function handleTaskRun(
   request: IncomingMessage,
   response: ServerResponse,
   runtime: CodexTaskRuntime,
+  authRuntime: CodexAuthRuntime,
   taskTimeoutMs: number,
 ): Promise<void> {
   const payload = (await readJsonBody(request)) as WebTaskPayload;
@@ -133,6 +138,8 @@ export async function handleTaskRun(
       ...payload,
       source: "web",
     });
+
+    await ensureAuthAvailable(authRuntime, normalizedRequest);
 
     const result = await runtime.runTask(normalizedRequest, {
       timeoutMs: taskTimeoutMs,
@@ -173,4 +180,24 @@ export async function handleTaskRun(
 function createId(prefix: string): string {
   const randomPart = Math.random().toString(36).slice(2, 10);
   return `${prefix}-${Date.now()}-${randomPart}`;
+}
+
+async function ensureAuthAvailable(authRuntime: CodexAuthRuntime, request: TaskRequest): Promise<void> {
+  if (request.options?.accessMode === "third-party") {
+    const auth = await authRuntime.readSnapshot();
+
+    if (auth.providerProfile?.type === "openai-compatible") {
+      return;
+    }
+
+    throw new Error("当前没有可用的第三方兼容接入配置。");
+  }
+
+  const auth = await authRuntime.readSnapshot();
+
+  if (!auth.requiresOpenaiAuth || auth.authenticated) {
+    return;
+  }
+
+  throw new Error("Not logged in");
 }

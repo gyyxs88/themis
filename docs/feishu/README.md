@@ -1,0 +1,195 @@
+# 飞书 Bot 调研与接入建议
+
+更新日期：2026-03-24
+
+相关实现文档：
+
+- [Themis 飞书渠道说明](./themis-feishu-channel.md)
+
+## 当前落地状态
+
+- Themis 已接入飞书长连接，`im.message.receive_v1` 能进入现有 runtime 主链路。
+- 当前已支持飞书文本收发、`/help`、`/sessions`、`/new`、`/use`、`/current`、`/link`、`/settings`、`/sandbox`、`/search`、`/network`、`/approval`、`/quota`。
+- Codex 中途回复与最终结果都会回推到飞书，并在消息末尾追加状态标志。
+- Web 与飞书当前都统一采用“新消息默认打断旧任务”的跟进行为。
+- 飞书与 Web 现在默认共享同一套 conversation 视图；飞书 `/sessions` 可看到 Web 创建的会话，切到同一个 `conversationId` 后会继续复用后端已有上下文。
+- 当前激活会话不会跨端自动同步；Web 和飞书各自保留“当前正在聊哪一条”的本地状态，需要手动切到目标 `conversationId`。
+- 飞书与 Web 已共用同一种服务端会话配置存储机制；飞书任务发起时会读取当前会话保存的 `sandbox / web search / network / approval` 等选项。
+- Web 仍保留浏览器级 identity 与绑定码，但它已降级为可选能力，主要用于认领旧浏览器身份，不再是跨渠道共享会话的前提。
+- 现阶段仍基于 `@openai/codex-sdk` 高层 thread API，没有桌面版那种 guide 当前运行的公开能力。
+
+## 目标
+
+为 Themis 后续制作飞书 Bot 插件准备资料，收集范围覆盖：
+
+- 飞书官方 API / 事件 / 回调 /教程文档
+- Node/TypeScript 方向的官方 SDK 与实现方式
+- GitHub 上可借鉴的同类项目
+- 面向当前仓库的落地建议
+
+## 这次先得出的结论
+
+- 对 Themis 来说，首选方案是：`企业自建应用 + 机器人能力 + Node 官方 SDK + 长连接接收事件/回调`。
+- 原因很直接：当前仓库本身就是 Node/TypeScript，且本地开发并没有稳定公网回调地址；长连接模式更适合先把闭环跑通。
+- 飞书官方旧仓库 `larksuite/oapi-sdk-nodejs` 已经废弃并归档；当前应以 npm 包 `@larksuiteoapi/node-sdk` 和新仓库 `larksuite/node-sdk` 为准。
+- 已用当前提供的应用凭证实际调用过 `tenant_access_token/internal`，2026-03-18 验证通过，返回 `code=0`、`expire=7200`。为了避免后续误提交，`app_secret` 没有写入仓库文档。
+- 在当前 runtime 结构下，飞书第一阶段以“长连接 + 文本消息 + 会话命令 + 默认打断旧任务”为宜，不继续追桌面版的 guide 模式。
+
+## 飞书 Bot 最小闭环
+
+1. 创建企业自建应用。
+2. 给应用开启机器人能力。
+3. 为应用申请最小权限。
+4. 发布应用版本，让配置真正生效。
+5. 订阅 `im.message.receive_v1` 事件。
+6. 用长连接或 Webhook 接收消息。
+7. 调用发送消息接口回复用户或群聊。
+8. 如果要做交互卡片，再补 `card.action.trigger` 回调。
+
+## 官方文档整理
+
+| 主题 | 关键结论 | 文档 |
+| --- | --- | --- |
+| 开放平台文档首页 | 服务端 API 列表、事件列表、权限列表、机器人教程入口都从这里汇总 | [开发文档首页](https://open.feishu.cn/document/home/index) |
+| 自建应用开发流程 | 自建应用是企业内使用；能力、权限、事件与回调变更后都需要重新发布版本 | [企业自建应用开发流程](https://open.feishu.cn/document/home/introduction-to-custom-app-development/self-built-application-development-process) |
+| 启用机器人能力 | Bot 能力不是默认开的，需要在开发者后台手动添加并发布 | [如何启用机器人能力](https://open.feishu.cn/document/uAjLw4CM/ugTN1YjL4UTN24CO1UjN/trouble-shooting/how-to-enable-bot-ability) |
+| 自建应用取 token | `tenant_access_token` 最大有效期 2 小时；剩余有效期小于 30 分钟时会发新 token | [自建应用获取 tenant_access_token](https://open.feishu.cn/document/server-docs/authentication-management/access-token/tenant_access_token_internal) |
+| 发送消息 | 发送前必须开启机器人能力；支持文本、卡片、图片等；可用 `uuid` 做 1 小时内去重 | [发送消息](https://open.feishu.cn/document/server-docs/im-v1/message/create) |
+| 接收消息事件 | 事件类型是 `im.message.receive_v1`；单聊、群里 @ 机器人、群全量消息依赖不同权限；去重要用 `message_id`，不要只看 `event_id` | [接收消息](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message/events/receive) |
+| 事件概述 | 官方支持长连接和 Webhook 两种模式；事件 3 秒内要响应，否则会按 15 秒、5 分钟、1 小时、6 小时重试，最多 4 次 | [事件概述](https://open.feishu.cn/document/ukTMukTMukTM/uUTNz4SN1MjL1UzM) |
+| Webhook 事件模式 | 需要 IPv4 公网地址；配置时会发 `challenge`，必须在 1 秒内原样返回；可配置 Encrypt Key 和 Verification Token | [将事件发送至开发者服务器](https://open.feishu.cn/document/ukTMukTMukTM/uYDNxYjL2QTM24iN0EjN/event-subscription-configure-/choose-a-subscription-mode/send-notifications-to-developers-server) |
+| 回调概述 | 回调和事件不同，回调是同步交互，3 秒内必须返回内容，且没有补推机制 | [回调概述](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/event-subscription-guide/callback-subscription/callback-overview) |
+| 卡片交互回调 | 回调类型是 `card.action.trigger`；回调里会带卡片更新 token；该 token 有效 30 分钟，最多更新 2 次 | [卡片回传交互回调](https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-callback-communication) |
+| Echo Bot 教程 | 官方最短路径示例，覆盖创建应用、发布、长连接收消息、自动回复 | [开发自动回复机器人](https://open.feishu.cn/document/uAjLw4CM/uMzNwEjLzcDMx4yM3ATM/develop-an-echo-bot/introduction) |
+| 卡片 Bot 教程 | 官方最短路径示例，覆盖欢迎卡片、交互卡片、回调处理与更新卡片 | [开发卡片交互机器人](https://open.feishu.cn/document/uAjLw4CM/uMzNwEjLzcDMx4yM3ATM/develop-a-card-interactive-bot/introduction) |
+| API / 事件 / 权限总表 | 做精确查表时最有用 | [服务端 API 列表](https://open.feishu.cn/document/ukTMukTMukTM/uYTM5UjL2ETO14iNxkTN/server-api-list) / [事件列表](https://open.feishu.cn/document/ukTMukTMukTM/uYDNxYjL2QTM24iN0EjN/event-list) / [应用权限列表](https://open.feishu.cn/document/ukTMukTMukTM/uYTM5UjL2ETO14iNxkTN/scope-list) |
+
+## 制作 Bot 时最容易踩的坑
+
+- 应用配置改了不等于立刻生效。权限、能力、事件、回调改完都要重新发布版本。
+- 用户搜不到 Bot、Bot 收不到消息，最常见原因不是代码，而是应用可用范围没放开。
+- 如果走 Webhook 模式，请求地址必须是公网 IPv4 地址；这和当前仓库常见的本地/LAN 调试方式天然不匹配。
+- 事件需要幂等处理。官方明确提示消息接收场景要用 `message_id` 去重，不要只依赖 `event_id`。
+- 事件推送只要求“收到”即可，3 秒内返回 200；回调则要在 3 秒内返回“处理结果”，两者不要混着写。
+- 发送消息接口对同一用户和同一群的限频都是 5 QPS，不能把大模型流式输出直接粗暴拆成高频消息刷出去。
+- 发消息时建议始终带 `uuid`，避免重复发送。
+- 卡片交互返回的更新 token 只有 30 分钟有效，且最多更新 2 次，做长时间任务时不能把它当长期会话句柄。
+
+## Node / TypeScript 方向的关键结论
+
+### 官方 SDK 现状
+
+- 旧仓库：[`larksuite/oapi-sdk-nodejs`](https://github.com/larksuite/oapi-sdk-nodejs)
+  - 已标记 `Deprecated`
+  - README 明确要求改用 `https://github.com/larksuite/node-sdk`
+  - 仓库已归档
+- 新仓库：[`larksuite/node-sdk`](https://github.com/larksuite/node-sdk)
+  - 仍在维护
+  - npm 包名：[`@larksuiteoapi/node-sdk`](https://www.npmjs.com/package/@larksuiteoapi/node-sdk)
+  - 2026-03-18 实查 `npm view`：`latest = 1.59.0`
+
+### 对 Themis 的推荐模式
+
+- 开发阶段优先用长连接。
+  - 优点：不需要公网回调地址，和本地开发更匹配。
+  - 官方 Bot 教程也是围绕长连接示例展开。
+- 生产阶段如果将来有稳定公网域名，可以再评估是否切到 Webhook。
+  - 适合云函数、统一网关、固定公网服务。
+  - 但要自己处理 URL 校验、解密、验签、重试和超时约束。
+
+## 推荐最小权限
+
+如果第一版目标只是“单聊和群里 @ 机器人后，把消息转给 Themis，再回复结果”，建议先只开这些：
+
+- `im:message:send_as_bot` 或 `im:message:send`
+- `im:message.p2p_msg:readonly`
+- `im:message.group_at_msg:readonly`
+
+按需再补：
+
+- `im:message.group_msg`
+  - 只有当你确实要接收群里所有消息时才开，这个范围更大。
+- `im:user_agent:read`
+  - 只有你确实要做客户端来源识别时才开。
+- `contact:user.employee_id:readonly`
+  - 只有你必须拿 `user_id` 时才开；多数 Bot 场景直接用 `open_id` 足够。
+
+## GitHub 同类项目整理
+
+以下信息按 2026-03-18 抓取。
+
+| 项目 | 技术栈 | 借鉴价值 | 链接 |
+| --- | --- | --- | --- |
+| 官方 Node SDK | TypeScript | 最适合直接作为 Themis 的底座；提供语义化 API 调用、分页、文件上传下载等封装 | [larksuite/node-sdk](https://github.com/larksuite/node-sdk) |
+| 飞书 Agent 网关 | JavaScript | 很贴近 Themis 的目标，重点是“每个线程绑定 runtime / model / session”和卡片流式更新 | [mybolide/feishu-agent-bridge](https://github.com/mybolide/feishu-agent-bridge) |
+| 插件式个人 AI 助手 | TypeScript | 把飞书当成渠道插件来做，适合参考“渠道层”和“插件层”的边界设计 | [GuLu9527/flashclaw](https://github.com/GuLu9527/flashclaw) |
+| 轻量 OpenAI 飞书 Bot | JavaScript | 适合看最小可用版：接消息、调模型、消息卡片包装、数据库记录问答 | [forkpath/openai-feishu-bot](https://github.com/forkpath/openai-feishu-bot) |
+| 资讯互动卡片 Bot | Python | 适合专门参考卡片交互、点赞回调、SQLite 映射、长连接收 `card.action.trigger` | [Matys1009/feishu_daily_news_card](https://github.com/Matys1009/feishu_daily_news_card) |
+| 生产级多平台 Bot 平台 | Python | 适合看大架构：多平台、多插件、控制台、监控、知识库；但对 Themis 第一版来说太重 | [langbot-app/LangBot](https://github.com/langbot-app/LangBot) |
+
+### 这些项目里最值得抄的不是“代码”，而是“分层”
+
+- `feishu-agent-bridge`
+  - 值得抄：线程级 session 持久化、runtime 路由、流式卡片更新。
+- `flashclaw`
+  - 值得抄：把飞书做成渠道插件，而不是把飞书逻辑散落到主流程里。
+- `openai-feishu-bot`
+  - 值得抄：MVP 闭环非常短，适合快速验证链路。
+- `feishu_daily_news_card`
+  - 值得抄：卡片交互事件与本地存储映射关系。
+- `LangBot`
+  - 值得抄：生产级监控、权限、插件生态思路；不值得直接整套照搬。
+
+## 面向 Themis 的建议落地方式
+
+建议单独收口到飞书渠道目录，不要把飞书 API 调用散到现有 HTTP server 和 Codex runtime 逻辑里。
+
+可考虑的模块拆分：
+
+- `src/channels/feishu/feishu-client.ts`
+  - 负责 SDK client、token、基础配置。
+- `src/channels/feishu/feishu-gateway.ts`
+  - 负责长连接启动、事件分发、生命周期管理。
+- `src/channels/feishu/feishu-normalizer.ts`
+  - 把 `im.message.receive_v1` 转成仓库内部统一消息结构。
+- `src/channels/feishu/feishu-session-store.ts`
+  - 把 `chat_id/open_id/message_id` 映射到 Themis 的 `sessionId`。
+- `src/channels/feishu/feishu-reply.ts`
+  - 负责文本、卡片、错误提示、节流和幂等。
+- `src/channels/feishu/feishu-card-callback.ts`
+  - 第二阶段再做，处理 `card.action.trigger`。
+
+### 第一版实际落地结果
+
+- 已支持文本收发。
+- 已支持单聊和群里 @ 机器人进入任务链路。
+- 已把飞书消息转成 Themis 现有任务请求，并回推中途回复与最终结果。
+- 当前仍不做复杂卡片，只保留纯文本消息与命令。
+
+### 第二版再做
+
+- 运行中状态卡片
+- “取消任务 / 新开会话 / 重试” 按钮
+- 群会话与单聊会话的不同路由策略
+- 更细的权限与管理员控制
+
+## 下一步建议
+
+1. 稳定当前文本链路，继续做真实使用场景联调。
+2. 按需补第二阶段能力：
+   - 运行中状态卡片
+   - “取消任务 / 新开会话 / 重试” 按钮
+   - 群会话与单聊会话的不同路由策略
+   - 更细的管理员控制
+3. 如果以后要追桌面版那种 guide 行为，先做 `turn/steer` 的最小 PoC，再决定是否迁移到底层 `app-server`。
+
+## 本次实际验证记录
+
+- 2026-03-18 已调用：
+  - `POST https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal`
+- 结果：
+  - `code=0`
+  - `expire=7200`
+- 说明：
+  - 当前提供的应用凭证至少在“获取自建应用 tenant_access_token”这一步是可用的。
+  - 本文档不记录明文 `app_secret`，避免后续被误提交到 Git。

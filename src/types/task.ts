@@ -5,9 +5,13 @@ export const TASK_ATTACHMENT_TYPES = ["text", "link", "file", "image"] as const;
 
 export type TaskAttachmentType = (typeof TASK_ATTACHMENT_TYPES)[number];
 
-export const REASONING_LEVELS = ["low", "medium", "high", "xhigh"] as const;
+export const REASONING_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const;
 
 export type ReasoningLevel = (typeof REASONING_LEVELS)[number];
+
+export const WEB_SEARCH_MODES = ["disabled", "cached", "live"] as const;
+
+export type WebSearchMode = (typeof WEB_SEARCH_MODES)[number];
 
 export const MEMORY_MODES = ["auto", "off", "confirm"] as const;
 
@@ -23,11 +27,19 @@ export type SandboxMode = (typeof SANDBOX_MODES)[number];
 
 export const APPROVAL_POLICIES = [
   "never",
-  "untrusted",
   "on-request",
+  "on-failure",
+  "untrusted",
 ] as const;
 
 export type ApprovalPolicy = (typeof APPROVAL_POLICIES)[number];
+
+export const TASK_ACCESS_MODES = [
+  "auth",
+  "third-party",
+] as const;
+
+export type TaskAccessMode = (typeof TASK_ACCESS_MODES)[number];
 
 export const TASK_EVENT_TYPES = [
   "task.received",
@@ -88,7 +100,24 @@ export interface TaskOptions {
   reasoning?: ReasoningLevel;
   memoryMode?: MemoryMode;
   sandboxMode?: SandboxMode;
+  webSearchMode?: WebSearchMode;
+  networkAccessEnabled?: boolean;
   approvalPolicy?: ApprovalPolicy;
+  accessMode?: TaskAccessMode;
+  thirdPartyProviderId?: string;
+  additionalDirectories?: string[];
+}
+
+export interface SessionTaskSettings {
+  accessMode?: TaskAccessMode;
+  model?: string;
+  reasoning?: ReasoningLevel;
+  approvalPolicy?: ApprovalPolicy;
+  sandboxMode?: SandboxMode;
+  webSearchMode?: WebSearchMode;
+  networkAccessEnabled?: boolean;
+  thirdPartyProviderId?: string;
+  thirdPartyModel?: string;
 }
 
 export interface TaskRequest {
