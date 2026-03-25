@@ -20,6 +20,7 @@ import {
   type WebSearchMode,
 } from "../../types/index.js";
 import { FeishuAdapter } from "./adapter.js";
+import { renderFeishuAssistantMessage, type FeishuRenderedMessageDraft } from "./message-renderer.js";
 import { FeishuSessionStore, type FeishuConversationKey } from "./session-store.js";
 import type { FeishuDeliveryMessage, FeishuTaskPayload } from "./types.js";
 
@@ -303,9 +304,11 @@ export class FeishuChannelService {
     const sessionId = this.sessionStore.ensureActiveSessionId(conversationKey);
     const taskLease = await this.acquireSessionTaskLease(sessionId);
     const bridge = new FeishuTaskMessageBridge({
-      createText: async (text) => this.createTextMessage(context.chatId, text),
-      updateText: async (messageId, text) => this.updateTextMessage(messageId, text),
-      sendText: async (text) => this.safeSendText(context.chatId, text),
+      createText: async (text) => this.createAssistantMessage(context.chatId, text),
+      updateText: async (messageId, text) => this.updateAssistantMessage(messageId, text),
+      sendText: async (text) => {
+        await this.createAssistantMessage(context.chatId, text);
+      },
     });
     const router = new InMemoryCommunicationRouter();
     const adapter = new FeishuAdapter({
@@ -850,15 +853,64 @@ export class FeishuChannelService {
     chatId: string,
     text: string,
   ): Promise<FeishuMessageMutationResponse> {
-    const client = this.client;
     const normalizedText = normalizeText(text);
 
-    if (!client || !normalizedText) {
+    if (!normalizedText) {
       throw new Error("飞书客户端未就绪，或消息内容为空。");
     }
 
     if (splitForFeishuText(normalizedText).length > 1) {
       throw new Error("消息内容过长，无法作为单条飞书文本消息发送。");
+    }
+
+    return this.createMessage(chatId, {
+      msgType: "text",
+      content: JSON.stringify({ text: normalizedText }),
+    });
+  }
+
+  private async updateTextMessage(
+    messageId: string,
+    text: string,
+  ): Promise<FeishuMessageMutationResponse> {
+    const normalizedText = normalizeText(text);
+
+    if (!normalizedText) {
+      throw new Error("飞书客户端未就绪，或消息内容为空。");
+    }
+
+    if (splitForFeishuText(normalizedText).length > 1) {
+      throw new Error("消息内容过长，无法作为单条飞书文本消息更新。");
+    }
+
+    return this.updateMessage(messageId, {
+      msgType: "text",
+      content: JSON.stringify({ text: normalizedText }),
+    });
+  }
+
+  private async createAssistantMessage(
+    chatId: string,
+    text: string,
+  ): Promise<FeishuMessageMutationResponse> {
+    return this.createMessage(chatId, renderFeishuAssistantMessage(text));
+  }
+
+  private async updateAssistantMessage(
+    messageId: string,
+    text: string,
+  ): Promise<FeishuMessageMutationResponse> {
+    return this.updateMessage(messageId, renderFeishuAssistantMessage(text));
+  }
+
+  private async createMessage(
+    chatId: string,
+    draft: FeishuRenderedMessageDraft,
+  ): Promise<FeishuMessageMutationResponse> {
+    const client = this.client;
+
+    if (!client) {
+      throw new Error("飞书客户端未就绪，或消息内容为空。");
     }
 
     return client.im.v1.message.create({
@@ -867,25 +919,20 @@ export class FeishuChannelService {
       },
       data: {
         receive_id: chatId,
-        msg_type: "text",
-        content: JSON.stringify({ text: normalizedText }),
+        msg_type: draft.msgType,
+        content: draft.content,
       },
     });
   }
 
-  private async updateTextMessage(
+  private async updateMessage(
     messageId: string,
-    text: string,
+    draft: FeishuRenderedMessageDraft,
   ): Promise<FeishuMessageMutationResponse> {
     const client = this.client;
-    const normalizedText = normalizeText(text);
 
-    if (!client || !normalizedText) {
+    if (!client) {
       throw new Error("飞书客户端未就绪，或消息内容为空。");
-    }
-
-    if (splitForFeishuText(normalizedText).length > 1) {
-      throw new Error("消息内容过长，无法作为单条飞书文本消息更新。");
     }
 
     return client.im.v1.message.update({
@@ -893,8 +940,8 @@ export class FeishuChannelService {
         message_id: messageId,
       },
       data: {
-        msg_type: "text",
-        content: JSON.stringify({ text: normalizedText }),
+        msg_type: draft.msgType,
+        content: draft.content,
       },
     });
   }
@@ -923,9 +970,9 @@ class FeishuTaskMessageBridge {
   private readonly createText: (text: string) => Promise<FeishuMessageMutationResponse>;
   private readonly updateText: (messageId: string, text: string) => Promise<FeishuMessageMutationResponse>;
   private readonly sendText: (text: string) => Promise<void>;
-  private primaryMessageId: string | null = null;
-  private primaryMessageText: string | null = null;
-  private primaryMessageUpdatable = true;
+  private lastProgressMessageId: string | null = null;
+  private lastProgressText: string | null = null;
+  private lastProgressUpdatable = false;
 
   constructor(options: {
     createText: (text: string) => Promise<FeishuMessageMutationResponse>;
@@ -989,7 +1036,7 @@ class FeishuTaskMessageBridge {
         return;
       }
 
-      await this.deliverTerminalText(text);
+      await this.deliverCompletedText(text);
       return;
     }
 
@@ -1002,78 +1049,92 @@ class FeishuTaskMessageBridge {
   }
 
   private async deliverProgressText(text: string): Promise<void> {
-    const chunks = splitForFeishuText(text);
-
-    if (!chunks.length) {
-      return;
-    }
-
-    const [firstChunk] = chunks;
-
-    if (!firstChunk) {
-      return;
-    }
-
-    const primaryText = chunks.length === 1
-      ? `${firstChunk}\n\n处理中...`
-      : `${firstChunk}\n\n处理中，完整内容会在结束后补全。`;
-
-    await this.upsertPrimaryMessage(primaryText);
-  }
-
-  private async deliverTerminalText(text: string): Promise<void> {
-    const chunks = splitForFeishuText(text);
-
-    if (!chunks.length) {
-      return;
-    }
-
-    const [firstChunk, ...remainingChunks] = chunks;
-
-    if (!firstChunk) {
-      return;
-    }
-
-    await this.upsertPrimaryMessage(firstChunk);
-
-    for (const chunk of remainingChunks) {
-      await this.sendText(chunk);
-    }
-  }
-
-  private async upsertPrimaryMessage(text: string): Promise<void> {
     const normalizedText = normalizeText(text);
 
     if (!normalizedText) {
       return;
     }
 
-    if (this.primaryMessageText === normalizedText) {
+    const sent = await this.sendStandaloneMessage(normalizedText);
+    this.lastProgressText = normalizedText;
+    this.lastProgressMessageId = sent.messageId;
+    this.lastProgressUpdatable = sent.updatable;
+  }
+
+  private async deliverCompletedText(text: string): Promise<void> {
+    const normalizedText = normalizeText(text);
+
+    if (!normalizedText) {
       return;
     }
 
-    if (!this.primaryMessageUpdatable) {
-      await this.sendText(normalizedText);
-      this.primaryMessageText = normalizedText;
+    if (normalizedText === this.lastProgressText) {
+      await this.refreshLastProgressMessage(normalizedText);
       return;
     }
 
-    if (this.primaryMessageId) {
-      await this.updateText(this.primaryMessageId, normalizedText);
-      this.primaryMessageText = normalizedText;
+    await this.sendStandaloneMessage(normalizedText);
+  }
+
+  private async deliverTerminalText(text: string): Promise<void> {
+    const normalizedText = normalizeText(text);
+
+    if (!normalizedText) {
       return;
     }
 
-    const created = await this.createText(normalizedText);
+    await this.sendStandaloneMessage(normalizedText);
+  }
+
+  private async refreshLastProgressMessage(text: string): Promise<void> {
+    if (!this.lastProgressMessageUpdatable()) {
+      return;
+    }
+
+    const chunks = splitForFeishuText(text);
+    const [firstChunk] = chunks;
+
+    if (!firstChunk || !this.lastProgressMessageId) {
+      return;
+    }
+
+    await this.updateText(this.lastProgressMessageId, firstChunk);
+  }
+
+  private async sendStandaloneMessage(text: string): Promise<{ messageId: string | null; updatable: boolean }> {
+    const chunks = splitForFeishuText(text);
+
+    if (!chunks.length) {
+      return {
+        messageId: null,
+        updatable: false,
+      };
+    }
+
+    const [firstChunk, ...remainingChunks] = chunks;
+
+    if (!firstChunk) {
+      return {
+        messageId: null,
+        updatable: false,
+      };
+    }
+
+    const created = await this.createText(firstChunk);
     const messageId = normalizeText(created.data?.message_id);
-    this.primaryMessageText = normalizedText;
 
-    if (!messageId) {
-      this.primaryMessageUpdatable = false;
-      return;
+    for (const chunk of remainingChunks) {
+      await this.sendText(chunk);
     }
 
-    this.primaryMessageId = messageId;
+    return {
+      messageId,
+      updatable: Boolean(messageId),
+    };
+  }
+
+  private lastProgressMessageUpdatable(): boolean {
+    return Boolean(this.lastProgressUpdatable && this.lastProgressMessageId);
   }
 }
 
