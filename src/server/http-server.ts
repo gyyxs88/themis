@@ -29,6 +29,7 @@ import {
 import { handleTaskRun, handleTaskStream } from "./http-task-handlers.js";
 import {
   handleThirdPartyCapabilityWriteback,
+  handleThirdPartyEndpointProbe,
   handleThirdPartyModelCreate,
   handleThirdPartyProbe,
   handleThirdPartyProviderCreate,
@@ -72,6 +73,10 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/runtime/third-party/codex-task-support") {
         return handleThirdPartyCapabilityWriteback(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/runtime/third-party/providers/endpoint-probe") {
+        return handleThirdPartyEndpointProbe(request, response, runtime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/runtime/third-party/providers") {

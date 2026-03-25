@@ -103,6 +103,7 @@ export function createModeSwitchController(app) {
       appliedSelection.provider?.id || "",
       appliedSelection.model?.model || appliedSelection.modelId || "",
     );
+    app.thirdPartyEndpointProbe.clearIfProviderChanged(appliedSelection.provider?.id || "");
 
     const activeThread = store.getActiveThread();
     app.runtime.modeSwitchDraft = buildDraftState(

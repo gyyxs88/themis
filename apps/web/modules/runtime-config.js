@@ -37,13 +37,29 @@ function createDefaultAccessMode(id = "") {
   };
 }
 
+function createDefaultModelCapabilities(supportsCodexTasks = true) {
+  return {
+    textInput: true,
+    imageInput: false,
+    supportsCodexTasks,
+    supportsReasoningSummaries: false,
+    supportsVerbosity: false,
+    supportsParallelToolCalls: false,
+    supportsSearchTool: false,
+    supportsImageDetailOriginal: false,
+  };
+}
+
 function createDefaultThirdPartyProvider() {
   return {
     id: "",
     type: "",
     name: "",
     baseUrl: "",
+    endpointCandidates: [],
     source: "",
+    wireApi: "",
+    supportsWebsockets: null,
     lockedModel: false,
     defaultModel: "",
     models: [],
@@ -145,6 +161,8 @@ function normalizeModel(value) {
     return null;
   }
 
+  const capabilities = normalizeModelCapabilities(value, value.supportsCodexTasks !== false);
+
   return {
     id: normalizeOptionalText(value.id) || model,
     model,
@@ -155,8 +173,10 @@ function normalizeModel(value) {
       ? value.supportedReasoningEfforts.map(normalizeReasoningOption).filter(Boolean)
       : [],
     defaultReasoningEffort: normalizeOptionalText(value.defaultReasoningEffort),
+    contextWindow: normalizeOptionalNumber(value.contextWindow ?? value.context_window),
+    capabilities,
     supportsPersonality: Boolean(value.supportsPersonality),
-    supportsCodexTasks: value.supportsCodexTasks !== false,
+    supportsCodexTasks: capabilities.supportsCodexTasks,
     isDefault: Boolean(value.isDefault),
   };
 }
@@ -188,6 +208,67 @@ function normalizeOptionalText(value) {
 
 function normalizeOptionalBoolean(value) {
   return typeof value === "boolean" ? value : null;
+}
+
+function normalizeTextArray(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => normalizeOptionalText(entry))
+    .filter(Boolean);
+}
+
+function normalizeOptionalNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function normalizeModelCapabilities(value, fallbackSupportsCodexTasks = true) {
+  const source = isRecord(value?.capabilities) ? value.capabilities : {};
+  const supportsCodexTasks = normalizeOptionalBoolean(source.supportsCodexTasks)
+    ?? normalizeOptionalBoolean(value?.supportsCodexTasks)
+    ?? fallbackSupportsCodexTasks;
+
+  return {
+    ...createDefaultModelCapabilities(supportsCodexTasks),
+    ...(normalizeOptionalBoolean(source.textInput) !== null
+      ? { textInput: Boolean(source.textInput) }
+      : normalizeOptionalBoolean(value?.textInput) !== null
+        ? { textInput: Boolean(value.textInput) }
+        : {}),
+    ...(normalizeOptionalBoolean(source.imageInput) !== null
+      ? { imageInput: Boolean(source.imageInput) }
+      : normalizeOptionalBoolean(value?.imageInput) !== null
+        ? { imageInput: Boolean(value.imageInput) }
+        : {}),
+    supportsCodexTasks,
+    ...(normalizeOptionalBoolean(source.supportsReasoningSummaries) !== null
+      ? { supportsReasoningSummaries: Boolean(source.supportsReasoningSummaries) }
+      : normalizeOptionalBoolean(value?.supportsReasoningSummaries) !== null
+        ? { supportsReasoningSummaries: Boolean(value.supportsReasoningSummaries) }
+      : {}),
+    ...(normalizeOptionalBoolean(source.supportsVerbosity) !== null
+      ? { supportsVerbosity: Boolean(source.supportsVerbosity) }
+      : normalizeOptionalBoolean(value?.supportsVerbosity) !== null
+        ? { supportsVerbosity: Boolean(value.supportsVerbosity) }
+        : {}),
+    ...(normalizeOptionalBoolean(source.supportsParallelToolCalls) !== null
+      ? { supportsParallelToolCalls: Boolean(source.supportsParallelToolCalls) }
+      : normalizeOptionalBoolean(value?.supportsParallelToolCalls) !== null
+        ? { supportsParallelToolCalls: Boolean(value.supportsParallelToolCalls) }
+      : {}),
+    ...(normalizeOptionalBoolean(source.supportsSearchTool) !== null
+      ? { supportsSearchTool: Boolean(source.supportsSearchTool) }
+      : normalizeOptionalBoolean(value?.supportsSearchTool) !== null
+        ? { supportsSearchTool: Boolean(value.supportsSearchTool) }
+        : {}),
+    ...(normalizeOptionalBoolean(source.supportsImageDetailOriginal) !== null
+      ? { supportsImageDetailOriginal: Boolean(source.supportsImageDetailOriginal) }
+      : normalizeOptionalBoolean(value?.supportsImageDetailOriginal) !== null
+        ? { supportsImageDetailOriginal: Boolean(value.supportsImageDetailOriginal) }
+      : {}),
+  };
 }
 
 function normalizeProvider(value) {
@@ -266,7 +347,10 @@ function normalizeThirdPartyProvider(value) {
     type: normalizeOptionalText(value.type),
     name: normalizeOptionalText(value.name) || id,
     baseUrl: normalizeOptionalText(value.baseUrl),
+    endpointCandidates: normalizeTextArray(value.endpointCandidates),
     source: normalizeOptionalText(value.source),
+    wireApi: normalizeOptionalText(value.wireApi),
+    supportsWebsockets: normalizeOptionalBoolean(value.supportsWebsockets),
     lockedModel: Boolean(value.lockedModel),
     defaultModel: fallbackDefaultModel,
     models,

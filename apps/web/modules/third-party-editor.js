@@ -4,6 +4,7 @@ function createDefaultProviderForm() {
     name: "",
     baseUrl: "",
     apiKey: "",
+    endpointCandidates: "",
     wireApi: "responses",
     supportsWebsockets: false,
   };
@@ -19,6 +20,11 @@ function createDefaultModelForm(providerId = "") {
     contextWindow: "",
     supportsCodexTasks: true,
     imageInput: false,
+    supportsSearchTool: false,
+    supportsParallelToolCalls: false,
+    supportsVerbosity: false,
+    supportsReasoningSummaries: false,
+    supportsImageDetailOriginal: false,
     setAsDefault: true,
   };
 }
@@ -32,6 +38,17 @@ export function createDefaultThirdPartyEditorState() {
     providerForm: createDefaultProviderForm(),
     modelForm: createDefaultModelForm(),
   };
+}
+
+function normalizeEndpointCandidatesText(value) {
+  if (typeof value !== "string") {
+    return [];
+  }
+
+  return value
+    .split(/\r?\n/g)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 export function createThirdPartyEditorController(app) {
@@ -119,7 +136,7 @@ export function createThirdPartyEditorController(app) {
   function handleProviderFormChange(event) {
     const target = event.target;
 
-    if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) {
+    if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement)) {
       return;
     }
 
@@ -182,7 +199,10 @@ export function createThirdPartyEditorController(app) {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(state.providerForm),
+        body: JSON.stringify({
+          ...state.providerForm,
+          endpointCandidates: normalizeEndpointCandidatesText(state.providerForm.endpointCandidates),
+        }),
       });
       const data = await app.utils.safeReadJson(response);
 
@@ -254,6 +274,7 @@ export function createThirdPartyEditorController(app) {
 
     if (!thread) {
       app.thirdPartyProbe.clear();
+      app.thirdPartyEndpointProbe.clear();
       return;
     }
 
@@ -262,6 +283,7 @@ export function createThirdPartyEditorController(app) {
       thirdPartyModel: model || "",
     });
     app.thirdPartyProbe.clearIfSelectionChanged(providerId || "", model || "");
+    app.thirdPartyEndpointProbe.clearIfProviderChanged(providerId || "");
   }
 
   function resolveCurrentProviderId() {

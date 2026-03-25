@@ -19,6 +19,7 @@ export function createActions(app) {
     app.auth.bindControls();
     app.modeSwitch.bindControls();
     app.thirdPartyEditor.bindControls();
+    app.thirdPartyEndpointProbe.bindControls();
     app.thirdPartyProbe.bindControls();
     bindWorkspaceControls();
     composerActions.bindLifecycleEvents();

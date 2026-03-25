@@ -9,6 +9,10 @@ import { createDefaultModeSwitchDraftState, createModeSwitchController } from ".
 import { createDefaultRuntimeConfigState, createRuntimeConfigController } from "./modules/runtime-config.js";
 import { createSessionSettingsController } from "./modules/session-settings.js";
 import { createStore } from "./modules/store.js";
+import {
+  createDefaultThirdPartyEndpointProbeState,
+  createThirdPartyEndpointProbeController,
+} from "./modules/third-party-endpoint-probe.js";
 import { createDefaultThirdPartyEditorState, createThirdPartyEditorController } from "./modules/third-party-editor.js";
 import { createDefaultThirdPartyProbeState, createThirdPartyProbeController } from "./modules/third-party-probe.js";
 import { createRenderer } from "./modules/ui.js";
@@ -39,6 +43,7 @@ const app = {
     runtimeConfig: createDefaultRuntimeConfigState(),
     modeSwitchDraft: createDefaultModeSwitchDraftState(),
     thirdPartyEditor: createDefaultThirdPartyEditorState(),
+    thirdPartyEndpointProbe: createDefaultThirdPartyEndpointProbeState(),
     thirdPartyProbe: createDefaultThirdPartyProbeState(),
   },
 };
@@ -53,6 +58,7 @@ app.runtimeConfig = createRuntimeConfigController(app);
 app.sessionSettings = createSessionSettingsController(app);
 app.modeSwitch = createModeSwitchController(app);
 app.thirdPartyEditor = createThirdPartyEditorController(app);
+app.thirdPartyEndpointProbe = createThirdPartyEndpointProbeController(app);
 app.thirdPartyProbe = createThirdPartyProbeController(app);
 app.actions = createActions(app);
 

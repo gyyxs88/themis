@@ -443,6 +443,15 @@
                       </select>
                     </label>
 
+                    <div class="settings-inline-actions">
+                      <button id="third-party-endpoint-probe-button" type="button" class="ghost-button">检测端点并自动选主地址</button>
+                      <p class="settings-inline-copy">会批量检查当前主端点和候选端点，优先挑健康且最快的地址。</p>
+                    </div>
+
+                    <p id="third-party-endpoint-probe-note" class="settings-section-copy settings-probe-note">
+                      供应商只填一个 Base URL 时，也可以先接起来；如果你有多个候选入口，建议在下面的供应商表单里一起维护。
+                    </p>
+
                     <label class="settings-field">
                       <span>第三方模型</span>
                       <select id="third-party-model-select">
@@ -728,6 +737,16 @@
                   </label>
 
                   <label class="settings-field">
+                    <span>候选端点（可选，每行一个）</span>
+                    <textarea
+                      id="third-party-provider-endpoint-candidates-input"
+                      name="endpointCandidates"
+                      rows="4"
+                      placeholder="https://gateway-a.example.com/v1&#10;https://gateway-b.example.com/v1"
+                    ></textarea>
+                  </label>
+
+                  <label class="settings-field">
                     <span>Wire API</span>
                     <select id="third-party-provider-wire-api-select" name="wireApi">
                       <option value="responses">responses</option>
@@ -803,10 +822,39 @@
                   </label>
 
                   <label class="settings-checkbox">
+                    <input id="third-party-model-search-input" name="supportsSearchTool" type="checkbox" />
+                    <span>声明支持搜索工具</span>
+                  </label>
+
+                  <label class="settings-checkbox">
+                    <input id="third-party-model-parallel-tools-input" name="supportsParallelToolCalls" type="checkbox" />
+                    <span>声明支持并行工具调用</span>
+                  </label>
+
+                  <label class="settings-checkbox">
+                    <input id="third-party-model-verbosity-input" name="supportsVerbosity" type="checkbox" />
+                    <span>声明支持 verbosity</span>
+                  </label>
+
+                  <label class="settings-checkbox">
+                    <input id="third-party-model-reasoning-summary-input" name="supportsReasoningSummaries" type="checkbox" />
+                    <span>声明支持 reasoning summary</span>
+                  </label>
+
+                  <label class="settings-checkbox">
+                    <input id="third-party-model-image-detail-input" name="supportsImageDetailOriginal" type="checkbox" />
+                    <span>声明支持原图细节</span>
+                  </label>
+
+                  <label class="settings-checkbox">
                     <input id="third-party-model-default-input" name="setAsDefault" type="checkbox" checked />
                     <span>设为这个供应商的默认模型</span>
                   </label>
                 </div>
+
+                <p class="settings-section-copy">
+                  这些能力字段首先是“模型契约声明”。除 Codex 任务发送守卫外，其它能力位目前更偏向画像和提示，不等于 Themis 已全部端到端打通。
+                </p>
 
                 <div class="settings-submodal-actions">
                   <button id="third-party-model-submit-button" type="submit" class="toolbar-button">保存模型</button>

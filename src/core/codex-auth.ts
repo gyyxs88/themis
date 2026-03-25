@@ -88,15 +88,17 @@ interface AuthAccountRuntimeState {
 export class CodexAuthRuntime {
   private readonly workingDirectory: string;
   private readonly registry: SqliteCodexSessionRegistry;
-  private readonly providerProfile: OpenAICompatibleProviderSummary | null;
   private readonly accountStates = new Map<string, AuthAccountRuntimeState>();
   private operationChain: Promise<unknown> = Promise.resolve();
 
   constructor(options: CodexAuthRuntimeOptions = {}) {
     this.workingDirectory = options.workingDirectory ?? process.cwd();
     this.registry = options.registry ?? new SqliteCodexSessionRegistry();
-    this.providerProfile = readOpenAICompatibleProviderSummary(this.workingDirectory);
     ensureAuthAccountBootstrap(this.workingDirectory, this.registry);
+  }
+
+  readThirdPartyProviderProfile(): OpenAICompatibleProviderSummary | null {
+    return readOpenAICompatibleProviderSummary(this.workingDirectory, this.registry);
   }
 
   listAccounts(): CodexAuthAccountSummary[] {
@@ -341,7 +343,7 @@ export class CodexAuthRuntime {
       ...status,
       pendingLogin: this.getPendingLoginSnapshot(state),
       lastError: state.lastError,
-      providerProfile: this.providerProfile,
+      providerProfile: this.readThirdPartyProviderProfile(),
     };
   }
 

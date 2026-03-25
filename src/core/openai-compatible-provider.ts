@@ -41,6 +41,7 @@ export interface OpenAICompatibleProviderConfig {
   name: string;
   baseUrl: string;
   apiKey: string;
+  endpointCandidates: string[];
   defaultModel: string | null;
   wireApi: "responses" | "chat";
   supportsWebsockets: boolean;
@@ -64,6 +65,7 @@ export interface OpenAICompatibleProviderCreateInput {
   name: string;
   baseUrl: string;
   apiKey: string;
+  endpointCandidates?: string[];
   wireApi?: "responses" | "chat";
   supportsWebsockets?: boolean;
 }
@@ -91,6 +93,7 @@ interface ProviderEntryPayload {
   name?: unknown;
   baseUrl?: unknown;
   apiKey?: unknown;
+  endpointCandidates?: unknown;
   defaultModel?: unknown;
   wireApi?: unknown;
   supportsWebsockets?: unknown;
@@ -130,6 +133,7 @@ interface WritableProviderEntry {
   name: string;
   baseUrl: string;
   apiKey: string;
+  endpointCandidates?: string[];
   defaultModel?: string;
   wireApi: "responses" | "chat";
   supportsWebsockets: boolean;
@@ -223,6 +227,7 @@ export function addOpenAICompatibleProvider(
     name: normalized.name,
     baseUrl: normalized.baseUrl,
     apiKey: normalized.apiKey,
+    endpointCandidatesJson: JSON.stringify(normalized.endpointCandidates),
     wireApi: normalized.wireApi,
     supportsWebsockets: normalized.supportsWebsockets,
     createdAt: now,
@@ -289,10 +294,12 @@ export function writeOpenAICompatibleProviderCodexTaskSupport(
   }
 
   const providerRegistry = getWritableProviderRegistry(cwd, registry);
+  const storedProvider = providerRegistry.listThirdPartyProviders()
+    .find((entry) => entry.providerId === normalizedProviderId);
   const provider = readProviderConfigsFromDatabase(cwd, providerRegistry)
     .find((entry) => entry.id === normalizedProviderId);
 
-  if (!provider) {
+  if (!storedProvider || !provider) {
     throw new Error(`当前第三方供应商 ${normalizedProviderId} 不可用。`);
   }
 
@@ -317,11 +324,60 @@ export function writeOpenAICompatibleProviderCodexTaskSupport(
   return findProviderConfig(cwd, normalizedProviderId, providerRegistry);
 }
 
+export function writeOpenAICompatibleProviderPreferredEndpoint(
+  cwd: string,
+  providerId: string,
+  preferredBaseUrl: string,
+  registry?: SqliteCodexSessionRegistry,
+): OpenAICompatibleProviderConfig {
+  const normalizedProviderId = normalizeRequiredText(providerId);
+  const normalizedBaseUrl = normalizeRequiredText(preferredBaseUrl);
+
+  if (!normalizedProviderId || !normalizedBaseUrl) {
+    throw new Error("写回主端点时缺少 providerId 或 baseUrl。");
+  }
+
+  const providerRegistry = getWritableProviderRegistry(cwd, registry);
+  const storedProvider = providerRegistry.listThirdPartyProviders()
+    .find((entry) => entry.providerId === normalizedProviderId);
+  const provider = readProviderConfigsFromDatabase(cwd, providerRegistry)
+    .find((entry) => entry.id === normalizedProviderId);
+
+  if (!storedProvider || !provider) {
+    throw new Error(`当前第三方供应商 ${normalizedProviderId} 不可用。`);
+  }
+
+  const nextEndpoints = reorderProviderEndpoints(provider.baseUrl, provider.endpointCandidates, normalizedBaseUrl);
+  const now = new Date().toISOString();
+
+  providerRegistry.saveThirdPartyProvider({
+    providerId: provider.id,
+    name: provider.name,
+    baseUrl: nextEndpoints.baseUrl,
+    apiKey: provider.apiKey,
+    endpointCandidatesJson: JSON.stringify(nextEndpoints.endpointCandidates),
+    ...(provider.defaultModel ? { defaultModel: provider.defaultModel } : {}),
+    wireApi: provider.wireApi,
+    supportsWebsockets: provider.supportsWebsockets,
+    ...(storedProvider.modelCatalogPath ? { modelCatalogPath: storedProvider.modelCatalogPath } : {}),
+    createdAt: storedProvider.createdAt,
+    updatedAt: now,
+  });
+
+  return findProviderConfig(cwd, normalizedProviderId, providerRegistry);
+}
+
+export function buildOpenAICompatibleProviderEndpointPool(provider: Pick<OpenAICompatibleProviderConfig, "baseUrl" | "endpointCandidates">): string[] {
+  return normalizeEndpointCandidates([provider.baseUrl, ...provider.endpointCandidates]);
+}
+
 function readProviderConfigFromEnv(): OpenAICompatibleProviderConfig | null {
   const baseUrl = normalizeRequiredText(process.env.THEMIS_OPENAI_COMPAT_BASE_URL);
   const apiKey = normalizeRequiredText(process.env.THEMIS_OPENAI_COMPAT_API_KEY);
   const model = normalizeRequiredText(process.env.THEMIS_OPENAI_COMPAT_MODEL);
   const name = normalizeOptionalText(process.env.THEMIS_OPENAI_COMPAT_NAME) || "OpenAI-Compatible Provider";
+  const endpointCandidates = normalizeEndpointCandidates(process.env.THEMIS_OPENAI_COMPAT_ENDPOINT_CANDIDATES)
+    .filter((entry) => entry !== baseUrl);
   const wireApi = normalizeWireApi(process.env.THEMIS_OPENAI_COMPAT_WIRE_API) ?? "responses";
   const supportsWebsockets = normalizeOptionalBoolean(process.env.THEMIS_OPENAI_COMPAT_SUPPORTS_WEBSOCKETS) ?? false;
   const configuredModelCatalogPath = normalizeOptionalText(process.env.THEMIS_OPENAI_COMPAT_MODEL_CATALOG_JSON);
@@ -330,6 +386,7 @@ function readProviderConfigFromEnv(): OpenAICompatibleProviderConfig | null {
       || apiKey
       || model
       || process.env.THEMIS_OPENAI_COMPAT_NAME
+      || process.env.THEMIS_OPENAI_COMPAT_ENDPOINT_CANDIDATES
       || process.env.THEMIS_OPENAI_COMPAT_WIRE_API
       || process.env.THEMIS_OPENAI_COMPAT_SUPPORTS_WEBSOCKETS
       || configuredModelCatalogPath,
@@ -350,6 +407,7 @@ function readProviderConfigFromEnv(): OpenAICompatibleProviderConfig | null {
     name,
     baseUrl,
     apiKey,
+    endpointCandidates,
     defaultModel: model,
     wireApi,
     supportsWebsockets,
@@ -487,6 +545,7 @@ function ensureProviderConfigBootstrap(cwd: string, registry: SqliteCodexSession
       name: provider.name,
       baseUrl: provider.baseUrl,
       apiKey: provider.apiKey,
+      endpointCandidatesJson: JSON.stringify(normalizeEndpointCandidates(provider.endpointCandidates ?? [])),
       ...(normalizeOptionalText(provider.defaultModel) ? { defaultModel: normalizeOptionalText(provider.defaultModel) } : {}),
       wireApi: provider.wireApi,
       supportsWebsockets: provider.supportsWebsockets,
@@ -560,6 +619,7 @@ function normalizeStoredProviderConfig(
     name: provider.name,
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
+    endpointCandidates: normalizeEndpointCandidates(parseJsonValue(provider.endpointCandidatesJson)),
     defaultModel: provider.defaultModel ?? models.find((entry) => entry.isDefault)?.model ?? models[0]?.model ?? null,
     wireApi: provider.wireApi,
     supportsWebsockets: provider.supportsWebsockets,
@@ -631,6 +691,9 @@ function normalizeWritableProviderEntry(value: unknown, index: number): Writable
     name,
     baseUrl: normalizeRequiredText(payload.baseUrl),
     apiKey: normalizeRequiredText(payload.apiKey),
+    ...(normalizeEndpointCandidates(payload.endpointCandidates).length
+      ? { endpointCandidates: normalizeEndpointCandidates(payload.endpointCandidates) }
+      : {}),
     ...(normalizeOptionalText(payload.defaultModel) ? { defaultModel: normalizeOptionalText(payload.defaultModel) } : {}),
     wireApi: normalizeWireApi(payload.wireApi) ?? "responses",
     supportsWebsockets: normalizeOptionalBoolean(payload.supportsWebsockets) ?? false,
@@ -673,6 +736,7 @@ function normalizeProviderCreateInput(input: OpenAICompatibleProviderCreateInput
   const name = normalizeRequiredText(input.name);
   const baseUrl = normalizeRequiredText(input.baseUrl);
   const apiKey = normalizeRequiredText(input.apiKey);
+  const endpointCandidates = normalizeEndpointCandidates(input.endpointCandidates).filter((entry) => entry !== baseUrl);
 
   if (!name || !baseUrl || !apiKey) {
     throw new Error("添加供应商时必须填写名称、Base URL 和 API Key。");
@@ -683,6 +747,7 @@ function normalizeProviderCreateInput(input: OpenAICompatibleProviderCreateInput
     name,
     baseUrl,
     apiKey,
+    endpointCandidates,
     wireApi: input.wireApi === "chat" ? "chat" : "responses",
     supportsWebsockets: input.supportsWebsockets === true,
   };
@@ -758,6 +823,47 @@ function normalizeProviderId(value: unknown): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 64);
+}
+
+function normalizeEndpointCandidates(value: unknown): string[] {
+  const rawValues = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[\n,]+/g)
+      : [];
+
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const entry of rawValues) {
+    const endpoint = normalizeRequiredText(entry);
+
+    if (!endpoint || seen.has(endpoint)) {
+      continue;
+    }
+
+    seen.add(endpoint);
+    normalized.push(endpoint);
+  }
+
+  return normalized;
+}
+
+function reorderProviderEndpoints(
+  currentBaseUrl: string,
+  endpointCandidates: string[],
+  preferredBaseUrl: string,
+): {
+  baseUrl: string;
+  endpointCandidates: string[];
+} {
+  const pool = normalizeEndpointCandidates([currentBaseUrl, ...endpointCandidates, preferredBaseUrl]);
+  const baseUrl = normalizeRequiredText(preferredBaseUrl) || normalizeRequiredText(currentBaseUrl);
+
+  return {
+    baseUrl,
+    endpointCandidates: pool.filter((entry) => entry !== baseUrl),
+  };
 }
 
 function normalizeReasoningLevels(value: unknown): string[] {

@@ -1665,9 +1665,7 @@ function truncateText(text: string, maxLength: number): string {
 
 async function ensureAuthAvailable(authRuntime: CodexAuthRuntime, request: TaskRequest): Promise<void> {
   if (request.options?.accessMode === "third-party") {
-    const auth = await authRuntime.readSnapshot(request.options?.authAccountId);
-
-    if (auth.providerProfile?.type === "openai-compatible") {
+    if (authRuntime.readThirdPartyProviderProfile()?.type === "openai-compatible") {
       return;
     }
 

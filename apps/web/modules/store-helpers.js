@@ -15,6 +15,29 @@ export function createStoreHelpers({ app, getState, saveState }) {
     reviewer: "审查官",
   };
 
+  function createDefaultModelCapabilities(supportsCodexTasks = true) {
+    return {
+      textInput: true,
+      imageInput: false,
+      supportsCodexTasks,
+      supportsReasoningSummaries: false,
+      supportsVerbosity: false,
+      supportsParallelToolCalls: false,
+      supportsSearchTool: false,
+      supportsImageDetailOriginal: false,
+    };
+  }
+
+  function getThirdPartyModelCapabilities(model) {
+    const supportsCodexTasks = model?.supportsCodexTasks !== false;
+
+    return {
+      ...createDefaultModelCapabilities(supportsCodexTasks),
+      ...(model?.capabilities && typeof model.capabilities === "object" ? model.capabilities : {}),
+      supportsCodexTasks,
+    };
+  }
+
   function buildTaskOptions(settings) {
     const effective = resolveEffectiveSettings(settings);
     const activeModel = effective.accessMode === "third-party" ? effective.thirdPartyModel : effective.model;
@@ -531,6 +554,8 @@ export function createStoreHelpers({ app, getState, saveState }) {
     description = "当前线程记录的模型，没有出现在 Codex 当前返回的模型列表中。",
     supportsCodexTasks = true,
   ) {
+    const capabilities = createDefaultModelCapabilities(supportsCodexTasks);
+
     return {
       id: modelId,
       model: modelId,
@@ -539,8 +564,10 @@ export function createStoreHelpers({ app, getState, saveState }) {
       hidden: false,
       supportedReasoningEfforts: DEFAULT_REASONING_OPTIONS,
       defaultReasoningEffort: "",
+      contextWindow: null,
+      capabilities,
       supportsPersonality: false,
-      supportsCodexTasks,
+      supportsCodexTasks: capabilities.supportsCodexTasks,
       isDefault: false,
     };
   }
@@ -631,16 +658,85 @@ export function createStoreHelpers({ app, getState, saveState }) {
       && settings.sandboxMode !== "danger-full-access";
   }
 
+  function resolveThirdPartyWebSearchWarning(settings, resolvedModel = null) {
+    const effectiveSettings = resolveEffectiveSettings(settings);
+
+    if (effectiveSettings.accessMode !== "third-party") {
+      return "";
+    }
+
+    const selection = resolveThirdPartySelection(settings);
+    const model = resolvedModel ?? selection.model;
+
+    if (!model) {
+      return "";
+    }
+
+    const capabilities = getThirdPartyModelCapabilities(model);
+
+    if (effectiveSettings.webSearchMode && effectiveSettings.webSearchMode !== "disabled" && !capabilities.supportsSearchTool) {
+      return "当前会话开启了联网搜索，但这个模型未声明支持 search tool";
+    }
+
+    return "";
+  }
+
+  function applyThirdPartyWebSearchConstraint(settings, patch = {}) {
+    const merged = {
+      ...settings,
+      ...patch,
+    };
+    const effectiveSettings = resolveEffectiveSettings(merged);
+
+    if (effectiveSettings.accessMode !== "third-party") {
+      return {
+        patch,
+        message: "",
+      };
+    }
+
+    const selection = resolveThirdPartySelection(merged);
+    const model = selection.model;
+
+    if (!model) {
+      return {
+        patch,
+        message: "",
+      };
+    }
+
+    const capabilities = getThirdPartyModelCapabilities(model);
+    const hasWebSearchEnabled = effectiveSettings.webSearchMode && effectiveSettings.webSearchMode !== "disabled";
+
+    if (!hasWebSearchEnabled || capabilities.supportsSearchTool) {
+      return {
+        patch,
+        message: "",
+      };
+    }
+
+    return {
+      patch: {
+        ...patch,
+        webSearchMode: "disabled",
+      },
+      message: "当前第三方模型未声明支持 search tool，已自动关闭联网搜索。",
+    };
+  }
+
   return {
     buildTaskOptions,
     getVisibleModels,
     getThirdPartyProviders,
     getThirdPartyModels,
+    getThirdPartyModelCapabilities,
     getReasoningOptions,
+    applyThirdPartyWebSearchConstraint,
     describeAssistantStyle,
     resolveAssistantDisplayLabel,
     resolveAccessMode,
     resolveThirdPartySelection,
+    resolveThirdPartyWebSearchWarning,
     resolveInheritedSettings,
     resolveEffectiveSettings,
     shouldBootstrapThread,

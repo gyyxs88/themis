@@ -9,6 +9,17 @@ export interface CodexRuntimeReasoningOption {
   description: string;
 }
 
+export interface CodexRuntimeModelCapabilities {
+  textInput: boolean;
+  imageInput: boolean;
+  supportsCodexTasks: boolean;
+  supportsReasoningSummaries: boolean;
+  supportsVerbosity: boolean;
+  supportsParallelToolCalls: boolean;
+  supportsSearchTool: boolean;
+  supportsImageDetailOriginal: boolean;
+}
+
 export interface CodexRuntimeModel {
   id: string;
   model: string;
@@ -17,6 +28,8 @@ export interface CodexRuntimeModel {
   hidden: boolean;
   supportedReasoningEfforts: CodexRuntimeReasoningOption[];
   defaultReasoningEffort: string | null;
+  contextWindow: number | null;
+  capabilities: CodexRuntimeModelCapabilities;
   supportsPersonality: boolean;
   supportsCodexTasks: boolean;
   isDefault: boolean;
@@ -58,7 +71,10 @@ export interface CodexRuntimeThirdPartyProvider {
   type: "openai-compatible";
   name: string;
   baseUrl: string | null;
+  endpointCandidates: string[];
   source: "env" | "db" | null;
+  wireApi: "responses" | "chat" | null;
+  supportsWebsockets: boolean | null;
   lockedModel: boolean;
   defaultModel: string | null;
   models: CodexRuntimeModel[];
@@ -476,6 +492,12 @@ function normalizeRuntimeModel(value: unknown): CodexRuntimeModel | null {
     return null;
   }
 
+  const supportsCodexTasks = normalizeCapabilityBoolean(
+    value.supportsCodexTasks,
+    value.supports_codex_tasks,
+  ) ?? true;
+  const capabilities = normalizeRuntimeModelCapabilities(value, supportsCodexTasks);
+
   return {
     id: normalizeOptionalText(value.id) ?? model,
     model,
@@ -484,8 +506,10 @@ function normalizeRuntimeModel(value: unknown): CodexRuntimeModel | null {
     hidden: Boolean(value.hidden),
     supportedReasoningEfforts: normalizeReasoningOptions(value.supportedReasoningEfforts),
     defaultReasoningEffort: normalizeOptionalText(value.defaultReasoningEffort),
+    contextWindow: normalizePositiveNumber(value.contextWindow ?? value.context_window),
+    capabilities,
     supportsPersonality: Boolean(value.supportsPersonality),
-    supportsCodexTasks: true,
+    supportsCodexTasks: capabilities.supportsCodexTasks,
     isDefault: Boolean(value.isDefault),
   };
 }
@@ -516,6 +540,8 @@ function normalizeReasoningOptions(value: unknown): CodexRuntimeReasoningOption[
 }
 
 function createSyntheticConfiguredModel(model: string, reasoning: string | null): CodexRuntimeModel {
+  const capabilities = createDefaultRuntimeModelCapabilities(true);
+
   return {
     id: model,
     model,
@@ -524,10 +550,87 @@ function createSyntheticConfiguredModel(model: string, reasoning: string | null)
     hidden: false,
     supportedReasoningEfforts: [...DEFAULT_REASONING_OPTIONS],
     defaultReasoningEffort: reasoning,
+    contextWindow: null,
+    capabilities,
     supportsPersonality: false,
-    supportsCodexTasks: true,
+    supportsCodexTasks: capabilities.supportsCodexTasks,
     isDefault: false,
   };
+}
+
+function createDefaultRuntimeModelCapabilities(supportsCodexTasks: boolean): CodexRuntimeModelCapabilities {
+  return {
+    textInput: true,
+    imageInput: false,
+    supportsCodexTasks,
+    supportsReasoningSummaries: false,
+    supportsVerbosity: false,
+    supportsParallelToolCalls: false,
+    supportsSearchTool: false,
+    supportsImageDetailOriginal: false,
+  };
+}
+
+function normalizeRuntimeModelCapabilities(
+  value: Record<string, unknown>,
+  supportsCodexTasks: boolean,
+): CodexRuntimeModelCapabilities {
+  const defaults = createDefaultRuntimeModelCapabilities(supportsCodexTasks);
+  const inputModalities = normalizeInputModalities(value.inputModalities ?? value.input_modalities);
+  const textInput = inputModalities.length
+    ? inputModalities.includes("text")
+    : normalizeCapabilityBoolean(value.textInput, value.text_input) ?? defaults.textInput;
+  const imageInput = inputModalities.includes("image")
+    || (normalizeCapabilityBoolean(value.imageInput, value.image_input) ?? defaults.imageInput);
+
+  return {
+    textInput,
+    imageInput,
+    supportsCodexTasks,
+    supportsReasoningSummaries: normalizeCapabilityBoolean(
+      value.supportsReasoningSummaries,
+      value.supports_reasoning_summaries,
+    ) ?? defaults.supportsReasoningSummaries,
+    supportsVerbosity: normalizeCapabilityBoolean(
+      value.supportsVerbosity,
+      value.support_verbosity,
+      value.supports_verbosity,
+    ) ?? defaults.supportsVerbosity,
+    supportsParallelToolCalls: normalizeCapabilityBoolean(
+      value.supportsParallelToolCalls,
+      value.supports_parallel_tool_calls,
+    ) ?? defaults.supportsParallelToolCalls,
+    supportsSearchTool: normalizeCapabilityBoolean(
+      value.supportsSearchTool,
+      value.supports_search_tool,
+    ) ?? defaults.supportsSearchTool,
+    supportsImageDetailOriginal: normalizeCapabilityBoolean(
+      value.supportsImageDetailOriginal,
+      value.supports_image_detail_original,
+    ) ?? defaults.supportsImageDetailOriginal,
+  };
+}
+
+function normalizeInputModalities(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => normalizeOptionalText(entry)?.toLowerCase() ?? null)
+    .filter((entry): entry is string => entry !== null);
+}
+
+function normalizeCapabilityBoolean(...values: unknown[]): boolean | null {
+  for (const value of values) {
+    const normalized = normalizeBoolean(value);
+
+    if (normalized !== null) {
+      return normalized;
+    }
+  }
+
+  return null;
 }
 
 function resolveCodexBinary(): string {

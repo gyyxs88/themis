@@ -386,10 +386,23 @@ export class CodexTaskRuntime {
     }
 
     const configuredModel = providerConfig.models.find((entry) => entry.model === requestedModel);
-    const supportsCodexTasks = configuredModel?.profile?.capabilities.supportsCodexTasks;
+    const capabilities = configuredModel?.profile?.capabilities;
+    const supportsCodexTasks = capabilities?.supportsCodexTasks;
 
     if (supportsCodexTasks === false) {
       throw new Error("当前第三方模型未声明支持 Codex agent 任务，已阻止发送。请在设置中更换模型，或把该模型的 Codex 任务能力明确标记为可用后再试。");
+    }
+
+    const webSearchMode = request.options?.webSearchMode;
+
+    if (webSearchMode && webSearchMode !== "disabled" && capabilities?.supportsSearchTool !== true) {
+      throw new Error("当前第三方模型未声明支持 search tool，已阻止发送。请先把联网搜索改成 disabled，或更换为明确支持该能力的模型。");
+    }
+
+    const hasImageAttachment = request.attachments?.some((attachment) => attachment.type === "image") ?? false;
+
+    if (hasImageAttachment && capabilities?.imageInput !== true) {
+      throw new Error("当前第三方模型未声明支持图片输入，已阻止发送。请先移除图片附件，或更换为明确支持该能力的模型。");
     }
   }
 
@@ -720,7 +733,10 @@ function createThirdPartyProviderCatalog(
     type: "openai-compatible",
     name: providerConfig.name,
     baseUrl: providerConfig.baseUrl,
+    endpointCandidates: [...providerConfig.endpointCandidates],
     source: providerConfig.source,
+    wireApi: providerConfig.wireApi,
+    supportsWebsockets: providerConfig.supportsWebsockets,
     lockedModel: providerConfig.source === "env",
     defaultModel: providerConfig.defaultModel,
     models,
@@ -752,6 +768,17 @@ function createProviderRuntimeModel(
       description: reasoningEffort,
     })),
     defaultReasoningEffort: defaultReasoning,
+    contextWindow: modelProfile?.contextWindow ?? null,
+    capabilities: {
+      textInput: modelProfile?.capabilities.textInput ?? true,
+      imageInput: modelProfile?.capabilities.imageInput ?? false,
+      supportsCodexTasks: modelProfile?.capabilities.supportsCodexTasks ?? true,
+      supportsReasoningSummaries: modelProfile?.capabilities.supportsReasoningSummaries ?? false,
+      supportsVerbosity: modelProfile?.capabilities.supportsVerbosity ?? false,
+      supportsParallelToolCalls: modelProfile?.capabilities.supportsParallelToolCalls ?? false,
+      supportsSearchTool: modelProfile?.capabilities.supportsSearchTool ?? false,
+      supportsImageDetailOriginal: modelProfile?.capabilities.supportsImageDetailOriginal ?? false,
+    },
     supportsPersonality: false,
     supportsCodexTasks: modelProfile?.capabilities.supportsCodexTasks ?? true,
     isDefault: providerModel.model === providerConfig.defaultModel,

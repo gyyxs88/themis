@@ -101,13 +101,14 @@ export function createRenderer(app) {
     renderReasoningSelect(settings, effectiveSettings);
     dom.approvalSelect.value = effectiveSettings.approvalPolicy ?? "";
     renderSandboxSelect(effectiveSettings);
-    renderWebSearchSelect(effectiveSettings);
+    renderWebSearchSelect(settings, effectiveSettings);
     renderNetworkAccessSelect(effectiveSettings);
     renderAssistantStyleNote(effectiveSettings);
     renderRuntimeConfigNote(settings, effectiveSettings);
     renderConversationLinkState(thread);
     renderIdentityState();
     renderThirdPartyNotes(settings, effectiveSettings);
+    renderThirdPartyEndpointProbeState(settings);
     renderThirdPartyProbeState(settings);
     renderThirdPartyProbeWritebackState(settings);
     renderAuthState();
@@ -167,6 +168,7 @@ export function createRenderer(app) {
     dom.thirdPartyProviderNameInput.value = editor.providerForm.name;
     dom.thirdPartyProviderBaseUrlInput.value = editor.providerForm.baseUrl;
     dom.thirdPartyProviderApiKeyInput.value = editor.providerForm.apiKey;
+    dom.thirdPartyProviderEndpointCandidatesInput.value = editor.providerForm.endpointCandidates;
     dom.thirdPartyProviderWireApiSelect.value = editor.providerForm.wireApi;
     dom.thirdPartyProviderWebsocketInput.checked = Boolean(editor.providerForm.supportsWebsockets);
 
@@ -183,6 +185,11 @@ export function createRenderer(app) {
     dom.thirdPartyModelDescriptionInput.value = editor.modelForm.description;
     dom.thirdPartyModelSupportsCodexInput.checked = Boolean(editor.modelForm.supportsCodexTasks);
     dom.thirdPartyModelImageInput.checked = Boolean(editor.modelForm.imageInput);
+    dom.thirdPartyModelSearchInput.checked = Boolean(editor.modelForm.supportsSearchTool);
+    dom.thirdPartyModelParallelToolsInput.checked = Boolean(editor.modelForm.supportsParallelToolCalls);
+    dom.thirdPartyModelVerbosityInput.checked = Boolean(editor.modelForm.supportsVerbosity);
+    dom.thirdPartyModelReasoningSummaryInput.checked = Boolean(editor.modelForm.supportsReasoningSummaries);
+    dom.thirdPartyModelImageDetailInput.checked = Boolean(editor.modelForm.supportsImageDetailOriginal);
     dom.thirdPartyModelDefaultInput.checked = Boolean(editor.modelForm.setAsDefault);
   }
 
@@ -361,8 +368,28 @@ export function createRenderer(app) {
     dom.sandboxSelect.value = effectiveSettings.sandboxMode ?? "";
   }
 
-  function renderWebSearchSelect(effectiveSettings) {
-    dom.webSearchSelect.value = effectiveSettings.webSearchMode ?? "";
+  function renderWebSearchSelect(settings, effectiveSettings) {
+    const selection = store.resolveThirdPartySelection(settings);
+    const searchSupported = effectiveSettings.accessMode !== "third-party"
+      || !selection.model
+      || store.getThirdPartyModelCapabilities(selection.model).supportsSearchTool;
+
+    Array.from(dom.webSearchSelect.options).forEach((option) => {
+      if (!(option instanceof HTMLOptionElement)) {
+        return;
+      }
+
+      if (searchSupported) {
+        option.disabled = false;
+        return;
+      }
+
+      option.disabled = option.value !== "disabled";
+    });
+
+    dom.webSearchSelect.value = searchSupported
+      ? effectiveSettings.webSearchMode ?? ""
+      : "disabled";
   }
 
   function renderNetworkAccessSelect(effectiveSettings) {
@@ -446,20 +473,42 @@ export function createRenderer(app) {
     const providerParts = [`当前可用供应商：${selection.provider.name}。`];
 
     if (selection.provider.baseUrl) {
-      providerParts.push(`上游地址：${selection.provider.baseUrl}。`);
+      providerParts.push(`当前主端点：${selection.provider.baseUrl}。`);
+    }
+
+    if (selection.provider.endpointCandidates?.length) {
+      providerParts.push(`候选端点：${selection.provider.endpointCandidates.length} 个。`);
     }
 
     if (selection.provider.source) {
       providerParts.push(`配置来源：${describeThirdPartyProviderSource(selection.provider.source)}。`);
     }
 
+    if (selection.provider.wireApi) {
+      providerParts.push(`兼容通道：${selection.provider.wireApi}。`);
+    }
+
+    if (typeof selection.provider.supportsWebsockets === "boolean") {
+      providerParts.push(`WebSocket 流式：${selection.provider.supportsWebsockets ? "开启" : "关闭"}。`);
+    }
+
     dom.thirdPartyProviderNote.textContent = providerParts.join(" ");
 
     if (effectiveSettings.thirdPartyModel) {
-      const taskSupportNote = selection.model?.supportsCodexTasks === false
-        ? " 该模型当前未声明支持 Codex agent 任务，Themis 会阻止直接发送。"
-        : "";
-      dom.thirdPartyModelNote.textContent = `当前第三方模型：${effectiveSettings.thirdPartyModel}。这项设置只影响第三方模式的后续任务。${taskSupportNote}`;
+      const modelParts = [`当前第三方模型：${effectiveSettings.thirdPartyModel}。`];
+
+      if (selection.model?.contextWindow) {
+        modelParts.push(`上下文窗口：${formatLargeNumber(selection.model.contextWindow)}。`);
+      }
+
+      modelParts.push(`声明能力：${describeThirdPartyModelCapabilities(selection.model)}。`);
+
+      if (selection.model?.supportsCodexTasks === false) {
+        modelParts.push("这个模型当前未声明支持 Codex agent 任务，Themis 会直接阻止发送。");
+      }
+
+      modelParts.push("当前除了 Codex 任务守卫外，联网搜索和明确不支持图片输入的模型也会被前后端收紧；其它能力位仍主要用于模型画像和提示。");
+      dom.thirdPartyModelNote.textContent = modelParts.join(" ");
       return;
     }
 
@@ -472,9 +521,16 @@ export function createRenderer(app) {
       const providerName = selection.provider?.name || "第三方兼容供应商";
       const modelName = effectiveSettings.thirdPartyModel || selection.modelId || "默认模型";
       const supportText = selection.model?.supportsCodexTasks === false
-        ? " 但这个模型当前未声明支持 Codex agent 任务，不能直接用于 Themis 执行。"
-        : " 这种模式不依赖 ChatGPT 认证。";
-      dom.accessModeNote.textContent = `当前会话会通过 ${providerName} 发送任务，模型 ${modelName}。${supportText}`;
+        ? "这个模型当前未声明支持 Codex agent 任务，不能直接用于 Themis 执行。"
+        : "这种模式不依赖 ChatGPT 认证。";
+      const capabilityText = selection.model ? `已声明：${describeThirdPartyModelCapabilities(selection.model, true)}。` : "";
+      const warningText = buildThirdPartyModelRuntimeWarnings(selection.model, settings);
+      dom.accessModeNote.textContent = [
+        `当前会话会通过 ${providerName} 发送任务，模型 ${modelName}。`,
+        supportText,
+        capabilityText,
+        warningText ? `注意：${warningText}` : "",
+      ].filter(Boolean).join(" ");
       return;
     }
 
@@ -508,6 +564,41 @@ export function createRenderer(app) {
     return source || "未知";
   }
 
+  function getThirdPartyModelCapabilities(model) {
+    return store.getThirdPartyModelCapabilities(model);
+  }
+
+  function describeThirdPartyModelCapabilities(model, compact = false) {
+    if (!model) {
+      return compact ? "缺少能力画像" : "当前只记录了模型名，还没有能力画像";
+    }
+
+    const capabilities = getThirdPartyModelCapabilities(model);
+    const separator = compact ? "，" : "；";
+
+    return [
+      `Codex 任务${capabilities.supportsCodexTasks ? "支持" : "未声明"}`,
+      `图片输入${capabilities.imageInput ? "支持" : "未声明"}`,
+      `搜索工具${capabilities.supportsSearchTool ? "支持" : "未声明"}`,
+      `并行工具${capabilities.supportsParallelToolCalls ? "支持" : "未声明"}`,
+      `verbosity${capabilities.supportsVerbosity ? "支持" : "未声明"}`,
+      `reasoning summary${capabilities.supportsReasoningSummaries ? "支持" : "未声明"}`,
+      `原图细节${capabilities.supportsImageDetailOriginal ? "支持" : "未声明"}`,
+    ].join(separator);
+  }
+
+  function buildThirdPartyModelRuntimeWarnings(model, settings) {
+    return store.resolveThirdPartyWebSearchWarning(settings, model);
+  }
+
+  function formatLargeNumber(value) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+      return "";
+    }
+
+    return new Intl.NumberFormat("zh-CN").format(value);
+  }
+
   function renderThirdPartyProbeState(settings) {
     const selection = store.resolveThirdPartySelection(settings);
     const probe = app.runtime.thirdPartyProbe;
@@ -536,6 +627,45 @@ export function createRenderer(app) {
     const commandNote = probe.observedCommand ? ` 观察到的命令：${probe.observedCommand}` : "";
     const previewNote = probe.outputPreview ? ` 输出预览：${probe.outputPreview}` : "";
     dom.thirdPartyProbeNote.textContent = `${probe.summary}${checkedAt} ${probe.detail}${commandNote}${previewNote}`.trim();
+  }
+
+  function renderThirdPartyEndpointProbeState(settings) {
+    const selection = store.resolveThirdPartySelection(settings);
+    const probe = app.runtime.thirdPartyEndpointProbe;
+    const matchesProvider = probe.providerId === (selection.provider?.id || "");
+
+    dom.thirdPartyEndpointProbeButton.textContent = probe.status === "loading" && matchesProvider
+      ? "正在检测端点..."
+      : matchesProvider && probe.checkedAt
+        ? "重新检测端点"
+        : "检测端点并自动选主地址";
+
+    dom.thirdPartyEndpointProbeNote.dataset.state = matchesProvider
+      ? probe.status === "healthy"
+        ? "supported"
+        : probe.status || "idle"
+      : "idle";
+
+    if (!selection.provider) {
+      dom.thirdPartyEndpointProbeNote.textContent = "先选好供应商，再检测它的主端点和候选端点。";
+      return;
+    }
+
+    if (!matchesProvider || probe.status === "idle") {
+      dom.thirdPartyEndpointProbeNote.textContent = "按钮会批量检查当前主端点和候选端点，优先把健康且最快的地址提升为主端点。";
+      return;
+    }
+
+    const checkedAt = probe.checkedAt ? ` 检测时间：${utils.formatRelativeTime(probe.checkedAt)}。` : "";
+    const selectedNote = probe.selectedBaseUrl ? ` 当前选中的主端点：${probe.selectedBaseUrl}。` : "";
+    const latencyNote = typeof probe.fastestHealthyLatencyMs === "number"
+      ? ` 最快健康时延：${probe.fastestHealthyLatencyMs}ms。`
+      : "";
+    const failedCount = probe.results.filter((entry) => entry.ok === false).length;
+    const failedNote = failedCount ? ` 本次有 ${failedCount} 个端点未通过健康检查。` : "";
+    const persistedNote = probe.persistedMessage ? ` ${probe.persistedMessage}` : "";
+
+    dom.thirdPartyEndpointProbeNote.textContent = `${probe.summary}${checkedAt} ${probe.detail}${selectedNote}${latencyNote}${failedNote}${persistedNote}`.trim();
   }
 
   function renderThirdPartyProbeWritebackState(settings) {
@@ -840,8 +970,10 @@ export function createRenderer(app) {
     });
     const authMessage = buildComposerAuthNote({
       auth,
+      settings,
       accessMode: store.resolveAccessMode(settings),
       thirdPartySelection: store.resolveThirdPartySelection(settings),
+      effectiveSettings: store.resolveEffectiveSettings(settings),
     });
     const message = [transientMessage, pendingInterruptMessage, runningMessage, authMessage].filter(Boolean).join(" ");
     const visible = Boolean(message);
@@ -917,6 +1049,9 @@ export function createRenderer(app) {
     dom.thirdPartyAddProviderButton.disabled = editorBusy;
     dom.thirdPartyAddModelButton.disabled = editorBusy || !store.getThirdPartyProviders().length;
     dom.thirdPartyProviderSelect.disabled = controlsBusy || !store.getThirdPartyProviders().length;
+    dom.thirdPartyEndpointProbeButton.disabled = controlsBusy
+      || app.runtime.thirdPartyEndpointProbe.status === "loading"
+      || !thirdPartySelection.provider;
     dom.thirdPartyModelSelect.disabled = controlsBusy || !thirdPartySelection.provider || !store.getThirdPartyModels(settings).length;
     dom.thirdPartyProbeButton.disabled = controlsBusy
       || app.runtime.thirdPartyProbe.status === "loading"
@@ -936,6 +1071,7 @@ export function createRenderer(app) {
     dom.thirdPartyProviderNameInput.disabled = editorBusy;
     dom.thirdPartyProviderBaseUrlInput.disabled = editorBusy;
     dom.thirdPartyProviderApiKeyInput.disabled = editorBusy;
+    dom.thirdPartyProviderEndpointCandidatesInput.disabled = editorBusy;
     dom.thirdPartyProviderWireApiSelect.disabled = editorBusy;
     dom.thirdPartyProviderWebsocketInput.disabled = editorBusy;
     dom.thirdPartyProviderSubmitButton.disabled = editorBusy;
@@ -948,6 +1084,11 @@ export function createRenderer(app) {
     dom.thirdPartyModelDescriptionInput.disabled = editorBusy;
     dom.thirdPartyModelSupportsCodexInput.disabled = editorBusy;
     dom.thirdPartyModelImageInput.disabled = editorBusy;
+    dom.thirdPartyModelSearchInput.disabled = editorBusy;
+    dom.thirdPartyModelParallelToolsInput.disabled = editorBusy;
+    dom.thirdPartyModelVerbosityInput.disabled = editorBusy;
+    dom.thirdPartyModelReasoningSummaryInput.disabled = editorBusy;
+    dom.thirdPartyModelImageDetailInput.disabled = editorBusy;
     dom.thirdPartyModelDefaultInput.disabled = editorBusy;
     dom.thirdPartyModelSubmitButton.disabled = editorBusy || !store.getThirdPartyProviders().length;
     dom.thirdPartyModelCancelButton.disabled = thirdPartyEditor.submitting;
@@ -1140,7 +1281,7 @@ function buildAuthStatusNote(auth) {
   );
 }
 
-function buildComposerAuthNote({ auth, accessMode, thirdPartySelection }) {
+function buildComposerAuthNote({ auth, settings, accessMode, thirdPartySelection, effectiveSettings }) {
   if (accessMode === "third-party") {
     if (!thirdPartySelection.provider) {
       return "当前会话切到了第三方模式，但后端还没有可用的第三方兼容供应商。";
@@ -1154,7 +1295,11 @@ function buildComposerAuthNote({ auth, accessMode, thirdPartySelection }) {
       return `当前第三方模型 ${thirdPartySelection.model.model} 未声明支持 Codex agent 任务，Themis 已阻止发送。`;
     }
 
-    return `当前将通过 ${thirdPartySelection.provider.name} 的兼容通道发送，模型 ${thirdPartySelection.model.model}。`;
+    const warningText = buildThirdPartyModelRuntimeWarnings(thirdPartySelection.model, settings);
+
+    return warningText
+      ? `当前将通过 ${thirdPartySelection.provider.name} 的兼容通道发送，模型 ${thirdPartySelection.model.model}。注意：${warningText}。`
+      : `当前将通过 ${thirdPartySelection.provider.name} 的兼容通道发送，模型 ${thirdPartySelection.model.model}。`;
   }
 
   if (auth.status === "loading") {

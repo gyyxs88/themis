@@ -5,6 +5,9 @@ import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import {
   addOpenAICompatibleProvider,
   addOpenAICompatibleProviderModel,
+  buildOpenAICompatibleProviderEndpointPool,
+  readOpenAICompatibleProviderConfigs,
+  writeOpenAICompatibleProviderPreferredEndpoint,
   writeOpenAICompatibleProviderCodexTaskSupport,
 } from "../core/openai-compatible-provider.js";
 import { createTaskError } from "./http-errors.js";
@@ -27,8 +30,13 @@ interface ThirdPartyProviderCreatePayload {
   name?: unknown;
   baseUrl?: unknown;
   apiKey?: unknown;
+  endpointCandidates?: unknown;
   wireApi?: unknown;
   supportsWebsockets?: unknown;
+}
+
+interface ThirdPartyEndpointProbePayload {
+  providerId?: unknown;
 }
 
 interface ThirdPartyModelCreatePayload {
@@ -40,10 +48,16 @@ interface ThirdPartyModelCreatePayload {
   contextWindow?: unknown;
   supportsCodexTasks?: unknown;
   imageInput?: unknown;
+  supportsReasoningSummaries?: unknown;
+  supportsVerbosity?: unknown;
+  supportsParallelToolCalls?: unknown;
+  supportsSearchTool?: unknown;
+  supportsImageDetailOriginal?: unknown;
   setAsDefault?: unknown;
 }
 
 const PROBE_GOAL = "请先执行 shell 命令 `head -n 1 README.md`，然后只回复该命令的标准输出原文。不要猜测，不要解释。如果命令失败，请只回复失败原因。";
+const THIRD_PARTY_ENDPOINT_PROBE_TIMEOUT_MS = 6000;
 
 export async function handleThirdPartyProbe(
   request: IncomingMessage,
@@ -192,6 +206,83 @@ export async function handleThirdPartyCapabilityWriteback(
   }
 }
 
+export async function handleThirdPartyEndpointProbe(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = ((await readJsonBody(request)) ?? {}) as ThirdPartyEndpointProbePayload;
+  const requestedProviderId = normalizeOptionalText(payload.providerId);
+  const providers = readOpenAICompatibleProviderConfigs(process.cwd(), runtime.getRuntimeStore());
+  const provider = requestedProviderId
+    ? providers.find((entry) => entry.id === requestedProviderId) ?? null
+    : providers[0] ?? null;
+
+  if (!provider) {
+    return writeJson(response, 400, {
+      error: {
+        code: "INVALID_REQUEST",
+        message: "当前没有可用的第三方兼容供应商。",
+      },
+    });
+  }
+
+  const endpointPool = buildOpenAICompatibleProviderEndpointPool(provider);
+
+  if (!endpointPool.length) {
+    return writeJson(response, 400, {
+      error: {
+        code: "INVALID_REQUEST",
+        message: "当前供应商没有可探测的端点。",
+      },
+    });
+  }
+
+  const results = await Promise.all(endpointPool.map((endpoint) => probeThirdPartyEndpoint(endpoint, provider.apiKey)));
+  const healthy = results
+    .filter((entry) => entry.ok)
+    .sort((left, right) => left.latencyMs - right.latencyMs);
+  const selectedBaseUrl = healthy[0]?.endpoint ?? provider.baseUrl;
+  let persisted = false;
+  let persistedMessage = "";
+
+  if (healthy.length && provider.source === "db" && selectedBaseUrl !== provider.baseUrl) {
+    writeOpenAICompatibleProviderPreferredEndpoint(
+      process.cwd(),
+      provider.id,
+      selectedBaseUrl,
+      runtime.getRuntimeStore(),
+    );
+    runtime.reloadProviderConfig();
+    persisted = true;
+    persistedMessage = `已经把最快的健康端点 ${selectedBaseUrl} 设为当前主端点。`;
+  } else if (healthy.length && provider.source !== "db") {
+    persistedMessage = "当前供应商来自环境变量，已完成测速，但不会自动写回主端点。";
+  } else if (healthy.length) {
+    persistedMessage = "当前主端点已经是本次测速里最快的健康地址。";
+  }
+
+  const fastestHealthy = healthy[0] ?? null;
+
+  return writeJson(response, 200, {
+    providerId: provider.id,
+    checkedAt: new Date().toISOString(),
+    status: healthy.length ? "healthy" : "error",
+    currentBaseUrl: provider.baseUrl,
+    selectedBaseUrl,
+    persisted,
+    persistedMessage,
+    summary: healthy.length
+      ? "端点检测完成。"
+      : "所有候选端点都没有通过健康检查。",
+    detail: healthy.length
+      ? `本次共检测 ${results.length} 个端点，最快的健康地址是 ${selectedBaseUrl}。`
+      : "这通常意味着当前地址不可达、鉴权失败，或者供应商根本不兼容 OpenAI `/models` 探活方式。",
+    fastestHealthyLatencyMs: fastestHealthy?.latencyMs ?? null,
+    results,
+  });
+}
+
 export async function handleThirdPartyProviderCreate(
   request: IncomingMessage,
   response: ServerResponse,
@@ -204,6 +295,7 @@ export async function handleThirdPartyProviderCreate(
       name: normalizeOptionalText(payload.name),
       baseUrl: normalizeOptionalText(payload.baseUrl),
       apiKey: normalizeOptionalText(payload.apiKey),
+      endpointCandidates: normalizeEndpointCandidates(payload.endpointCandidates),
       wireApi: normalizeWireApi(payload.wireApi) ?? "responses",
       supportsWebsockets: normalizeBoolean(payload.supportsWebsockets) ?? false,
       ...(normalizeOptionalText(payload.id) ? { id: normalizeOptionalText(payload.id) } : {}),
@@ -241,6 +333,17 @@ export async function handleThirdPartyModelCreate(
       capabilities: {
         ...(typeof payload.supportsCodexTasks === "boolean" ? { supportsCodexTasks: payload.supportsCodexTasks } : {}),
         ...(typeof payload.imageInput === "boolean" ? { imageInput: payload.imageInput } : {}),
+        ...(typeof payload.supportsReasoningSummaries === "boolean"
+          ? { supportsReasoningSummaries: payload.supportsReasoningSummaries }
+          : {}),
+        ...(typeof payload.supportsVerbosity === "boolean" ? { supportsVerbosity: payload.supportsVerbosity } : {}),
+        ...(typeof payload.supportsParallelToolCalls === "boolean"
+          ? { supportsParallelToolCalls: payload.supportsParallelToolCalls }
+          : {}),
+        ...(typeof payload.supportsSearchTool === "boolean" ? { supportsSearchTool: payload.supportsSearchTool } : {}),
+        ...(typeof payload.supportsImageDetailOriginal === "boolean"
+          ? { supportsImageDetailOriginal: payload.supportsImageDetailOriginal }
+          : {}),
       },
       ...(normalizeOptionalText(payload.displayName) ? { displayName: normalizeOptionalText(payload.displayName) } : {}),
       ...(normalizeOptionalText(payload.description) ? { description: normalizeOptionalText(payload.description) } : {}),
@@ -293,6 +396,93 @@ function truncateText(value: string, maxLength = 160): string {
   }
 
   return `${normalized.slice(0, maxLength)}...`;
+}
+
+async function probeThirdPartyEndpoint(
+  endpoint: string,
+  apiKey: string,
+): Promise<{
+  endpoint: string;
+  ok: boolean;
+  latencyMs: number;
+  statusCode: number | null;
+  message: string;
+}> {
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, THIRD_PARTY_ENDPOINT_PROBE_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(buildModelsProbeUrl(endpoint), {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: "application/json",
+      },
+      signal: controller.signal,
+    });
+    const latencyMs = Date.now() - startedAt;
+
+    if (response.ok) {
+      return {
+        endpoint,
+        ok: true,
+        latencyMs,
+        statusCode: response.status,
+        message: "探活成功。",
+      };
+    }
+
+    const bodyText = truncateText(await response.text(), 200);
+
+    return {
+      endpoint,
+      ok: false,
+      latencyMs,
+      statusCode: response.status,
+      message: bodyText || `HTTP ${response.status}`,
+    };
+  } catch (error) {
+    return {
+      endpoint,
+      ok: false,
+      latencyMs: Date.now() - startedAt,
+      statusCode: null,
+      message: error instanceof Error ? truncateText(error.message, 200) : String(error),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function buildModelsProbeUrl(baseUrl: string): string {
+  return new URL("models", `${normalizeOptionalText(baseUrl).replace(/\/+$/, "")}/`).toString();
+}
+
+function normalizeEndpointCandidates(value: unknown): string[] {
+  const rawValues = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/\r?\n/g)
+      : [];
+
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const entry of rawValues) {
+    const endpoint = normalizeOptionalText(entry);
+
+    if (!endpoint || seen.has(endpoint)) {
+      continue;
+    }
+
+    seen.add(endpoint);
+    normalized.push(endpoint);
+  }
+
+  return normalized;
 }
 
 function normalizeOptionalText(value: unknown): string {

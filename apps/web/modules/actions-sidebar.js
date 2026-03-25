@@ -55,6 +55,12 @@ export function createSidebarActions(app) {
       }
 
       store.updateThreadSettings(nextSettings);
+      app.thirdPartyEndpointProbe.clearIfProviderChanged(
+        store.resolveThirdPartySelection({
+          ...thread.settings,
+          ...nextSettings,
+        }).provider?.id || "",
+      );
       app.thirdPartyProbe.clearIfSelectionChanged(
         store.resolveThirdPartySelection({
           ...thread.settings,
@@ -188,6 +194,12 @@ export function createSidebarActions(app) {
       }
 
       store.updateThreadSettings(nextSettings);
+      app.thirdPartyEndpointProbe.clearIfProviderChanged(
+        store.resolveThirdPartySelection({
+          ...thread.settings,
+          ...nextSettings,
+        }).provider?.id || "",
+      );
       app.thirdPartyProbe.clearIfSelectionChanged(
         store.resolveThirdPartySelection({
           ...thread.settings,

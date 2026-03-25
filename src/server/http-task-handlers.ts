@@ -187,9 +187,7 @@ function createId(prefix: string): string {
 
 async function ensureAuthAvailable(authRuntime: CodexAuthRuntime, request: TaskRequest): Promise<void> {
   if (request.options?.accessMode === "third-party") {
-    const auth = await authRuntime.readSnapshot();
-
-    if (auth.providerProfile?.type === "openai-compatible") {
+    if (authRuntime.readThirdPartyProviderProfile()?.type === "openai-compatible") {
       return;
     }
 

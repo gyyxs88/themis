@@ -160,11 +160,16 @@ export function createStore(app) {
       return;
     }
 
+    const constrained = helpers.applyThirdPartyWebSearchConstraint(thread.settings, patch);
+
     thread.settings = {
       ...models.createDefaultThreadSettings(),
       ...thread.settings,
-      ...patch,
+      ...constrained.patch,
     };
+    if (constrained.message) {
+      setTransientStatus(thread.id, constrained.message);
+    }
     touchThread(thread.id);
     saveState();
     void app.sessionSettings?.persistThreadSettings(thread.id, thread.settings, { quiet: true });

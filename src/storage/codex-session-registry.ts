@@ -14,7 +14,7 @@ import type {
   TaskResult,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 7;
+const DATABASE_SCHEMA_VERSION = 8;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -162,6 +162,7 @@ export interface StoredThirdPartyProviderRecord {
   name: string;
   baseUrl: string;
   apiKey: string;
+  endpointCandidatesJson: string;
   defaultModel?: string;
   wireApi: "responses" | "chat";
   supportsWebsockets: boolean;
@@ -358,6 +359,7 @@ interface ThirdPartyProviderRow {
   name: string;
   base_url: string;
   api_key: string;
+  endpoint_candidates_json: string | null;
   default_model: string | null;
   wire_api: string;
   supports_websockets: number;
@@ -2175,6 +2177,7 @@ export class SqliteCodexSessionRegistry {
             name,
             base_url,
             api_key,
+            endpoint_candidates_json,
             default_model,
             wire_api,
             supports_websockets,
@@ -2249,6 +2252,7 @@ export class SqliteCodexSessionRegistry {
             name,
             base_url,
             api_key,
+            endpoint_candidates_json,
             default_model,
             wire_api,
             supports_websockets,
@@ -2260,6 +2264,7 @@ export class SqliteCodexSessionRegistry {
             @name,
             @base_url,
             @api_key,
+            @endpoint_candidates_json,
             @default_model,
             @wire_api,
             @supports_websockets,
@@ -2271,6 +2276,7 @@ export class SqliteCodexSessionRegistry {
             name = excluded.name,
             base_url = excluded.base_url,
             api_key = excluded.api_key,
+            endpoint_candidates_json = excluded.endpoint_candidates_json,
             default_model = excluded.default_model,
             wire_api = excluded.wire_api,
             supports_websockets = excluded.supports_websockets,
@@ -2283,6 +2289,7 @@ export class SqliteCodexSessionRegistry {
         name: record.name,
         base_url: record.baseUrl,
         api_key: record.apiKey,
+        endpoint_candidates_json: record.endpointCandidatesJson,
         default_model: record.defaultModel ?? null,
         wire_api: record.wireApi,
         supports_websockets: record.supportsWebsockets ? 1 : 0,
@@ -2586,6 +2593,7 @@ export class SqliteCodexSessionRegistry {
         name TEXT NOT NULL,
         base_url TEXT NOT NULL,
         api_key TEXT NOT NULL,
+        endpoint_candidates_json TEXT NOT NULL DEFAULT '[]',
         default_model TEXT,
         wire_api TEXT NOT NULL DEFAULT 'responses',
         supports_websockets INTEGER NOT NULL DEFAULT 0,
@@ -2638,6 +2646,18 @@ export class SqliteCodexSessionRegistry {
       database.exec(`
         ALTER TABLE themis_auth_accounts
         ADD COLUMN account_email TEXT;
+      `);
+    }
+
+    const thirdPartyProviderColumns = database
+      .prepare(`PRAGMA table_info(themis_third_party_providers)`)
+      .all() as Array<{ name: string }>;
+    const thirdPartyProviderColumnNames = new Set(thirdPartyProviderColumns.map((column) => column.name));
+
+    if (!thirdPartyProviderColumnNames.has("endpoint_candidates_json")) {
+      database.exec(`
+        ALTER TABLE themis_third_party_providers
+        ADD COLUMN endpoint_candidates_json TEXT NOT NULL DEFAULT '[]';
       `);
     }
 
@@ -2846,6 +2866,7 @@ function mapThirdPartyProviderRow(row: ThirdPartyProviderRow): StoredThirdPartyP
     name: row.name,
     baseUrl: row.base_url,
     apiKey: row.api_key,
+    endpointCandidatesJson: row.endpoint_candidates_json ?? "[]",
     ...(row.default_model ? { defaultModel: row.default_model } : {}),
     wireApi: row.wire_api === "chat" ? "chat" : "responses",
     supportsWebsockets: row.supports_websockets === 1,

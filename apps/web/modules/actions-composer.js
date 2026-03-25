@@ -133,6 +133,7 @@ export function createComposerActions(app, streamActions) {
       }
     } else {
       const thirdPartySelection = store.resolveThirdPartySelection(thread.settings);
+      const effectiveSettings = store.resolveEffectiveSettings(thread.settings);
 
       if (!thirdPartySelection.provider) {
         store.setTransientStatus(thread.id, "当前会话切到了第三方模式，但还没有可用的第三方供应商。");
@@ -157,6 +158,17 @@ export function createComposerActions(app, streamActions) {
         );
         app.runtime.workspaceToolsSection = "third-party";
         app.runtime.workspaceToolsOpen = true;
+        app.renderer.renderAll();
+        return;
+      }
+
+      const searchWarning = store.resolveThirdPartyWebSearchWarning(thread.settings, thirdPartySelection.model);
+
+      if (searchWarning) {
+        store.setTransientStatus(thread.id, searchWarning);
+        app.runtime.workspaceToolsSection = "runtime";
+        app.runtime.workspaceToolsOpen = true;
+        dom.webSearchSelect.value = effectiveSettings.webSearchMode || "disabled";
         app.renderer.renderAll();
         return;
       }
