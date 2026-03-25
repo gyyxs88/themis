@@ -20,6 +20,7 @@ export function normalizeSessionTaskSettings(value: unknown): SessionTaskSetting
 
   const profile = normalizeText(value.profile);
   const accessMode = normalizeEnum<TaskAccessMode>(value.accessMode, TASK_ACCESS_MODES);
+  const authAccountId = normalizeText(value.authAccountId);
   const model = normalizeText(value.model);
   const reasoning = normalizeEnum<ReasoningLevel>(value.reasoning, REASONING_LEVELS);
   const approvalPolicy = normalizeEnum<ApprovalPolicy>(value.approvalPolicy, APPROVAL_POLICIES);
@@ -32,6 +33,7 @@ export function normalizeSessionTaskSettings(value: unknown): SessionTaskSetting
   return {
     ...(profile ? { profile } : {}),
     ...(accessMode ? { accessMode } : {}),
+    ...(authAccountId ? { authAccountId } : {}),
     ...(model ? { model } : {}),
     ...(reasoning ? { reasoning } : {}),
     ...(approvalPolicy ? { approvalPolicy } : {}),
@@ -74,6 +76,7 @@ export function buildTaskOptionsFromSessionTaskSettings(
   const options: TaskOptions = {
     ...(normalized.profile ? { profile: normalized.profile } : {}),
     ...(accessMode ? { accessMode } : {}),
+    ...(normalized.authAccountId ? { authAccountId: normalized.authAccountId } : {}),
     ...(model ? { model } : {}),
     ...(normalized.reasoning ? { reasoning: normalized.reasoning } : {}),
     ...(normalized.approvalPolicy ? { approvalPolicy: normalized.approvalPolicy } : {}),

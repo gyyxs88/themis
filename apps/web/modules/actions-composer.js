@@ -119,7 +119,10 @@ export function createComposerActions(app, streamActions) {
     const accessMode = store.resolveAccessMode(thread.settings);
 
     if (accessMode === "auth") {
-      const authCheck = await app.auth.ensureAuthenticated();
+      const effectiveSettings = store.resolveEffectiveSettings(thread.settings);
+      const authCheck = await app.auth.ensureAuthenticated({
+        accountId: effectiveSettings.authAccountId,
+      });
 
       if (!authCheck.ok) {
         store.setTransientStatus(thread.id, authCheck.message);

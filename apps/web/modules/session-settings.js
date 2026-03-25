@@ -100,6 +100,7 @@ function normalizeSessionSettings(settings) {
   return {
     ...(typeof settings.profile === "string" && settings.profile ? { profile: settings.profile } : {}),
     ...(typeof settings.accessMode === "string" && settings.accessMode ? { accessMode: settings.accessMode } : {}),
+    ...(typeof settings.authAccountId === "string" && settings.authAccountId ? { authAccountId: settings.authAccountId } : {}),
     ...(typeof settings.model === "string" && settings.model ? { model: settings.model } : {}),
     ...(typeof settings.reasoning === "string" && settings.reasoning ? { reasoning: settings.reasoning } : {}),
     ...(typeof settings.approvalPolicy === "string" && settings.approvalPolicy ? { approvalPolicy: settings.approvalPolicy } : {}),

@@ -1,6 +1,19 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import {
+  buildCodexCliConfigArgs,
+  buildCodexProcessEnv,
+  copyCodexAuthFile,
+  createCodexAuthStorageConfigOverrides,
+  createManagedAuthAccountRecord,
+  ensureAuthAccountBootstrap,
+  ensureAuthAccountCodexHome,
+  normalizeAuthAccountSummary,
+  resolveDefaultCodexHome,
+  type CodexCliConfigOverrides,
+  type CodexAuthAccountSummary,
+} from "./auth-accounts.js";
+import {
   CodexAppServerSession,
   readCodexAuthStatus,
   readCodexAuthStatusFromSession,
@@ -11,6 +24,7 @@ import {
   readOpenAICompatibleProviderSummary,
   type OpenAICompatibleProviderSummary,
 } from "./openai-compatible-provider.js";
+import { SqliteCodexSessionRegistry, type StoredAuthAccountRecord } from "../storage/index.js";
 
 export interface CodexPendingBrowserLogin {
   provider: "chatgpt";
@@ -32,6 +46,8 @@ export interface CodexPendingDeviceLogin {
 export type CodexPendingLogin = CodexPendingBrowserLogin | CodexPendingDeviceLogin;
 
 export interface CodexAuthSnapshot extends CodexAuthStatus {
+  accountId: string;
+  accountLabel: string;
   pendingLogin: CodexPendingLogin | null;
   lastError: string | null;
   providerProfile: OpenAICompatibleProviderSummary | null;
@@ -39,6 +55,13 @@ export interface CodexAuthSnapshot extends CodexAuthStatus {
 
 export interface CodexAuthRuntimeOptions {
   workingDirectory?: string;
+  registry?: SqliteCodexSessionRegistry;
+}
+
+export interface CodexAuthAccountCreateInput {
+  accountId?: string;
+  label: string;
+  activate?: boolean;
 }
 
 interface AppServerLoginStartResponse {
@@ -56,54 +79,122 @@ interface PendingDeviceLoginSession extends CodexPendingDeviceLogin {
   outputChunks: string[];
 }
 
+interface AuthAccountRuntimeState {
+  pendingBrowserLogin: PendingBrowserLoginSession | null;
+  pendingDeviceLogin: PendingDeviceLoginSession | null;
+  lastError: string | null;
+}
+
 export class CodexAuthRuntime {
   private readonly workingDirectory: string;
+  private readonly registry: SqliteCodexSessionRegistry;
   private readonly providerProfile: OpenAICompatibleProviderSummary | null;
-  private pendingBrowserLogin: PendingBrowserLoginSession | null = null;
-  private pendingDeviceLogin: PendingDeviceLoginSession | null = null;
-  private lastError: string | null = null;
+  private readonly accountStates = new Map<string, AuthAccountRuntimeState>();
   private operationChain: Promise<unknown> = Promise.resolve();
 
   constructor(options: CodexAuthRuntimeOptions = {}) {
     this.workingDirectory = options.workingDirectory ?? process.cwd();
+    this.registry = options.registry ?? new SqliteCodexSessionRegistry();
     this.providerProfile = readOpenAICompatibleProviderSummary(this.workingDirectory);
+    ensureAuthAccountBootstrap(this.workingDirectory, this.registry);
   }
 
-  async readSnapshot(): Promise<CodexAuthSnapshot> {
-    return this.withLock(async () => this.readSnapshotInternal());
+  listAccounts(): CodexAuthAccountSummary[] {
+    ensureAuthAccountBootstrap(this.workingDirectory, this.registry);
+    return this.registry
+      .listAuthAccounts()
+      .filter((record) => this.isVisibleAccountRecord(record))
+      .map(normalizeAuthAccountSummary);
   }
 
-  async startChatgptLogin(): Promise<CodexAuthSnapshot> {
-    return this.withLock(async () => this.startChatgptLoginInternal());
+  getActiveAccount(): CodexAuthAccountSummary | null {
+    ensureAuthAccountBootstrap(this.workingDirectory, this.registry);
+    const record = this.registry
+      .listAuthAccounts()
+      .find((entry) => entry.isActive && this.isVisibleAccountRecord(entry))
+      ?? null;
+    return record ? normalizeAuthAccountSummary(record) : null;
   }
 
-  async startChatgptDeviceLogin(): Promise<CodexAuthSnapshot> {
-    return this.withLock(async () => this.startChatgptDeviceLoginInternal());
+  createAccount(input: CodexAuthAccountCreateInput): CodexAuthAccountSummary {
+    const normalizedLabel = input.label.trim();
+
+    if (!normalizedLabel) {
+      throw new Error("账号名称不能为空。");
+    }
+
+    const record = createManagedAuthAccountRecord(this.workingDirectory, this.registry, {
+      label: normalizedLabel,
+      ...(input.accountId ? { accountId: input.accountId } : {}),
+      activate: input.activate !== false,
+    });
+    ensureAuthAccountCodexHome(this.workingDirectory, record.codexHome);
+    this.registry.saveAuthAccount(record);
+    return normalizeAuthAccountSummary(record);
   }
 
-  async loginWithApiKey(apiKey: string): Promise<CodexAuthSnapshot> {
-    return this.withLock(async () => this.loginWithApiKeyInternal(apiKey));
+  setActiveAccount(accountId: string): CodexAuthAccountSummary {
+    const updated = this.registry.setActiveAuthAccount(accountId);
+
+    if (!updated) {
+      throw new Error(`认证账号 ${accountId} 不存在。`);
+    }
+
+    const record = this.registry.getActiveAuthAccount();
+
+    if (!record) {
+      throw new Error("切换默认账号失败。");
+    }
+
+    return normalizeAuthAccountSummary(record);
   }
 
-  async logout(): Promise<CodexAuthSnapshot> {
-    return this.withLock(async () => this.logoutInternal());
+  async readSnapshot(accountId?: string): Promise<CodexAuthSnapshot> {
+    return this.withLock(async () => {
+      if (typeof accountId === "string" && accountId.trim()) {
+        return await this.readSnapshotInternal(this.resolveAccountRecord(accountId));
+      }
+
+      const syncedAccount = await this.syncDefaultAuthAccount();
+      return await this.readSnapshotInternal(syncedAccount ?? this.resolveAccountRecord());
+    });
   }
 
-  async cancelPendingLogin(): Promise<CodexAuthSnapshot> {
-    return this.withLock(async () => this.cancelPendingLoginInternal());
+  async startChatgptLogin(accountId?: string): Promise<CodexAuthSnapshot> {
+    return this.withLock(async () => this.startChatgptLoginInternal(this.resolveAccountRecord(accountId)));
   }
 
-  private async startChatgptLoginInternal(): Promise<CodexAuthSnapshot> {
-    const current = await this.readSnapshotInternal();
+  async startChatgptDeviceLogin(accountId?: string): Promise<CodexAuthSnapshot> {
+    return this.withLock(async () => this.startChatgptDeviceLoginInternal(this.resolveAccountRecord(accountId)));
+  }
+
+  async loginWithApiKey(apiKey: string, accountId?: string): Promise<CodexAuthSnapshot> {
+    return this.withLock(async () => this.loginWithApiKeyInternal(apiKey, this.resolveAccountRecord(accountId)));
+  }
+
+  async logout(accountId?: string): Promise<CodexAuthSnapshot> {
+    return this.withLock(async () => this.logoutInternal(this.resolveAccountRecord(accountId)));
+  }
+
+  async cancelPendingLogin(accountId?: string): Promise<CodexAuthSnapshot> {
+    return this.withLock(async () => this.cancelPendingLoginInternal(this.resolveAccountRecord(accountId)));
+  }
+
+  private async startChatgptLoginInternal(account: StoredAuthAccountRecord): Promise<CodexAuthSnapshot> {
+    const state = this.getAccountState(account.accountId);
+    const current = await this.readSnapshotInternal(account);
 
     if (current.authenticated || current.pendingLogin?.mode === "browser") {
       return current;
     }
 
-    await this.cancelPendingSessions();
-    this.lastError = null;
+    await this.cancelPendingSessions(state);
+    state.lastError = null;
 
-    const session = new CodexAppServerSession(this.workingDirectory);
+    const session = new CodexAppServerSession(this.workingDirectory, {
+      env: this.buildAccountEnv(account),
+      configOverrides: this.buildAccountConfigOverrides(),
+    });
 
     try {
       await session.initialize();
@@ -119,7 +210,7 @@ export class CodexAuthRuntime {
         throw new Error("Codex 没有返回可用的浏览器登录信息。");
       }
 
-      this.pendingBrowserLogin = {
+      state.pendingBrowserLogin = {
         provider: "chatgpt",
         mode: "browser",
         loginId,
@@ -128,53 +219,57 @@ export class CodexAuthRuntime {
         session,
       };
 
-      return await this.readSnapshotInternal();
+      return await this.readSnapshotInternal(account);
     } catch (error) {
-      this.lastError = toErrorMessage(error);
+      state.lastError = toErrorMessage(error);
       await closeQuietly(session);
       throw error;
     }
   }
 
-  private async startChatgptDeviceLoginInternal(): Promise<CodexAuthSnapshot> {
-    const current = await this.readSnapshotInternal();
+  private async startChatgptDeviceLoginInternal(account: StoredAuthAccountRecord): Promise<CodexAuthSnapshot> {
+    const state = this.getAccountState(account.accountId);
+    const current = await this.readSnapshotInternal(account);
 
     if (current.authenticated || current.pendingLogin?.mode === "device") {
       return current;
     }
 
-    await this.cancelPendingSessions();
-    this.lastError = null;
+    await this.cancelPendingSessions(state);
+    state.lastError = null;
 
     try {
-      this.pendingDeviceLogin = await this.spawnDeviceLoginSession();
-      return await this.readSnapshotInternal();
+      state.pendingDeviceLogin = await this.spawnDeviceLoginSession(account);
+      return await this.readSnapshotInternal(account);
     } catch (error) {
-      this.lastError = toErrorMessage(error);
+      state.lastError = toErrorMessage(error);
       throw error;
     }
   }
 
-  private async loginWithApiKeyInternal(apiKey: string): Promise<CodexAuthSnapshot> {
+  private async loginWithApiKeyInternal(apiKey: string, account: StoredAuthAccountRecord): Promise<CodexAuthSnapshot> {
     const normalizedApiKey = apiKey.trim();
+    const state = this.getAccountState(account.accountId);
 
     if (!normalizedApiKey) {
       throw new Error("API Key 不能为空。");
     }
 
-    await this.cancelPendingSessions();
-    this.lastError = null;
+    await this.cancelPendingSessions(state);
+    state.lastError = null;
 
     try {
       await runCodexCommand(this.workingDirectory, ["login", "--with-api-key"], {
+        env: this.buildAccountEnv(account),
+        configOverrides: this.buildAccountConfigOverrides(),
         stdinText: `${normalizedApiKey}\n`,
       });
     } catch (error) {
-      this.lastError = toErrorMessage(error);
+      state.lastError = toErrorMessage(error);
       throw error;
     }
 
-    const snapshot = await this.readSnapshotInternal();
+    const snapshot = await this.readSnapshotInternal(account);
 
     if (!snapshot.authenticated && snapshot.requiresOpenaiAuth) {
       throw new Error("API Key 登录没有生效，请检查密钥是否正确。");
@@ -183,71 +278,201 @@ export class CodexAuthRuntime {
     return snapshot;
   }
 
-  private async logoutInternal(): Promise<CodexAuthSnapshot> {
-    await this.cancelPendingSessions();
-    this.lastError = null;
+  private async logoutInternal(account: StoredAuthAccountRecord): Promise<CodexAuthSnapshot> {
+    const state = this.getAccountState(account.accountId);
+    await this.cancelPendingSessions(state);
+    state.lastError = null;
 
     try {
-      await runCodexCommand(this.workingDirectory, ["logout"]);
+      await runCodexCommand(this.workingDirectory, ["logout"], {
+        env: this.buildAccountEnv(account),
+        configOverrides: this.buildAccountConfigOverrides(),
+      });
     } catch (error) {
       const message = toErrorMessage(error);
 
       if (!/not logged in/i.test(message)) {
-        this.lastError = message;
+        state.lastError = message;
         throw error;
       }
     }
 
-    return await this.readSnapshotInternal();
+    return await this.readSnapshotInternal(account);
   }
 
-  private async cancelPendingLoginInternal(): Promise<CodexAuthSnapshot> {
-    await this.cancelPendingSessions();
-    return await this.readSnapshotInternal();
+  private async cancelPendingLoginInternal(account: StoredAuthAccountRecord): Promise<CodexAuthSnapshot> {
+    const state = this.getAccountState(account.accountId);
+    await this.cancelPendingSessions(state);
+    return await this.readSnapshotInternal(account);
   }
 
-  private async readSnapshotInternal(): Promise<CodexAuthSnapshot> {
+  private async readSnapshotInternal(account: StoredAuthAccountRecord): Promise<CodexAuthSnapshot> {
+    const state = this.getAccountState(account.accountId);
     let status: CodexAuthStatus;
 
-    if (this.pendingBrowserLogin) {
+    if (state.pendingBrowserLogin) {
       try {
-        status = await readCodexAuthStatusFromSession(this.pendingBrowserLogin.session);
+        status = await readCodexAuthStatusFromSession(state.pendingBrowserLogin.session);
       } catch (error) {
-        this.lastError = toErrorMessage(error);
-        await this.disposeBrowserLoginSession(false);
-        status = await readCodexAuthStatus(this.workingDirectory);
+        state.lastError = toErrorMessage(error);
+        await this.disposeBrowserLoginSession(state, false);
+        status = await readCodexAuthStatus(this.workingDirectory, {
+          env: this.buildAccountEnv(account),
+          configOverrides: this.buildAccountConfigOverrides(),
+        });
       }
     } else {
-      status = await readCodexAuthStatus(this.workingDirectory);
+      status = await readCodexAuthStatus(this.workingDirectory, {
+        env: this.buildAccountEnv(account),
+        configOverrides: this.buildAccountConfigOverrides(),
+      });
     }
 
     if (status.authenticated) {
-      this.lastError = null;
-      await this.disposeBrowserLoginSession(false);
-      await this.disposeDeviceLoginSession(false);
+      account = this.syncAuthenticatedAccountRecord(account, status);
+      state.lastError = null;
+      await this.disposeBrowserLoginSession(state, false);
+      await this.disposeDeviceLoginSession(state, false);
     }
 
     return {
+      accountId: account.accountId,
+      accountLabel: account.label,
       ...status,
-      pendingLogin: this.getPendingLoginSnapshot(),
-      lastError: this.lastError,
+      pendingLogin: this.getPendingLoginSnapshot(state),
+      lastError: state.lastError,
       providerProfile: this.providerProfile,
     };
   }
 
-  private async cancelPendingSessions(): Promise<void> {
-    await this.disposeBrowserLoginSession(true);
-    await this.disposeDeviceLoginSession(true);
+  private async syncDefaultAuthAccount(): Promise<StoredAuthAccountRecord | null> {
+    const defaultCodexHome = resolveDefaultCodexHome();
+    const status = await safeReadAuthStatus(this.workingDirectory, {
+      env: buildCodexProcessEnv(defaultCodexHome),
+      configOverrides: this.buildAccountConfigOverrides(),
+    });
+
+    if (!status?.authenticated) {
+      return null;
+    }
+
+    const accountEmail = normalizeAccountEmail(status.account?.email);
+
+    if (!accountEmail) {
+      return null;
+    }
+
+    const existing = this.registry.getAuthAccountByEmail(accountEmail);
+    const accountLabel = status.account?.email?.trim() || accountEmail;
+
+    if (existing) {
+      return this.activateAuthenticatedAccount(existing, defaultCodexHome, accountEmail, accountLabel);
+    }
+
+    return this.createAuthenticatedManagedAccount(defaultCodexHome, accountEmail, accountLabel);
   }
 
-  private async disposeBrowserLoginSession(cancel: boolean): Promise<void> {
-    const pending = this.pendingBrowserLogin;
+  private syncAuthenticatedAccountRecord(
+    account: StoredAuthAccountRecord,
+    status: CodexAuthStatus,
+  ): StoredAuthAccountRecord {
+    const accountEmail = normalizeAccountEmail(status.account?.email);
+
+    if (!accountEmail) {
+      return account;
+    }
+
+    const existing = this.registry.getAuthAccountByEmail(accountEmail);
+    const accountLabel = status.account?.email?.trim() || accountEmail;
+
+    if (existing && existing.accountId !== account.accountId) {
+      return this.activateAuthenticatedAccount(existing, account.codexHome, accountEmail, accountLabel);
+    }
+
+    if (this.isDefaultSourceAccountRecord(account)) {
+      return this.createAuthenticatedManagedAccount(account.codexHome, accountEmail, accountLabel);
+    }
+
+    const normalizedStoredEmail = normalizeAccountEmail(account.accountEmail);
+
+    if (normalizedStoredEmail && normalizedStoredEmail !== accountEmail) {
+      return this.createAuthenticatedManagedAccount(account.codexHome, accountEmail, accountLabel);
+    }
+
+    return this.updateManagedAccountIdentity(account, accountEmail, accountLabel);
+  }
+
+  private activateAuthenticatedAccount(
+    account: StoredAuthAccountRecord,
+    sourceCodexHome: string,
+    accountEmail: string,
+    accountLabel: string,
+  ): StoredAuthAccountRecord {
+    ensureAuthAccountCodexHome(this.workingDirectory, account.codexHome);
+    copyCodexAuthFile(sourceCodexHome, account.codexHome);
+
+    const updated: StoredAuthAccountRecord = {
+      ...account,
+      label: accountLabel || account.label,
+      accountEmail,
+      isActive: true,
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.registry.saveAuthAccount(updated);
+    return this.registry.getAuthAccount(updated.accountId) ?? updated;
+  }
+
+  private createAuthenticatedManagedAccount(
+    sourceCodexHome: string,
+    accountEmail: string,
+    accountLabel: string,
+  ): StoredAuthAccountRecord {
+    const record = createManagedAuthAccountRecord(this.workingDirectory, this.registry, {
+      label: accountLabel,
+      accountEmail,
+      activate: true,
+    });
+    ensureAuthAccountCodexHome(this.workingDirectory, record.codexHome);
+    copyCodexAuthFile(sourceCodexHome, record.codexHome);
+    this.registry.saveAuthAccount(record);
+    return this.registry.getAuthAccount(record.accountId) ?? record;
+  }
+
+  private updateManagedAccountIdentity(
+    account: StoredAuthAccountRecord,
+    accountEmail: string,
+    accountLabel: string,
+  ): StoredAuthAccountRecord {
+    if (account.label === accountLabel && normalizeAccountEmail(account.accountEmail) === accountEmail && account.isActive) {
+      return account;
+    }
+
+    const updated: StoredAuthAccountRecord = {
+      ...account,
+      label: accountLabel,
+      accountEmail,
+      isActive: true,
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.registry.saveAuthAccount(updated);
+    return this.registry.getAuthAccount(updated.accountId) ?? updated;
+  }
+
+  private async cancelPendingSessions(state: AuthAccountRuntimeState): Promise<void> {
+    await this.disposeBrowserLoginSession(state, true);
+    await this.disposeDeviceLoginSession(state, true);
+  }
+
+  private async disposeBrowserLoginSession(state: AuthAccountRuntimeState, cancel: boolean): Promise<void> {
+    const pending = state.pendingBrowserLogin;
 
     if (!pending) {
       return;
     }
 
-    this.pendingBrowserLogin = null;
+    state.pendingBrowserLogin = null;
 
     if (cancel) {
       try {
@@ -262,14 +487,14 @@ export class CodexAuthRuntime {
     await closeQuietly(pending.session);
   }
 
-  private async disposeDeviceLoginSession(cancel: boolean): Promise<void> {
-    const pending = this.pendingDeviceLogin;
+  private async disposeDeviceLoginSession(state: AuthAccountRuntimeState, cancel: boolean): Promise<void> {
+    const pending = state.pendingDeviceLogin;
 
     if (!pending) {
       return;
     }
 
-    this.pendingDeviceLogin = null;
+    state.pendingDeviceLogin = null;
     pending.canceled = pending.canceled || cancel;
 
     if (!cancel || pending.process.exitCode !== null || pending.process.signalCode !== null) {
@@ -285,23 +510,24 @@ export class CodexAuthRuntime {
     }
   }
 
-  private getPendingLoginSnapshot(): CodexPendingLogin | null {
-    if (this.pendingBrowserLogin) {
-      const { session: _session, ...pending } = this.pendingBrowserLogin;
+  private getPendingLoginSnapshot(state: AuthAccountRuntimeState): CodexPendingLogin | null {
+    if (state.pendingBrowserLogin) {
+      const { session: _session, ...pending } = state.pendingBrowserLogin;
       return pending;
     }
 
-    if (this.pendingDeviceLogin) {
-      const { process: _process, canceled: _canceled, outputChunks: _outputChunks, ...pending } = this.pendingDeviceLogin;
+    if (state.pendingDeviceLogin) {
+      const { process: _process, canceled: _canceled, outputChunks: _outputChunks, ...pending } = state.pendingDeviceLogin;
       return pending;
     }
 
     return null;
   }
 
-  private async spawnDeviceLoginSession(): Promise<PendingDeviceLoginSession> {
-    const child = spawn(resolveCodexCliBinary(), ["login", "--device-auth"], {
+  private async spawnDeviceLoginSession(account: StoredAuthAccountRecord): Promise<PendingDeviceLoginSession> {
+    const child = spawn(resolveCodexCliBinary(), [...buildCodexCliConfigArgs(this.buildAccountConfigOverrides()), "login", "--device-auth"], {
       cwd: this.workingDirectory,
+      env: this.buildAccountEnv(account),
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -390,7 +616,7 @@ export class CodexAuthRuntime {
       child.once("close", (code, signal) => {
         if (activeSession) {
           const session = activeSession;
-          void this.withLock(async () => this.handleDeviceLoginProcessExit(session, code, signal));
+          void this.withLock(async () => this.handleDeviceLoginProcessExit(account, session, code, signal));
           return;
         }
 
@@ -405,35 +631,97 @@ export class CodexAuthRuntime {
   }
 
   private async handleDeviceLoginProcessExit(
+    account: StoredAuthAccountRecord,
     session: PendingDeviceLoginSession,
     code: number | null,
     signal: NodeJS.Signals | null,
   ): Promise<void> {
-    const status = await safeReadAuthStatus(this.workingDirectory);
+    const state = this.getAccountState(account.accountId);
+    const status = await safeReadAuthStatus(this.workingDirectory, {
+      env: this.buildAccountEnv(account),
+      configOverrides: this.buildAccountConfigOverrides(),
+    });
 
     if (status?.authenticated) {
-      if (this.pendingDeviceLogin === session) {
-        this.pendingDeviceLogin = null;
+      if (state.pendingDeviceLogin === session) {
+        state.pendingDeviceLogin = null;
       }
 
-      this.lastError = null;
+      state.lastError = null;
       return;
     }
 
-    if (this.pendingDeviceLogin === session) {
-      this.pendingDeviceLogin = null;
+    if (state.pendingDeviceLogin === session) {
+      state.pendingDeviceLogin = null;
     }
 
     if (session.canceled) {
       return;
     }
 
-    this.lastError = buildProcessFailureMessage(
+    state.lastError = buildProcessFailureMessage(
       "codex login --device-auth",
       code,
       signal,
       session.outputChunks.join(""),
     );
+  }
+
+  private getAccountState(accountId: string): AuthAccountRuntimeState {
+    const existing = this.accountStates.get(accountId);
+
+    if (existing) {
+      return existing;
+    }
+
+    const created: AuthAccountRuntimeState = {
+      pendingBrowserLogin: null,
+      pendingDeviceLogin: null,
+      lastError: null,
+    };
+
+    this.accountStates.set(accountId, created);
+    return created;
+  }
+
+  private resolveAccountRecord(accountId?: string): StoredAuthAccountRecord {
+    ensureAuthAccountBootstrap(this.workingDirectory, this.registry);
+
+    if (typeof accountId === "string" && accountId.trim()) {
+      const explicit = this.registry.getAuthAccount(accountId.trim());
+
+      if (!explicit) {
+        throw new Error(`认证账号 ${accountId.trim()} 不存在。`);
+      }
+
+      return explicit;
+    }
+
+    const active = this.registry.getActiveAuthAccount();
+
+    if (active) {
+      return active;
+    }
+
+    return ensureAuthAccountBootstrap(this.workingDirectory, this.registry);
+  }
+
+  private buildAccountEnv(account: StoredAuthAccountRecord): Record<string, string> {
+    ensureAuthAccountCodexHome(this.workingDirectory, account.codexHome);
+    return buildCodexProcessEnv(account.codexHome);
+  }
+
+  private buildAccountConfigOverrides(): CodexCliConfigOverrides {
+    return createCodexAuthStorageConfigOverrides();
+  }
+
+  private isVisibleAccountRecord(record: StoredAuthAccountRecord): boolean {
+    return !this.isDefaultSourceAccountRecord(record);
+  }
+
+  private isDefaultSourceAccountRecord(record: StoredAuthAccountRecord): boolean {
+    return record.accountId === "default"
+      && record.codexHome === resolveDefaultCodexHome();
   }
 
   private async withLock<T>(operation: () => Promise<T>): Promise<T> {
@@ -445,6 +733,8 @@ export class CodexAuthRuntime {
 
 interface RunCodexCommandOptions {
   stdinText?: string;
+  env?: Record<string, string>;
+  configOverrides?: CodexCliConfigOverrides;
 }
 
 async function runCodexCommand(
@@ -453,8 +743,9 @@ async function runCodexCommand(
   options: RunCodexCommandOptions = {},
 ): Promise<{ stdout: string; stderr: string }> {
   return await new Promise((resolve, reject) => {
-    const child = spawn(resolveCodexCliBinary(), args, {
+    const child = spawn(resolveCodexCliBinary(), [...buildCodexCliConfigArgs(options.configOverrides), ...args], {
       cwd,
+      ...(options.env ? { env: options.env } : {}),
       stdio: ["pipe", "pipe", "pipe"],
     });
     const stdoutChunks: string[] = [];
@@ -521,9 +812,18 @@ async function closeQuietly(session: CodexAppServerSession): Promise<void> {
   }
 }
 
-async function safeReadAuthStatus(workingDirectory: string): Promise<CodexAuthStatus | null> {
+async function safeReadAuthStatus(
+  workingDirectory: string,
+  options: {
+    env?: Record<string, string>;
+    configOverrides?: CodexCliConfigOverrides;
+  } = {},
+): Promise<CodexAuthStatus | null> {
   try {
-    return await readCodexAuthStatus(workingDirectory);
+    return await readCodexAuthStatus(workingDirectory, {
+      ...(options.env ? { env: options.env } : {}),
+      ...(options.configOverrides ? { configOverrides: options.configOverrides } : {}),
+    });
   } catch {
     return null;
   }
@@ -569,6 +869,11 @@ function normalizeOptionalText(value: unknown): string | null {
 
   const text = value.trim();
   return text ? text : null;
+}
+
+function normalizeAccountEmail(value: unknown): string | null {
+  const normalized = normalizeOptionalText(value);
+  return normalized ? normalized.toLowerCase() : null;
 }
 
 function matchFirst(value: string, pattern: RegExp): string | null {

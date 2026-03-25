@@ -14,7 +14,7 @@ import type {
   TaskResult,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 5;
+const DATABASE_SCHEMA_VERSION = 7;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -84,6 +84,16 @@ export interface StoredSessionHistoryFilter {
 export interface StoredSessionTaskSettingsRecord {
   sessionId: string;
   settings: SessionTaskSettings;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoredAuthAccountRecord {
+  accountId: string;
+  label: string;
+  accountEmail?: string;
+  codexHome: string;
+  isActive: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -220,6 +230,16 @@ interface SessionRow {
 interface SessionTaskSettingsRow {
   session_id: string;
   settings_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface AuthAccountRow {
+  account_id: string;
+  label: string;
+  account_email: string | null;
+  codex_home: string;
+  is_active: number;
   created_at: string;
   updated_at: string;
 }
@@ -531,6 +551,182 @@ export class SqliteCodexSessionRegistry {
       .run(normalized);
 
     return result.changes > 0;
+  }
+
+  listAuthAccounts(): StoredAuthAccountRecord[] {
+    const rows = this.db
+      .prepare(
+        `
+          SELECT account_id, label, account_email, codex_home, is_active, created_at, updated_at
+          FROM themis_auth_accounts
+          ORDER BY is_active DESC, updated_at DESC, account_id ASC
+        `,
+      )
+      .all() as AuthAccountRow[];
+
+    return rows.map(mapAuthAccountRow);
+  }
+
+  getAuthAccount(accountId: string): StoredAuthAccountRecord | null {
+    const normalized = accountId.trim();
+
+    if (!normalized) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT account_id, label, account_email, codex_home, is_active, created_at, updated_at
+          FROM themis_auth_accounts
+          WHERE account_id = ?
+        `,
+      )
+      .get(normalized) as AuthAccountRow | undefined;
+
+    return row ? mapAuthAccountRow(row) : null;
+  }
+
+  getActiveAuthAccount(): StoredAuthAccountRecord | null {
+    const row = this.db
+      .prepare(
+        `
+          SELECT account_id, label, account_email, codex_home, is_active, created_at, updated_at
+          FROM themis_auth_accounts
+          WHERE is_active = 1
+          ORDER BY updated_at DESC, account_id ASC
+          LIMIT 1
+        `,
+      )
+      .get() as AuthAccountRow | undefined;
+
+    return row ? mapAuthAccountRow(row) : null;
+  }
+
+  getAuthAccountByEmail(accountEmail: string): StoredAuthAccountRecord | null {
+    const normalized = accountEmail.trim().toLowerCase();
+
+    if (!normalized) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT account_id, label, account_email, codex_home, is_active, created_at, updated_at
+          FROM themis_auth_accounts
+          WHERE LOWER(account_email) = ?
+          ORDER BY is_active DESC, updated_at DESC, account_id ASC
+          LIMIT 1
+        `,
+      )
+      .get(normalized) as AuthAccountRow | undefined;
+
+    return row ? mapAuthAccountRow(row) : null;
+  }
+
+  saveAuthAccount(record: StoredAuthAccountRecord): void {
+    const accountId = record.accountId.trim();
+    const label = record.label.trim();
+    const accountEmail = record.accountEmail?.trim().toLowerCase() || null;
+    const codexHome = record.codexHome.trim();
+
+    if (!accountId || !label || !codexHome) {
+      throw new Error("Auth account record is incomplete.");
+    }
+
+    const save = this.db.transaction(() => {
+      if (record.isActive) {
+        this.db
+          .prepare(
+            `
+              UPDATE themis_auth_accounts
+              SET is_active = 0
+            `,
+          )
+          .run();
+      }
+
+      this.db
+        .prepare(
+          `
+            INSERT INTO themis_auth_accounts (
+              account_id,
+              label,
+              account_email,
+              codex_home,
+              is_active,
+              created_at,
+              updated_at
+            ) VALUES (
+              @account_id,
+              @label,
+              @account_email,
+              @codex_home,
+              @is_active,
+              @created_at,
+              @updated_at
+            )
+            ON CONFLICT(account_id) DO UPDATE SET
+              label = excluded.label,
+              account_email = excluded.account_email,
+              codex_home = excluded.codex_home,
+              is_active = excluded.is_active,
+              created_at = excluded.created_at,
+              updated_at = excluded.updated_at
+          `,
+        )
+        .run({
+          account_id: accountId,
+          label,
+          account_email: accountEmail,
+          codex_home: codexHome,
+          is_active: record.isActive ? 1 : 0,
+          created_at: record.createdAt,
+          updated_at: record.updatedAt,
+        });
+    });
+
+    save();
+  }
+
+  setActiveAuthAccount(accountId: string): boolean {
+    const normalized = accountId.trim();
+
+    if (!normalized) {
+      return false;
+    }
+
+    const update = this.db.transaction(() => {
+      const existing = this.getAuthAccount(normalized);
+
+      if (!existing) {
+        return false;
+      }
+
+      const now = new Date().toISOString();
+      this.db
+        .prepare(
+          `
+            UPDATE themis_auth_accounts
+            SET is_active = 0
+          `,
+        )
+        .run();
+      this.db
+        .prepare(
+          `
+            UPDATE themis_auth_accounts
+            SET is_active = 1, updated_at = ?
+            WHERE account_id = ?
+          `,
+        )
+        .run(now, normalized);
+
+      return true;
+    });
+
+    return update();
   }
 
   getPrincipal(principalId: string): StoredPrincipalRecord | null {
@@ -2313,6 +2509,19 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_session_settings_updated_at_idx
       ON themis_session_settings(updated_at DESC);
 
+      CREATE TABLE IF NOT EXISTS themis_auth_accounts (
+        account_id TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        account_email TEXT,
+        codex_home TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_auth_accounts_active_idx
+      ON themis_auth_accounts(is_active DESC, updated_at DESC);
+
       CREATE TABLE IF NOT EXISTS themis_turns (
         request_id TEXT PRIMARY KEY,
         task_id TEXT NOT NULL,
@@ -2415,7 +2624,24 @@ export class SqliteCodexSessionRegistry {
   private openDatabase(): Database.Database {
     const database = this.createDatabaseConnection();
     this.initializeSchema(database);
+    this.migrateSchema(database);
     return database;
+  }
+
+  private migrateSchema(database: Database.Database): void {
+    const authAccountColumns = database
+      .prepare(`PRAGMA table_info(themis_auth_accounts)`)
+      .all() as Array<{ name: string }>;
+    const columnNames = new Set(authAccountColumns.map((column) => column.name));
+
+    if (!columnNames.has("account_email")) {
+      database.exec(`
+        ALTER TABLE themis_auth_accounts
+        ADD COLUMN account_email TEXT;
+      `);
+    }
+
+    database.pragma(`user_version = ${DATABASE_SCHEMA_VERSION}`);
   }
 
   private createDatabaseConnection(): Database.Database {
@@ -2485,6 +2711,18 @@ function mapSessionTaskSettingsRow(row: SessionTaskSettingsRow): StoredSessionTa
   return {
     sessionId: row.session_id,
     settings,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapAuthAccountRow(row: AuthAccountRow): StoredAuthAccountRecord {
+  return {
+    accountId: row.account_id,
+    label: row.label,
+    ...(row.account_email ? { accountEmail: row.account_email } : {}),
+    codexHome: row.codex_home,
+    isActive: row.is_active === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

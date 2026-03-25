@@ -2,10 +2,11 @@ import { createId, nowIso } from "./utils.js";
 
 export function createStoreModelHelpers() {
   function createDefaultThreadSettings() {
-    return {
-      profile: "",
-      accessMode: "",
-      model: "",
+      return {
+        profile: "",
+        accessMode: "",
+        authAccountId: "",
+        model: "",
       reasoning: "",
       approvalPolicy: "",
       sandboxMode: "",
@@ -171,6 +172,7 @@ export function createStoreModelHelpers() {
       return {
         profile: typeof value.profile === "string" ? value.profile : "",
         accessMode: typeof value.accessMode === "string" ? value.accessMode : "",
+        authAccountId: typeof value.authAccountId === "string" ? value.authAccountId : "",
         model: typeof value.model === "string" ? value.model : "",
         reasoning: typeof value.reasoning === "string" ? value.reasoning : "",
         approvalPolicy: typeof value.approvalPolicy === "string" ? value.approvalPolicy : "",
@@ -198,6 +200,7 @@ export function createStoreModelHelpers() {
         ...(typeof value.styleNotes === "string" && value.styleNotes ? { styleNotes: value.styleNotes } : {}),
         ...(typeof value.assistantSoul === "string" && value.assistantSoul ? { assistantSoul: value.assistantSoul } : {}),
         ...(typeof value.accessMode === "string" && value.accessMode ? { accessMode: value.accessMode } : {}),
+        ...(typeof value.authAccountId === "string" && value.authAccountId ? { authAccountId: value.authAccountId } : {}),
         ...(typeof value.model === "string" && value.model ? { model: value.model } : {}),
         ...(typeof value.reasoning === "string" && value.reasoning ? { reasoning: value.reasoning } : {}),
         ...(typeof value.approvalPolicy === "string" && value.approvalPolicy

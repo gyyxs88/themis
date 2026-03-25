@@ -1,5 +1,6 @@
 import type { ChannelAdapter } from "../../communication/adapter.js";
 import type { TaskError, TaskEvent, TaskRequest, TaskResult } from "../../types/index.js";
+import { appendTaskReplyQuotaText } from "../../core/task-reply-quota.js";
 import type { WebMessageSink, WebTaskPayload } from "./types.js";
 
 export interface WebAdapterOptions {
@@ -84,7 +85,7 @@ export class WebAdapter implements ChannelAdapter<WebTaskPayload> {
       requestId: result.requestId,
       taskId: result.taskId,
       title: `task.${result.status}`,
-      text: result.summary,
+      text: appendTaskReplyQuotaText(result.summary, result.structuredOutput),
       metadata: {
         ...(result.output ? { output: result.output } : {}),
         ...(result.touchedFiles?.length ? { touchedFiles: result.touchedFiles } : {}),

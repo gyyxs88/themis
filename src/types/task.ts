@@ -100,6 +100,7 @@ export interface TaskOptions {
   assistantMbti?: string;
   styleNotes?: string;
   assistantSoul?: string;
+  authAccountId?: string;
   model?: string;
   reasoning?: ReasoningLevel;
   memoryMode?: MemoryMode;
@@ -115,6 +116,7 @@ export interface TaskOptions {
 export interface SessionTaskSettings {
   profile?: string;
   accessMode?: TaskAccessMode;
+  authAccountId?: string;
   model?: string;
   reasoning?: ReasoningLevel;
   approvalPolicy?: ApprovalPolicy;

@@ -144,6 +144,7 @@ function renderStep(step, index, utils) {
 function renderResultBlock(result, utils) {
   const summaryText = typeof result.summary === "string" ? result.summary.trim() : "";
   const outputText = typeof result.output === "string" ? result.output.trim() : "";
+  const quotaFooterText = resolveReplyQuotaFooterText(result);
   const summaryMarkup = summaryText && summaryText !== outputText ? utils.renderRichText(summaryText) : "";
   const output = outputText ? utils.renderRichText(outputText) : "";
   const touchedFiles = Array.isArray(result.touchedFiles) && result.touchedFiles.length
@@ -152,6 +153,9 @@ function renderResultBlock(result, utils) {
         ${result.touchedFiles.map((file) => `<span class="file-tag">${utils.escapeHtml(file)}</span>`).join("")}
       </div>
     `
+    : "";
+  const quotaFooter = quotaFooterText
+    ? `<p class="reply-quota-footer">${utils.escapeHtml(quotaFooterText)}</p>`
     : "";
 
   return `
@@ -165,6 +169,17 @@ function renderResultBlock(result, utils) {
       ${summaryMarkup || (!output ? utils.renderRichText(result.summary ?? "无") : "")}
       ${output}
       ${touchedFiles}
+      ${quotaFooter}
     </section>
   `;
+}
+
+function resolveReplyQuotaFooterText(result) {
+  const footer = result?.structuredOutput?.replyQuota;
+
+  if (!footer || typeof footer !== "object") {
+    return "";
+  }
+
+  return typeof footer.text === "string" ? footer.text.trim() : "";
 }

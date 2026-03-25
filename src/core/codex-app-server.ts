@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import { buildCodexCliConfigArgs, type CodexCliConfigOverrides } from "./auth-accounts.js";
 
 export interface CodexRuntimeReasoningOption {
   reasoningEffort: string;
@@ -158,6 +159,8 @@ interface PendingRequest<TResult> {
 
 interface CodexAppServerSessionOptions {
   onNotification?: (notification: CodexAppServerNotification) => void;
+  env?: Record<string, string>;
+  configOverrides?: CodexCliConfigOverrides;
 }
 
 const DEFAULT_REASONING_OPTIONS: CodexRuntimeReasoningOption[] = [
@@ -167,8 +170,8 @@ const DEFAULT_REASONING_OPTIONS: CodexRuntimeReasoningOption[] = [
   { reasoningEffort: "xhigh", description: "xhigh" },
 ];
 
-export async function readCodexRuntimeCatalog(cwd: string): Promise<CodexRuntimeCatalog> {
-  const session = new CodexAppServerSession(cwd);
+export async function readCodexRuntimeCatalog(cwd: string, options: CodexAppServerSessionOptions = {}): Promise<CodexRuntimeCatalog> {
+  const session = new CodexAppServerSession(cwd, options);
 
   try {
     await session.initialize();
@@ -220,8 +223,8 @@ export async function readCodexRuntimeCatalog(cwd: string): Promise<CodexRuntime
   }
 }
 
-export async function readCodexAuthStatus(cwd: string): Promise<CodexAuthStatus> {
-  const session = new CodexAppServerSession(cwd);
+export async function readCodexAuthStatus(cwd: string, options: CodexAppServerSessionOptions = {}): Promise<CodexAuthStatus> {
+  const session = new CodexAppServerSession(cwd, options);
 
   try {
     await session.initialize();
@@ -268,8 +271,9 @@ export class CodexAppServerSession {
 
   constructor(cwd: string, options: CodexAppServerSessionOptions = {}) {
     this.onNotification = options.onNotification;
-    this.child = spawn(resolveCodexBinary(), ["app-server"], {
+    this.child = spawn(resolveCodexBinary(), [...buildCodexCliConfigArgs(options.configOverrides), "app-server"], {
       cwd,
+      ...(options.env ? { env: options.env } : {}),
       stdio: ["pipe", "pipe", "pipe"],
     });
 

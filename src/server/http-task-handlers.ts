@@ -3,6 +3,7 @@ import { InMemoryCommunicationRouter } from "../communication/router.js";
 import { WebAdapter, type WebDeliveryMessage, type WebTaskPayload } from "../channels/index.js";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import { appendTaskReplyQuotaFooter } from "../core/task-reply-quota.js";
 import type { TaskRequest } from "../types/index.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
@@ -66,6 +67,7 @@ export async function handleTaskStream(
     const result = await runtime.runTask(normalizedRequest, {
       signal: abortController.signal,
       timeoutMs: taskTimeoutMs,
+      finalizeResult: (request, taskResult) => appendTaskReplyQuotaFooter(authRuntime, request, taskResult),
       onEvent: async (event) => {
         await router.publishEvent(event);
       },
@@ -143,6 +145,7 @@ export async function handleTaskRun(
 
     const result = await runtime.runTask(normalizedRequest, {
       timeoutMs: taskTimeoutMs,
+      finalizeResult: (request, taskResult) => appendTaskReplyQuotaFooter(authRuntime, request, taskResult),
       onEvent: async (event) => {
         await router.publishEvent(event);
       },
@@ -193,7 +196,7 @@ async function ensureAuthAvailable(authRuntime: CodexAuthRuntime, request: TaskR
     throw new Error("当前没有可用的第三方兼容接入配置。");
   }
 
-  const auth = await authRuntime.readSnapshot();
+  const auth = await authRuntime.readSnapshot(request.options?.authAccountId);
 
   if (!auth.requiresOpenaiAuth || auth.authenticated) {
     return;

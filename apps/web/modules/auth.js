@@ -6,6 +6,18 @@ function createDefaultAccountState() {
   };
 }
 
+function createDefaultAuthAccountEntryState() {
+  return {
+    accountId: "",
+    label: "",
+    accountEmail: "",
+    codexHome: "",
+    isActive: false,
+    createdAt: "",
+    updatedAt: "",
+  };
+}
+
 function createDefaultPendingLoginState() {
   return {
     provider: "",
@@ -67,6 +79,9 @@ export function createDefaultAuthState() {
     lastError: "",
     providerProfile: createDefaultProviderProfileState(),
     rateLimits: null,
+    accounts: [],
+    activeAccountId: "",
+    currentAccountId: "",
   };
 }
 
@@ -117,16 +132,46 @@ export function createAuthController(app) {
       event.preventDefault();
       await runSafely(() => loginWithApiKey(dom.authApiKeyInput.value));
     });
+
+    dom.authAccountSelect?.addEventListener("change", async () => {
+      await runSafely(() => load({
+        force: true,
+        accountId: dom.authAccountSelect.value,
+      }));
+    });
+
+    dom.authAccountActivateButton?.addEventListener("click", async () => {
+      await runSafely(switchActiveAccount);
+    });
+
+    dom.authAccountCreateButton?.addEventListener("click", async () => {
+      await runSafely(() => createAccount(dom.authAccountCreateInput.value));
+    });
+
+    dom.authAccountCreateInput?.addEventListener("keydown", async (event) => {
+      if (event.key !== "Enter" || event.shiftKey) {
+        return;
+      }
+
+      event.preventDefault();
+      await runSafely(() => createAccount(dom.authAccountCreateInput.value));
+    });
   }
 
   async function load(options = {}) {
-    const { force = false, quiet = false } = options;
+    const { force = false, quiet = false, accountId = "" } = options;
+    const normalizedAccountId = typeof accountId === "string" ? accountId.trim() : "";
 
     if (inflight && !force) {
       return inflight;
     }
 
-    if (!force && app.runtime.auth.status === "ready" && !app.runtime.auth.pendingLogin) {
+    if (
+      !force
+      && app.runtime.auth.status === "ready"
+      && !app.runtime.auth.pendingLogin
+      && (!normalizedAccountId || normalizedAccountId === app.runtime.auth.currentAccountId)
+    ) {
       return app.runtime.auth;
     }
 
@@ -141,7 +186,8 @@ export function createAuthController(app) {
       }
 
       try {
-        const response = await fetch("/api/auth/status");
+        const query = normalizedAccountId ? `?accountId=${encodeURIComponent(normalizedAccountId)}` : "";
+        const response = await fetch(`/api/auth/status${query}`);
         const data = await app.utils.safeReadJson(response);
 
         if (!response.ok) {
@@ -183,10 +229,11 @@ export function createAuthController(app) {
     }
   }
 
-  async function ensureAuthenticated() {
-    const auth = app.runtime.auth.status === "ready"
+  async function ensureAuthenticated(options = {}) {
+    const accountId = options?.accountId ? String(options.accountId).trim() : "";
+    const auth = app.runtime.auth.status === "ready" && (!accountId || accountId === app.runtime.auth.currentAccountId)
       ? app.runtime.auth
-      : await load({ force: true, quiet: true });
+      : await load({ force: true, quiet: true, accountId });
 
     if (!requiresAuthentication(auth)) {
       return {
@@ -224,6 +271,7 @@ export function createAuthController(app) {
       const auth = await postAuth("/api/auth/login", {
         method: "chatgpt",
         mode: "browser",
+        accountId: currentViewedAccountId(),
       });
 
       if (auth.pendingLogin?.authUrl) {
@@ -253,6 +301,7 @@ export function createAuthController(app) {
       return await postAuth("/api/auth/login", {
         method: "chatgpt",
         mode: "device",
+        accountId: currentViewedAccountId(),
       });
     } finally {
       app.runtime.authBusy = false;
@@ -304,6 +353,7 @@ export function createAuthController(app) {
       const auth = await postAuth("/api/auth/login", {
         method: "apiKey",
         apiKey: normalizedApiKey,
+        accountId: currentViewedAccountId(),
       });
       app.dom.authApiKeyInput.value = "";
       return auth;
@@ -326,7 +376,9 @@ export function createAuthController(app) {
     app.renderer.renderAll();
 
     try {
-      return await postAuth("/api/auth/logout", {});
+      return await postAuth("/api/auth/logout", {
+        accountId: currentViewedAccountId(),
+      });
     } finally {
       app.runtime.authBusy = false;
       app.renderer.renderAll();
@@ -346,7 +398,9 @@ export function createAuthController(app) {
     app.renderer.renderAll();
 
     try {
-      return await postAuth("/api/auth/login/cancel", {});
+      return await postAuth("/api/auth/login/cancel", {
+        accountId: currentViewedAccountId(),
+      });
     } finally {
       app.runtime.authBusy = false;
       app.renderer.renderAll();
@@ -381,6 +435,95 @@ export function createAuthController(app) {
     return app.runtime.auth;
   }
 
+  async function switchActiveAccount() {
+    const accountId = currentViewedAccountId();
+
+    if (!accountId || app.runtime.authBusy) {
+      return app.runtime.auth;
+    }
+
+    app.runtime.authBusy = true;
+    app.runtime.auth = {
+      ...app.runtime.auth,
+      errorMessage: "",
+    };
+    app.renderer.renderAll();
+
+    try {
+      return await postAuth("/api/auth/account/select", { accountId });
+    } finally {
+      app.runtime.authBusy = false;
+      app.renderer.renderAll();
+    }
+  }
+
+  async function createAccount(label) {
+    const normalizedLabel = typeof label === "string" ? label.trim() : "";
+
+    if (!normalizedLabel) {
+      app.runtime.auth = {
+        ...app.runtime.auth,
+        errorMessage: "账号名称不能为空。",
+      };
+      app.renderer.renderAll();
+      return app.runtime.auth;
+    }
+
+    if (app.runtime.authBusy) {
+      return app.runtime.auth;
+    }
+
+    app.runtime.authBusy = true;
+    app.runtime.auth = {
+      ...app.runtime.auth,
+      errorMessage: "",
+    };
+    app.renderer.renderAll();
+
+    try {
+      const response = await fetch("/api/auth/accounts", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          label: normalizedLabel,
+          activate: true,
+        }),
+      });
+      const data = await app.utils.safeReadJson(response);
+
+      if (!response.ok) {
+        throw new Error(data?.error?.message ?? "创建认证账号失败。");
+      }
+
+      app.runtime.auth = normalizeAuthState(data?.auth);
+      app.dom.authAccountCreateInput.value = "";
+      resetDeviceCodeCopyButtonState();
+      syncPolling();
+      app.renderer.renderAll();
+      return app.runtime.auth;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      app.runtime.auth = {
+        ...app.runtime.auth,
+        errorMessage: message,
+      };
+      app.renderer.renderAll();
+      throw error;
+    } finally {
+      app.runtime.authBusy = false;
+      app.renderer.renderAll();
+    }
+  }
+
+  function currentViewedAccountId() {
+    return app.runtime.auth.currentAccountId
+      || app.runtime.auth.activeAccountId
+      || app.runtime.auth.accounts[0]?.accountId
+      || "";
+  }
+
   function syncPolling() {
     if (pollTimer) {
       clearTimeout(pollTimer);
@@ -405,6 +548,8 @@ export function createAuthController(app) {
     loginWithApiKey,
     startChatgptLogin,
     startChatgptDeviceLogin,
+    switchActiveAccount,
+    createAccount,
   };
 
   function setDeviceCodeCopyButtonState(label) {
@@ -458,6 +603,9 @@ function normalizeAuthState(payload) {
   const browserLogin = isRecord(payload?.browserLogin) ? payload.browserLogin : null;
   const providerProfile = isRecord(payload?.providerProfile) ? payload.providerProfile : null;
   const rateLimits = isRecord(payload?.rateLimits) ? payload.rateLimits : null;
+  const accounts = Array.isArray(payload?.accounts)
+    ? payload.accounts.map(normalizeAuthAccountEntry).filter(Boolean)
+    : [];
 
   return {
     ...state,
@@ -510,6 +658,32 @@ function normalizeAuthState(payload) {
         credits: normalizeRateLimitCredits(rateLimits.credits),
       }
       : null,
+    accounts,
+    activeAccountId: normalizeOptionalText(payload?.activeAccountId),
+    currentAccountId: normalizeOptionalText(payload?.currentAccountId),
+  };
+}
+
+function normalizeAuthAccountEntry(value) {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const accountId = normalizeOptionalText(value.accountId);
+
+  if (!accountId) {
+    return null;
+  }
+
+  return {
+    ...createDefaultAuthAccountEntryState(),
+    accountId,
+    label: normalizeOptionalText(value.label) || accountId,
+    accountEmail: normalizeOptionalText(value.accountEmail),
+    codexHome: normalizeOptionalText(value.codexHome),
+    isActive: Boolean(value.isActive),
+    createdAt: normalizeOptionalText(value.createdAt),
+    updatedAt: normalizeOptionalText(value.updatedAt),
   };
 }
 

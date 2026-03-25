@@ -3,7 +3,14 @@ import { networkInterfaces } from "node:os";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { serveWebAsset } from "./http-assets.js";
-import { handleAuthLogin, handleAuthLoginCancel, handleAuthLogout, handleAuthStatus } from "./http-auth.js";
+import {
+  handleAuthAccountCreate,
+  handleAuthAccountSelect,
+  handleAuthLogin,
+  handleAuthLoginCancel,
+  handleAuthLogout,
+  handleAuthStatus,
+} from "./http-auth.js";
 import { toErrorMessage } from "./http-errors.js";
 import { handleHistorySessionDetail, handleHistorySessions } from "./http-history.js";
 import {
@@ -37,7 +44,9 @@ export interface ThemisHttpServerOptions {
 
 export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): Server {
   const runtime = options.runtime ?? new CodexTaskRuntime();
-  const authRuntime = options.authRuntime ?? new CodexAuthRuntime();
+  const authRuntime = options.authRuntime ?? new CodexAuthRuntime({
+    registry: runtime.getRuntimeStore(),
+  });
   const runtimeStore = runtime.getRuntimeStore();
   const taskTimeoutMs = options.taskTimeoutMs ?? resolveTaskTimeoutMs();
 
@@ -75,6 +84,14 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if ((request.method === "GET" || isHeadRequest) && url.pathname === "/api/auth/status") {
         return handleAuthStatus(request, response, authRuntime, isHeadRequest);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/auth/accounts") {
+        return handleAuthAccountCreate(request, response, authRuntime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/auth/account/select") {
+        return handleAuthAccountSelect(request, response, authRuntime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/identity/status") {

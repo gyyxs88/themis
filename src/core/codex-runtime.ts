@@ -15,6 +15,12 @@ import {
   type CodexRuntimeModel,
   type CodexRuntimeThirdPartyProvider,
 } from "./codex-app-server.js";
+import {
+  buildCodexProcessEnv,
+  createCodexAuthStorageConfigOverrides,
+  ensureAuthAccountBootstrap,
+  ensureAuthAccountCodexHome,
+} from "./auth-accounts.js";
 import { buildAssistantStyleSessionPayload } from "./assistant-style.js";
 import { ConversationService } from "./conversation-service.js";
 import { IdentityLinkService } from "./identity-link-service.js";
@@ -29,7 +35,7 @@ import {
   type CodexSessionLease,
   type CodexSessionMode,
 } from "./codex-session-store.js";
-import { SqliteCodexSessionRegistry } from "../storage/index.js";
+import { SqliteCodexSessionRegistry, type StoredAuthAccountRecord } from "../storage/index.js";
 import type { TaskAccessMode, TaskEvent, TaskRequest, TaskResult } from "../types/index.js";
 import {
   readOpenAICompatibleProviderConfigs,
@@ -50,6 +56,7 @@ export interface CodexTaskRuntimeOptions {
 
 interface ResolvedRuntimeTarget {
   accessMode: TaskAccessMode;
+  authAccountId: string | null;
   providerId: string | null;
   providerConfig: OpenAICompatibleProviderConfig | null;
   sessionStore: CodexThreadSessionStore;
@@ -60,24 +67,24 @@ export interface CodexTaskRuntimeHooks {
   signal?: AbortSignal;
   timeoutMs?: number;
   allowUnsupportedThirdPartyModel?: boolean;
+  finalizeResult?: (request: TaskRequest, result: TaskResult) => Promise<TaskResult> | TaskResult;
 }
 
 export class CodexTaskRuntime {
-  private readonly codex: Codex;
   private readonly workingDirectory: string;
   private readonly skipGitRepoCheck: boolean;
-  private readonly sessionStore: CodexThreadSessionStore;
   private readonly runtimeStore: SqliteCodexSessionRegistry;
   private readonly identityLinkService: IdentityLinkService;
   private readonly conversationService: ConversationService;
   private readonly principalPersonaService: PrincipalPersonaService;
   private providerConfigs: OpenAICompatibleProviderConfig[];
+  private readonly authClients = new Map<string, Codex>();
+  private readonly authSessionStores = new Map<string, CodexThreadSessionStore>();
   private readonly providerClients = new Map<string, Codex>();
   private readonly providerSessionStores = new Map<string, CodexThreadSessionStore>();
 
   constructor(options: CodexTaskRuntimeOptions = {}) {
     this.workingDirectory = options.workingDirectory ?? process.cwd();
-    this.codex = options.codex ?? new Codex();
     this.skipGitRepoCheck = options.skipGitRepoCheck ?? false;
     this.runtimeStore = options.runtimeStore
       ?? options.sessionStore?.getSessionRegistry()
@@ -90,11 +97,8 @@ export class CodexTaskRuntime {
       ?? (options.providerConfig
         ? [options.providerConfig]
         : readOpenAICompatibleProviderConfigs(this.workingDirectory, this.runtimeStore));
-    this.sessionStore = options.sessionStore ?? new CodexThreadSessionStore({
-      codex: this.codex,
-      sessionRegistry: this.runtimeStore,
-      sessionIdNamespace: "auth",
-    });
+    ensureAuthAccountBootstrap(this.workingDirectory, this.runtimeStore);
+    this.resetAuthRuntime(options.codex ?? null, options.sessionStore ?? null);
     this.resetProviderRuntime(options.providerCodex ?? null, options.providerSessionStore ?? null);
   }
 
@@ -212,9 +216,11 @@ export class CodexTaskRuntime {
         completedAt: new Date().toISOString(),
       };
 
+      const finalizedResult = await finalizeTaskResult(request, result, hooks.finalizeResult);
+
       this.runtimeStore.completeTaskTurn({
         request,
-        result,
+        result: finalizedResult,
         ...resolveSessionPersistence(sessionLease, resolvedThreadId),
       });
 
@@ -230,7 +236,7 @@ export class CodexTaskRuntime {
         ),
       );
 
-      return result;
+      return finalizedResult;
     } catch (error) {
       if (isAbortLikeError(error) || signal.aborted) {
         const message = describeAbort(signal);
@@ -277,7 +283,11 @@ export class CodexTaskRuntime {
   }
 
   async readRuntimeConfig(): Promise<CodexRuntimeCatalog> {
-    const runtimeCatalog = await readCodexRuntimeCatalog(this.workingDirectory);
+    const authAccount = this.resolveAuthAccount();
+    const runtimeCatalog = await readCodexRuntimeCatalog(this.workingDirectory, {
+      env: buildCodexProcessEnv(authAccount.codexHome),
+      configOverrides: createCodexAuthStorageConfigOverrides(),
+    });
     return createUnifiedRuntimeCatalog(runtimeCatalog, this.providerConfigs);
   }
 
@@ -302,11 +312,14 @@ export class CodexTaskRuntime {
     const requestedMode = request.options?.accessMode === "third-party" ? "third-party" : "auth";
 
     if (requestedMode !== "third-party") {
+      const account = this.resolveAuthAccount(request.options?.authAccountId);
+      const sessionStore = this.ensureAuthAccountRuntime(account);
       return {
         accessMode: "auth",
+        authAccountId: account.accountId,
         providerId: null,
         providerConfig: null,
-        sessionStore: this.sessionStore,
+        sessionStore,
       };
     }
 
@@ -335,6 +348,7 @@ export class CodexTaskRuntime {
 
     return {
       accessMode: "third-party",
+      authAccountId: null,
       providerId: providerConfig.id,
       providerConfig,
       sessionStore: providerSessionStore,
@@ -342,10 +356,12 @@ export class CodexTaskRuntime {
   }
 
   private async resolveThreadIdForFork(sessionId: string): Promise<string | null> {
-    const authThreadId = await this.sessionStore.resolveThreadId(sessionId);
+    for (const authSessionStore of this.authSessionStores.values()) {
+      const authThreadId = await authSessionStore.resolveThreadId(sessionId);
 
-    if (authThreadId) {
-      return authThreadId;
+      if (authThreadId) {
+        return authThreadId;
+      }
     }
 
     for (const providerSessionStore of this.providerSessionStores.values()) {
@@ -400,6 +416,76 @@ export class CodexTaskRuntime {
       this.providerSessionStores.set(providerConfig.id, providerSessionStore);
     }
   }
+
+  private resetAuthRuntime(
+    authCodexOverride: Codex | null = null,
+    authSessionStoreOverride: CodexThreadSessionStore | null = null,
+  ): void {
+    this.authClients.clear();
+    this.authSessionStores.clear();
+
+    for (const [index, account] of this.listAuthAccounts().entries()) {
+      const authCodex = index === 0 && authCodexOverride
+        ? authCodexOverride
+        : createAuthCodexClient(this.workingDirectory, account);
+      const authSessionStore = index === 0 && authSessionStoreOverride
+        ? authSessionStoreOverride
+        : new CodexThreadSessionStore({
+          codex: authCodex,
+          sessionRegistry: this.runtimeStore,
+          sessionIdNamespace: `auth:${account.accountId}`,
+        });
+
+      this.authClients.set(account.accountId, authCodex);
+      this.authSessionStores.set(account.accountId, authSessionStore);
+    }
+  }
+
+  private ensureAuthAccountRuntime(account: StoredAuthAccountRecord): CodexThreadSessionStore {
+    const existing = this.authSessionStores.get(account.accountId);
+
+    if (existing) {
+      return existing;
+    }
+
+    const authCodex = createAuthCodexClient(this.workingDirectory, account);
+    const authSessionStore = new CodexThreadSessionStore({
+      codex: authCodex,
+      sessionRegistry: this.runtimeStore,
+      sessionIdNamespace: `auth:${account.accountId}`,
+    });
+
+    this.authClients.set(account.accountId, authCodex);
+    this.authSessionStores.set(account.accountId, authSessionStore);
+    return authSessionStore;
+  }
+
+  private listAuthAccounts(): StoredAuthAccountRecord[] {
+    ensureAuthAccountBootstrap(this.workingDirectory, this.runtimeStore);
+    return this.runtimeStore.listAuthAccounts();
+  }
+
+  private resolveAuthAccount(accountId?: string): StoredAuthAccountRecord {
+    ensureAuthAccountBootstrap(this.workingDirectory, this.runtimeStore);
+
+    if (typeof accountId === "string" && accountId.trim()) {
+      const explicit = this.runtimeStore.getAuthAccount(accountId.trim());
+
+      if (!explicit) {
+        throw new Error(`认证账号 ${accountId.trim()} 不存在。`);
+      }
+
+      return explicit;
+    }
+
+    const active = this.runtimeStore.getActiveAuthAccount();
+
+    if (active) {
+      return active;
+    }
+
+    return ensureAuthAccountBootstrap(this.workingDirectory, this.runtimeStore);
+  }
 }
 
 function resolveFinalOutput(
@@ -431,6 +517,7 @@ function createStructuredOutput(
       ...(resolvedThreadId ? { threadId: resolvedThreadId } : {}),
       mode: sessionLease.sessionMode,
       accessMode: target.accessMode,
+      ...(target.authAccountId ? { authAccountId: target.authAccountId } : {}),
       ...(target.providerId ? { thirdPartyProviderId: target.providerId } : {}),
       ...(assistantStyle ? { assistantStyle } : {}),
     },
@@ -498,6 +585,22 @@ function resolveSessionPersistence(
     ...(sessionLease.sessionMode ? { sessionMode: sessionLease.sessionMode } : {}),
     ...(threadId ? { threadId } : {}),
   };
+}
+
+async function finalizeTaskResult(
+  request: TaskRequest,
+  result: TaskResult,
+  finalizeResult: CodexTaskRuntimeHooks["finalizeResult"],
+): Promise<TaskResult> {
+  if (!finalizeResult) {
+    return result;
+  }
+
+  try {
+    return await finalizeResult(request, result);
+  } catch {
+    return result;
+  }
 }
 
 function resolveTaskFailure(error: unknown, failureMessage: string | null): unknown {
@@ -596,6 +699,15 @@ function createUnifiedRuntimeCatalog(
       ),
     ],
   };
+}
+
+function createAuthCodexClient(workingDirectory: string, account: StoredAuthAccountRecord): Codex {
+  ensureAuthAccountCodexHome(workingDirectory, account.codexHome);
+
+  return new Codex({
+    env: buildCodexProcessEnv(account.codexHome),
+    config: createCodexAuthStorageConfigOverrides(),
+  });
 }
 
 function createThirdPartyProviderCatalog(

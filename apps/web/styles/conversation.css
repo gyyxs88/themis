@@ -286,6 +286,15 @@
   font-size: 12px;
 }
 
+.reply-quota-footer {
+  margin: 14px 0 0;
+  padding-top: 12px;
+  border-top: 1px dashed #d6dde6;
+  color: #52657a;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .turn-details {
   margin-top: 14px;
 }

@@ -8,6 +8,7 @@ import {
   isSessionTaskSettingsEmpty,
   normalizeSessionTaskSettings,
 } from "../../core/session-task-settings.js";
+import { appendTaskReplyQuotaFooter } from "../../core/task-reply-quota.js";
 import { createTaskError } from "../../server/http-errors.js";
 import {
   APPROVAL_POLICIES,
@@ -260,10 +261,13 @@ export class FeishuChannelService {
       case "credits":
       case "usage":
       case "balance":
-        await this.sendQuota(context.chatId);
+        await this.sendQuota(context.chatId, context);
         return;
       case "current":
         await this.sendCurrentSession(context.chatId, context);
+        return;
+      case "account":
+        await this.handleAccountCommand(command.args, context);
         return;
       case "link":
         await this.linkIdentity(command.args, context);
@@ -334,6 +338,7 @@ export class FeishuChannelService {
       const result = await this.runtime.runTask(normalizedRequest, {
         signal: taskLease.signal,
         timeoutMs: this.taskTimeoutMs,
+        finalizeResult: (request, taskResult) => appendTaskReplyQuotaFooter(this.authRuntime, request, taskResult),
         onEvent: async (taskEvent) => {
           await router.publishEvent(taskEvent);
         },
@@ -527,10 +532,156 @@ export class FeishuChannelService {
       ...formatSessionSettingsLines(settings),
       "",
       "说明：未设置的项会回退到运行时默认值。",
-      "飞书当前可直接修改：/sandbox /search /network /approval",
+      "飞书当前可直接修改：/sandbox /search /network /approval /account use",
     ];
 
     await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async handleAccountCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const subcommand = normalizeText(args[0])?.toLowerCase() ?? "";
+    const restArgs = args.slice(1);
+
+    switch (subcommand || "current") {
+      case "list":
+      case "ls":
+        await this.sendAccountList(context.chatId, context);
+        return;
+      case "current":
+      case "show":
+      case "status":
+        await this.sendCurrentAccount(context.chatId, context);
+        return;
+      case "use":
+      case "switch":
+      case "set":
+        await this.useAccount(restArgs, context);
+        return;
+      default:
+        await this.safeSendText(
+          context.chatId,
+          "用法：/account list\n/account current\n/account use <账号名|邮箱|序号|default>",
+        );
+    }
+  }
+
+  private async sendAccountList(chatId: string, context: FeishuIncomingContext): Promise<void> {
+    const accounts = this.authRuntime.listAccounts();
+    const activeAccountId = this.authRuntime.getActiveAccount()?.accountId ?? "";
+    const sessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
+    const sessionSettings = sessionId ? this.readSessionSettings(sessionId) : {};
+    const sessionAccountId = normalizeText(sessionSettings.authAccountId);
+
+    if (!accounts.length) {
+      await this.safeSendText(chatId, "当前还没有可用认证账号。");
+      return;
+    }
+
+    const lines = [
+      sessionId ? `当前会话：${sessionId}` : "当前会话：未激活",
+      sessionAccountId
+        ? `当前会话固定账号：${formatAuthAccountLabel(findAuthAccountById(accounts, sessionAccountId), sessionAccountId)}`
+        : `当前会话认证账号：跟随默认账号${activeAccountId ? `（${formatAuthAccountLabel(findAuthAccountById(accounts, activeAccountId), activeAccountId)}）` : ""}`,
+      "",
+      "认证账号：",
+      ...accounts.map((account, index) => {
+        const markers = [
+          account.accountId === activeAccountId ? "默认" : "",
+          account.accountId === sessionAccountId ? "当前会话" : "",
+        ].filter(Boolean);
+        const markerText = markers.length ? `（${markers.join("｜")}）` : "";
+        return `${index + 1}. ${formatAuthAccountLabel(account)}${markerText}\n   CODEX_HOME：${account.codexHome}`;
+      }),
+      "",
+      "使用 /account use <账号名|邮箱|序号|default> 切换当前会话使用的认证账号。",
+    ];
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendCurrentAccount(chatId: string, context: FeishuIncomingContext): Promise<void> {
+    const accounts = this.authRuntime.listAccounts();
+    const activeAccount = this.authRuntime.getActiveAccount();
+    const sessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
+    const sessionSettings = sessionId ? this.readSessionSettings(sessionId) : {};
+    const sessionAccountId = normalizeText(sessionSettings.authAccountId);
+    const resolvedAccountId = sessionAccountId || activeAccount?.accountId || accounts[0]?.accountId || "";
+
+    if (!resolvedAccountId) {
+      await this.safeSendText(chatId, "当前还没有可用认证账号。");
+      return;
+    }
+
+    const snapshot = await this.authRuntime.readSnapshot(resolvedAccountId);
+    const account = findAuthAccountById(accounts, resolvedAccountId) ?? activeAccount;
+    const lines = [
+      sessionId ? `当前会话：${sessionId}` : "当前会话：未激活",
+      sessionAccountId
+        ? `会话绑定：固定使用 ${formatAuthAccountLabel(account, resolvedAccountId)}`
+        : `会话绑定：跟随默认账号 ${formatAuthAccountLabel(account, resolvedAccountId)}`,
+      `认证方式：${snapshot.authMethod ?? "unknown"}`,
+      snapshot.account?.email ? `账号：${snapshot.account.email}` : null,
+      snapshot.account?.planType ? `套餐：${snapshot.account.planType}` : null,
+      snapshot.authenticated ? "状态：已认证" : "状态：未认证",
+    ].filter((line): line is string => Boolean(line));
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async useAccount(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const target = normalizeText(args.join(" "));
+
+    if (!target) {
+      await this.safeSendText(context.chatId, "用法：/account use <账号名|邮箱|序号|default>");
+      return;
+    }
+
+    const targetSession = this.ensureMutableSession(context);
+    const accounts = this.authRuntime.listAccounts();
+    const normalizedTarget = target.toLowerCase();
+
+    if (["default", "active", "follow", "clear"].includes(normalizedTarget)) {
+      const settings = this.updateSessionSettingsField(targetSession.sessionId, "authAccountId", undefined);
+      const activeAccount = this.authRuntime.getActiveAccount();
+      const lines = [
+        targetSession.created ? `已自动创建会话：${targetSession.sessionId}` : `当前会话：${targetSession.sessionId}`,
+        activeAccount
+          ? `认证账号已改为：跟随默认账号 ${formatAuthAccountLabel(activeAccount)}`
+          : "认证账号已改为：跟随默认账号",
+        isSessionTaskSettingsEmpty(settings)
+          ? "当前会话已无单独配置，后续会完全回退到运行时默认值。"
+          : "发送 /settings 可查看当前会话的完整配置。",
+      ];
+
+      await this.safeSendText(context.chatId, lines.join("\n"));
+      return;
+    }
+
+    let resolvedAccountId: string | null = null;
+
+    if (/^\d+$/.test(target)) {
+      const index = Number.parseInt(target, 10);
+      resolvedAccountId = accounts[index - 1]?.accountId ?? null;
+    } else {
+      resolvedAccountId = findAuthAccountByQuery(accounts, target)?.accountId ?? null;
+    }
+
+    if (!resolvedAccountId) {
+      await this.safeSendText(context.chatId, "没有找到对应认证账号。先执行 /account list 查看可选账号。");
+      return;
+    }
+
+    const account = findAuthAccountById(accounts, resolvedAccountId);
+    const settings = this.updateSessionSettingsField(targetSession.sessionId, "authAccountId", resolvedAccountId);
+    const lines = [
+      targetSession.created ? `已自动创建会话：${targetSession.sessionId}` : `当前会话：${targetSession.sessionId}`,
+      `认证账号已固定为：${formatAuthAccountLabel(account, resolvedAccountId)}`,
+      isSessionTaskSettingsEmpty(settings)
+        ? "当前会话已无单独配置，后续会完全回退到运行时默认值。"
+        : "发送 /settings 可查看当前会话的完整配置。",
+    ];
+
+    await this.safeSendText(context.chatId, lines.join("\n"));
   }
 
   private async updateSandboxMode(args: string[], context: FeishuIncomingContext): Promise<void> {
@@ -618,6 +769,9 @@ export class FeishuChannelService {
       "/new 新建并切换到新会话",
       "/use <序号|conversationId> 切换到已有会话",
       "/current 查看当前会话",
+      "/account list 查看认证账号",
+      "/account current 查看当前会话使用的认证账号",
+      "/account use <账号名|邮箱|序号|default> 切换当前会话使用的认证账号",
       "/link <绑定码> 可选：认领一个旧 Web 浏览器身份",
       "/reset confirm 清空当前 principal 的人格档案、历史和记忆，并重新开始",
       "/settings 查看当前会话配置",
@@ -706,7 +860,16 @@ export class FeishuChannelService {
       return;
     }
 
-    await this.safeSendText(chatId, `当前会话：${sessionId}`);
+    const settings = this.readSessionSettings(sessionId);
+    const sessionAccountId = normalizeText(settings.authAccountId);
+    const activeAccount = this.authRuntime.getActiveAccount();
+    const accountLine = sessionAccountId
+      ? `认证账号：固定使用 ${formatAuthAccountLabel(findAuthAccountById(this.authRuntime.listAccounts(), sessionAccountId), sessionAccountId)}`
+      : activeAccount
+        ? `认证账号：跟随默认账号 ${formatAuthAccountLabel(activeAccount)}`
+        : "认证账号：跟随默认账号";
+
+    await this.safeSendText(chatId, [`当前会话：${sessionId}`, accountLine].join("\n"));
   }
 
   private async resetPrincipalState(args: string[], context: FeishuIncomingContext): Promise<void> {
@@ -778,8 +941,14 @@ export class FeishuChannelService {
     await this.safeSendText(context.chatId, lines.join("\n"));
   }
 
-  private async sendQuota(chatId: string): Promise<void> {
-    const snapshot = await this.authRuntime.readSnapshot();
+  private async sendQuota(chatId: string, context: FeishuIncomingContext): Promise<void> {
+    const sessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
+    const sessionSettings = sessionId ? this.readSessionSettings(sessionId) : {};
+    const sessionAccountId = normalizeText(sessionSettings.authAccountId);
+    const snapshot = await this.authRuntime.readSnapshot(sessionAccountId ?? undefined);
+    const accounts = this.authRuntime.listAccounts();
+    const resolvedAccountId = snapshot.accountId || sessionAccountId || this.authRuntime.getActiveAccount()?.accountId || "";
+    const account = findAuthAccountById(accounts, resolvedAccountId);
 
     if (!snapshot.authenticated) {
       await this.safeSendText(chatId, "Codex 当前没有可用认证，暂时无法读取额度信息。");
@@ -788,6 +957,9 @@ export class FeishuChannelService {
 
     const lines = [
       "Codex 额度信息：",
+      resolvedAccountId
+        ? `认证账号：${formatAuthAccountLabel(account, resolvedAccountId)}${sessionAccountId ? "（当前会话固定）" : "（默认账号）"}`
+        : null,
       `认证方式：${snapshot.authMethod ?? "unknown"}`,
       snapshot.account?.email ? `账号：${snapshot.account.email}` : null,
       snapshot.account?.planType ? `套餐：${snapshot.account.planType}` : null,
@@ -1493,7 +1665,7 @@ function truncateText(text: string, maxLength: number): string {
 
 async function ensureAuthAvailable(authRuntime: CodexAuthRuntime, request: TaskRequest): Promise<void> {
   if (request.options?.accessMode === "third-party") {
-    const auth = await authRuntime.readSnapshot();
+    const auth = await authRuntime.readSnapshot(request.options?.authAccountId);
 
     if (auth.providerProfile?.type === "openai-compatible") {
       return;
@@ -1502,7 +1674,7 @@ async function ensureAuthAvailable(authRuntime: CodexAuthRuntime, request: TaskR
     throw new Error("当前没有可用的第三方兼容接入配置。");
   }
 
-  const auth = await authRuntime.readSnapshot();
+  const auth = await authRuntime.readSnapshot(request.options?.authAccountId);
 
   if (!auth.requiresOpenaiAuth || auth.authenticated) {
     return;
@@ -1594,6 +1766,7 @@ function formatSessionSettingsLines(settings: SessionTaskSettings): string[] {
   return [
     "当前配置：",
     `接入方式：${formatOptionalSetting(normalized.accessMode)}`,
+    `认证账号：${normalized.authAccountId ? normalized.authAccountId : "跟随默认账号"}`,
     `模型：${formatOptionalSetting(normalized.model)}`,
     `第三方供应商：${formatOptionalSetting(normalized.thirdPartyProviderId)}`,
     `第三方模型：${formatOptionalSetting(normalized.thirdPartyModel)}`,
@@ -1615,6 +1788,47 @@ function formatOptionalBoolean(value: boolean | null | undefined): string {
   }
 
   return value ? "开启" : "关闭";
+}
+
+function findAuthAccountById<T extends { accountId: string }>(accounts: T[], accountId: string | null | undefined): T | null {
+  const normalizedAccountId = normalizeText(accountId ?? undefined);
+
+  if (!normalizedAccountId) {
+    return null;
+  }
+
+  return accounts.find((account) => account.accountId === normalizedAccountId) ?? null;
+}
+
+function findAuthAccountByQuery<T extends { accountId: string; label?: string | null; accountEmail?: string | null }>(
+  accounts: T[],
+  query: string | null | undefined,
+): T | null {
+  const normalizedQuery = normalizeText(query)?.toLowerCase();
+
+  if (!normalizedQuery) {
+    return null;
+  }
+
+  return accounts.find((account) => {
+    const candidates = [
+      normalizeText(account.accountId)?.toLowerCase() ?? "",
+      normalizeText(account.label)?.toLowerCase() ?? "",
+      normalizeText(account.accountEmail)?.toLowerCase() ?? "",
+    ].filter(Boolean);
+
+    return candidates.includes(normalizedQuery);
+  }) ?? null;
+}
+
+function formatAuthAccountLabel(
+  account: { accountId: string; label?: string | null; accountEmail?: string | null } | null | undefined,
+  fallbackAccountId?: string | null,
+): string {
+  const normalizedAccountId = normalizeText(account?.accountId ?? fallbackAccountId ?? undefined) ?? "";
+  const normalizedEmail = normalizeText(account?.accountEmail ?? undefined) ?? "";
+  const normalizedLabel = normalizeText(account?.label ?? undefined) ?? "";
+  return normalizedEmail || normalizedLabel || normalizedAccountId || "当前账号";
 }
 
 function parseFeishuLoggerLevel(value: string | undefined): Lark.LoggerLevel {

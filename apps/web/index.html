@@ -491,6 +491,13 @@
                       </select>
                     </label>
 
+                    <label id="mode-switch-auth-account-row" class="settings-field">
+                      <span>认证账号</span>
+                      <select id="mode-switch-auth-account-select">
+                        <option value="">跟随默认账号</option>
+                      </select>
+                    </label>
+
                     <label id="mode-switch-third-party-model-row" class="settings-field hidden">
                       <span>第三方模式模型</span>
                       <select id="mode-switch-third-party-model-select">
@@ -521,6 +528,30 @@
                   </div>
 
                   <p id="auth-status-note" class="settings-section-copy">正在检查 Codex 认证状态。</p>
+
+                  <div class="settings-stack">
+                    <label class="settings-field">
+                      <span>查看账号</span>
+                      <select id="auth-account-select">
+                        <option value="">默认账号</option>
+                      </select>
+                    </label>
+
+                    <div class="settings-inline-actions">
+                      <button id="auth-account-activate-button" type="button" class="toolbar-button subtle">设为默认账号</button>
+                      <p id="auth-account-note" class="settings-inline-copy" aria-live="polite"></p>
+                    </div>
+
+                    <label class="settings-field">
+                      <span>手动预建槽位（可选）</span>
+                      <input id="auth-account-create-input" type="text" placeholder="通常不需要；直接登录后会自动按账号邮箱建槽" />
+                    </label>
+
+                    <div class="settings-inline-actions">
+                      <button id="auth-account-create-button" type="button" class="toolbar-button subtle">手动新建槽位</button>
+                      <p class="settings-inline-copy">默认会在检测到新账号后自动建槽并保存认证文件；这里只保留给需要提前预建空槽位的场景。</p>
+                    </div>
+                  </div>
 
                   <section id="auth-rate-limits-panel" class="auth-rate-limits hidden" aria-live="polite">
                     <div class="auth-rate-limits-head">

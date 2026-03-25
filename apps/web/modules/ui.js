@@ -342,17 +342,19 @@ export function createRenderer(app) {
       .join("");
 
     dom.accessModeSelect.value = draft.accessMode || effectiveSettings.accessMode || "auth";
+    renderModeSwitchAuthAccountSelect(app.runtime.auth, draft);
+    dom.modeSwitchAuthAccountRow.classList.toggle("hidden", draft.accessMode !== "auth");
     dom.modeSwitchThirdPartyModelRow.classList.toggle("hidden", draft.accessMode !== "third-party");
     dom.modeSwitchThirdPartyModelSelect.value = draft.thirdPartyModel || "";
     dom.accessModeApplyButton.textContent = draft.accessMode !== (effectiveSettings.accessMode || "auth")
       ? "确定切换"
       : "确定应用";
 
-    const pendingNote = buildAccessModePendingNote(store, settings, effectiveSettings, draft);
+    const pendingNote = buildAccessModePendingNote(store, settings, effectiveSettings, draft, app.runtime.auth);
     dom.accessModePendingNote.classList.toggle("hidden", !pendingNote);
     dom.accessModePendingNote.textContent = pendingNote;
 
-    renderAccessModeNote(effectiveSettings);
+    renderAccessModeNote(settings, effectiveSettings, app.runtime.auth);
   }
 
   function renderSandboxSelect(effectiveSettings) {
@@ -464,7 +466,7 @@ export function createRenderer(app) {
     dom.thirdPartyModelNote.textContent = "第三方模型列表会跟随所选供应商切换。";
   }
 
-  function renderAccessModeNote(effectiveSettings) {
+  function renderAccessModeNote(settings, effectiveSettings, auth) {
     if (effectiveSettings.accessMode === "third-party") {
       const selection = store.resolveThirdPartySelection(store.getActiveThread()?.settings);
       const providerName = selection.provider?.name || "第三方兼容供应商";
@@ -473,6 +475,21 @@ export function createRenderer(app) {
         ? " 但这个模型当前未声明支持 Codex agent 任务，不能直接用于 Themis 执行。"
         : " 这种模式不依赖 ChatGPT 认证。";
       dom.accessModeNote.textContent = `当前会话会通过 ${providerName} 发送任务，模型 ${modelName}。${supportText}`;
+      return;
+    }
+
+    const explicitAuthAccountId = normalizeAuthAccountId(settings?.authAccountId);
+    const effectiveAuthAccountId = normalizeAuthAccountId(effectiveSettings.authAccountId);
+    const explicitAccount = findAuthAccount(auth, explicitAuthAccountId);
+    const effectiveAccount = findAuthAccount(auth, effectiveAuthAccountId);
+
+    if (explicitAuthAccountId) {
+      dom.accessModeNote.textContent = `当前会话会通过 Codex / ChatGPT 认证模式发送任务，并固定使用 ${formatAuthAccountDisplayName(explicitAccount, explicitAuthAccountId)}。`;
+      return;
+    }
+
+    if (effectiveAuthAccountId) {
+      dom.accessModeNote.textContent = `当前会话会通过 Codex / ChatGPT 认证模式发送任务，并跟随默认认证账号 ${formatAuthAccountDisplayName(effectiveAccount, effectiveAuthAccountId)}。`;
       return;
     }
 
@@ -563,6 +580,8 @@ export function createRenderer(app) {
     const devicePending = pendingLogin?.mode === "device";
     const remoteBrowserWarning = shouldShowRemoteBrowserLoginWarning(auth);
 
+    renderAuthAccountControls(auth);
+
     dom.authRemoteLoginPanel.classList.toggle("hidden", !remoteBrowserWarning);
     dom.authBrowserLoginPanel.classList.toggle("hidden", !browserPending);
     dom.authDeviceLoginPanel.classList.toggle("hidden", !devicePending);
@@ -612,6 +631,56 @@ export function createRenderer(app) {
     }
 
     dom.authStatusNote.textContent = buildAuthStatusNote(auth);
+  }
+
+  function renderAuthAccountControls(auth) {
+    const accounts = Array.isArray(auth.accounts) ? auth.accounts : [];
+    const activeAccountId = normalizeAuthAccountId(auth.activeAccountId)
+      || accounts.find((account) => account.isActive)?.accountId
+      || accounts[0]?.accountId
+      || "";
+    const currentAccountId = normalizeAuthAccountId(auth.currentAccountId) || activeAccountId;
+    const activeAccount = findAuthAccount(auth, activeAccountId);
+    const currentAccount = findAuthAccount(auth, currentAccountId);
+
+    dom.authAccountSelect.innerHTML = accounts.length
+      ? accounts
+        .map((account) => `<option value="${utils.escapeHtml(account.accountId)}">${utils.escapeHtml(formatAuthAccountSelectLabel(account))}</option>`)
+        .join("")
+      : '<option value="">默认账号</option>';
+    dom.authAccountSelect.value = currentAccountId || "";
+
+    if (!accounts.length) {
+      dom.authAccountNote.textContent = "当前还没有独立账号槽位；首次检测到已登录账号后，系统会自动按账号邮箱建槽并归档认证文件。";
+      return;
+    }
+
+    if (currentAccountId && currentAccountId !== activeAccountId && currentAccount) {
+      dom.authAccountNote.textContent = `当前正在查看 ${formatAuthAccountDisplayName(currentAccount)}；默认账号是 ${formatAuthAccountDisplayName(activeAccount, activeAccountId)}。`;
+      return;
+    }
+
+    dom.authAccountNote.textContent = `当前正在查看默认账号 ${formatAuthAccountDisplayName(activeAccount, activeAccountId)}。`;
+  }
+
+  function renderModeSwitchAuthAccountSelect(auth, draft) {
+    const accounts = Array.isArray(auth.accounts) ? auth.accounts : [];
+    const activeAccountId = normalizeAuthAccountId(auth.activeAccountId)
+      || accounts.find((account) => account.isActive)?.accountId
+      || accounts[0]?.accountId
+      || "";
+    const activeAccount = findAuthAccount(auth, activeAccountId);
+    const followDefaultLabel = activeAccount
+      ? `跟随默认账号（${formatAuthAccountSelectLabel(activeAccount)}）`
+      : "跟随默认账号";
+
+    dom.modeSwitchAuthAccountSelect.innerHTML = [
+      `<option value="">${utils.escapeHtml(followDefaultLabel)}</option>`,
+      ...accounts.map((account) => (
+        `<option value="${utils.escapeHtml(account.accountId)}">${utils.escapeHtml(formatAuthAccountSelectLabel(account))}</option>`
+      )),
+    ].join("");
+    dom.modeSwitchAuthAccountSelect.value = draft.authAccountId || "";
   }
 
   function renderAuthRateLimits(auth) {
@@ -833,6 +902,9 @@ export function createRenderer(app) {
     dom.conversationLinkButton.disabled = controlsBusy;
     dom.identityLinkCodeButton.disabled = controlsBusy || app.runtime.identity?.issuing;
     dom.accessModeSelect.disabled = controlsBusy || !app.runtime.runtimeConfig.accessModes?.length;
+    dom.modeSwitchAuthAccountSelect.disabled = controlsBusy
+      || modeSwitchDraft.accessMode !== "auth"
+      || !app.runtime.auth.accounts.length;
     dom.accessModeApplyButton.disabled = controlsBusy
       || !modeSwitchDraft.dirty
       || (
@@ -881,6 +953,12 @@ export function createRenderer(app) {
     dom.thirdPartyModelCancelButton.disabled = thirdPartyEditor.submitting;
     dom.authChatgptLoginButton.disabled = controlsBusy;
     dom.authChatgptDeviceLoginButton.disabled = controlsBusy;
+    dom.authAccountSelect.disabled = controlsBusy || !app.runtime.auth.accounts.length;
+    dom.authAccountActivateButton.disabled = controlsBusy
+      || !app.runtime.auth.accounts.length
+      || app.runtime.auth.currentAccountId === app.runtime.auth.activeAccountId;
+    dom.authAccountCreateInput.disabled = controlsBusy;
+    dom.authAccountCreateButton.disabled = controlsBusy;
     dom.authDeviceLoginCopyButton.disabled = controlsBusy
       || app.runtime.auth.pendingLogin?.mode !== "device"
       || !app.runtime.auth.pendingLogin?.userCode;
@@ -1149,7 +1227,7 @@ function buildPendingInterruptNote({ activeThread, pendingInterruptSubmit }) {
   return "正在打断当前任务，随后会自动发送你刚才的新消息。";
 }
 
-function buildAccessModePendingNote(store, settings, effectiveSettings, draft) {
+function buildAccessModePendingNote(store, settings, effectiveSettings, draft, auth) {
   if (!draft.dirty) {
     return "";
   }
@@ -1169,7 +1247,19 @@ function buildAccessModePendingNote(store, settings, effectiveSettings, draft) {
       return `已选择切到第三方模式，供应商 ${currentSelection.provider.name}，模型 ${draft.thirdPartyModel}。点击“确定切换”后才会生效。`;
     }
 
-    return "已选择切回认证模式。点击“确定切换”后才会生效。";
+    if (draft.authAccountId) {
+      return `已选择切回认证模式，并固定使用 ${formatAuthAccountDisplayName(findAuthAccount(auth, draft.authAccountId), draft.authAccountId)}。点击“确定切换”后才会生效。`;
+    }
+
+    return "已选择切回认证模式，并改为跟随默认认证账号。点击“确定切换”后才会生效。";
+  }
+
+  if (draft.accessMode === "auth" && draft.authAccountId !== normalizeAuthAccountId(settings?.authAccountId)) {
+    if (draft.authAccountId) {
+      return `已选择把当前会话固定到认证账号 ${formatAuthAccountDisplayName(findAuthAccount(auth, draft.authAccountId), draft.authAccountId)}。点击“确定应用”后才会生效。`;
+    }
+
+    return "已选择让当前会话改为跟随默认认证账号。点击“确定应用”后才会生效。";
   }
 
   if (draft.accessMode === "third-party" && draft.thirdPartyModel !== (effectiveSettings.thirdPartyModel || "")) {
@@ -1350,6 +1440,44 @@ function formatPlanType(planType) {
   };
 
   return planLabels[planType] ?? planType;
+}
+
+function findAuthAccount(auth, accountId) {
+  const normalizedAccountId = normalizeAuthAccountId(accountId);
+
+  if (!normalizedAccountId || !Array.isArray(auth?.accounts)) {
+    return null;
+  }
+
+  return auth.accounts.find((account) => account.accountId === normalizedAccountId) ?? null;
+}
+
+function formatAuthAccountSelectLabel(account) {
+  if (!account) {
+    return "未命名账号";
+  }
+
+  const baseLabel = formatAuthAccountDisplayName(account, account.accountId);
+  return account.isActive ? `${baseLabel}（默认）` : baseLabel;
+}
+
+function formatAuthAccountDisplayName(account, fallbackAccountId = "") {
+  const accountEmail = typeof account?.accountEmail === "string" && account.accountEmail.trim()
+    ? account.accountEmail.trim()
+    : "";
+  const label = typeof account?.label === "string" && account.label.trim()
+    ? account.label.trim()
+    : "";
+  const accountId = typeof account?.accountId === "string" && account.accountId.trim()
+    ? account.accountId.trim()
+    : normalizeAuthAccountId(fallbackAccountId);
+  const displayLabel = accountEmail || label;
+
+  return displayLabel || accountId || "当前账号";
+}
+
+function normalizeAuthAccountId(value) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function shouldShowRemoteBrowserLoginWarning(auth) {

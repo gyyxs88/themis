@@ -23,6 +23,9 @@ export function createStoreHelpers({ app, getState, saveState }) {
       ...(effective.profile ? { profile: effective.profile } : {}),
       ...principalAssistantStyle,
       accessMode: effective.accessMode,
+      ...(effective.accessMode === "auth" && normalizeText(settings?.authAccountId)
+        ? { authAccountId: normalizeText(settings?.authAccountId) }
+        : {}),
       ...(activeModel ? { model: activeModel } : {}),
       ...(effective.reasoning ? { reasoning: effective.reasoning } : {}),
       ...(effective.sandboxMode ? { sandboxMode: effective.sandboxMode } : {}),
@@ -205,6 +208,7 @@ export function createStoreHelpers({ app, getState, saveState }) {
     return {
       profile: normalizeText(settings?.profile),
       accessMode,
+      authAccountId: normalizeText(settings?.authAccountId) || normalizeText(app.runtime.auth?.activeAccountId),
       model: inheritedModel,
       thirdPartyProviderId: thirdPartySelection.providerId,
       thirdPartyModel: thirdPartySelection.modelId,
@@ -224,6 +228,7 @@ export function createStoreHelpers({ app, getState, saveState }) {
     return {
       profile: normalizeText(settings?.profile) || inherited.profile,
       accessMode: inherited.accessMode,
+      authAccountId: normalizeText(settings?.authAccountId) || inherited.authAccountId,
       model: normalizeText(settings?.model) || inherited.model,
       thirdPartyProviderId: normalizeText(settings?.thirdPartyProviderId) || inherited.thirdPartyProviderId,
       thirdPartyModel: normalizeText(settings?.thirdPartyModel) || inherited.thirdPartyModel,

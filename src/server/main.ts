@@ -6,7 +6,9 @@ const host = process.env.THEMIS_HOST ?? "0.0.0.0";
 const port = Number.parseInt(process.env.THEMIS_PORT ?? "3100", 10);
 const taskTimeoutMs = Number.parseInt(process.env.THEMIS_TASK_TIMEOUT_MS ?? "300000", 10);
 const runtime = new CodexTaskRuntime();
-const authRuntime = new CodexAuthRuntime();
+const authRuntime = new CodexAuthRuntime({
+  registry: runtime.getRuntimeStore(),
+});
 const feishuService = new FeishuChannelService({
   runtime,
   authRuntime,

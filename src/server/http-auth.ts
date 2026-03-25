@@ -9,6 +9,17 @@ interface AuthLoginPayload {
   method?: unknown;
   mode?: unknown;
   apiKey?: unknown;
+  accountId?: unknown;
+}
+
+interface AuthAccountCreatePayload {
+  accountId?: unknown;
+  label?: unknown;
+  activate?: unknown;
+}
+
+interface AuthAccountSelectPayload {
+  accountId?: unknown;
 }
 
 interface BrowserLoginContext {
@@ -24,8 +35,9 @@ export async function handleAuthStatus(
   headOnly = false,
 ): Promise<void> {
   try {
-    const auth = await authRuntime.readSnapshot();
-    writeJson(response, 200, { auth: enrichAuthSnapshot(auth, request) }, headOnly);
+    const accountId = normalizeOptionalText(new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`).searchParams.get("accountId") ?? undefined);
+    const auth = await authRuntime.readSnapshot(accountId ?? undefined);
+    writeJson(response, 200, { auth: enrichAuthSnapshot(authRuntime, auth, request) }, headOnly);
   } catch (error) {
     writeJson(
       response,
@@ -50,12 +62,13 @@ export async function handleAuthLogin(
     const payload = (await readJsonBody(request)) as AuthLoginPayload;
     const method = normalizeOptionalText(payload.method);
     const mode = normalizeOptionalText(payload.mode);
+    const accountId = normalizeOptionalText(payload.accountId);
 
     if (method === "chatgpt") {
       const auth = mode === "device"
-        ? await authRuntime.startChatgptDeviceLogin()
-        : await authRuntime.startChatgptLogin();
-      writeJson(response, 200, { auth: enrichAuthSnapshot(auth, request) });
+        ? await authRuntime.startChatgptDeviceLogin(accountId ?? undefined)
+        : await authRuntime.startChatgptLogin(accountId ?? undefined);
+      writeJson(response, 200, { auth: enrichAuthSnapshot(authRuntime, auth, request) });
       return;
     }
 
@@ -72,8 +85,8 @@ export async function handleAuthLogin(
         return;
       }
 
-      const auth = await authRuntime.loginWithApiKey(apiKey);
-      writeJson(response, 200, { auth: enrichAuthSnapshot(auth, request) });
+      const auth = await authRuntime.loginWithApiKey(apiKey, accountId ?? undefined);
+      writeJson(response, 200, { auth: enrichAuthSnapshot(authRuntime, auth, request) });
       return;
     }
 
@@ -99,8 +112,10 @@ export async function handleAuthLogout(
   authRuntime: CodexAuthRuntime,
 ): Promise<void> {
   try {
-    const auth = await authRuntime.logout();
-    writeJson(response, 200, { auth: enrichAuthSnapshot(auth, request) });
+    const payload = (await readJsonBody(request).catch(() => ({}))) as AuthLoginPayload;
+    const accountId = normalizeOptionalText(payload.accountId);
+    const auth = await authRuntime.logout(accountId ?? undefined);
+    writeJson(response, 200, { auth: enrichAuthSnapshot(authRuntime, auth, request) });
   } catch (error) {
     writeJson(response, 500, {
       error: {
@@ -117,12 +132,88 @@ export async function handleAuthLoginCancel(
   authRuntime: CodexAuthRuntime,
 ): Promise<void> {
   try {
-    const auth = await authRuntime.cancelPendingLogin();
-    writeJson(response, 200, { auth: enrichAuthSnapshot(auth, request) });
+    const payload = (await readJsonBody(request).catch(() => ({}))) as AuthLoginPayload;
+    const accountId = normalizeOptionalText(payload.accountId);
+    const auth = await authRuntime.cancelPendingLogin(accountId ?? undefined);
+    writeJson(response, 200, { auth: enrichAuthSnapshot(authRuntime, auth, request) });
   } catch (error) {
     writeJson(response, 500, {
       error: {
         code: "AUTH_LOGIN_CANCEL_ERROR",
+        message: toErrorMessage(error),
+      },
+    });
+  }
+}
+
+export async function handleAuthAccountCreate(
+  request: IncomingMessage,
+  response: ServerResponse,
+  authRuntime: CodexAuthRuntime,
+): Promise<void> {
+  try {
+    const payload = (await readJsonBody(request)) as AuthAccountCreatePayload;
+    const label = normalizeOptionalText(payload.label);
+
+    if (!label) {
+      writeJson(response, 400, {
+        error: {
+          code: "INVALID_REQUEST",
+          message: "缺少账号名称。",
+        },
+      });
+      return;
+    }
+
+    const account = authRuntime.createAccount({
+      label,
+      ...(normalizeOptionalText(payload.accountId) ? { accountId: normalizeOptionalText(payload.accountId)! } : {}),
+      activate: typeof payload.activate === "boolean" ? payload.activate : true,
+    });
+    const auth = await authRuntime.readSnapshot(account.accountId);
+    writeJson(response, 200, {
+      account,
+      auth: enrichAuthSnapshot(authRuntime, auth, request),
+    });
+  } catch (error) {
+    writeJson(response, 500, {
+      error: {
+        code: "AUTH_ACCOUNT_CREATE_ERROR",
+        message: toErrorMessage(error),
+      },
+    });
+  }
+}
+
+export async function handleAuthAccountSelect(
+  request: IncomingMessage,
+  response: ServerResponse,
+  authRuntime: CodexAuthRuntime,
+): Promise<void> {
+  try {
+    const payload = (await readJsonBody(request)) as AuthAccountSelectPayload;
+    const accountId = normalizeOptionalText(payload.accountId);
+
+    if (!accountId) {
+      writeJson(response, 400, {
+        error: {
+          code: "INVALID_REQUEST",
+          message: "缺少 accountId。",
+        },
+      });
+      return;
+    }
+
+    const account = authRuntime.setActiveAccount(accountId);
+    const auth = await authRuntime.readSnapshot(account.accountId);
+    writeJson(response, 200, {
+      account,
+      auth: enrichAuthSnapshot(authRuntime, auth, request),
+    });
+  } catch (error) {
+    writeJson(response, 500, {
+      error: {
+        code: "AUTH_ACCOUNT_SELECT_ERROR",
         message: toErrorMessage(error),
       },
     });
@@ -138,11 +229,17 @@ function normalizeOptionalText(value: unknown): string | null {
   return text ? text : null;
 }
 
-function enrichAuthSnapshot(auth: CodexAuthSnapshot, request: IncomingMessage): CodexAuthSnapshot & {
+function enrichAuthSnapshot(authRuntime: CodexAuthRuntime, auth: CodexAuthSnapshot, request: IncomingMessage): CodexAuthSnapshot & {
   browserLogin: BrowserLoginContext;
+  accounts: ReturnType<CodexAuthRuntime["listAccounts"]>;
+  activeAccountId: string | null;
+  currentAccountId: string;
 } {
   return {
     ...auth,
+    accounts: authRuntime.listAccounts(),
+    activeAccountId: authRuntime.getActiveAccount()?.accountId ?? null,
+    currentAccountId: auth.accountId,
     browserLogin: resolveBrowserLoginContext(request),
   };
 }

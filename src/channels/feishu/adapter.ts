@@ -1,5 +1,6 @@
 import type { ChannelAdapter } from "../../communication/adapter.js";
 import type { TaskError, TaskEvent, TaskRequest, TaskResult } from "../../types/index.js";
+import { appendTaskReplyQuotaText } from "../../core/task-reply-quota.js";
 import type { FeishuDeliveryMessage, FeishuMessageSink, FeishuTaskPayload } from "./types.js";
 
 export interface FeishuAdapterOptions {
@@ -99,7 +100,10 @@ export class FeishuAdapter implements ChannelAdapter<FeishuTaskPayload> {
   }
 
   async handleResult(result: TaskResult): Promise<void> {
-    const text = normalizeText(result.output) ?? normalizeText(result.summary) ?? "任务已结束。";
+    const text = appendTaskReplyQuotaText(
+      normalizeText(result.output) ?? normalizeText(result.summary) ?? "任务已结束。",
+      result.structuredOutput,
+    );
 
     await this.deliver({
       kind: "result",

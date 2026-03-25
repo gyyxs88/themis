@@ -10,7 +10,7 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 - 飞书长连接渠道已经接入，可与 Web 共享同一套通信层、运行时和本地持久化。
 - 后端围绕 `@openai/codex-sdk` 做会话复用、流式输出、分叉上下文和历史恢复。
 - 本地 SQLite `infra/local/themis.db` 负责持久化 conversation、turn、event、touched files、identity 和第三方兼容 provider 配置。
-- Web 端已支持 Codex 认证、设备码登录、历史加载、会话分叉、第三方兼容接入、首次对话长期画像建档、principal 级长期人格配置和运行参数设置。
+- Web 端已支持 Codex 认证、设备码登录、多账号自动建槽与管理、会话级手动切号、历史加载、会话分叉、第三方兼容接入、首次对话长期画像建档、principal 级长期人格配置和运行参数设置。
 
 ## 目录说明
 
@@ -49,6 +49,8 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 - 统一会话层：外部渠道先提供 `channelSessionKey`，运行时再解析成统一 `conversationId`。
 - 后端 Codex thread 复用：同一 `conversationId` 会恢复到同一条 Codex thread。
 - NDJSON 流式任务输出：支持中途事件、最终结果、取消和断连中止。
+- 回复额度尾注：认证模式下，Web / 飞书最终回复会附带当前认证返回的额度剩余尾注；当前 ChatGPT 常见会显示 `5h` 和 `1w` 两个窗口。
+- 多账号认证池：当前只针对 ChatGPT 登录态做多账号自动建槽；Themis 会按真实账号邮箱自动创建并命名账号槽位，自动把认证文件归档到对应 `CODEX_HOME`；再次检测到同邮箱时会直接复用已有槽位。Web 可查看账号、切默认账号，并给当前会话单独固定认证账号；飞书支持 `/account list`、`/account current`、`/account use`。
 - 飞书长连接主链路：普通文本消息、会话切换、命令、额度查询，以及“短延迟处理中占位槽位 + 消息编辑更新 + 飞书富文本渲染”的回复桥接。
 - 身份与会话辅助：Web 浏览器身份、一次性绑定码、跨端接入已有 `conversationId`。
 - 长期协作档案：首次对话会进入一次性 bootstrap，用 4 轮分组采集称呼、长期背景、协作偏好，以及 Themis 的长期人格字段（语言风格 / 性格标签 / 补充说明 / SOUL），并按 `principal` 持久化；后续跨 Web / 飞书、跨会话复用。
@@ -77,6 +79,7 @@ npm install
 
 - 本机已有 Codex / ChatGPT 登录态。
 - 或者环境里已提供 `CODEX_API_KEY`。
+- 多账号模式下，默认账号会沿用当前 `CODEX_HOME` 或 `~/.codex`；当 Themis 在 ChatGPT 登录态下检测到一个新账号时，会自动创建对应槽位并把认证文件保存到 `infra/local/codex-auth/<accountId>/`，同时默认强制 `cli_auth_credentials_store = "file"`。如果你先在 VS Code Codex、桌面版 Codex 或 CLI 里切了 ChatGPT 账号，再回到 Themis，Themis 会在下次读取认证状态或发送任务时自动识别并同步。纯 API Key 登录不在这套自动建槽/换号范围里。
 
 3. 如果需要飞书渠道，再额外配置：
 

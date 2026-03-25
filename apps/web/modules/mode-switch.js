@@ -2,6 +2,7 @@ export function createDefaultModeSwitchDraftState() {
   return {
     threadId: "",
     accessMode: "auth",
+    authAccountId: "",
     thirdPartyModel: "",
     dirty: false,
   };
@@ -14,6 +15,12 @@ export function createModeSwitchController(app) {
     dom.accessModeSelect.addEventListener("change", () => {
       updateDraft({
         accessMode: dom.accessModeSelect.value,
+      });
+    });
+
+    dom.modeSwitchAuthAccountSelect.addEventListener("change", () => {
+      updateDraft({
+        authAccountId: dom.modeSwitchAuthAccountSelect.value,
       });
     });
 
@@ -65,6 +72,7 @@ export function createModeSwitchController(app) {
 
     const nextSettings = {
       accessMode: draft.accessMode === "third-party" ? "third-party" : "",
+      authAccountId: draft.accessMode === "auth" ? (draft.authAccountId || "") : "",
     };
 
     if (draft.accessMode === "third-party") {
@@ -134,6 +142,7 @@ function buildDraftState(threadId, settings, store) {
     ...createDefaultModeSwitchDraftState(),
     threadId,
     accessMode: effectiveSettings.accessMode || "auth",
+    authAccountId: normalizeText(settings?.authAccountId),
     thirdPartyModel: selection.modelId || effectiveSettings.thirdPartyModel || "",
     dirty: false,
   };
@@ -145,6 +154,7 @@ function finalizeDraft(draft, threadId, settings, store) {
   const normalizedAccessMode = draft.accessMode === "third-party" && store.getThirdPartyProviders().length
     ? "third-party"
     : "auth";
+  const normalizedAuthAccountId = normalizedAccessMode === "auth" ? normalizeText(draft.authAccountId) : "";
   const fallbackModel = selection.modelId || effectiveSettings.thirdPartyModel || "";
   const candidateModel = normalizeText(draft.thirdPartyModel);
   const normalizedThirdPartyModel = selection.models.some((model) => model.model === candidateModel)
@@ -155,21 +165,29 @@ function finalizeDraft(draft, threadId, settings, store) {
     ...createDefaultModeSwitchDraftState(),
     threadId,
     accessMode: normalizedAccessMode,
+    authAccountId: normalizedAuthAccountId,
     thirdPartyModel: normalizedThirdPartyModel,
     dirty: hasDraftChanges(
       {
         accessMode: normalizedAccessMode,
+        authAccountId: normalizedAuthAccountId,
         thirdPartyModel: normalizedThirdPartyModel,
       },
+      settings,
       effectiveSettings,
     ),
   };
 }
 
-function hasDraftChanges(draft, effectiveSettings) {
+function hasDraftChanges(draft, settings, effectiveSettings) {
   const currentAccessMode = effectiveSettings.accessMode || "auth";
+  const explicitAuthAccountId = normalizeText(settings?.authAccountId);
 
   if (draft.accessMode !== currentAccessMode) {
+    return true;
+  }
+
+  if (draft.accessMode === "auth" && draft.authAccountId !== explicitAuthAccountId) {
     return true;
   }
 
@@ -183,6 +201,7 @@ function hasDraftChanges(draft, effectiveSettings) {
 function isSameDraft(left, right) {
   return left.threadId === right.threadId
     && left.accessMode === right.accessMode
+    && left.authAccountId === right.authAccountId
     && left.thirdPartyModel === right.thirdPartyModel
     && left.dirty === right.dirty;
 }

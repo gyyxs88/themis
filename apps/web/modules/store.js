@@ -286,6 +286,8 @@ export function createStore(app) {
     getThirdPartyProviders: helpers.getThirdPartyProviders,
     getThirdPartyModels: helpers.getThirdPartyModels,
     getReasoningOptions: helpers.getReasoningOptions,
+    describeAssistantStyle: helpers.describeAssistantStyle,
+    resolveAssistantDisplayLabel: helpers.resolveAssistantDisplayLabel,
     resolveAccessMode: helpers.resolveAccessMode,
     resolveThirdPartySelection: helpers.resolveThirdPartySelection,
     resolveInheritedSettings: helpers.resolveInheritedSettings,
