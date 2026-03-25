@@ -159,6 +159,17 @@ export function createComposerActions(app, streamActions) {
       }
     }
 
+    const personaSaved = await app.identity.saveAssistantPersona({
+      assistantLanguageStyle: dom.assistantLanguageStyleInput.value,
+      assistantMbti: dom.assistantMbtiInput.value,
+      assistantStyleNotes: dom.assistantStyleNotesInput.value,
+      assistantSoul: dom.assistantSoulInput.value,
+    }, { quiet: false });
+
+    if (!personaSaved) {
+      return;
+    }
+
     const turn = store.createTurn({
       goal,
       inputText: "",

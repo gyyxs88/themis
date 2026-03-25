@@ -2,21 +2,33 @@ export function createSidebarActions(app) {
   const { dom, store } = app;
 
   function bindSettingsControls() {
-    dom.personaSelect.addEventListener("change", () => {
-      const thread = store.getActiveThread();
-
-      if (!thread) {
-        return;
-      }
-
-      const inherited = store.resolveInheritedSettings(thread.settings);
-      const selectedProfile = dom.personaSelect.value;
-
-      store.updateThreadSettings({
-        profile: selectedProfile && selectedProfile !== inherited.profile ? selectedProfile : "",
+    const updatePersonaDraft = () => {
+      app.identity.updatePersonaDraft({
+        assistantLanguageStyleDraft: dom.assistantLanguageStyleInput.value,
+        assistantMbtiDraft: dom.assistantMbtiInput.value,
+        assistantStyleNotesDraft: dom.assistantStyleNotesInput.value,
+        assistantSoulDraft: dom.assistantSoulInput.value,
       });
-      app.renderer.renderAll();
-    });
+    };
+
+    const savePersona = () => {
+      void app.identity.saveAssistantPersona({
+        assistantLanguageStyle: dom.assistantLanguageStyleInput.value,
+        assistantMbti: dom.assistantMbtiInput.value,
+        assistantStyleNotes: dom.assistantStyleNotesInput.value,
+        assistantSoul: dom.assistantSoulInput.value,
+      });
+    };
+
+    for (const element of [
+      dom.assistantLanguageStyleInput,
+      dom.assistantMbtiInput,
+      dom.assistantStyleNotesInput,
+      dom.assistantSoulInput,
+    ]) {
+      element.addEventListener("input", updatePersonaDraft);
+      element.addEventListener("change", savePersona);
+    }
 
     dom.modelSelect.addEventListener("change", () => {
       const thread = store.getActiveThread();

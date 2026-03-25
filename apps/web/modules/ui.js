@@ -93,7 +93,7 @@ export function createRenderer(app) {
     const settings = thread?.settings ?? store.createDefaultThreadSettings();
     const effectiveSettings = store.resolveEffectiveSettings(settings);
 
-    renderPersonaSelect(settings, effectiveSettings);
+    renderAssistantStyleInputs(effectiveSettings);
     renderModelSelect(settings, effectiveSettings);
     renderThirdPartyProviderSelect(settings, effectiveSettings);
     renderThirdPartyModelSelect(settings, effectiveSettings);
@@ -103,7 +103,7 @@ export function createRenderer(app) {
     renderSandboxSelect(effectiveSettings);
     renderWebSearchSelect(effectiveSettings);
     renderNetworkAccessSelect(effectiveSettings);
-    renderPersonaNote(effectiveSettings);
+    renderAssistantStyleNote(effectiveSettings);
     renderRuntimeConfigNote(settings, effectiveSettings);
     renderConversationLinkState(thread);
     renderIdentityState();
@@ -113,21 +113,21 @@ export function createRenderer(app) {
     renderAuthState();
 
     if (!thread) {
-      dom.settingsNote.textContent = "这些设置只作用于当前会话后续发出的任务。";
+      dom.settingsNote.textContent = "上方人格字段属于当前 principal 的长期默认配置；下方运行参数只作用于当前会话后续发出的任务。";
       return;
     }
 
     if (thread.serverThreadId) {
-      dom.settingsNote.textContent = `当前会话已绑定后端 Codex thread：${thread.serverThreadId}`;
+      dom.settingsNote.textContent = `当前会话已绑定后端 Codex thread：${thread.serverThreadId}。上方人格字段仍按当前 principal 的长期默认配置生效。`;
       return;
     }
 
     if (thread.bootstrapTranscript) {
-      dom.settingsNote.textContent = `这是一个 fork 会话。第一次发送时，会先把${store.describeBootstrapLabel(thread)}导入新的 Codex 会话。`;
+      dom.settingsNote.textContent = `这是一个 fork 会话。第一次发送时，会先把${store.describeBootstrapLabel(thread)}导入新的 Codex 会话；上方人格字段仍按当前 principal 的长期默认配置生效。`;
       return;
     }
 
-    dom.settingsNote.textContent = "当前还没有建立后端上下文。首次发送后会创建新的 Codex 会话。";
+    dom.settingsNote.textContent = "上方人格字段属于当前 principal 的长期默认配置；首次发送后，下面这些运行参数会绑定到新的 Codex 会话。";
   }
 
   function renderThirdPartyEditor() {
@@ -232,43 +232,47 @@ export function createRenderer(app) {
     dom.modelSelect.value = effectiveSettings.model ?? "";
   }
 
-  function renderPersonaSelect(settings, effectiveSettings) {
-    const runtimeConfig = app.runtime.runtimeConfig;
-    const personas = store.getPersonas();
-    const defaultProfileId = runtimeConfig.defaults?.profile ?? personas[0]?.id ?? "";
-    const selectedProfileId = effectiveSettings.profile || defaultProfileId;
-    const options = personas.some((persona) => persona.id === selectedProfileId)
-      ? personas
-      : selectedProfileId
-        ? [store.resolvePersonaProfile(selectedProfileId), ...personas]
-        : personas;
-
-    if (runtimeConfig.status === "loading" && !options.length) {
-      dom.personaSelect.innerHTML = '<option value="">正在读取人格预设...</option>';
-      dom.personaSelect.value = "";
-      return;
-    }
-
-    if (!options.length) {
-      dom.personaSelect.innerHTML = '<option value="">Themis 默认人格</option>';
-      dom.personaSelect.value = "";
-      return;
-    }
-
-    dom.personaSelect.innerHTML = options
-      .map((persona) => {
-        const label = persona.id === defaultProfileId ? `${persona.label}（默认）` : persona.label;
-        return `<option value="${utils.escapeHtml(persona.id)}">${utils.escapeHtml(label)}</option>`;
-      })
-      .join("");
-
-    dom.personaSelect.value = selectedProfileId || defaultProfileId;
+  function renderAssistantStyleInputs(effectiveSettings) {
+    dom.assistantLanguageStyleInput.value = app.runtime.identity?.assistantLanguageStyleDraft
+      ?? app.runtime.identity?.assistantLanguageStyle
+      ?? "";
+    dom.assistantMbtiInput.value = app.runtime.identity?.assistantMbtiDraft
+      ?? app.runtime.identity?.assistantMbti
+      ?? "";
+    dom.assistantStyleNotesInput.value = app.runtime.identity?.assistantStyleNotesDraft
+      ?? app.runtime.identity?.assistantStyleNotes
+      ?? "";
+    dom.assistantSoulInput.value = app.runtime.identity?.assistantSoulDraft ?? app.runtime.identity?.assistantSoul ?? "";
   }
 
-  function renderPersonaNote(effectiveSettings) {
-    const persona = store.resolvePersonaProfile(effectiveSettings.profile);
-    const vibeText = persona.vibe ? ` 当前气质：${persona.vibe}。` : "";
-    dom.personaNote.textContent = `当前人格：${persona.label}。${persona.description}${vibeText} 人格只影响提示词和表达风格，不改变模型、权限和工具能力。`;
+  function renderAssistantStyleNote(effectiveSettings) {
+    const assistantLanguageStyle = app.runtime.identity?.assistantLanguageStyleDraft
+      ?? app.runtime.identity?.assistantLanguageStyle
+      ?? "";
+    const assistantMbti = app.runtime.identity?.assistantMbtiDraft
+      ?? app.runtime.identity?.assistantMbti
+      ?? "";
+    const assistantStyleNotes = app.runtime.identity?.assistantStyleNotesDraft
+      ?? app.runtime.identity?.assistantStyleNotes
+      ?? "";
+    const assistantSoul = app.runtime.identity?.assistantSoulDraft
+      ?? app.runtime.identity?.assistantSoul
+      ?? "";
+    const styleDescription = store.describeAssistantStyle({
+      languageStyle: assistantLanguageStyle,
+      assistantMbti,
+      styleNotes: assistantStyleNotes,
+      assistantSoul,
+    });
+    const hasUnsavedDraft = assistantLanguageStyle !== (app.runtime.identity?.assistantLanguageStyle ?? "")
+      || assistantMbti !== (app.runtime.identity?.assistantMbti ?? "")
+      || assistantStyleNotes !== (app.runtime.identity?.assistantStyleNotes ?? "")
+      || assistantSoul !== (app.runtime.identity?.assistantSoul ?? "");
+    dom.assistantStyleNote.textContent = app.runtime.identity?.savingPersona
+      ? `${styleDescription} 正在保存当前 principal 的长期人格。`
+      : hasUnsavedDraft
+        ? `${styleDescription} 这里配置的是当前 principal 的长期人格，所有会话默认继承；发送消息前会自动保存，只有重置 principal 才会一起清空。`
+        : `${styleDescription} 这里配置的是当前 principal 的长期人格，所有会话默认继承；只有重置 principal 才会一起清空。`;
   }
 
   function renderReasoningSelect(settings, effectiveSettings) {
@@ -402,11 +406,6 @@ export function createRenderer(app) {
     }
 
     const parts = ["模型列表来自 Codex app-server。"];
-    const defaultPersona = store.resolvePersonaProfile(runtimeConfig.defaults.profile);
-
-    if (defaultPersona?.id) {
-      parts.push(`默认人格：${defaultPersona.label}。`);
-    }
 
     if (runtimeConfig.defaults.model) {
       parts.push(`当前默认模型：${runtimeConfig.defaults.model}。`);
@@ -819,7 +818,10 @@ export function createRenderer(app) {
     dom.modelSelect.disabled = controlsBusy
       || !store.getVisibleModels(store.getActiveThread()?.settings).length
       || Boolean(app.runtime.runtimeConfig.provider?.lockedModel);
-    dom.personaSelect.disabled = controlsBusy || !store.getPersonas().length;
+    dom.assistantLanguageStyleInput.disabled = controlsBusy || app.runtime.identity?.savingPersona;
+    dom.assistantMbtiInput.disabled = controlsBusy || app.runtime.identity?.savingPersona;
+    dom.assistantStyleNotesInput.disabled = controlsBusy || app.runtime.identity?.savingPersona;
+    dom.assistantSoulInput.disabled = controlsBusy || app.runtime.identity?.savingPersona;
     dom.reasoningSelect.disabled = controlsBusy;
     dom.approvalSelect.disabled = controlsBusy;
     dom.sandboxSelect.disabled = controlsBusy;

@@ -15,14 +15,10 @@ import {
   type CodexRuntimeModel,
   type CodexRuntimeThirdPartyProvider,
 } from "./codex-app-server.js";
+import { buildAssistantStyleSessionPayload } from "./assistant-style.js";
 import { ConversationService } from "./conversation-service.js";
 import { IdentityLinkService } from "./identity-link-service.js";
 import { buildBootstrapPrompt, buildTaskPrompt } from "./prompt.js";
-import {
-  DEFAULT_PERSONA_PROFILE_ID,
-  listThemisPersonaProfiles,
-  resolveThemisPersonaProfile,
-} from "./persona-profiles.js";
 import {
   PrincipalPersonaService,
   type PrincipalPersonaOnboardingInterceptResult,
@@ -110,10 +106,6 @@ export class CodexTaskRuntime {
       ? this.principalPersonaService.maybeHandleOnboardingTurn(principalId, request)
       : null;
 
-    if (!onboardingIntercept) {
-      request = this.principalPersonaService.applyProfileDefaults(principalId, request);
-    }
-
     const taskId = request.taskId ?? createId("task");
     const emit = async (event: TaskEvent): Promise<void> => {
       this.runtimeStore.appendTaskEvent(event);
@@ -137,12 +129,14 @@ export class CodexTaskRuntime {
       );
       sessionLease = await target.sessionStore.acquire(request, threadOptions);
       const thread = sessionLease.thread;
+      const personalizedProfileContext = this.principalPersonaService.buildPromptContext(principalId);
       const prompt = onboardingIntercept
-        ? buildBootstrapPrompt(request, onboardingIntercept)
+        ? buildBootstrapPrompt(request, onboardingIntercept, {
+          personalizedProfileContext,
+        })
         : buildTaskPrompt(request, {
-          personalizedProfileContext: this.principalPersonaService.buildPromptContext(principalId),
+          personalizedProfileContext,
         });
-      const persona = resolveThemisPersonaProfile(request.options?.profile);
       const touchedFiles = new Set<string>();
       let finalResponse = "";
 
@@ -211,7 +205,7 @@ export class CodexTaskRuntime {
         structuredOutput: createStructuredOutput(
           sessionLease,
           target,
-          persona,
+          request.options,
           resolvedThreadId,
           onboardingIntercept,
         ),
@@ -293,6 +287,10 @@ export class CodexTaskRuntime {
 
   getIdentityLinkService(): IdentityLinkService {
     return this.identityLinkService;
+  }
+
+  getPrincipalPersonaService(): PrincipalPersonaService {
+    return this.principalPersonaService;
   }
 
   reloadProviderConfig(): void {
@@ -420,10 +418,12 @@ function resolveFinalOutput(
 function createStructuredOutput(
   sessionLease: CodexSessionLease,
   target: ResolvedRuntimeTarget,
-  persona: ReturnType<typeof resolveThemisPersonaProfile>,
+  options: TaskRequest["options"] | undefined,
   resolvedThreadId: string | undefined,
   onboardingIntercept: PrincipalPersonaOnboardingInterceptResult | null,
 ): Record<string, unknown> {
+  const assistantStyle = buildAssistantStyleSessionPayload(options);
+
   return {
     session: {
       ...(sessionLease.sessionId ? { sessionId: sessionLease.sessionId } : {}),
@@ -432,8 +432,7 @@ function createStructuredOutput(
       mode: sessionLease.sessionMode,
       accessMode: target.accessMode,
       ...(target.providerId ? { thirdPartyProviderId: target.providerId } : {}),
-      profile: persona.id,
-      profileLabel: persona.label,
+      ...(assistantStyle ? { assistantStyle } : {}),
     },
     ...(onboardingIntercept ? { personaOnboarding: createPersonaOnboardingPayload(onboardingIntercept) } : {}),
   };
@@ -575,7 +574,6 @@ function createUnifiedRuntimeCatalog(
   runtimeCatalog: CodexRuntimeCatalog,
   providerConfigs: OpenAICompatibleProviderConfig[],
 ): CodexRuntimeCatalog {
-  const personas = listThemisPersonaProfiles();
   const hasThirdPartyAccessMode = runtimeCatalog.accessModes.some((mode) => mode.id === "third-party");
   const accessModes = !providerConfigs.length || hasThirdPartyAccessMode
     ? runtimeCatalog.accessModes
@@ -590,12 +588,7 @@ function createUnifiedRuntimeCatalog(
 
   return {
     ...runtimeCatalog,
-    defaults: {
-      ...runtimeCatalog.defaults,
-      profile: runtimeCatalog.defaults.profile ?? DEFAULT_PERSONA_PROFILE_ID,
-    },
     accessModes,
-    personas,
     thirdPartyProviders: [
       ...providerConfigs.map((providerConfig) => createThirdPartyProviderCatalog(providerConfig)),
       ...runtimeCatalog.thirdPartyProviders.filter(

@@ -8,12 +8,20 @@ export function createStoreHelpers({ app, getState, saveState }) {
     { reasoningEffort: "high", description: "high" },
     { reasoningEffort: "xhigh", description: "xhigh" },
   ];
+  const LEGACY_PERSONA_LABELS = {
+    "themis-default": "Themis",
+    executor: "推进官",
+    mentor: "带教搭档",
+    reviewer: "审查官",
+  };
 
   function buildTaskOptions(settings) {
     const effective = resolveEffectiveSettings(settings);
     const activeModel = effective.accessMode === "third-party" ? effective.thirdPartyModel : effective.model;
+    const principalAssistantStyle = resolvePrincipalAssistantStyleOptions();
     const options = {
       ...(effective.profile ? { profile: effective.profile } : {}),
+      ...principalAssistantStyle,
       accessMode: effective.accessMode,
       ...(activeModel ? { model: activeModel } : {}),
       ...(effective.reasoning ? { reasoning: effective.reasoning } : {}),
@@ -29,6 +37,21 @@ export function createStoreHelpers({ app, getState, saveState }) {
     };
 
     return Object.keys(options).length ? options : undefined;
+  }
+
+  function resolvePrincipalAssistantStyleOptions() {
+    const identity = app.runtime.identity ?? {};
+    const languageStyle = normalizeText(identity.assistantLanguageStyle);
+    const assistantMbti = normalizeText(identity.assistantMbti);
+    const styleNotes = normalizeText(identity.assistantStyleNotes);
+    const assistantSoul = normalizeLongText(identity.assistantSoul);
+
+    return {
+      ...(languageStyle ? { languageStyle } : {}),
+      ...(assistantMbti ? { assistantMbti } : {}),
+      ...(styleNotes ? { styleNotes } : {}),
+      ...(assistantSoul ? { assistantSoul } : {}),
+    };
   }
 
   function getRuntimeConfig() {
@@ -48,32 +71,6 @@ export function createStoreHelpers({ app, getState, saveState }) {
       accessModes: [],
       thirdPartyProviders: [],
       personas: [],
-    };
-  }
-
-  function getPersonas() {
-    const runtimeConfig = getRuntimeConfig();
-    return Array.isArray(runtimeConfig.personas) ? runtimeConfig.personas : [];
-  }
-
-  function resolvePersonaProfile(profileId) {
-    const normalized = normalizeText(profileId);
-    const personas = getPersonas();
-
-    if (normalized) {
-      return personas.find((persona) => persona.id === normalized) ?? {
-        id: normalized,
-        label: normalized,
-        description: "当前线程记录的人格预设，没有出现在服务端返回的人格列表中。",
-        vibe: "",
-      };
-    }
-
-    return personas[0] ?? {
-      id: "themis-default",
-      label: "Themis",
-      description: "默认人格。",
-      vibe: "",
     };
   }
 
@@ -178,7 +175,6 @@ export function createStoreHelpers({ app, getState, saveState }) {
     const runtimeConfig = getRuntimeConfig();
     const visibleModels = getVisibleModelsWithoutFallback(settings);
     const configuredModel = normalizeText(runtimeConfig.defaults.model);
-    const configuredProfile = normalizeText(runtimeConfig.defaults.profile);
     const inheritedModel = normalizeText(settings?.model)
       || configuredModel
       || runtimeConfig.models.find((model) => model.isDefault)?.model
@@ -207,7 +203,7 @@ export function createStoreHelpers({ app, getState, saveState }) {
       );
 
     return {
-      profile: normalizeText(settings?.profile) || configuredProfile || getPersonas()[0]?.id || "",
+      profile: normalizeText(settings?.profile),
       accessMode,
       model: inheritedModel,
       thirdPartyProviderId: thirdPartySelection.providerId,
@@ -556,6 +552,74 @@ export function createStoreHelpers({ app, getState, saveState }) {
     return typeof value === "boolean" ? value : null;
   }
 
+  function normalizeLongText(value) {
+    if (typeof value !== "string") {
+      return "";
+    }
+
+    return value
+      .replace(/\r\n/g, "\n")
+      .split("\n")
+      .map((line) => line.trimEnd())
+      .join("\n")
+      .trim()
+      .slice(0, 4000);
+  }
+
+  function resolveAssistantDisplayLabel(options) {
+    const assistantMbti = normalizeText(options?.assistantMbti);
+    const languageStyle = normalizeText(options?.languageStyle);
+    const assistantSoul = normalizeLongText(options?.assistantSoul);
+    const legacyProfile = normalizeText(options?.profile);
+
+    if (assistantMbti && languageStyle) {
+      return `Themis · ${truncateLabel(assistantMbti)} / ${truncateLabel(languageStyle)}`;
+    }
+
+    if (assistantMbti) {
+      return `Themis · ${truncateLabel(assistantMbti, 20)}`;
+    }
+
+    if (languageStyle) {
+      return `Themis · ${truncateLabel(languageStyle, 20)}`;
+    }
+
+    if (assistantSoul) {
+      return "Themis · 补充设定";
+    }
+
+    return LEGACY_PERSONA_LABELS[legacyProfile] || "Themis";
+  }
+
+  function describeAssistantStyle(options) {
+    const languageStyle = normalizeText(options?.languageStyle);
+    const assistantMbti = normalizeText(options?.assistantMbti);
+    const styleNotes = normalizeText(options?.styleNotes);
+    const assistantSoul = normalizeLongText(options?.assistantSoul);
+    const parts = [
+      languageStyle ? `语言风格：${languageStyle}。` : "",
+      assistantMbti ? `MBTI / 性格标签：${assistantMbti}。` : "",
+      styleNotes ? `补充说明：${styleNotes}。` : "",
+      assistantSoul ? `补充设定：已配置 ${assistantSoul.length} 字。` : "",
+    ].filter(Boolean);
+
+    if (parts.length) {
+      return `${parts.join(" ")} 这些设置只影响提示词和表达风格，不改变模型、权限和工具能力。`;
+    }
+
+    const legacyProfile = normalizeText(options?.profile);
+
+    if (legacyProfile && LEGACY_PERSONA_LABELS[legacyProfile]) {
+      return `当前沿用旧会话里的预设人格：${LEGACY_PERSONA_LABELS[legacyProfile]}。新会话建议直接填写语言风格、MBTI 或补充说明。`;
+    }
+
+    return "当前未设置额外风格。Themis 会按默认协作型助理方式表达，重点仍由你的当轮指令决定。";
+  }
+
+  function truncateLabel(value, maxLength = 14) {
+    return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
+  }
+
   function shouldIncludeNetworkAccess(settings) {
     return typeof settings.networkAccessEnabled === "boolean"
       && settings.sandboxMode !== "read-only"
@@ -564,12 +628,12 @@ export function createStoreHelpers({ app, getState, saveState }) {
 
   return {
     buildTaskOptions,
-    getPersonas,
     getVisibleModels,
     getThirdPartyProviders,
     getThirdPartyModels,
     getReasoningOptions,
-    resolvePersonaProfile,
+    describeAssistantStyle,
+    resolveAssistantDisplayLabel,
     resolveAccessMode,
     resolveThirdPartySelection,
     resolveInheritedSettings,

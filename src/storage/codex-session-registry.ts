@@ -2641,18 +2641,24 @@ function normalizePrincipalPersonaProfileData(value: unknown): PrincipalPersonaP
 
   const preferredAddress = normalizeOptionalText(value.preferredAddress);
   const assistantName = normalizeOptionalText(value.assistantName);
+  const assistantLanguageStyle = normalizeOptionalText(value.assistantLanguageStyle);
+  const assistantMbti = normalizeOptionalText(value.assistantMbti);
+  const assistantStyleNotes = normalizeOptionalText(value.assistantStyleNotes);
   const workSummary = normalizeOptionalText(value.workSummary);
   const collaborationStyle = normalizeOptionalText(value.collaborationStyle);
   const boundaries = normalizeOptionalText(value.boundaries);
-  const defaultProfileId = normalizeOptionalText(value.defaultProfileId);
+  const assistantSoul = normalizeOptionalMultilineText(value.assistantSoul);
 
   return {
     ...(preferredAddress ? { preferredAddress } : {}),
     ...(assistantName ? { assistantName } : {}),
+    ...(assistantLanguageStyle ? { assistantLanguageStyle } : {}),
+    ...(assistantMbti ? { assistantMbti } : {}),
+    ...(assistantStyleNotes ? { assistantStyleNotes } : {}),
+    ...(assistantSoul ? { assistantSoul } : {}),
     ...(workSummary ? { workSummary } : {}),
     ...(collaborationStyle ? { collaborationStyle } : {}),
     ...(boundaries ? { boundaries } : {}),
-    ...(defaultProfileId ? { defaultProfileId } : {}),
   };
 }
 
@@ -2661,16 +2667,21 @@ function normalizePrincipalPersonaOnboardingState(value: unknown): PrincipalPers
     return {
       stepIndex: 0,
       draft: {},
+      completedStepIds: [],
     };
   }
 
   const stepIndex = Number.isInteger(value.stepIndex) && Number(value.stepIndex) >= 0
     ? Number(value.stepIndex)
     : 0;
+  const completedStepIds = Array.isArray(value.completedStepIds)
+    ? value.completedStepIds.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    : [];
 
   return {
     stepIndex,
     draft: normalizePrincipalPersonaProfileData(value.draft),
+    completedStepIds,
   };
 }
 
@@ -2695,6 +2706,22 @@ function normalizeOptionalText(value: unknown): string | undefined {
   }
 
   const normalized = value.trim();
+  return normalized ? normalized : undefined;
+}
+
+function normalizeOptionalMultilineText(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const normalized = value
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trim()
+    .slice(0, 4000);
+
   return normalized ? normalized : undefined;
 }
 

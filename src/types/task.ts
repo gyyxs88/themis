@@ -96,6 +96,10 @@ export interface TaskAttachment {
 
 export interface TaskOptions {
   profile?: string;
+  languageStyle?: string;
+  assistantMbti?: string;
+  styleNotes?: string;
+  assistantSoul?: string;
   model?: string;
   reasoning?: ReasoningLevel;
   memoryMode?: MemoryMode;

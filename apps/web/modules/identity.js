@@ -4,10 +4,19 @@ function createDefaultIdentityState(browserUserId = "") {
     browserUserId,
     principalId: "",
     principalDisplayName: "",
+    assistantLanguageStyle: "",
+    assistantLanguageStyleDraft: "",
+    assistantMbti: "",
+    assistantMbtiDraft: "",
+    assistantStyleNotes: "",
+    assistantStyleNotesDraft: "",
+    assistantSoul: "",
+    assistantSoulDraft: "",
     linkCode: "",
     linkCodeExpiresAt: "",
     errorMessage: "",
     issuing: false,
+    savingPersona: false,
   };
 }
 
@@ -42,11 +51,28 @@ export function createIdentityController(app) {
       }
 
       const identity = data?.identity ?? {};
+      const personaProfile = data?.personaProfile ?? {};
       app.runtime.identity = {
         ...app.runtime.identity,
         status: "ready",
         principalId: typeof identity.principalId === "string" ? identity.principalId : "",
         principalDisplayName: typeof identity.principalDisplayName === "string" ? identity.principalDisplayName : "",
+        assistantLanguageStyle: typeof personaProfile.assistantLanguageStyle === "string"
+          ? personaProfile.assistantLanguageStyle
+          : "",
+        assistantLanguageStyleDraft: typeof personaProfile.assistantLanguageStyle === "string"
+          ? personaProfile.assistantLanguageStyle
+          : "",
+        assistantMbti: typeof personaProfile.assistantMbti === "string" ? personaProfile.assistantMbti : "",
+        assistantMbtiDraft: typeof personaProfile.assistantMbti === "string" ? personaProfile.assistantMbti : "",
+        assistantStyleNotes: typeof personaProfile.assistantStyleNotes === "string"
+          ? personaProfile.assistantStyleNotes
+          : "",
+        assistantStyleNotesDraft: typeof personaProfile.assistantStyleNotes === "string"
+          ? personaProfile.assistantStyleNotes
+          : "",
+        assistantSoul: typeof personaProfile.assistantSoul === "string" ? personaProfile.assistantSoul : "",
+        assistantSoulDraft: typeof personaProfile.assistantSoul === "string" ? personaProfile.assistantSoul : "",
         errorMessage: "",
       };
     } catch (error) {
@@ -109,6 +135,107 @@ export function createIdentityController(app) {
     return app.runtime.identity;
   }
 
+  function updatePersonaDraft(patch) {
+    app.runtime.identity = {
+      ...app.runtime.identity,
+      ...patch,
+    };
+  }
+
+  async function saveAssistantPersona(payload, options = {}) {
+    const normalizedPayload = {
+      assistantLanguageStyle: typeof payload?.assistantLanguageStyle === "string" ? payload.assistantLanguageStyle.trim() : "",
+      assistantMbti: typeof payload?.assistantMbti === "string" ? payload.assistantMbti.trim() : "",
+      assistantStyleNotes: typeof payload?.assistantStyleNotes === "string" ? payload.assistantStyleNotes.trim() : "",
+      assistantSoul: typeof payload?.assistantSoul === "string" ? payload.assistantSoul.trim() : "",
+    };
+    const { quiet = false } = options;
+
+    if (
+      app.runtime.identity.status === "ready"
+      && !app.runtime.identity.savingPersona
+      && normalizedPayload.assistantLanguageStyle === app.runtime.identity.assistantLanguageStyle
+      && normalizedPayload.assistantMbti === app.runtime.identity.assistantMbti
+      && normalizedPayload.assistantStyleNotes === app.runtime.identity.assistantStyleNotes
+      && normalizedPayload.assistantSoul === app.runtime.identity.assistantSoul
+    ) {
+      return true;
+    }
+
+    app.runtime.identity = {
+      ...app.runtime.identity,
+      savingPersona: true,
+    };
+    app.renderer.renderAll();
+
+    try {
+      const response = await fetch("/api/identity/persona", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ...buildIdentityPayload(),
+          ...normalizedPayload,
+        }),
+      });
+      const data = await app.utils.safeReadJson(response);
+
+      if (!response.ok) {
+        throw new Error(data?.error?.message ?? "保存长期人格失败。");
+      }
+
+      const identity = data?.identity ?? {};
+      const personaProfile = data?.personaProfile ?? {};
+      app.runtime.identity = {
+        ...app.runtime.identity,
+        status: "ready",
+        principalId: typeof identity.principalId === "string" ? identity.principalId : app.runtime.identity.principalId,
+        principalDisplayName: typeof identity.principalDisplayName === "string"
+          ? identity.principalDisplayName
+          : app.runtime.identity.principalDisplayName,
+        assistantLanguageStyle: typeof personaProfile.assistantLanguageStyle === "string"
+          ? personaProfile.assistantLanguageStyle
+          : "",
+        assistantLanguageStyleDraft: typeof personaProfile.assistantLanguageStyle === "string"
+          ? personaProfile.assistantLanguageStyle
+          : "",
+        assistantMbti: typeof personaProfile.assistantMbti === "string" ? personaProfile.assistantMbti : "",
+        assistantMbtiDraft: typeof personaProfile.assistantMbti === "string" ? personaProfile.assistantMbti : "",
+        assistantStyleNotes: typeof personaProfile.assistantStyleNotes === "string"
+          ? personaProfile.assistantStyleNotes
+          : "",
+        assistantStyleNotesDraft: typeof personaProfile.assistantStyleNotes === "string"
+          ? personaProfile.assistantStyleNotes
+          : "",
+        assistantSoul: typeof personaProfile.assistantSoul === "string" ? personaProfile.assistantSoul : "",
+        assistantSoulDraft: typeof personaProfile.assistantSoul === "string" ? personaProfile.assistantSoul : "",
+        savingPersona: false,
+      };
+      app.renderer.renderAll();
+      return true;
+    } catch (error) {
+      app.runtime.identity = {
+        ...app.runtime.identity,
+        savingPersona: false,
+      };
+      app.renderer.renderAll();
+
+      if (!quiet) {
+        const activeThread = app.store.getActiveThread();
+
+        if (activeThread) {
+          app.store.setTransientStatus(
+            activeThread.id,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      }
+
+      return false;
+    }
+  }
+
   function getRequestIdentity() {
     const displayName = resolveDisplayName();
 
@@ -143,6 +270,8 @@ export function createIdentityController(app) {
   return {
     load,
     issueLinkCode,
+    saveAssistantPersona,
+    updatePersonaDraft,
     getRequestIdentity,
   };
 }

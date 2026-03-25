@@ -256,18 +256,49 @@
                     <span class="meta-label">模型、推理与审批</span>
                   </div>
 
-                  <p id="settings-note" class="settings-section-copy">这些设置只作用于当前会话后续发出的任务。</p>
+                  <p id="settings-note" class="settings-section-copy">上方人格字段属于当前 principal 的长期默认配置；下方运行参数只作用于当前会话后续发出的任务。</p>
                   <p id="runtime-config-note" class="settings-section-copy">正在从 Codex 读取可用模型与默认配置。</p>
 
                   <div class="settings-stack">
+                    <div class="settings-grid">
+                      <label class="settings-field">
+                        <span>长期语言风格</span>
+                        <input
+                          id="assistant-language-style-input"
+                          type="text"
+                          placeholder="比如：直接、少铺垫、口语化、偏技术写作。会作为当前 principal 的默认表达风格。"
+                        />
+                      </label>
+
+                      <label class="settings-field">
+                        <span>长期 MBTI / 性格标签</span>
+                        <input
+                          id="assistant-mbti-input"
+                          type="text"
+                          placeholder="比如：INTJ、ENTP、冷静理性、耐心型。会作为当前 principal 的默认性格标签。"
+                        />
+                      </label>
+                    </div>
+
                     <label class="settings-field">
-                      <span>人格预设</span>
-                      <select id="persona-select">
-                        <option value="">正在读取人格预设...</option>
-                      </select>
+                      <span>长期补充风格说明</span>
+                      <textarea
+                        id="assistant-style-notes-input"
+                        rows="4"
+                        placeholder="补充你希望 Themis 默认怎么表达、解释、推进，或有哪些不要踩的风格边界。所有会话都会继承。"
+                      ></textarea>
                     </label>
 
-                    <p id="persona-note" class="settings-section-copy">人格会影响表达风格和协作方式，不改变模型、权限和工具能力。</p>
+                    <label class="settings-field">
+                      <span>长期补充设定（可选）</span>
+                      <textarea
+                        id="assistant-soul-input"
+                        rows="8"
+                        placeholder="如果你希望 Themis 长期带一点固定习惯或原则，可以写在这里。所有会话都会继承。比如：先给结论再展开；不确定就直接说不知道；别太官话；做方案时先讲取舍。"
+                      ></textarea>
+                    </label>
+
+                    <p id="assistant-style-note" class="settings-section-copy">这些设置只影响提示词和表达风格，不改变模型、权限和工具能力。</p>
 
                     <label class="settings-field">
                       <span>认证模式模型</span>

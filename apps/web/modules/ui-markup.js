@@ -28,7 +28,7 @@ export function renderThreadButton(thread, { active, busy, status, escapeHtml })
 }
 
 export function renderTurnMarkup(turn, index, { store, utils }) {
-  const persona = store.resolvePersonaProfile(turn.options?.profile);
+  const assistantLabel = store.resolveAssistantDisplayLabel(turn.options);
   const assistantMessages = store.getVisibleAssistantMessages(turn);
   const assistantStreamMarkup = assistantMessages.length
     ? renderAssistantMessages(assistantMessages, utils, { showOperatorDetails: false })
@@ -55,7 +55,7 @@ export function renderTurnMarkup(turn, index, { store, utils }) {
       <article class="message-card assistant-card ${assistantCardClass(turn.state)}">
         <div class="assistant-head">
           <div>
-            <h3>${utils.escapeHtml(persona.label || "Themis")}</h3>
+            <h3>${utils.escapeHtml(assistantLabel)}</h3>
             <p class="assistant-copy">${assistantHeadline(turn)}</p>
           </div>
           <span class="badge ${badgeToneForStatus(turn.state)}">${formatStatusLabel(turn.state)}</span>

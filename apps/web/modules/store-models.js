@@ -189,6 +189,14 @@ export function createStoreModelHelpers() {
 
       const normalized = {
         ...(typeof value.profile === "string" && value.profile ? { profile: value.profile } : {}),
+        ...(typeof value.languageStyle === "string" && value.languageStyle
+          ? { languageStyle: value.languageStyle }
+          : {}),
+        ...(typeof value.assistantMbti === "string" && value.assistantMbti
+          ? { assistantMbti: value.assistantMbti }
+          : {}),
+        ...(typeof value.styleNotes === "string" && value.styleNotes ? { styleNotes: value.styleNotes } : {}),
+        ...(typeof value.assistantSoul === "string" && value.assistantSoul ? { assistantSoul: value.assistantSoul } : {}),
         ...(typeof value.accessMode === "string" && value.accessMode ? { accessMode: value.accessMode } : {}),
         ...(typeof value.model === "string" && value.model ? { model: value.model } : {}),
         ...(typeof value.reasoning === "string" && value.reasoning ? { reasoning: value.reasoning } : {}),

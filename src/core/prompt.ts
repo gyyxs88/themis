@@ -1,5 +1,5 @@
 import type { PrincipalPersonaProfileData, TaskAttachment, TaskRequest } from "../types/index.js";
-import { buildPersonaPromptBlock } from "./persona-profiles.js";
+import { buildAssistantStylePromptBlock } from "./assistant-style.js";
 import type { PrincipalPersonaOnboardingInterceptResult } from "./principal-persona-service.js";
 
 export interface BuildTaskPromptOptions {
@@ -8,7 +8,7 @@ export interface BuildTaskPromptOptions {
 
 export function buildTaskPrompt(request: TaskRequest, options: BuildTaskPromptOptions = {}): string {
   const personalizedProfileContext = normalizePromptSection(options.personalizedProfileContext);
-  const sections = [buildPersonaPromptBlock(request)];
+  const sections = [buildAssistantStylePromptBlock(request)];
 
   if (personalizedProfileContext) {
     sections.push(personalizedProfileContext);
@@ -41,8 +41,9 @@ export function buildTaskPrompt(request: TaskRequest, options: BuildTaskPromptOp
   sections.push(
     [
       "Response guidance:",
+      "- Treat the principal-level persona as the default assistant persona for every conversation under this principal.",
+      "- Make that persona visible in wording, structure, directness, pacing, and collaboration style instead of merely mentioning it.",
       "- Treat the long-term profile as persistent collaboration preference, but explicit user instructions in this turn take precedence.",
-      "- Follow the selected persona, but explicit user instructions take precedence.",
       "- Solve the requested task directly.",
       "- Keep the final answer practical and concise.",
       "- Mention touched files when relevant.",
@@ -55,17 +56,24 @@ export function buildTaskPrompt(request: TaskRequest, options: BuildTaskPromptOp
 export function buildBootstrapPrompt(
   request: TaskRequest,
   onboarding: PrincipalPersonaOnboardingInterceptResult,
+  options: BuildTaskPromptOptions = {},
 ): string {
+  const isFeishu = request.sourceChannel === "feishu";
+  const personalizedProfileContext = normalizePromptSection(options.personalizedProfileContext);
   const requesterName = request.user.displayName?.trim() || request.user.userId;
   const currentQuestionPrompt = normalizePromptSection(onboarding.questionPrompt);
   const draftSummary = formatPersonaDraft(onboarding.profile ?? onboarding.draft);
   const sections = [
-    buildPersonaPromptBlock(request),
+    buildAssistantStylePromptBlock(request),
     "You are running inside Themis, a LAN web UI built on top of the Codex SDK.",
     "You are in first-run persona bootstrap mode for this user.",
     `Bootstrap progress: ${resolveBootstrapProgressLabel(onboarding)}`,
     `Requester: ${requesterName}`,
   ];
+
+  if (personalizedProfileContext) {
+    sections.push(personalizedProfileContext);
+  }
 
   if (onboarding.phase === "started") {
     sections.push(
@@ -75,6 +83,14 @@ export function buildBootstrapPrompt(
         "- Do not solve that task yet.",
         "- Explain briefly that you need one short one-time bootstrap before normal collaboration.",
         "- Ask only the first missing question, naturally and conversationally.",
+        "- Prefer natural conversational wording instead of rigid form-filling language.",
+        "- Offer a short example reply pattern only if it clearly helps the user answer faster.",
+        ...(isFeishu
+          ? [
+            "- This is Feishu chat. Keep it to 2-3 short lines.",
+            "- Avoid long preambles, checklists, and explicit form instructions.",
+          ]
+          : []),
         "- Do not sound like a form, interrogation, or checklist.",
       ].join("\n"),
     );
@@ -86,6 +102,12 @@ export function buildBootstrapPrompt(
         "- Do not ask more questions.",
         "- Confirm that the long-term collaboration profile has been saved.",
         "- Summarize the saved profile briefly and naturally.",
+        ...(isFeishu
+          ? [
+            "- In Feishu, keep the summary compact and teammate-like.",
+            "- Prefer one short paragraph over a long checklist.",
+          ]
+          : []),
         "- Tell the user to resend the interrupted formal task.",
       ].join("\n"),
     );
@@ -97,6 +119,14 @@ export function buildBootstrapPrompt(
         "- Do not solve any formal task yet.",
         "- Briefly acknowledge the answer, then ask exactly one next question.",
         "- Keep the tone natural and collaborative, not robotic.",
+        "- Prefer natural conversational wording instead of rigid form-filling language.",
+        "- Offer a short example reply pattern only if it clearly helps the user answer faster.",
+        ...(isFeishu
+          ? [
+            "- This is Feishu chat. Usually use one short acknowledgement plus one short prompt.",
+            "- Avoid turning the reply into a mini guide or mini spec.",
+          ]
+          : []),
         "- Offer examples only if they help the user answer faster.",
       ].join("\n"),
     );
@@ -119,6 +149,13 @@ export function buildBootstrapPrompt(
       "- Keep it concise and human.",
       "- Ask at most one question in this turn.",
       "- Do not expose internal field names, step numbers, or JSON.",
+      ...(isFeishu
+        ? [
+          "- In Feishu, sound like a teammate chatting, not a wizard or form flow.",
+          "- Prefer short sentences and low ceremony.",
+        ]
+        : []),
+      "- The principal-level Themis persona should still be visible in tone, structure, and directness, even in bootstrap mode.",
       "- Explicit user instructions in this turn still take precedence over persona tone.",
     ].join("\n"),
   );
@@ -165,6 +202,18 @@ function formatPersonaDraft(profile: PrincipalPersonaProfileData): string {
     typeof profile.boundaries === "string" && profile.boundaries
       ? `- 用户明确偏好/边界：${profile.boundaries}`
       : "- 用户明确偏好/边界：<unknown>",
+    typeof profile.assistantLanguageStyle === "string" && profile.assistantLanguageStyle
+      ? `- Themis 长期语言风格：${profile.assistantLanguageStyle}`
+      : "- Themis 长期语言风格：<unknown>",
+    typeof profile.assistantMbti === "string" && profile.assistantMbti
+      ? `- Themis 长期性格标签：${profile.assistantMbti}`
+      : "- Themis 长期性格标签：<unknown>",
+    typeof profile.assistantStyleNotes === "string" && profile.assistantStyleNotes
+      ? `- Themis 长期补充说明：${profile.assistantStyleNotes}`
+      : "- Themis 长期补充说明：<unknown>",
+    typeof profile.assistantSoul === "string" && profile.assistantSoul
+      ? `- Themis 长期 SOUL：已配置 ${profile.assistantSoul.length} 字`
+      : "- Themis 长期 SOUL：<optional>",
   ];
 
   return lines.join("\n");

@@ -21,6 +21,7 @@ export async function handleIdentityStatus(
 
     writeJson(response, 200, {
       identity,
+      personaProfile: runtime.getPrincipalPersonaService().getPrincipalProfile(identity.principalId),
     });
   } catch (error) {
     writeJson(response, resolveErrorStatusCode(error, true), {
@@ -71,6 +72,39 @@ export async function handleIdentityReset(
   }
 }
 
+export async function handleIdentityPersonaUpdate(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  try {
+    const payload = normalizeIdentityPersonaPayload(await readJsonBody(request));
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const personaProfile = runtime.getPrincipalPersonaService().savePrincipalAssistantPersona(
+      identity.principalId,
+      {
+        ...(payload.assistantLanguageStyle ? { assistantLanguageStyle: payload.assistantLanguageStyle } : {}),
+        ...(payload.assistantMbti ? { assistantMbti: payload.assistantMbti } : {}),
+        ...(payload.assistantStyleNotes ? { assistantStyleNotes: payload.assistantStyleNotes } : {}),
+        assistantSoul: payload.assistantSoul,
+      },
+      {
+        ...(payload.displayName ? { displayName: payload.displayName } : {}),
+      },
+    );
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      personaProfile,
+    });
+  } catch (error) {
+    writeJson(response, resolveErrorStatusCode(error, true), {
+      error: createTaskError(error, true),
+    });
+  }
+}
+
 function normalizeIdentityPayload(value: unknown): {
   channel: string;
   channelUserId: string;
@@ -92,6 +126,34 @@ function normalizeIdentityPayload(value: unknown): {
     channel,
     channelUserId,
     ...(displayName ? { displayName } : {}),
+  };
+}
+
+function normalizeIdentityPersonaPayload(value: unknown): {
+  channel: string;
+  channelUserId: string;
+  assistantLanguageStyle?: string;
+  assistantMbti?: string;
+  assistantStyleNotes?: string;
+  assistantSoul: string;
+  displayName?: string;
+} {
+  if (!isRecord(value)) {
+    throw new Error("人格请求缺少必要字段。");
+  }
+
+  const identity = normalizeIdentityPayload(value);
+  const assistantLanguageStyle = normalizeText(value.assistantLanguageStyle);
+  const assistantMbti = normalizeText(value.assistantMbti);
+  const assistantStyleNotes = normalizeText(value.assistantStyleNotes);
+  const assistantSoul = typeof value.assistantSoul === "string" ? value.assistantSoul : "";
+
+  return {
+    ...identity,
+    ...(assistantLanguageStyle ? { assistantLanguageStyle } : {}),
+    ...(assistantMbti ? { assistantMbti } : {}),
+    ...(assistantStyleNotes ? { assistantStyleNotes } : {}),
+    assistantSoul,
   };
 }
 
