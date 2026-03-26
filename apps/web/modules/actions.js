@@ -45,10 +45,6 @@ export function createActions(app) {
         return;
       }
 
-      const previousSettings = {
-        ...thread.settings,
-      };
-
       store.updateThreadSettings(
         {
           workspacePath: normalizeWorkspacePath(dom.sessionWorkspaceInput.value),
@@ -58,27 +54,27 @@ export function createActions(app) {
         },
       );
 
-      const updatedThread = store.getThreadById(thread.id);
+      const result = await app.sessionSettings.commitThreadSettings(thread.id, {
+        quiet: true,
+      });
 
-      if (!updatedThread) {
+      if (result.ok) {
+        store.clearTransientStatus();
+        app.renderer.renderAll();
         return;
       }
 
-      try {
-        await app.sessionSettings.persistThreadSettings(updatedThread.id, updatedThread.settings, {
-          throwOnError: true,
-        });
-        store.clearTransientStatus();
-      } catch (error) {
-        updatedThread.settings = {
-          ...store.createDefaultThreadSettings(),
-          ...previousSettings,
-        };
-        store.touchThread(updatedThread.id);
-        store.saveState();
+      if (result.code === "PERSIST_FAILED_RECONCILED") {
         store.setTransientStatus(
-          updatedThread.id,
-          error instanceof Error && error.message ? `保存工作区失败：${error.message}` : "保存工作区失败。",
+          thread.id,
+          result.found
+            ? "保存工作区失败，已按服务端状态同步。"
+            : "保存工作区失败，服务端当前未绑定工作区，已回退到 Themis 启动目录。",
+        );
+      } else {
+        store.setTransientStatus(
+          thread.id,
+          "保存工作区失败，暂时无法确认服务端状态；当前显示可能与服务端不一致，请稍后重试或刷新页面。",
         );
       }
 

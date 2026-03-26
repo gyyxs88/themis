@@ -1011,7 +1011,8 @@ export function createRenderer(app) {
     const controlsBusy = app.runtime.sessionControlBusy || app.runtime.authBusy;
     const editorBusy = controlsBusy || thirdPartyEditor.submitting;
 
-    dom.submitButton.disabled = authMissing
+    dom.submitButton.disabled = app.runtime.sessionControlBusy
+      || authMissing
       || thirdPartyUnavailable
       || (accessMode === "auth" && app.runtime.auth.status === "loading");
     dom.cancelButton.disabled = !runBusy;

@@ -221,7 +221,7 @@ export function createSidebarActions(app) {
       app.renderer.renderThreadList();
     });
 
-    dom.newThreadButton.addEventListener("click", () => {
+    dom.newThreadButton.addEventListener("click", async () => {
       if (app.runtime.sessionControlBusy) {
         return;
       }
@@ -232,7 +232,33 @@ export function createSidebarActions(app) {
       });
 
       store.clearTransientStatus();
-      void app.sessionSettings.persistThreadSettings(nextThread.id, nextThread.settings, { quiet: true });
+      const inheritedWorkspacePath = typeof nextThread.settings.workspacePath === "string"
+        ? nextThread.settings.workspacePath.trim()
+        : "";
+
+      if (inheritedWorkspacePath) {
+        const result = await app.sessionSettings.commitThreadSettings(nextThread.id, {
+          quiet: true,
+          clearWorkspaceOnUnknownFailure: true,
+        });
+
+        if (!result.ok) {
+          if (result.code === "PERSIST_FAILED_RECONCILED") {
+            store.setTransientStatus(
+              nextThread.id,
+              result.found
+                ? "新会话继承工作区保存失败，已按服务端状态同步。"
+                : "新会话继承工作区未写入服务端，已回退到 Themis 启动目录。",
+            );
+          } else {
+            store.setTransientStatus(
+              nextThread.id,
+              "新会话继承工作区失败，暂时无法确认服务端状态；当前已回退到 Themis 启动目录，请手动重新保存。",
+            );
+          }
+        }
+      }
+
       app.runtime.workspaceToolsOpen = false;
       app.renderer.renderAll();
       app.layout.closeMobileSidebar();
