@@ -21,6 +21,7 @@ const SESSION_STRING_SETTING_KEYS: ReadonlyArray<keyof SessionTaskSettings> = [
   "thirdPartyProviderId",
   "thirdPartyModel",
 ];
+const SESSION_BOOLEAN_CLEARABLE_KEY: keyof SessionTaskSettings = "networkAccessEnabled";
 
 export interface PersistSessionTaskSettingsResult {
   sessionId: string;
@@ -47,7 +48,7 @@ export function persistSessionTaskSettings(
   const normalizedPatch = normalizeSessionTaskSettings(patch);
   const baseSettings = clearRequested
     ? {}
-    : applyExplicitStringFieldClears(existing?.settings ?? {}, patch);
+    : applyExplicitFieldClears(existing?.settings ?? {}, patch);
   const mergedSettings = clearRequested
     ? {}
     : mergeSessionTaskSettings(baseSettings, normalizedPatch);
@@ -108,7 +109,7 @@ function normalizeWorkspaceValue(value: string | undefined): string {
   return normalized || "";
 }
 
-function applyExplicitStringFieldClears(
+function applyExplicitFieldClears(
   base: SessionTaskSettings,
   patch: unknown,
 ): SessionTaskSettings {
@@ -136,6 +137,17 @@ function applyExplicitStringFieldClears(
     const mutable: SessionTaskSettings = { ...next };
     delete (mutable as Record<string, unknown>)[key];
     next = mutable;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, SESSION_BOOLEAN_CLEARABLE_KEY)) {
+    const rawValue = patch[SESSION_BOOLEAN_CLEARABLE_KEY];
+    const shouldClear = rawValue === null || (typeof rawValue === "string" && rawValue.trim() === "");
+
+    if (shouldClear && Object.prototype.hasOwnProperty.call(next, SESSION_BOOLEAN_CLEARABLE_KEY)) {
+      const mutable: SessionTaskSettings = { ...next };
+      delete (mutable as Record<string, unknown>)[SESSION_BOOLEAN_CLEARABLE_KEY];
+      next = mutable;
+    }
   }
 
   return next;

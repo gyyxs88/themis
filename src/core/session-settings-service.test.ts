@@ -238,6 +238,42 @@ test("persistSessionTaskSettings 支持用空白字符串删除非 workspace 文
   }
 });
 
+test("persistSessionTaskSettings 支持用 null 删除 networkAccessEnabled", () => {
+  const { root, store } = createStoreContext();
+
+  try {
+    store.saveSessionTaskSettings({
+      sessionId: "session-clear-network",
+      settings: {
+        networkAccessEnabled: true,
+        webSearchMode: "disabled",
+      },
+      createdAt: "2026-03-26T00:00:00.000Z",
+      updatedAt: "2026-03-26T00:00:00.000Z",
+    });
+
+    const result = persistSessionTaskSettings(
+      store,
+      "session-clear-network",
+      {
+        networkAccessEnabled: null,
+      },
+      "2026-03-26T01:00:00.000Z",
+    );
+
+    assert.equal(result.cleared, false);
+    assert.deepEqual(result.settings, {
+      webSearchMode: "disabled",
+    });
+    assert.equal(
+      store.getSessionTaskSettings("session-clear-network")?.settings.networkAccessEnabled,
+      undefined,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("persistSessionTaskSettings 允许清空会话设置", () => {
   const { root, store } = createStoreContext();
   const workspace = join(root, "workspace");
