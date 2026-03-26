@@ -8,7 +8,7 @@ Themis 已接入飞书长连接渠道，特点如下：
 
 - 使用飞书官方 Node SDK 长连接模式接收 `im.message.receive_v1`
 - 飞书普通文本消息会作为 Themis 任务输入
-- 飞书发任务前会读取当前会话保存的服务端配置，并带上对应 `options`
+- 飞书发任务前会读取当前 principal 保存的 Themis 默认任务配置，并带上对应 `options`
 - 如果当前 principal 还没有长期协作档案，首次普通消息会先进入一次性人格 bootstrap
 - 用户发消息后，飞书会立刻收到一条 `处理中...` 占位消息
 - 第一条中途文本会先缓存，不立刻发到飞书
@@ -104,7 +104,12 @@ infra/local/themis.db
 
 ### `/help`
 
-查看帮助。
+查看第一层命令。
+
+说明：
+
+- `/help` 只展示第一层命令。
+- `/settings` 的子项需要继续下钻查看。
 
 ### `/sessions`
 
@@ -148,7 +153,7 @@ infra/local/themis.db
 
 ### `/reset confirm`
 
-清空当前 principal 的人格档案、对话历史、会话设置和后端会话索引，并重新开始。
+清空当前 principal 的人格档案、对话历史、默认任务配置和后端会话索引，并重新开始。
 
 执行效果：
 
@@ -159,43 +164,72 @@ infra/local/themis.db
 
 ### `/settings`
 
-查看当前会话当前实际会使用的服务端配置。
+查看 `/settings` 这一层的配置树入口。
 
-当前会展示：
+当前第一层子项是：
 
-- 接入方式
-- 模型
-- 第三方供应商 / 模型
-- 推理强度
-- 审批策略
-- 沙箱模式
-- 联网搜索
-- 网络访问
+- `/settings sandbox`
+- `/settings search`
+- `/settings network`
+- `/settings approval`
+- `/settings account`
 
-Themis 当前有一层全局默认配置，会在任务下发前显式补齐：
+这些配置都属于当前 principal 的长期默认配置，不再是会话配置。
 
-- 沙箱模式：`workspace-write`
-- 联网搜索：`live`
-- 网络访问：`on`
-- 审批策略：`never`
+生效规则：
 
-`/settings` 展示的是“当前会实际使用的配置”，因此会把这层全局默认一起展示出来。
+- 只影响之后新发起的任务
+- 不会打断已经在运行中的任务
+- Web 和飞书读写同一份默认配置
 
-### `/sandbox <read-only|workspace-write|danger-full-access>`
+### `/settings sandbox`
 
-设置当前会话的沙箱模式。
+查看当前 principal 默认沙箱模式、来源和可选值。
 
-### `/search <disabled|cached|live>`
+执行 `/settings sandbox <read-only|workspace-write|danger-full-access>` 才会真正修改。
 
-设置当前会话的联网搜索模式。
+### `/settings search`
 
-### `/network <on|off>`
+查看当前 principal 默认联网搜索模式、来源和可选值。
 
-设置当前会话的网络访问开关。
+执行 `/settings search <disabled|cached|live>` 才会真正修改。
 
-### `/approval <never|on-request|on-failure|untrusted>`
+### `/settings network`
 
-设置当前会话的审批策略。
+查看当前 principal 默认网络访问开关、来源和可选值。
+
+执行 `/settings network <on|off>` 才会真正修改。
+
+### `/settings approval`
+
+查看当前 principal 默认审批策略、来源和可选值。
+
+执行 `/settings approval <never|on-request|on-failure|untrusted>` 才会真正修改。
+
+### `/settings account`
+
+查看认证账号相关的下一层子命令：
+
+- `/settings account current`
+- `/settings account list`
+- `/settings account use`
+
+其中：
+
+- `/settings account current` 查看当前 principal 默认认证账号
+- `/settings account list` 查看可用认证账号列表
+- `/settings account use` 查看切换说明
+- `/settings account use <账号名|邮箱|序号|default>` 真正修改当前 principal 默认认证账号
+
+### 兼容入口
+
+为了兼容旧习惯，下面这些平铺命令当前仍可用，但主路径已经改成 `/settings ...`：
+
+- `/account ...`
+- `/sandbox ...`
+- `/search ...`
+- `/network ...`
+- `/approval ...`
 
 ### `/msgupdate`
 
@@ -229,7 +263,7 @@ Themis 当前有一层全局默认配置，会在任务下发前显式补齐：
 - 直接发送普通文本：进入当前会话
 - 如果当前还没有激活会话：自动创建新会话
 - 如果当前 principal 还没有已完成的长期协作档案，普通文本会先进入一次性 bootstrap，而不是直接执行正式任务
-- 如果当前会话保存过服务端配置，这些配置会随任务请求一起带入 Codex runtime
+- 如果当前 principal 保存过默认任务配置，这些配置会随任务请求一起带入 Codex runtime
 - 当前实现只处理文本消息
 - 非文本消息暂不进入任务执行链路
 - 如果同一会话里上一条任务还没跑完，新消息会先打断旧任务，再自动进入当前会话

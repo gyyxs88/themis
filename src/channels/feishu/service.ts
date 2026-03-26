@@ -5,20 +5,19 @@ import type { CodexRuntimeCatalog } from "../../core/codex-app-server.js";
 import { CodexAuthRuntime } from "../../core/codex-auth.js";
 import { CodexTaskRuntime } from "../../core/codex-runtime.js";
 import {
-  buildTaskOptionsFromSessionTaskSettings,
-  isSessionTaskSettingsEmpty,
-  normalizeSessionTaskSettings,
-} from "../../core/session-task-settings.js";
+  isPrincipalTaskSettingsEmpty,
+  mergePrincipalTaskSettings,
+} from "../../core/principal-task-settings.js";
 import { appendTaskReplyQuotaFooter } from "../../core/task-reply-quota.js";
 import { applyThemisGlobalDefaultsToRuntimeCatalog } from "../../core/task-defaults.js";
 import { createTaskError } from "../../server/http-errors.js";
 import {
   APPROVAL_POLICIES,
+  type PrincipalTaskSettings,
   SANDBOX_MODES,
   WEB_SEARCH_MODES,
   type ApprovalPolicy,
   type SandboxMode,
-  type SessionTaskSettings,
   type TaskRequest,
   type WebSearchMode,
 } from "../../types/index.js";
@@ -83,6 +82,8 @@ export interface FeishuChannelServiceOptions {
 
 const MAX_FEISHU_TEXT_CHARS = 3500;
 const FEISHU_MESSAGE_DEDUPE_TTL_MS = 10 * 60 * 1000;
+const FEISHU_SETTINGS_SCOPE_LINE = "作用范围：Themis 中间层长期默认配置，会同时影响 Web 和飞书后续新任务。";
+const FEISHU_SETTINGS_EFFECT_LINE = "生效规则：只影响之后新发起的任务，不会打断已经在运行中的任务。";
 
 export class FeishuChannelService {
   private readonly runtime: CodexTaskRuntime;
@@ -279,7 +280,7 @@ export class FeishuChannelService {
         return;
       case "settings":
       case "config":
-        await this.sendSessionSettings(context.chatId, context);
+        await this.handleSettingsCommand(command.args, context);
         return;
       case "sandbox":
         await this.updateSandboxMode(command.args, context);
@@ -436,8 +437,8 @@ export class FeishuChannelService {
   }
 
   private createTaskPayload(context: FeishuIncomingContext, sessionId: string): FeishuTaskPayload {
-    const sessionSettings = this.readSessionSettings(sessionId);
-    const options = buildTaskOptionsFromSessionTaskSettings(sessionSettings);
+    const principalSettings = this.readPrincipalTaskSettings(context);
+    const options = isPrincipalTaskSettingsEmpty(principalSettings) ? undefined : principalSettings;
 
     return {
       source: "feishu",
@@ -461,93 +462,62 @@ export class FeishuChannelService {
     };
   }
 
-  private readSessionSettings(sessionId: string): SessionTaskSettings {
-    const record = this.runtime.getRuntimeStore().getSessionTaskSettings(sessionId);
-    return normalizeSessionTaskSettings(record?.settings);
-  }
-
-  private saveSessionSettings(sessionId: string, settings: SessionTaskSettings): SessionTaskSettings {
-    const store = this.runtime.getRuntimeStore();
-    const existing = store.getSessionTaskSettings(sessionId);
-    const normalized = normalizeSessionTaskSettings(settings);
-
-    if (isSessionTaskSettingsEmpty(normalized)) {
-      store.deleteSessionTaskSettings(sessionId);
-      return {};
-    }
-
-    const now = new Date().toISOString();
-    store.saveSessionTaskSettings({
-      sessionId,
-      settings: normalized,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
+  private ensurePrincipalIdentity(context: FeishuIncomingContext): { principalId: string; principalDisplayName?: string } {
+    return this.runtime.getIdentityLinkService().ensureIdentity({
+      channel: "feishu",
+      channelUserId: context.userId,
     });
-
-    return normalized;
   }
 
-  private updateSessionSettingsField<K extends keyof SessionTaskSettings>(
-    sessionId: string,
-    field: K,
-    value: SessionTaskSettings[K] | undefined,
-  ): SessionTaskSettings {
-    const base = this.readSessionSettings(sessionId);
-    const next: Record<string, unknown> = {
-      ...base,
-    };
-
-    if (typeof value === "undefined") {
-      delete next[field];
-    } else {
-      next[field] = value;
-    }
-
-    return this.saveSessionSettings(sessionId, normalizeSessionTaskSettings(next));
+  private readPrincipalTaskSettings(context: FeishuIncomingContext): PrincipalTaskSettings {
+    const principal = this.ensurePrincipalIdentity(context);
+    return this.runtime.getPrincipalTaskSettings(principal.principalId) ?? {};
   }
 
-  private ensureMutableSession(context: FeishuIncomingContext): { sessionId: string; created: boolean } {
-    const conversationKey = toConversationKey(context);
-    const existing = this.sessionStore.getActiveSessionId(conversationKey);
-
-    if (existing) {
-      return {
-        sessionId: existing,
-        created: false,
-      };
-    }
+  private writePrincipalTaskSettings(
+    context: FeishuIncomingContext,
+    patch: Partial<PrincipalTaskSettings>,
+  ): { principalId: string; settings: PrincipalTaskSettings } {
+    const principal = this.ensurePrincipalIdentity(context);
+    const current = this.runtime.getPrincipalTaskSettings(principal.principalId) ?? {};
+    const next = mergePrincipalTaskSettings(current, patch);
 
     return {
-      sessionId: this.sessionStore.createAndActivateSession(conversationKey),
-      created: true,
+      principalId: principal.principalId,
+      settings: this.runtime.savePrincipalTaskSettings(principal.principalId, next),
     };
   }
 
-  private async sendSessionSettings(chatId: string, context: FeishuIncomingContext): Promise<void> {
-    const sessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
-
-    if (!sessionId) {
-      await this.safeSendText(chatId, "当前还没有激活会话。直接发消息时会自动创建，或使用 /new 手动新建。");
-      return;
-    }
-
-    const settings = this.readSessionSettings(sessionId);
+  private async sendSessionSettings(
+    chatId: string,
+    context: FeishuIncomingContext,
+    invalidSegment?: string,
+  ): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const settings = this.readPrincipalTaskSettings(context);
     const runtimeConfig = await this.readRuntimeConfig();
-    const accounts = this.authRuntime.listAccounts();
-    const sessionAccountId = normalizeText(settings.authAccountId);
-    const resolvedAccount = sessionAccountId
-      ? findAuthAccountById(accounts, sessionAccountId)
-      : this.authRuntime.getActiveAccount();
-    const resolvedAccountLabel = resolvedAccount
-      ? formatAuthAccountLabel(resolvedAccount, sessionAccountId)
-      : sessionAccountId ?? null;
+    const effective = resolveEffectivePrincipalSettings(settings, runtimeConfig);
+    const accountState = resolvePrincipalAccountState({
+      accounts: this.authRuntime.listAccounts(),
+      activeAccount: this.authRuntime.getActiveAccount(),
+      principalAccountId: normalizeText(settings.authAccountId),
+    });
     const lines = [
-      `当前会话：${sessionId}`,
+      invalidSegment ? `未识别的设置项：${invalidSegment}` : "Themis 设置：",
+      `当前 principal：${principal.principalId}`,
+      FEISHU_SETTINGS_SCOPE_LINE,
+      FEISHU_SETTINGS_EFFECT_LINE,
       "",
-      ...formatSessionSettingsLines(settings, runtimeConfig, resolvedAccountLabel),
-      "",
-      "说明：这里展示的是当前会话实际会使用的配置；Themis 默认会补齐 sandbox=workspace-write、search=live、network=on、approval=never。",
-      "飞书当前可直接修改：/sandbox /search /network /approval /account use",
+      "/settings sandbox",
+      `当前值：${formatSettingSummaryValue(effective.sandboxMode, Boolean(settings.sandboxMode))}`,
+      "/settings search",
+      `当前值：${formatSettingSummaryValue(effective.webSearchMode, Boolean(settings.webSearchMode))}`,
+      "/settings network",
+      `当前值：${formatSettingSummaryValue(formatBooleanCommandValue(effective.networkAccessEnabled), typeof settings.networkAccessEnabled === "boolean")}`,
+      "/settings approval",
+      `当前值：${formatSettingSummaryValue(effective.approvalPolicy, Boolean(settings.approvalPolicy))}`,
+      "/settings account",
+      `当前值：${describePrincipalAccountCurrentValue(accountState)}`,
     ];
 
     await this.safeSendText(chatId, lines.join("\n"));
@@ -562,11 +532,42 @@ export class FeishuChannelService {
     }
   }
 
+  private async handleSettingsCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const subcommand = normalizeText(args[0])?.toLowerCase() ?? "";
+    const restArgs = args.slice(1);
+
+    switch (subcommand) {
+      case "":
+        await this.sendSessionSettings(context.chatId, context);
+        return;
+      case "sandbox":
+        await this.updateSandboxMode(restArgs, context);
+        return;
+      case "search":
+        await this.updateWebSearchMode(restArgs, context);
+        return;
+      case "network":
+        await this.updateNetworkAccess(restArgs, context);
+        return;
+      case "approval":
+        await this.updateApprovalPolicy(restArgs, context);
+        return;
+      case "account":
+        await this.handleAccountCommand(restArgs, context);
+        return;
+      default:
+        await this.sendSessionSettings(context.chatId, context, subcommand);
+    }
+  }
+
   private async handleAccountCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
     const subcommand = normalizeText(args[0])?.toLowerCase() ?? "";
     const restArgs = args.slice(1);
 
-    switch (subcommand || "current") {
+    switch (subcommand) {
+      case "":
+        await this.sendAccountSettings(context.chatId, context);
+        return;
       case "list":
       case "ls":
         await this.sendAccountList(context.chatId, context);
@@ -582,67 +583,115 @@ export class FeishuChannelService {
         await this.useAccount(restArgs, context);
         return;
       default:
-        await this.safeSendText(
-          context.chatId,
-          "用法：/account list\n/account current\n/account use <账号名|邮箱|序号|default>",
-        );
+        await this.sendAccountSettings(context.chatId, context, subcommand);
     }
   }
 
+  private async sendAccountSettings(chatId: string, context: FeishuIncomingContext, invalidSegment?: string): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const settings = this.readPrincipalTaskSettings(context);
+    const accountState = resolvePrincipalAccountState({
+      accounts: this.authRuntime.listAccounts(),
+      activeAccount: this.authRuntime.getActiveAccount(),
+      principalAccountId: normalizeText(settings.authAccountId),
+    });
+    const lines = [
+      invalidSegment ? `未识别的账号设置项：${invalidSegment}` : "账号设置：",
+      `当前 principal：${principal.principalId}`,
+      FEISHU_SETTINGS_SCOPE_LINE,
+      FEISHU_SETTINGS_EFFECT_LINE,
+      "",
+      "/settings account current",
+      `当前值：${describePrincipalAccountCurrentValue(accountState)}`,
+      "/settings account list",
+      "查看可用认证账号列表。",
+      "/settings account use",
+      "查看切换方法并设置当前 principal 默认认证账号。",
+    ];
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
   private async sendAccountList(chatId: string, context: FeishuIncomingContext): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
     const accounts = this.authRuntime.listAccounts();
-    const activeAccountId = this.authRuntime.getActiveAccount()?.accountId ?? "";
-    const sessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
-    const sessionSettings = sessionId ? this.readSessionSettings(sessionId) : {};
-    const sessionAccountId = normalizeText(sessionSettings.authAccountId);
+    const activeAccount = this.authRuntime.getActiveAccount();
+    const settings = this.readPrincipalTaskSettings(context);
+    const accountState = resolvePrincipalAccountState({
+      accounts,
+      activeAccount,
+      principalAccountId: normalizeText(settings.authAccountId),
+    });
 
     if (!accounts.length) {
-      await this.safeSendText(chatId, "当前还没有可用认证账号。");
+      await this.safeSendText(
+        chatId,
+        [`当前 principal：${principal.principalId}`, "当前还没有可用认证账号。"].join("\n"),
+      );
       return;
     }
 
     const lines = [
-      sessionId ? `当前会话：${sessionId}` : "当前会话：未激活",
-      sessionAccountId
-        ? `当前会话固定账号：${formatAuthAccountLabel(findAuthAccountById(accounts, sessionAccountId), sessionAccountId)}`
-        : `当前会话认证账号：跟随默认账号${activeAccountId ? `（${formatAuthAccountLabel(findAuthAccountById(accounts, activeAccountId), activeAccountId)}）` : ""}`,
+      `当前 principal：${principal.principalId}`,
+      accountState.principalAccountId
+        ? `当前 principal 默认：固定使用 ${formatAuthAccountLabel(accountState.configuredAccount, accountState.principalAccountId)}`
+        : accountState.effectiveAccountId
+          ? `当前 principal 默认：跟随 Themis 系统默认账号 ${formatAuthAccountLabel(accountState.activeAccount, accountState.effectiveAccountId)}`
+          : "当前 principal 默认：跟随 Themis 系统默认账号",
       "",
       "认证账号：",
       ...accounts.map((account, index) => {
         const markers = [
-          account.accountId === activeAccountId ? "默认" : "",
-          account.accountId === sessionAccountId ? "当前会话" : "",
+          account.accountId === activeAccount?.accountId ? "系统默认" : "",
+          account.accountId === accountState.principalAccountId ? "principal 默认" : "",
+          !accountState.principalAccountId && account.accountId === activeAccount?.accountId ? "当前生效" : "",
         ].filter(Boolean);
         const markerText = markers.length ? `（${markers.join("｜")}）` : "";
         return `${index + 1}. ${formatAuthAccountLabel(account)}${markerText}\n   CODEX_HOME：${account.codexHome}`;
       }),
       "",
-      "使用 /account use <账号名|邮箱|序号|default> 切换当前会话使用的认证账号。",
+      "使用 /settings account use <账号名|邮箱|序号|default> 切换当前 principal 默认认证账号。",
     ];
 
     await this.safeSendText(chatId, lines.join("\n"));
   }
 
   private async sendCurrentAccount(chatId: string, context: FeishuIncomingContext): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
     const accounts = this.authRuntime.listAccounts();
-    const activeAccount = this.authRuntime.getActiveAccount();
-    const sessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
-    const sessionSettings = sessionId ? this.readSessionSettings(sessionId) : {};
-    const sessionAccountId = normalizeText(sessionSettings.authAccountId);
-    const resolvedAccountId = sessionAccountId || activeAccount?.accountId || accounts[0]?.accountId || "";
+    const settings = this.readPrincipalTaskSettings(context);
+    const accountState = resolvePrincipalAccountState({
+      accounts,
+      activeAccount: this.authRuntime.getActiveAccount(),
+      principalAccountId: normalizeText(settings.authAccountId),
+    });
 
-    if (!resolvedAccountId) {
-      await this.safeSendText(chatId, "当前还没有可用认证账号。");
+    if (accountState.principalAccountId && !accountState.configuredAccount) {
+      await this.safeSendText(
+        chatId,
+        [
+          `当前 principal：${principal.principalId}`,
+          `当前 principal 默认认证账号已失效：${accountState.principalAccountId}`,
+          "请执行 /settings account list 查看可选账号，并重新设置。",
+        ].join("\n"),
+      );
       return;
     }
 
-    const snapshot = await this.authRuntime.readSnapshot(resolvedAccountId);
-    const account = findAuthAccountById(accounts, resolvedAccountId) ?? activeAccount;
+    const resolvedAccountId = accountState.effectiveAccountId;
+
+    if (!resolvedAccountId) {
+      await this.safeSendText(chatId, [`当前 principal：${principal.principalId}`, "当前还没有可用认证账号。"].join("\n"));
+      return;
+    }
+
+    const snapshot = await this.authRuntime.readSnapshot(accountState.principalAccountId ?? undefined);
+    const account = findAuthAccountById(accounts, snapshot.accountId || resolvedAccountId) ?? accountState.configuredAccount;
     const lines = [
-      sessionId ? `当前会话：${sessionId}` : "当前会话：未激活",
-      sessionAccountId
-        ? `会话绑定：固定使用 ${formatAuthAccountLabel(account, resolvedAccountId)}`
-        : `会话绑定：跟随默认账号 ${formatAuthAccountLabel(account, resolvedAccountId)}`,
+      `当前 principal：${principal.principalId}`,
+      accountState.principalAccountId
+        ? `当前 principal 默认：固定使用 ${formatAuthAccountLabel(account, resolvedAccountId)}`
+        : `当前 principal 默认：跟随 Themis 系统默认账号 ${formatAuthAccountLabel(account, resolvedAccountId)}`,
       `认证方式：${snapshot.authMethod ?? "unknown"}`,
       snapshot.account?.email ? `账号：${snapshot.account.email}` : null,
       snapshot.account?.planType ? `套餐：${snapshot.account.planType}` : null,
@@ -656,25 +705,25 @@ export class FeishuChannelService {
     const target = normalizeText(args.join(" "));
 
     if (!target) {
-      await this.safeSendText(context.chatId, "用法：/account use <账号名|邮箱|序号|default>");
+      await this.sendAccountUseHelp(context.chatId, context);
       return;
     }
 
-    const targetSession = this.ensureMutableSession(context);
     const accounts = this.authRuntime.listAccounts();
     const normalizedTarget = target.toLowerCase();
 
     if (["default", "active", "follow", "clear"].includes(normalizedTarget)) {
-      const settings = this.updateSessionSettingsField(targetSession.sessionId, "authAccountId", undefined);
+      const saved = this.writePrincipalTaskSettings(context, {
+        authAccountId: "",
+      });
       const activeAccount = this.authRuntime.getActiveAccount();
       const lines = [
-        targetSession.created ? `已自动创建会话：${targetSession.sessionId}` : `当前会话：${targetSession.sessionId}`,
+        `当前 principal：${saved.principalId}`,
         activeAccount
-          ? `认证账号已改为：跟随默认账号 ${formatAuthAccountLabel(activeAccount)}`
-          : "认证账号已改为：跟随默认账号",
-        isSessionTaskSettingsEmpty(settings)
-          ? "当前会话已无单独配置，后续会完全回退到运行时默认值。"
-          : "发送 /settings 可查看当前会话的完整配置。",
+          ? `默认认证账号已改为：跟随 Themis 系统默认账号 ${formatAuthAccountLabel(activeAccount)}`
+          : "默认认证账号已改为：跟随 Themis 系统默认账号",
+        FEISHU_SETTINGS_EFFECT_LINE,
+        "查看：/settings account current",
       ];
 
       await this.safeSendText(context.chatId, lines.join("\n"));
@@ -691,94 +740,252 @@ export class FeishuChannelService {
     }
 
     if (!resolvedAccountId) {
-      await this.safeSendText(context.chatId, "没有找到对应认证账号。先执行 /account list 查看可选账号。");
+      await this.sendAccountUseHelp(context.chatId, context, target);
       return;
     }
 
     const account = findAuthAccountById(accounts, resolvedAccountId);
-    const settings = this.updateSessionSettingsField(targetSession.sessionId, "authAccountId", resolvedAccountId);
+    const saved = this.writePrincipalTaskSettings(context, {
+      authAccountId: resolvedAccountId,
+    });
     const lines = [
-      targetSession.created ? `已自动创建会话：${targetSession.sessionId}` : `当前会话：${targetSession.sessionId}`,
-      `认证账号已固定为：${formatAuthAccountLabel(account, resolvedAccountId)}`,
-      isSessionTaskSettingsEmpty(settings)
-        ? "当前会话已无单独配置，后续会完全回退到运行时默认值。"
-        : "发送 /settings 可查看当前会话的完整配置。",
+      `当前 principal：${saved.principalId}`,
+      `默认认证账号已更新为：${formatAuthAccountLabel(account, resolvedAccountId)}`,
+      FEISHU_SETTINGS_EFFECT_LINE,
+      "查看：/settings account current",
     ];
 
     await this.safeSendText(context.chatId, lines.join("\n"));
   }
 
+  private async sendAccountUseHelp(
+    chatId: string,
+    context: FeishuIncomingContext,
+    invalidValue?: string,
+  ): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const settings = this.readPrincipalTaskSettings(context);
+    const accounts = this.authRuntime.listAccounts();
+    const accountState = resolvePrincipalAccountState({
+      accounts,
+      activeAccount: this.authRuntime.getActiveAccount(),
+      principalAccountId: normalizeText(settings.authAccountId),
+    });
+    const lines = [
+      invalidValue ? `没有找到对应认证账号：${invalidValue}` : "设置项：/settings account use",
+      `当前 principal：${principal.principalId}`,
+      `当前值：${describePrincipalAccountCurrentValue(accountState)}`,
+      `来源：${accountState.principalAccountId ? "当前 principal 默认配置" : "Themis 系统默认账号"}`,
+      FEISHU_SETTINGS_SCOPE_LINE,
+      FEISHU_SETTINGS_EFFECT_LINE,
+      "可选输入：<账号名|邮箱|序号|default>",
+      "示例：/settings account use 2",
+      "示例：/settings account use default",
+    ];
+
+    if (accounts.length) {
+      lines.push("", "可用账号：");
+      lines.push(
+        ...accounts.map((account, index) => {
+          const markers = [
+            account.accountId === accountState.principalAccountId ? "principal 默认" : "",
+            !accountState.principalAccountId && account.accountId === accountState.activeAccount?.accountId ? "当前生效" : "",
+          ].filter(Boolean);
+          const markerText = markers.length ? `（${markers.join("｜")}）` : "";
+          return `${index + 1}. ${formatAuthAccountLabel(account)}${markerText}`;
+        }),
+      );
+    }
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendSandboxSetting(chatId: string, context: FeishuIncomingContext, invalidValue?: string): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const settings = this.readPrincipalTaskSettings(context);
+    const runtimeConfig = await this.readRuntimeConfig();
+    const effective = resolveEffectivePrincipalSettings(settings, runtimeConfig);
+    const lines = [
+      invalidValue ? `无效取值：${invalidValue}` : "设置项：/settings sandbox",
+      `当前 principal：${principal.principalId}`,
+      `当前值：${effective.sandboxMode ?? "未配置"}`,
+      `来源：${formatSettingSourceLabel(Boolean(settings.sandboxMode))}`,
+      FEISHU_SETTINGS_SCOPE_LINE,
+      FEISHU_SETTINGS_EFFECT_LINE,
+      `可选值：${SANDBOX_MODES.join(" | ")}`,
+      "示例：/settings sandbox workspace-write",
+    ];
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
   private async updateSandboxMode(args: string[], context: FeishuIncomingContext): Promise<void> {
+    if (!args.length) {
+      await this.sendSandboxSetting(context.chatId, context);
+      return;
+    }
+
     const sandboxMode = parseSandboxModeArgument(args);
 
     if (sandboxMode === null) {
-      await this.safeSendText(context.chatId, "用法：/sandbox <read-only|workspace-write|danger-full-access>");
+      await this.sendSandboxSetting(context.chatId, context, args.join(" "));
       return;
     }
 
-    const target = this.ensureMutableSession(context);
-    const settings = this.updateSessionSettingsField(target.sessionId, "sandboxMode", sandboxMode);
-    await this.sendSettingUpdatedMessage(context.chatId, target, "沙箱模式", formatOptionalSetting(sandboxMode), settings);
-  }
-
-  private async updateWebSearchMode(args: string[], context: FeishuIncomingContext): Promise<void> {
-    const webSearchMode = parseWebSearchModeArgument(args);
-
-    if (webSearchMode === null) {
-      await this.safeSendText(context.chatId, "用法：/search <disabled|cached|live>");
-      return;
-    }
-
-    const target = this.ensureMutableSession(context);
-    const settings = this.updateSessionSettingsField(target.sessionId, "webSearchMode", webSearchMode);
-    await this.sendSettingUpdatedMessage(context.chatId, target, "联网搜索", formatOptionalSetting(webSearchMode), settings);
-  }
-
-  private async updateNetworkAccess(args: string[], context: FeishuIncomingContext): Promise<void> {
-    const networkAccessEnabled = parseNetworkAccessArgument(args);
-
-    if (networkAccessEnabled === null) {
-      await this.safeSendText(context.chatId, "用法：/network <on|off>");
-      return;
-    }
-
-    const target = this.ensureMutableSession(context);
-    const settings = this.updateSessionSettingsField(target.sessionId, "networkAccessEnabled", networkAccessEnabled);
-    await this.sendSettingUpdatedMessage(
+    const saved = this.writePrincipalTaskSettings(context, { sandboxMode });
+    await this.sendPrincipalSettingUpdatedMessage(
       context.chatId,
-      target,
-      "网络访问",
-      formatOptionalBoolean(networkAccessEnabled),
-      settings,
+      saved.principalId,
+      "沙箱模式",
+      sandboxMode,
+      "/settings sandbox",
     );
   }
 
-  private async updateApprovalPolicy(args: string[], context: FeishuIncomingContext): Promise<void> {
-    const approvalPolicy = parseApprovalPolicyArgument(args);
+  private async sendWebSearchSetting(chatId: string, context: FeishuIncomingContext, invalidValue?: string): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const settings = this.readPrincipalTaskSettings(context);
+    const runtimeConfig = await this.readRuntimeConfig();
+    const effective = resolveEffectivePrincipalSettings(settings, runtimeConfig);
+    const lines = [
+      invalidValue ? `无效取值：${invalidValue}` : "设置项：/settings search",
+      `当前 principal：${principal.principalId}`,
+      `当前值：${effective.webSearchMode ?? "未配置"}`,
+      `来源：${formatSettingSourceLabel(Boolean(settings.webSearchMode))}`,
+      FEISHU_SETTINGS_SCOPE_LINE,
+      FEISHU_SETTINGS_EFFECT_LINE,
+      `可选值：${WEB_SEARCH_MODES.join(" | ")}`,
+      "示例：/settings search live",
+    ];
 
-    if (approvalPolicy === null) {
-      await this.safeSendText(context.chatId, "用法：/approval <never|on-request|on-failure|untrusted>");
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async updateWebSearchMode(args: string[], context: FeishuIncomingContext): Promise<void> {
+    if (!args.length) {
+      await this.sendWebSearchSetting(context.chatId, context);
       return;
     }
 
-    const target = this.ensureMutableSession(context);
-    const settings = this.updateSessionSettingsField(target.sessionId, "approvalPolicy", approvalPolicy);
-    await this.sendSettingUpdatedMessage(context.chatId, target, "审批策略", formatOptionalSetting(approvalPolicy), settings);
+    const webSearchMode = parseWebSearchModeArgument(args);
+
+    if (webSearchMode === null) {
+      await this.sendWebSearchSetting(context.chatId, context, args.join(" "));
+      return;
+    }
+
+    const saved = this.writePrincipalTaskSettings(context, { webSearchMode });
+    await this.sendPrincipalSettingUpdatedMessage(
+      context.chatId,
+      saved.principalId,
+      "联网搜索",
+      webSearchMode,
+      "/settings search",
+    );
   }
 
-  private async sendSettingUpdatedMessage(
+  private async sendNetworkAccessSetting(
     chatId: string,
-    target: { sessionId: string; created: boolean },
+    context: FeishuIncomingContext,
+    invalidValue?: string,
+  ): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const settings = this.readPrincipalTaskSettings(context);
+    const runtimeConfig = await this.readRuntimeConfig();
+    const effective = resolveEffectivePrincipalSettings(settings, runtimeConfig);
+    const lines = [
+      invalidValue ? `无效取值：${invalidValue}` : "设置项：/settings network",
+      `当前 principal：${principal.principalId}`,
+      `当前值：${formatBooleanCommandValue(effective.networkAccessEnabled)}`,
+      `来源：${formatSettingSourceLabel(typeof settings.networkAccessEnabled === "boolean")}`,
+      FEISHU_SETTINGS_SCOPE_LINE,
+      FEISHU_SETTINGS_EFFECT_LINE,
+      "可选值：on | off",
+      "示例：/settings network on",
+    ];
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async updateNetworkAccess(args: string[], context: FeishuIncomingContext): Promise<void> {
+    if (!args.length) {
+      await this.sendNetworkAccessSetting(context.chatId, context);
+      return;
+    }
+
+    const networkAccessEnabled = parseNetworkAccessArgument(args);
+
+    if (networkAccessEnabled === null) {
+      await this.sendNetworkAccessSetting(context.chatId, context, args.join(" "));
+      return;
+    }
+
+    const saved = this.writePrincipalTaskSettings(context, {
+      networkAccessEnabled,
+    });
+    await this.sendPrincipalSettingUpdatedMessage(
+      context.chatId,
+      saved.principalId,
+      "网络访问",
+      formatBooleanCommandValue(networkAccessEnabled),
+      "/settings network",
+    );
+  }
+
+  private async sendApprovalSetting(chatId: string, context: FeishuIncomingContext, invalidValue?: string): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const settings = this.readPrincipalTaskSettings(context);
+    const runtimeConfig = await this.readRuntimeConfig();
+    const effective = resolveEffectivePrincipalSettings(settings, runtimeConfig);
+    const lines = [
+      invalidValue ? `无效取值：${invalidValue}` : "设置项：/settings approval",
+      `当前 principal：${principal.principalId}`,
+      `当前值：${effective.approvalPolicy ?? "未配置"}`,
+      `来源：${formatSettingSourceLabel(Boolean(settings.approvalPolicy))}`,
+      FEISHU_SETTINGS_SCOPE_LINE,
+      FEISHU_SETTINGS_EFFECT_LINE,
+      `可选值：${APPROVAL_POLICIES.join(" | ")}`,
+      "示例：/settings approval never",
+    ];
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async updateApprovalPolicy(args: string[], context: FeishuIncomingContext): Promise<void> {
+    if (!args.length) {
+      await this.sendApprovalSetting(context.chatId, context);
+      return;
+    }
+
+    const approvalPolicy = parseApprovalPolicyArgument(args);
+
+    if (approvalPolicy === null) {
+      await this.sendApprovalSetting(context.chatId, context, args.join(" "));
+      return;
+    }
+
+    const saved = this.writePrincipalTaskSettings(context, { approvalPolicy });
+    await this.sendPrincipalSettingUpdatedMessage(
+      context.chatId,
+      saved.principalId,
+      "审批策略",
+      approvalPolicy,
+      "/settings approval",
+    );
+  }
+
+  private async sendPrincipalSettingUpdatedMessage(
+    chatId: string,
+    principalId: string,
     label: string,
     value: string,
-    settings: SessionTaskSettings,
+    viewCommand: string,
   ): Promise<void> {
     const lines = [
-      target.created ? `已自动创建会话：${target.sessionId}` : `当前会话：${target.sessionId}`,
+      `当前 principal：${principalId}`,
       `${label}已更新为：${value}`,
-      isSessionTaskSettingsEmpty(settings)
-        ? "当前会话已无单独配置，后续会完全回退到运行时默认值。"
-        : "发送 /settings 可查看当前会话的完整配置。",
+      FEISHU_SETTINGS_EFFECT_LINE,
+      `查看：${viewCommand}`,
     ];
 
     await this.safeSendText(chatId, lines.join("\n"));
@@ -793,21 +1000,14 @@ export class FeishuChannelService {
       "/new 新建并切换到新会话",
       "/use <序号|conversationId> 切换到已有会话",
       "/current 查看当前会话",
-      "/account list 查看认证账号",
-      "/account current 查看当前会话使用的认证账号",
-      "/account use <账号名|邮箱|序号|default> 切换当前会话使用的认证账号",
+      "/settings 查看设置树",
       "/link <绑定码> 可选：认领一个旧 Web 浏览器身份",
-      "/reset confirm 清空当前 principal 的人格档案、历史和记忆，并重新开始",
-      "/settings 查看当前会话配置",
-      "/sandbox <read-only|workspace-write|danger-full-access>",
-      "/search <disabled|cached|live>",
-      "/network <on|off>",
-      "/approval <never|on-request|on-failure|untrusted>",
+      "/reset confirm 清空当前 principal 的人格档案、历史和默认配置，并重新开始",
       "/msgupdate 测试机器人是否能原地更新自己刚发出的文本消息",
       "/quota 查看当前 Codex / ChatGPT 额度信息",
       "",
-      "Web 和飞书默认共享同一套会话列表；切到同一个 conversationId 后，会继续复用后端已有上下文。",
-      "以上配置只作用于当前会话；/settings 只展示当前可确认的实际值。",
+      "发送 /settings 查看下一层配置项。",
+      "Web 和飞书默认共享同一套会话列表与 principal 默认配置；切到同一个 conversationId 后，会继续复用后端已有上下文。",
       "直接发送普通文本即可继续当前会话。",
       "如果当前会话还有任务在运行，新消息会先打断旧任务，再自动开始新的请求。",
       currentSessionId ? `当前会话：${currentSessionId}` : "当前还没有激活会话，直接发消息时会自动创建。",
@@ -884,16 +1084,22 @@ export class FeishuChannelService {
       return;
     }
 
-    const settings = this.readSessionSettings(sessionId);
-    const sessionAccountId = normalizeText(settings.authAccountId);
-    const activeAccount = this.authRuntime.getActiveAccount();
-    const accountLine = sessionAccountId
-      ? `认证账号：固定使用 ${formatAuthAccountLabel(findAuthAccountById(this.authRuntime.listAccounts(), sessionAccountId), sessionAccountId)}`
-      : activeAccount
-        ? `认证账号：跟随默认账号 ${formatAuthAccountLabel(activeAccount)}`
-        : "认证账号：跟随默认账号";
+    const principal = this.ensurePrincipalIdentity(context);
+    const settings = this.readPrincipalTaskSettings(context);
+    const accountState = resolvePrincipalAccountState({
+      accounts: this.authRuntime.listAccounts(),
+      activeAccount: this.authRuntime.getActiveAccount(),
+      principalAccountId: normalizeText(settings.authAccountId),
+    });
 
-    await this.safeSendText(chatId, [`当前会话：${sessionId}`, accountLine].join("\n"));
+    await this.safeSendText(
+      chatId,
+      [
+        `当前会话：${sessionId}`,
+        `当前 principal：${principal.principalId}`,
+        `认证账号：${describePrincipalAccountCurrentValue(accountState)}`,
+      ].join("\n"),
+    );
   }
 
   private async resetPrincipalState(args: string[], context: FeishuIncomingContext): Promise<void> {
@@ -934,6 +1140,7 @@ export class FeishuChannelService {
         `清空任务记录：${reset.clearedTurnCount} 条`,
         `清空人格档案：${reset.clearedPersonaProfile ? "是" : "否"}`,
         `清空进行中建档：${reset.clearedPersonaOnboarding ? "是" : "否"}`,
+        `清空默认任务配置：${reset.clearedPrincipalTaskSettings ? "是" : "否"}`,
         `新会话：${nextSessionId}`,
         "现在直接发消息，就会从头开始重新建档。",
       ];
@@ -966,12 +1173,29 @@ export class FeishuChannelService {
   }
 
   private async sendQuota(chatId: string, context: FeishuIncomingContext): Promise<void> {
-    const sessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
-    const sessionSettings = sessionId ? this.readSessionSettings(sessionId) : {};
-    const sessionAccountId = normalizeText(sessionSettings.authAccountId);
-    const snapshot = await this.authRuntime.readSnapshot(sessionAccountId ?? undefined);
+    const settings = this.readPrincipalTaskSettings(context);
+    const principalAccountId = normalizeText(settings.authAccountId);
+    const accountState = resolvePrincipalAccountState({
+      accounts: this.authRuntime.listAccounts(),
+      activeAccount: this.authRuntime.getActiveAccount(),
+      principalAccountId,
+    });
+
+    if (principalAccountId && !accountState.configuredAccount) {
+      await this.safeSendText(
+        chatId,
+        [
+          "Codex 额度信息：",
+          `当前 principal 默认认证账号已失效：${principalAccountId}`,
+          "请执行 /settings account list 查看可选账号，并重新设置。",
+        ].join("\n"),
+      );
+      return;
+    }
+
+    const snapshot = await this.authRuntime.readSnapshot(principalAccountId ?? undefined);
     const accounts = this.authRuntime.listAccounts();
-    const resolvedAccountId = snapshot.accountId || sessionAccountId || this.authRuntime.getActiveAccount()?.accountId || "";
+    const resolvedAccountId = snapshot.accountId || principalAccountId || this.authRuntime.getActiveAccount()?.accountId || "";
     const account = findAuthAccountById(accounts, resolvedAccountId);
 
     if (!snapshot.authenticated) {
@@ -982,7 +1206,7 @@ export class FeishuChannelService {
     const lines = [
       "Codex 额度信息：",
       resolvedAccountId
-        ? `认证账号：${formatAuthAccountLabel(account, resolvedAccountId)}${sessionAccountId ? "（当前会话固定）" : "（默认账号）"}`
+        ? `认证账号：${formatAuthAccountLabel(account, resolvedAccountId)}${principalAccountId ? "（当前 principal 默认）" : "（跟随 Themis 系统默认）"}`
         : null,
       `认证方式：${snapshot.authMethod ?? "unknown"}`,
       snapshot.account?.email ? `账号：${snapshot.account.email}` : null,
@@ -1447,7 +1671,7 @@ function parseNetworkAccessArgument(args: string[]): boolean | null {
   const value = normalizeText(args.join(" "))?.toLowerCase();
 
   if (!value) {
-      return null;
+    return null;
   }
 
   if (["on", "true", "1", "yes", "enabled"].includes(value)) {
@@ -1461,78 +1685,10 @@ function parseNetworkAccessArgument(args: string[]): boolean | null {
   return null;
 }
 
-function formatSessionSettingsLines(
-  settings: SessionTaskSettings,
-  runtimeConfig: CodexRuntimeCatalog | null,
-  authAccountLabel: string | null,
-): string[] {
-  const normalized = normalizeSessionTaskSettings(settings);
-  const effective = resolveEffectiveSessionSettings(normalized, runtimeConfig);
-  const lines = [
-    "当前可确认配置：",
-    `接入方式：${effective.accessMode}`,
-  ];
-
-  if (authAccountLabel) {
-    lines.push(`认证账号：${authAccountLabel}`);
-  }
-
-  if (effective.model) {
-    lines.push(`模型：${effective.model}`);
-  }
-
-  if (effective.thirdPartyProviderId) {
-    lines.push(`第三方供应商：${effective.thirdPartyProviderId}`);
-  }
-
-  if (effective.thirdPartyModel) {
-    lines.push(`第三方模型：${effective.thirdPartyModel}`);
-  }
-
-  if (effective.reasoning) {
-    lines.push(`推理强度：${effective.reasoning}`);
-  }
-
-  if (effective.approvalPolicy) {
-    lines.push(`审批策略：${effective.approvalPolicy}`);
-  }
-
-  if (effective.sandboxMode) {
-    lines.push(`沙箱模式：${effective.sandboxMode}`);
-  }
-
-  if (effective.webSearchMode) {
-    lines.push(`联网搜索：${effective.webSearchMode}`);
-  }
-
-  if (typeof effective.networkAccessEnabled === "boolean") {
-    lines.push(`网络访问：${formatBooleanValue(effective.networkAccessEnabled)}`);
-  }
-
-  return lines;
-}
-
-function formatOptionalSetting(value: string | null | undefined): string {
-  return value ? value : "默认";
-}
-
-function formatOptionalBoolean(value: boolean | null | undefined): string {
-  if (typeof value !== "boolean") {
-    return "默认";
-  }
-
-  return value ? "开启" : "关闭";
-}
-
-function resolveEffectiveSessionSettings(
-  settings: SessionTaskSettings,
+function resolveEffectivePrincipalSettings(
+  settings: PrincipalTaskSettings,
   runtimeConfig: CodexRuntimeCatalog | null,
 ): {
-  accessMode: string;
-  model: string | null;
-  thirdPartyProviderId: string | null;
-  thirdPartyModel: string | null;
-  reasoning: string | null;
   approvalPolicy: string | null;
   sandboxMode: string | null;
   webSearchMode: string | null;
@@ -1541,11 +1697,6 @@ function resolveEffectiveSessionSettings(
   const runtimeDefaults = runtimeConfig?.defaults ?? null;
 
   return {
-    accessMode: settings.accessMode ?? "auth",
-    model: settings.model ?? runtimeDefaults?.model ?? runtimeConfig?.models.find((entry) => entry.isDefault)?.model ?? null,
-    thirdPartyProviderId: settings.thirdPartyProviderId ?? null,
-    thirdPartyModel: settings.thirdPartyModel ?? null,
-    reasoning: settings.reasoning ?? runtimeDefaults?.reasoning ?? null,
     approvalPolicy: settings.approvalPolicy ?? runtimeDefaults?.approvalPolicy ?? null,
     sandboxMode: settings.sandboxMode ?? runtimeDefaults?.sandboxMode ?? null,
     webSearchMode: settings.webSearchMode ?? runtimeDefaults?.webSearchMode ?? null,
@@ -1555,12 +1706,67 @@ function resolveEffectiveSessionSettings(
   };
 }
 
-function formatBooleanValue(value: boolean | null | undefined): string {
+function formatSettingSourceLabel(hasOverride: boolean): string {
+  return hasOverride ? "当前 principal 默认配置" : "Themis 系统默认值";
+}
+
+function formatSettingSummaryValue(value: string | null | undefined, hasOverride: boolean): string {
+  return `${value ?? "未配置"}（${formatSettingSourceLabel(hasOverride)}）`;
+}
+
+function formatBooleanCommandValue(value: boolean | null | undefined): string {
   if (typeof value !== "boolean") {
     return "未配置";
   }
 
-  return value ? "开启" : "关闭";
+  return value ? "on" : "off";
+}
+
+function resolvePrincipalAccountState<T extends { accountId: string; label?: string | null; accountEmail?: string | null }>(options: {
+  accounts: T[];
+  activeAccount: T | null;
+  principalAccountId: string | null;
+}): {
+  principalAccountId: string | null;
+  configuredAccount: T | null;
+  activeAccount: T | null;
+  effectiveAccountId: string | null;
+} {
+  const configuredAccount = findAuthAccountById(options.accounts, options.principalAccountId);
+  const effectiveAccountId = options.principalAccountId
+    || options.activeAccount?.accountId
+    || options.accounts[0]?.accountId
+    || null;
+
+  return {
+    principalAccountId: options.principalAccountId,
+    configuredAccount,
+    activeAccount: options.activeAccount,
+    effectiveAccountId,
+  };
+}
+
+function describePrincipalAccountCurrentValue<T extends { accountId: string; label?: string | null; accountEmail?: string | null }>(
+  state: {
+    principalAccountId: string | null;
+    configuredAccount: T | null;
+    activeAccount: T | null;
+    effectiveAccountId: string | null;
+  },
+): string {
+  if (state.principalAccountId) {
+    if (state.configuredAccount) {
+      return `固定使用 ${formatAuthAccountLabel(state.configuredAccount, state.principalAccountId)}`;
+    }
+
+    return `固定使用 ${state.principalAccountId}（当前账号列表中不存在）`;
+  }
+
+  if (state.effectiveAccountId) {
+    return `跟随 Themis 系统默认账号 ${formatAuthAccountLabel(state.activeAccount, state.effectiveAccountId)}`;
+  }
+
+  return "跟随 Themis 系统默认账号";
 }
 
 function findAuthAccountById<T extends { accountId: string }>(accounts: T[], accountId: string | null | undefined): T | null {

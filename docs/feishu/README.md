@@ -1,6 +1,6 @@
 # 飞书 Bot 调研与接入建议
 
-更新日期：2026-03-25
+更新日期：2026-03-26
 
 相关实现文档：
 
@@ -9,13 +9,13 @@
 ## 当前落地状态
 
 - Themis 已接入飞书长连接，`im.message.receive_v1` 能进入现有 runtime 主链路。
-- 当前已支持飞书文本收发、`/help`、`/sessions`、`/new`、`/use`、`/current`、`/link`、`/settings`、`/sandbox`、`/search`、`/network`、`/approval`、`/msgupdate`、`/quota`。
+- 当前已支持飞书文本收发、`/help`、`/sessions`、`/new`、`/use`、`/current`、`/link`、`/settings` 命令树、`/msgupdate`、`/quota`，以及 `/account`、`/sandbox`、`/search`、`/network`、`/approval` 这些兼容入口。
 - Codex 在飞书里已改成“占位槽位 + 顺序延迟缓冲”体验：用户发消息后先立刻返回 `处理中...`；第一条中途回复先缓存，后续中途回复到达时才把上一条落成真实消息并补下一个 `处理中...`；静默超时后也会自动补发缓存内容。
 - 普通任务回复会优先转换成飞书 `post` 富文本，渲染列表、加粗、代码块和外链；本地文件链接会降级成普通文本显示。
 - Web 与飞书当前都统一采用“新消息默认打断旧任务”的跟进行为。
 - 飞书与 Web 现在默认共享同一套 conversation 视图；飞书 `/sessions` 可看到 Web 创建的会话，切到同一个 `conversationId` 后会继续复用后端已有上下文。
 - 当前激活会话不会跨端自动同步；Web 和飞书各自保留“当前正在聊哪一条”的本地状态，需要手动切到目标 `conversationId`。
-- 飞书与 Web 已共用同一种服务端会话配置存储机制；Themis 还会在服务端补一层全局默认：`sandbox=workspace-write`、`web search=live`、`network=on`、`approval=never`，任务发送时会显式带上，`/settings` 也会按这套实际使用值展示。
+- 飞书与 Web 现在共用同一份 principal 级 Themis 默认任务配置；`sandbox / search / network / approval / account` 都不再是会话配置，而是会同时影响两个渠道后续新任务的长期默认值。
 - Web 仍保留浏览器级 identity 与绑定码，但它已降级为可选能力，主要用于认领旧浏览器身份，不再是跨渠道共享会话的前提。
 - 现阶段仍基于 `@openai/codex-sdk` 高层 thread API，没有桌面版那种 guide 当前运行的公开能力。
 
