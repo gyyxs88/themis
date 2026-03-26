@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { CodexTaskRuntime } from "./codex-runtime.js";
 import {
   mergePrincipalTaskSettings,
   normalizePrincipalTaskSettings,
@@ -85,6 +86,61 @@ test("SqliteCodexSessionRegistry 可以按 principal 读写任务默认配置", 
         authAccountId: "acc-1",
       },
     );
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test("CodexTaskRuntime 会把 principal 默认配置并入后续新任务", () => {
+  const workingDirectory = mkdtempSync(join(tmpdir(), "themis-principal-runtime-"));
+
+  try {
+    const runtimeStore = new SqliteCodexSessionRegistry({
+      databaseFile: join(workingDirectory, "infra/local/themis.db"),
+    });
+    const runtime = new CodexTaskRuntime({
+      workingDirectory,
+      runtimeStore,
+    });
+    const identity = runtime.getIdentityLinkService().ensureIdentity({
+      channel: "web",
+      channelUserId: "browser-user-1",
+      displayName: "Tester",
+    });
+
+    runtimeStore.savePrincipalTaskSettings({
+      principalId: identity.principalId,
+      settings: {
+        sandboxMode: "workspace-write",
+        webSearchMode: "live",
+        networkAccessEnabled: true,
+        approvalPolicy: "never",
+        authAccountId: "acc-1",
+      },
+      createdAt: "2026-03-26T00:00:00.000Z",
+      updatedAt: "2026-03-26T00:00:00.000Z",
+    });
+
+    const resolved = runtime.resolveExecutionRequest({
+      requestId: "request-1",
+      sourceChannel: "web",
+      user: {
+        userId: "browser-user-1",
+        displayName: "Tester",
+      },
+      goal: "hello",
+      channelContext: {
+        channelSessionKey: "thread-1",
+      },
+      createdAt: "2026-03-26T00:00:00.000Z",
+    });
+
+    assert.equal(resolved.principalId, identity.principalId);
+    assert.equal(resolved.request.options?.sandboxMode, "workspace-write");
+    assert.equal(resolved.request.options?.webSearchMode, "live");
+    assert.equal(resolved.request.options?.networkAccessEnabled, true);
+    assert.equal(resolved.request.options?.approvalPolicy, "never");
+    assert.equal(resolved.request.options?.authAccountId, "acc-1");
   } finally {
     rmSync(workingDirectory, { recursive: true, force: true });
   }

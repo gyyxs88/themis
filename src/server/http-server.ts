@@ -18,6 +18,7 @@ import {
   handleIdentityPersonaUpdate,
   handleIdentityReset,
   handleIdentityStatus,
+  handleIdentityTaskSettingsUpdate,
 } from "./http-identity.js";
 import { handleRuntimeConfig } from "./http-runtime-config.js";
 import { writeJson } from "./http-responses.js";
@@ -113,6 +114,10 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/identity/persona") {
         return handleIdentityPersonaUpdate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/identity/task-settings") {
+        return handleIdentityTaskSettingsUpdate(request, response, runtime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/login") {

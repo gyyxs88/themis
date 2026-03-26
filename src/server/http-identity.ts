@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { CodexTaskRuntime } from "../core/codex-runtime.js";
+import { normalizePrincipalTaskSettings } from "../core/principal-task-settings.js";
 import { readJsonBody } from "./http-request.js";
 import { writeJson } from "./http-responses.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
@@ -22,6 +23,7 @@ export async function handleIdentityStatus(
     writeJson(response, 200, {
       identity,
       personaProfile: runtime.getPrincipalPersonaService().getPrincipalProfile(identity.principalId),
+      taskSettings: runtime.getPrincipalTaskSettings(identity.principalId),
     });
   } catch (error) {
     writeJson(response, resolveErrorStatusCode(error, true), {
@@ -105,6 +107,31 @@ export async function handleIdentityPersonaUpdate(
   }
 }
 
+export async function handleIdentityTaskSettingsUpdate(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  try {
+    const payload = normalizeIdentityTaskSettingsPayload(await readJsonBody(request));
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const taskSettings = runtime.savePrincipalTaskSettings(
+      identity.principalId,
+      normalizePrincipalTaskSettings(payload.settings),
+    );
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      taskSettings,
+    });
+  } catch (error) {
+    writeJson(response, resolveErrorStatusCode(error, true), {
+      error: createTaskError(error, true),
+    });
+  }
+}
+
 function normalizeIdentityPayload(value: unknown): {
   channel: string;
   channelUserId: string;
@@ -154,6 +181,24 @@ function normalizeIdentityPersonaPayload(value: unknown): {
     ...(assistantMbti ? { assistantMbti } : {}),
     ...(assistantStyleNotes ? { assistantStyleNotes } : {}),
     assistantSoul,
+  };
+}
+
+function normalizeIdentityTaskSettingsPayload(value: unknown): {
+  channel: string;
+  channelUserId: string;
+  settings: unknown;
+  displayName?: string;
+} {
+  if (!isRecord(value)) {
+    throw new Error("配置请求缺少必要字段。");
+  }
+
+  const identity = normalizeIdentityPayload(value);
+
+  return {
+    ...identity,
+    settings: value.settings,
   };
 }
 

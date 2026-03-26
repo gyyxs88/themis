@@ -33,6 +33,10 @@ import {
   PrincipalPersonaService,
   type PrincipalPersonaOnboardingInterceptResult,
 } from "./principal-persona-service.js";
+import {
+  isPrincipalTaskSettingsEmpty,
+  normalizePrincipalTaskSettings,
+} from "./principal-task-settings.js";
 import { buildForkContextFromThread, type CodexForkContext } from "./codex-session-fork.js";
 import {
   CodexThreadSessionStore,
@@ -40,7 +44,7 @@ import {
   type CodexSessionMode,
 } from "./codex-session-store.js";
 import { SqliteCodexSessionRegistry, type StoredAuthAccountRecord } from "../storage/index.js";
-import type { TaskAccessMode, TaskEvent, TaskRequest, TaskResult } from "../types/index.js";
+import type { PrincipalTaskSettings, TaskAccessMode, TaskEvent, TaskRequest, TaskResult } from "../types/index.js";
 import {
   readOpenAICompatibleProviderConfigs,
   type OpenAICompatibleProviderConfig,
@@ -106,12 +110,30 @@ export class CodexTaskRuntime {
     this.resetProviderRuntime(options.providerCodex ?? null, options.providerSessionStore ?? null);
   }
 
-  async runTask(request: TaskRequest, hooks: CodexTaskRuntimeHooks = {}): Promise<TaskResult> {
+  resolveExecutionRequest(request: TaskRequest): {
+    request: TaskRequest;
+    principalId?: string;
+    conversationId?: string;
+    channelSessionKey?: string;
+  } {
     const resolvedRequest = this.conversationService.resolveRequest(request);
-    request = {
-      ...resolvedRequest.request,
-      options: applyThemisGlobalDefaultsToTaskOptions(resolvedRequest.request.options),
+    const principalDefaults = this.getPrincipalTaskSettings(resolvedRequest.principalId) ?? {};
+
+    return {
+      ...resolvedRequest,
+      request: {
+        ...resolvedRequest.request,
+        options: applyThemisGlobalDefaultsToTaskOptions({
+          ...principalDefaults,
+          ...(resolvedRequest.request.options ?? {}),
+        }),
+      },
     };
+  }
+
+  async runTask(request: TaskRequest, hooks: CodexTaskRuntimeHooks = {}): Promise<TaskResult> {
+    const resolvedRequest = this.resolveExecutionRequest(request);
+    request = resolvedRequest.request;
     const principalId = resolvedRequest.principalId;
     const onboardingIntercept = principalId && this.principalPersonaService.shouldRunOnboarding(request, principalId)
       ? this.principalPersonaService.maybeHandleOnboardingTurn(principalId, request)
@@ -310,6 +332,48 @@ export class CodexTaskRuntime {
 
   getPrincipalPersonaService(): PrincipalPersonaService {
     return this.principalPersonaService;
+  }
+
+  getPrincipalTaskSettings(principalId?: string): PrincipalTaskSettings | null {
+    const normalizedPrincipalId = normalizeOptionalText(principalId);
+
+    if (!normalizedPrincipalId) {
+      return null;
+    }
+
+    return this.runtimeStore.getPrincipalTaskSettings(normalizedPrincipalId)?.settings ?? null;
+  }
+
+  savePrincipalTaskSettings(principalId: string, patch: PrincipalTaskSettings): PrincipalTaskSettings {
+    const normalizedPrincipalId = normalizeOptionalText(principalId);
+
+    if (!normalizedPrincipalId) {
+      throw new Error("Principal id is required.");
+    }
+
+    const principal = this.runtimeStore.getPrincipal(normalizedPrincipalId);
+
+    if (!principal) {
+      throw new Error("Principal does not exist.");
+    }
+
+    const now = new Date().toISOString();
+    const existing = this.runtimeStore.getPrincipalTaskSettings(normalizedPrincipalId);
+    const next = normalizePrincipalTaskSettings(patch);
+
+    if (isPrincipalTaskSettingsEmpty(next)) {
+      this.runtimeStore.deletePrincipalTaskSettings(normalizedPrincipalId);
+      return {};
+    }
+
+    this.runtimeStore.savePrincipalTaskSettings({
+      principalId: normalizedPrincipalId,
+      settings: next,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    });
+
+    return next;
   }
 
   reloadProviderConfig(): void {
