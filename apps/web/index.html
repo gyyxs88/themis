@@ -183,14 +183,14 @@
             <div>
               <p class="workspace-tools-kicker">Session Studio</p>
               <h2 id="workspace-tools-title">设置</h2>
-              <p class="settings-modal-copy">按分类整理当前会话要用到的运行参数和认证方式。</p>
+              <p class="settings-modal-copy">按分类整理当前 principal 的长期默认配置，以及当前会话自己的运行模式与第三方选择。</p>
             </div>
             <button id="workspace-tools-close" type="button" class="toolbar-button subtle">关闭</button>
           </div>
 
           <div class="settings-modal-body">
             <aside class="settings-modal-sidebar" aria-label="设置分类">
-              <p class="settings-sidebar-kicker">当前会话</p>
+              <p class="settings-sidebar-kicker">Themis 中间层</p>
 
               <div class="settings-modal-nav" role="tablist" aria-label="设置分类">
                 <button
@@ -256,7 +256,7 @@
                     <span class="meta-label">模型、推理与审批</span>
                   </div>
 
-                  <p id="settings-note" class="settings-section-copy">上方人格字段属于当前 principal 的长期默认配置；下方运行参数只作用于当前会话后续发出的任务。</p>
+                  <p id="settings-note" class="settings-section-copy">上方人格字段和下方 sandbox / search / network / approval / account 都属于当前 principal 的长期默认配置，会同时影响 Web 和飞书后续新任务。</p>
                   <p id="runtime-config-note" class="settings-section-copy">正在从 Codex 读取可用模型与默认配置。</p>
 
                   <div class="settings-stack">

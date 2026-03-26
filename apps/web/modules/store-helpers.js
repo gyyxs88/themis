@@ -46,8 +46,8 @@ export function createStoreHelpers({ app, getState, saveState }) {
       ...(effective.profile ? { profile: effective.profile } : {}),
       ...principalAssistantStyle,
       accessMode: effective.accessMode,
-      ...(effective.accessMode === "auth" && normalizeText(settings?.authAccountId)
-        ? { authAccountId: normalizeText(settings?.authAccountId) }
+      ...(effective.accessMode === "auth" && normalizeText(effective.authAccountId)
+        ? { authAccountId: normalizeText(effective.authAccountId) }
         : {}),
       ...(activeModel ? { model: activeModel } : {}),
       ...(effective.reasoning ? { reasoning: effective.reasoning } : {}),
@@ -77,6 +77,18 @@ export function createStoreHelpers({ app, getState, saveState }) {
       ...(assistantMbti ? { assistantMbti } : {}),
       ...(styleNotes ? { styleNotes } : {}),
       ...(assistantSoul ? { assistantSoul } : {}),
+    };
+  }
+
+  function resolvePrincipalTaskSettings() {
+    const taskSettings = app.runtime.identity?.taskSettings;
+
+    return {
+      authAccountId: normalizeText(taskSettings?.authAccountId),
+      sandboxMode: normalizeText(taskSettings?.sandboxMode),
+      webSearchMode: normalizeText(taskSettings?.webSearchMode),
+      networkAccessEnabled: normalizeBooleanSetting(taskSettings?.networkAccessEnabled),
+      approvalPolicy: normalizeText(taskSettings?.approvalPolicy),
     };
   }
 
@@ -199,6 +211,7 @@ export function createStoreHelpers({ app, getState, saveState }) {
 
   function resolveInheritedSettings(settings) {
     const runtimeConfig = getRuntimeConfig();
+    const principalTaskSettings = resolvePrincipalTaskSettings();
     const visibleModels = getVisibleModelsWithoutFallback(settings);
     const configuredModel = normalizeText(runtimeConfig.defaults.model);
     const inheritedModel = normalizeText(settings?.model)
@@ -231,15 +244,16 @@ export function createStoreHelpers({ app, getState, saveState }) {
     return {
       profile: normalizeText(settings?.profile),
       accessMode,
-      authAccountId: normalizeText(settings?.authAccountId) || normalizeText(app.runtime.auth?.activeAccountId),
+      authAccountId: principalTaskSettings.authAccountId || normalizeText(app.runtime.auth?.activeAccountId),
       model: inheritedModel,
       thirdPartyProviderId: thirdPartySelection.providerId,
       thirdPartyModel: thirdPartySelection.modelId,
       reasoning: inheritedReasoning || "",
-      sandboxMode: normalizeText(runtimeConfig.defaults.sandboxMode),
-      webSearchMode: normalizeText(runtimeConfig.defaults.webSearchMode),
-      networkAccessEnabled: normalizeBooleanSetting(runtimeConfig.defaults.networkAccessEnabled),
-      approvalPolicy: normalizeText(runtimeConfig.defaults.approvalPolicy) || "untrusted",
+      sandboxMode: principalTaskSettings.sandboxMode || normalizeText(runtimeConfig.defaults.sandboxMode),
+      webSearchMode: principalTaskSettings.webSearchMode || normalizeText(runtimeConfig.defaults.webSearchMode),
+      networkAccessEnabled: principalTaskSettings.networkAccessEnabled
+        ?? normalizeBooleanSetting(runtimeConfig.defaults.networkAccessEnabled),
+      approvalPolicy: principalTaskSettings.approvalPolicy || normalizeText(runtimeConfig.defaults.approvalPolicy) || "untrusted",
     };
   }
 
@@ -251,17 +265,17 @@ export function createStoreHelpers({ app, getState, saveState }) {
     return {
       profile: normalizeText(settings?.profile) || inherited.profile,
       accessMode: inherited.accessMode,
-      authAccountId: normalizeText(settings?.authAccountId) || inherited.authAccountId,
+      authAccountId: inherited.authAccountId,
       model: normalizeText(settings?.model) || inherited.model,
       thirdPartyProviderId: normalizeText(settings?.thirdPartyProviderId) || inherited.thirdPartyProviderId,
       thirdPartyModel: normalizeText(settings?.thirdPartyModel) || inherited.thirdPartyModel,
       reasoning: reasoningOptions.some((option) => option.reasoningEffort === explicitReasoning)
         ? explicitReasoning
         : inherited.reasoning,
-      sandboxMode: normalizeText(settings?.sandboxMode) || inherited.sandboxMode,
-      webSearchMode: normalizeText(settings?.webSearchMode) || inherited.webSearchMode,
-      networkAccessEnabled: normalizeBooleanSetting(settings?.networkAccessEnabled) ?? inherited.networkAccessEnabled,
-      approvalPolicy: normalizeText(settings?.approvalPolicy) || inherited.approvalPolicy,
+      sandboxMode: inherited.sandboxMode,
+      webSearchMode: inherited.webSearchMode,
+      networkAccessEnabled: inherited.networkAccessEnabled,
+      approvalPolicy: inherited.approvalPolicy,
     };
   }
 

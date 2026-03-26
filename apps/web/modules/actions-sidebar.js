@@ -2,6 +2,14 @@ export function createSidebarActions(app) {
   const { dom, store } = app;
 
   function bindSettingsControls() {
+    const savePrincipalTaskSettings = async (patch) => {
+      const current = app.runtime.identity?.taskSettings ?? {};
+      await app.identity.saveTaskSettings({
+        ...current,
+        ...patch,
+      });
+    };
+
     const updatePersonaDraft = () => {
       app.identity.updatePersonaDraft({
         assistantLanguageStyleDraft: dom.assistantLanguageStyleInput.value,
@@ -90,70 +98,29 @@ export function createSidebarActions(app) {
       app.renderer.renderAll();
     });
 
-    dom.approvalSelect.addEventListener("change", () => {
-      const thread = store.getActiveThread();
-
-      if (!thread) {
-        return;
-      }
-
-      const inherited = store.resolveInheritedSettings(thread.settings);
-      const selectedApproval = dom.approvalSelect.value;
-
-      store.updateThreadSettings({
-        approvalPolicy: selectedApproval && selectedApproval !== inherited.approvalPolicy ? selectedApproval : "",
+    dom.approvalSelect.addEventListener("change", async () => {
+      await savePrincipalTaskSettings({
+        approvalPolicy: dom.approvalSelect.value,
       });
-      app.renderer.renderAll();
     });
 
-    dom.sandboxSelect.addEventListener("change", () => {
-      const thread = store.getActiveThread();
-
-      if (!thread) {
-        return;
-      }
-
-      const inherited = store.resolveInheritedSettings(thread.settings);
-      const selectedSandbox = dom.sandboxSelect.value;
-
-      store.updateThreadSettings({
-        sandboxMode: selectedSandbox && selectedSandbox !== inherited.sandboxMode ? selectedSandbox : "",
+    dom.sandboxSelect.addEventListener("change", async () => {
+      await savePrincipalTaskSettings({
+        sandboxMode: dom.sandboxSelect.value,
       });
-      app.renderer.renderAll();
     });
 
-    dom.webSearchSelect.addEventListener("change", () => {
-      const thread = store.getActiveThread();
-
-      if (!thread) {
-        return;
-      }
-
-      const inherited = store.resolveInheritedSettings(thread.settings);
-      const selectedWebSearch = dom.webSearchSelect.value;
-
-      store.updateThreadSettings({
-        webSearchMode: selectedWebSearch && selectedWebSearch !== inherited.webSearchMode ? selectedWebSearch : "",
+    dom.webSearchSelect.addEventListener("change", async () => {
+      await savePrincipalTaskSettings({
+        webSearchMode: dom.webSearchSelect.value,
       });
-      app.renderer.renderAll();
     });
 
-    dom.networkAccessSelect.addEventListener("change", () => {
-      const thread = store.getActiveThread();
-
-      if (!thread) {
-        return;
-      }
-
-      const inherited = store.resolveInheritedSettings(thread.settings);
+    dom.networkAccessSelect.addEventListener("change", async () => {
       const selectedNetworkAccess = normalizeBooleanSelectValue(dom.networkAccessSelect.value);
-
-      store.updateThreadSettings({
-        networkAccessEnabled: selectedNetworkAccess !== null && selectedNetworkAccess !== inherited.networkAccessEnabled
-          ? selectedNetworkAccess
-          : "",
+      await savePrincipalTaskSettings({
+        networkAccessEnabled: selectedNetworkAccess,
       });
-      app.renderer.renderAll();
     });
 
     dom.thirdPartyProviderSelect.addEventListener("change", () => {

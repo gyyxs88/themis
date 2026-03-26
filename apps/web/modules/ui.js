@@ -114,21 +114,21 @@ export function createRenderer(app) {
     renderAuthState();
 
     if (!thread) {
-      dom.settingsNote.textContent = "上方人格字段属于当前 principal 的长期默认配置；下方运行参数只作用于当前会话后续发出的任务。";
+      dom.settingsNote.textContent = "上方人格字段和下方 sandbox / search / network / approval / account 都属于当前 principal 的长期默认配置，会同时影响 Web 和飞书后续新任务。";
       return;
     }
 
     if (thread.serverThreadId) {
-      dom.settingsNote.textContent = `当前会话已绑定后端 Codex thread：${thread.serverThreadId}。上方人格字段仍按当前 principal 的长期默认配置生效。`;
+      dom.settingsNote.textContent = `当前会话已绑定后端 Codex thread：${thread.serverThreadId}。人格字段与 sandbox / search / network / approval / account 仍按当前 principal 的长期默认配置生效。`;
       return;
     }
 
     if (thread.bootstrapTranscript) {
-      dom.settingsNote.textContent = `这是一个 fork 会话。第一次发送时，会先把${store.describeBootstrapLabel(thread)}导入新的 Codex 会话；上方人格字段仍按当前 principal 的长期默认配置生效。`;
+      dom.settingsNote.textContent = `这是一个 fork 会话。第一次发送时，会先把${store.describeBootstrapLabel(thread)}导入新的 Codex 会话；人格字段与 sandbox / search / network / approval / account 仍按当前 principal 的长期默认配置生效。`;
       return;
     }
 
-    dom.settingsNote.textContent = "上方人格字段属于当前 principal 的长期默认配置；首次发送后，下面这些运行参数会绑定到新的 Codex 会话。";
+    dom.settingsNote.textContent = "上方人格字段和下方 sandbox / search / network / approval / account 都属于当前 principal 的长期默认配置，会同时影响 Web 和飞书后续新任务。";
   }
 
   function renderThirdPartyEditor() {
@@ -534,22 +534,15 @@ export function createRenderer(app) {
       return;
     }
 
-    const explicitAuthAccountId = normalizeAuthAccountId(settings?.authAccountId);
     const effectiveAuthAccountId = normalizeAuthAccountId(effectiveSettings.authAccountId);
-    const explicitAccount = findAuthAccount(auth, explicitAuthAccountId);
     const effectiveAccount = findAuthAccount(auth, effectiveAuthAccountId);
 
-    if (explicitAuthAccountId) {
-      dom.accessModeNote.textContent = `当前会话会通过 Codex / ChatGPT 认证模式发送任务，并固定使用 ${formatAuthAccountDisplayName(explicitAccount, explicitAuthAccountId)}。`;
-      return;
-    }
-
     if (effectiveAuthAccountId) {
-      dom.accessModeNote.textContent = `当前会话会通过 Codex / ChatGPT 认证模式发送任务，并跟随默认认证账号 ${formatAuthAccountDisplayName(effectiveAccount, effectiveAuthAccountId)}。`;
+      dom.accessModeNote.textContent = `当前会话会通过 Codex / ChatGPT 认证模式发送任务，并使用当前 principal 默认认证账号 ${formatAuthAccountDisplayName(effectiveAccount, effectiveAuthAccountId)}。`;
       return;
     }
 
-    dom.accessModeNote.textContent = "当前会话会通过 Codex / ChatGPT 认证模式发送任务。";
+    dom.accessModeNote.textContent = "当前会话会通过 Codex / ChatGPT 认证模式发送任务，并跟随 Themis 系统默认账号。";
   }
 
   function describeThirdPartyProviderSource(source) {
@@ -1024,10 +1017,11 @@ export function createRenderer(app) {
     dom.assistantStyleNotesInput.disabled = controlsBusy || app.runtime.identity?.savingPersona;
     dom.assistantSoulInput.disabled = controlsBusy || app.runtime.identity?.savingPersona;
     dom.reasoningSelect.disabled = controlsBusy;
-    dom.approvalSelect.disabled = controlsBusy;
-    dom.sandboxSelect.disabled = controlsBusy;
-    dom.webSearchSelect.disabled = controlsBusy;
+    dom.approvalSelect.disabled = controlsBusy || app.runtime.identity?.savingTaskSettings;
+    dom.sandboxSelect.disabled = controlsBusy || app.runtime.identity?.savingTaskSettings;
+    dom.webSearchSelect.disabled = controlsBusy || app.runtime.identity?.savingTaskSettings;
     dom.networkAccessSelect.disabled = controlsBusy
+      || app.runtime.identity?.savingTaskSettings
       || effectiveSettings.sandboxMode === "read-only"
       || effectiveSettings.sandboxMode === "danger-full-access";
     dom.conversationLinkInput.disabled = controlsBusy;
@@ -1035,6 +1029,7 @@ export function createRenderer(app) {
     dom.identityLinkCodeButton.disabled = controlsBusy || app.runtime.identity?.issuing;
     dom.accessModeSelect.disabled = controlsBusy || !app.runtime.runtimeConfig.accessModes?.length;
     dom.modeSwitchAuthAccountSelect.disabled = controlsBusy
+      || app.runtime.identity?.savingTaskSettings
       || modeSwitchDraft.accessMode !== "auth"
       || !app.runtime.auth.accounts.length;
     dom.accessModeApplyButton.disabled = controlsBusy
@@ -1393,18 +1388,18 @@ function buildAccessModePendingNote(store, settings, effectiveSettings, draft, a
     }
 
     if (draft.authAccountId) {
-      return `已选择切回认证模式，并固定使用 ${formatAuthAccountDisplayName(findAuthAccount(auth, draft.authAccountId), draft.authAccountId)}。点击“确定切换”后才会生效。`;
+      return `已选择切回认证模式，并把当前 principal 默认认证账号改成 ${formatAuthAccountDisplayName(findAuthAccount(auth, draft.authAccountId), draft.authAccountId)}。点击“确定切换”后才会生效。`;
     }
 
-    return "已选择切回认证模式，并改为跟随默认认证账号。点击“确定切换”后才会生效。";
+    return "已选择切回认证模式，并改为跟随 Themis 系统默认账号。点击“确定切换”后才会生效。";
   }
 
-  if (draft.accessMode === "auth" && draft.authAccountId !== normalizeAuthAccountId(settings?.authAccountId)) {
+  if (draft.accessMode === "auth" && draft.authAccountId !== normalizeAuthAccountId(effectiveSettings.authAccountId)) {
     if (draft.authAccountId) {
-      return `已选择把当前会话固定到认证账号 ${formatAuthAccountDisplayName(findAuthAccount(auth, draft.authAccountId), draft.authAccountId)}。点击“确定应用”后才会生效。`;
+      return `已选择把当前 principal 默认认证账号改成 ${formatAuthAccountDisplayName(findAuthAccount(auth, draft.authAccountId), draft.authAccountId)}。点击“确定应用”后才会生效。`;
     }
 
-    return "已选择让当前会话改为跟随默认认证账号。点击“确定应用”后才会生效。";
+    return "已选择让当前 principal 重新跟随 Themis 系统默认账号。点击“确定应用”后才会生效。";
   }
 
   if (draft.accessMode === "third-party" && draft.thirdPartyModel !== (effectiveSettings.thirdPartyModel || "")) {

@@ -12,11 +12,23 @@ function createDefaultIdentityState(browserUserId = "") {
     assistantStyleNotesDraft: "",
     assistantSoul: "",
     assistantSoulDraft: "",
+    taskSettings: createDefaultTaskSettings(),
     linkCode: "",
     linkCodeExpiresAt: "",
     errorMessage: "",
     issuing: false,
     savingPersona: false,
+    savingTaskSettings: false,
+  };
+}
+
+function createDefaultTaskSettings() {
+  return {
+    authAccountId: "",
+    sandboxMode: "",
+    webSearchMode: "",
+    networkAccessEnabled: null,
+    approvalPolicy: "",
   };
 }
 
@@ -52,6 +64,7 @@ export function createIdentityController(app) {
 
       const identity = data?.identity ?? {};
       const personaProfile = data?.personaProfile ?? {};
+      const taskSettings = normalizeTaskSettings(data?.taskSettings);
       app.runtime.identity = {
         ...app.runtime.identity,
         status: "ready",
@@ -73,6 +86,7 @@ export function createIdentityController(app) {
           : "",
         assistantSoul: typeof personaProfile.assistantSoul === "string" ? personaProfile.assistantSoul : "",
         assistantSoulDraft: typeof personaProfile.assistantSoul === "string" ? personaProfile.assistantSoul : "",
+        taskSettings,
         errorMessage: "",
       };
     } catch (error) {
@@ -236,6 +250,71 @@ export function createIdentityController(app) {
     }
   }
 
+  async function saveTaskSettings(taskSettings, options = {}) {
+    const normalizedTaskSettings = normalizeTaskSettings(taskSettings);
+    const { quiet = false } = options;
+
+    if (
+      app.runtime.identity.status === "ready"
+      && !app.runtime.identity.savingTaskSettings
+      && isSameTaskSettings(normalizedTaskSettings, app.runtime.identity.taskSettings)
+    ) {
+      return true;
+    }
+
+    app.runtime.identity = {
+      ...app.runtime.identity,
+      savingTaskSettings: true,
+    };
+    app.renderer.renderAll();
+
+    try {
+      const response = await fetch("/api/identity/task-settings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ...buildIdentityPayload(),
+          settings: normalizedTaskSettings,
+        }),
+      });
+      const data = await app.utils.safeReadJson(response);
+
+      if (!response.ok) {
+        throw new Error(data?.error?.message ?? "保存默认任务配置失败。");
+      }
+
+      app.runtime.identity = {
+        ...app.runtime.identity,
+        status: "ready",
+        taskSettings: normalizeTaskSettings(data?.taskSettings),
+        savingTaskSettings: false,
+      };
+      app.renderer.renderAll();
+      return true;
+    } catch (error) {
+      app.runtime.identity = {
+        ...app.runtime.identity,
+        savingTaskSettings: false,
+      };
+      app.renderer.renderAll();
+
+      if (!quiet) {
+        const activeThread = app.store.getActiveThread();
+
+        if (activeThread) {
+          app.store.setTransientStatus(
+            activeThread.id,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      }
+
+      return false;
+    }
+  }
+
   function getRequestIdentity() {
     const displayName = resolveDisplayName();
 
@@ -271,9 +350,32 @@ export function createIdentityController(app) {
     load,
     issueLinkCode,
     saveAssistantPersona,
+    saveTaskSettings,
     updatePersonaDraft,
     getRequestIdentity,
   };
+}
+
+function normalizeTaskSettings(value) {
+  if (!value || typeof value !== "object") {
+    return createDefaultTaskSettings();
+  }
+
+  return {
+    authAccountId: typeof value.authAccountId === "string" ? value.authAccountId : "",
+    sandboxMode: typeof value.sandboxMode === "string" ? value.sandboxMode : "",
+    webSearchMode: typeof value.webSearchMode === "string" ? value.webSearchMode : "",
+    networkAccessEnabled: typeof value.networkAccessEnabled === "boolean" ? value.networkAccessEnabled : null,
+    approvalPolicy: typeof value.approvalPolicy === "string" ? value.approvalPolicy : "",
+  };
+}
+
+function isSameTaskSettings(left, right) {
+  return left.authAccountId === right.authAccountId
+    && left.sandboxMode === right.sandboxMode
+    && left.webSearchMode === right.webSearchMode
+    && left.networkAccessEnabled === right.networkAccessEnabled
+    && left.approvalPolicy === right.approvalPolicy;
 }
 
 function ensureBrowserUserId(storageKey) {

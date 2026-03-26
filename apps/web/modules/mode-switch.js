@@ -31,7 +31,7 @@ export function createModeSwitchController(app) {
     });
 
     dom.accessModeApplyButton.addEventListener("click", () => {
-      applyDraft();
+      void applyDraft();
     });
   }
 
@@ -56,7 +56,7 @@ export function createModeSwitchController(app) {
     app.renderer.renderAll();
   }
 
-  function applyDraft() {
+  async function applyDraft() {
     const thread = store.getActiveThread();
 
     if (!thread) {
@@ -72,7 +72,6 @@ export function createModeSwitchController(app) {
 
     const nextSettings = {
       accessMode: draft.accessMode === "third-party" ? "third-party" : "",
-      authAccountId: draft.accessMode === "auth" ? (draft.authAccountId || "") : "",
     };
 
     if (draft.accessMode === "third-party") {
@@ -92,6 +91,14 @@ export function createModeSwitchController(app) {
     }
 
     store.updateThreadSettings(nextSettings);
+
+    if (draft.accessMode === "auth") {
+      const currentTaskSettings = app.runtime.identity?.taskSettings ?? {};
+      await app.identity.saveTaskSettings({
+        ...currentTaskSettings,
+        authAccountId: draft.authAccountId || "",
+      }, { quiet: true });
+    }
 
     const appliedSettings = {
       ...settings,
@@ -143,7 +150,7 @@ function buildDraftState(threadId, settings, store) {
     ...createDefaultModeSwitchDraftState(),
     threadId,
     accessMode: effectiveSettings.accessMode || "auth",
-    authAccountId: normalizeText(settings?.authAccountId),
+    authAccountId: normalizeText(effectiveSettings.authAccountId),
     thirdPartyModel: selection.modelId || effectiveSettings.thirdPartyModel || "",
     dirty: false,
   };
@@ -182,13 +189,13 @@ function finalizeDraft(draft, threadId, settings, store) {
 
 function hasDraftChanges(draft, settings, effectiveSettings) {
   const currentAccessMode = effectiveSettings.accessMode || "auth";
-  const explicitAuthAccountId = normalizeText(settings?.authAccountId);
+  const currentAuthAccountId = normalizeText(effectiveSettings.authAccountId);
 
   if (draft.accessMode !== currentAccessMode) {
     return true;
   }
 
-  if (draft.accessMode === "auth" && draft.authAccountId !== explicitAuthAccountId) {
+  if (draft.accessMode === "auth" && draft.authAccountId !== currentAuthAccountId) {
     return true;
   }
 

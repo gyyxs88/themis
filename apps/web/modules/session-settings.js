@@ -100,13 +100,8 @@ function normalizeSessionSettings(settings) {
   return {
     ...(typeof settings.profile === "string" && settings.profile ? { profile: settings.profile } : {}),
     ...(typeof settings.accessMode === "string" && settings.accessMode ? { accessMode: settings.accessMode } : {}),
-    ...(typeof settings.authAccountId === "string" && settings.authAccountId ? { authAccountId: settings.authAccountId } : {}),
     ...(typeof settings.model === "string" && settings.model ? { model: settings.model } : {}),
     ...(typeof settings.reasoning === "string" && settings.reasoning ? { reasoning: settings.reasoning } : {}),
-    ...(typeof settings.approvalPolicy === "string" && settings.approvalPolicy ? { approvalPolicy: settings.approvalPolicy } : {}),
-    ...(typeof settings.sandboxMode === "string" && settings.sandboxMode ? { sandboxMode: settings.sandboxMode } : {}),
-    ...(typeof settings.webSearchMode === "string" && settings.webSearchMode ? { webSearchMode: settings.webSearchMode } : {}),
-    ...(typeof settings.networkAccessEnabled === "boolean" ? { networkAccessEnabled: settings.networkAccessEnabled } : {}),
     ...(typeof settings.thirdPartyProviderId === "string" && settings.thirdPartyProviderId
       ? { thirdPartyProviderId: settings.thirdPartyProviderId }
       : {}),
