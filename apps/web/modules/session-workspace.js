@@ -14,8 +14,22 @@ export function inheritWorkspaceSettings(thread) {
 
 export function isWorkspaceLocked(thread) {
   const storedTurnCount = Number.isFinite(thread?.storedTurnCount) ? Number(thread.storedTurnCount) : 0;
-  const localTurnCount = Array.isArray(thread?.turns) ? thread.turns.length : 0;
-  return storedTurnCount > 0 || localTurnCount > 0;
+  const hasServerHistory = thread?.serverHistoryAvailable === true && storedTurnCount > 0;
+  const hasServerThread = hasNonEmptyText(thread?.serverThreadId);
+  const hasServerBackedTurn = Array.isArray(thread?.turns) && thread.turns.some(hasServerBackedTurnSignal);
+
+  return hasServerHistory || hasServerThread || hasServerBackedTurn;
+}
+
+function hasServerBackedTurnSignal(turn) {
+  return hasNonEmptyText(turn?.requestId)
+    || hasNonEmptyText(turn?.taskId)
+    || hasNonEmptyText(turn?.serverSessionId)
+    || hasNonEmptyText(turn?.serverThreadId);
+}
+
+function hasNonEmptyText(value) {
+  return typeof value === "string" && value.trim() !== "";
 }
 
 export function buildWorkspaceNote(thread) {

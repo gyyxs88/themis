@@ -49,6 +49,9 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 - 聊天式 Web 工作台：本地线程、历史列表、会话切换、底部输入区、分叉、设置。
 - 统一会话层：外部渠道先提供 `channelSessionKey`，运行时再解析成统一 `conversationId`。
 - 后端 Codex thread 复用：同一 `conversationId` 会恢复到同一条 Codex thread。
+- 会话级工作区绑定：`workspacePath` 属于会话级设置，不属于 `principal` 级默认配置；Web 和飞书都支持按会话读写，新会话会继承当前激活会话的 `workspacePath`。
+- 会话工作区冻结：会话一旦出现后端已执行痕迹（例如已确认的 turn / 已有服务端历史），就不能再修改 `workspacePath`，只能新建会话后再改。
+- 执行目录解析：运行时每次执行任务会按会话解析工作区目录；如果当前会话没设置工作区会回退到 Themis 启动目录。Themis 自身 SQLite、认证账号槽位和第三方 provider 配置仍固定在控制目录体系下管理。
 - NDJSON 流式任务输出：支持中途事件、最终结果、取消和断连中止。
 - 回复额度尾注：认证模式下，Web / 飞书最终回复会附带当前认证返回的额度剩余尾注；当前 ChatGPT 常见会显示 `5h` 和 `1w` 两个窗口。
 - 多账号认证池：当前只针对 ChatGPT 登录态做多账号自动建槽；Themis 会按真实账号邮箱自动创建并命名账号槽位，自动把认证文件归档到对应 `CODEX_HOME`；再次检测到同邮箱时会直接复用已有槽位。Web 和飞书现在共享同一份 `principal` 级默认认证账号与任务配置；飞书支持 `/settings account ...` 命令树，同时保留 `/account ...` 兼容入口。

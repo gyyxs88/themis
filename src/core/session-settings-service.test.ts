@@ -83,6 +83,78 @@ test("persistSessionTaskSettings 会基于现有 settings 做 merge", () => {
   }
 });
 
+test("persistSessionTaskSettings 在已保存 workspace 失效时仍允许修改无关字段", () => {
+  const { root, store } = createStoreContext();
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+
+  try {
+    store.saveSessionTaskSettings({
+      sessionId: "session-stale-workspace",
+      settings: {
+        workspacePath: workspace,
+        accessMode: "auth",
+      },
+      createdAt: "2026-03-26T00:00:00.000Z",
+      updatedAt: "2026-03-26T00:00:00.000Z",
+    });
+    rmSync(workspace, { recursive: true, force: true });
+
+    const result = persistSessionTaskSettings(
+      store,
+      "session-stale-workspace",
+      {
+        model: "gpt-5.4",
+      },
+      "2026-03-26T01:00:00.000Z",
+    );
+
+    assert.equal(result.cleared, false);
+    assert.deepEqual(result.settings, {
+      workspacePath: workspace,
+      accessMode: "auth",
+      model: "gpt-5.4",
+    });
+    assert.deepEqual(store.getSessionTaskSettings("session-stale-workspace")?.settings, {
+      workspacePath: workspace,
+      accessMode: "auth",
+      model: "gpt-5.4",
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("persistSessionTaskSettings 在 workspacePath 真改动时仍会校验路径", () => {
+  const { root, store } = createStoreContext();
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+
+  try {
+    store.saveSessionTaskSettings({
+      sessionId: "session-change-workspace",
+      settings: {
+        workspacePath: workspace,
+      },
+      createdAt: "2026-03-26T00:00:00.000Z",
+      updatedAt: "2026-03-26T00:00:00.000Z",
+    });
+
+    assert.throws(() => {
+      persistSessionTaskSettings(
+        store,
+        "session-change-workspace",
+        {
+          workspacePath: join(root, "workspace-missing"),
+        },
+        "2026-03-26T01:00:00.000Z",
+      );
+    }, /工作区不存在。/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("persistSessionTaskSettings 在会话已有 turn 时禁止修改 workspacePath", () => {
   const { root, store } = createStoreContext();
   const workspaceA = join(root, "workspace-a");

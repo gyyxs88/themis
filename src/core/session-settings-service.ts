@@ -52,13 +52,13 @@ export function persistSessionTaskSettings(
   const mergedSettings = clearRequested
     ? {}
     : mergeSessionTaskSettings(baseSettings, normalizedPatch);
+  const workspacePathChanged = workspaceChanged(existing?.settings?.workspacePath, mergedSettings.workspacePath);
 
-  if (workspaceChanged(existing?.settings?.workspacePath, mergedSettings.workspacePath)
-    && store.hasSessionTurn({ sessionId: normalizedSessionId })) {
+  if (workspacePathChanged && store.hasSessionTurn({ sessionId: normalizedSessionId })) {
     throw new Error(SESSION_WORKSPACE_LOCKED_ERROR);
   }
 
-  const normalizedSettings = normalizeWorkspaceField(mergedSettings);
+  const normalizedSettings = normalizeWorkspaceField(mergedSettings, workspacePathChanged);
 
   if (isSessionTaskSettingsEmpty(normalizedSettings)) {
     store.deleteSessionTaskSettings(normalizedSessionId);
@@ -87,8 +87,15 @@ export function persistSessionTaskSettings(
   };
 }
 
-function normalizeWorkspaceField(settings: SessionTaskSettings): SessionTaskSettings {
+function normalizeWorkspaceField(
+  settings: SessionTaskSettings,
+  shouldValidateWorkspacePath: boolean,
+): SessionTaskSettings {
   if (!settings.workspacePath) {
+    return settings;
+  }
+
+  if (!shouldValidateWorkspacePath) {
     return settings;
   }
 

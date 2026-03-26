@@ -27,8 +27,9 @@ test("inheritWorkspaceSettings 只复制当前会话的 workspacePath", () => {
 });
 
 test("isWorkspaceLocked 会把已有历史会话视为锁定", () => {
-  assert.equal(isWorkspaceLocked({ storedTurnCount: 1, turns: [] }), true);
-  assert.equal(isWorkspaceLocked({ storedTurnCount: 0, turns: [{}] }), true);
+  assert.equal(isWorkspaceLocked({ storedTurnCount: 1, serverHistoryAvailable: true, turns: [] }), true);
+  assert.equal(isWorkspaceLocked({ storedTurnCount: 0, turns: [{}] }), false);
+  assert.equal(isWorkspaceLocked({ storedTurnCount: 0, turns: [{ requestId: "request-1" }] }), true);
   assert.equal(isWorkspaceLocked({ storedTurnCount: 0, turns: [] }), false);
 });
 
@@ -48,6 +49,7 @@ test("buildWorkspaceNote 会在锁定会话上提示请先新建会话", () => {
     buildWorkspaceNote({
       settings: { workspacePath: "/srv/projects/demo" },
       storedTurnCount: 2,
+      serverHistoryAvailable: true,
       turns: [],
     }),
     /请先新建会话/,
