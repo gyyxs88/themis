@@ -39,7 +39,7 @@ export function createSessionSettingsController(app) {
     const normalizedThreadId = typeof threadId === "string" ? threadId.trim() : "";
 
     if (!normalizedThreadId) {
-      return;
+      return false;
     }
 
     try {
@@ -57,10 +57,18 @@ export function createSessionSettingsController(app) {
       if (!response.ok) {
         throw new Error(data?.error?.message ?? "写入服务端会话配置失败。");
       }
+
+      return true;
     } catch (error) {
       if (!options.quiet) {
         console.error("Session settings persist failed.", error);
       }
+
+      if (options.throwOnError) {
+        throw error;
+      }
+
+      return false;
     }
   }
 
@@ -97,6 +105,8 @@ function normalizeSessionSettings(settings) {
     return {};
   }
 
+  const workspacePath = typeof settings.workspacePath === "string" ? settings.workspacePath.trim() : "";
+
   return {
     ...(typeof settings.profile === "string" && settings.profile ? { profile: settings.profile } : {}),
     ...(typeof settings.accessMode === "string" && settings.accessMode ? { accessMode: settings.accessMode } : {}),
@@ -106,5 +116,6 @@ function normalizeSessionSettings(settings) {
       ? { thirdPartyProviderId: settings.thirdPartyProviderId }
       : {}),
     ...(typeof settings.thirdPartyModel === "string" && settings.thirdPartyModel ? { thirdPartyModel: settings.thirdPartyModel } : {}),
+    ...(workspacePath ? { workspacePath } : {}),
   };
 }

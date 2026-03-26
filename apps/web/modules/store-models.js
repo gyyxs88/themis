@@ -2,11 +2,11 @@ import { createId, nowIso } from "./utils.js";
 
 export function createStoreModelHelpers() {
   function createDefaultThreadSettings() {
-      return {
-        profile: "",
-        accessMode: "",
-        authAccountId: "",
-        model: "",
+    return {
+      profile: "",
+      accessMode: "",
+      authAccountId: "",
+      model: "",
       reasoning: "",
       approvalPolicy: "",
       sandboxMode: "",
@@ -14,11 +14,17 @@ export function createStoreModelHelpers() {
       networkAccessEnabled: "",
       thirdPartyProviderId: "",
       thirdPartyModel: "",
+      workspacePath: "",
     };
   }
 
-  function createThread() {
+  function createThread(options = {}) {
     const timestamp = nowIso();
+    const settings = {
+      ...createDefaultThreadSettings(),
+      ...(options.settings && typeof options.settings === "object" ? options.settings : {}),
+    };
+
     return {
       id: createId("thread"),
       title: "新会话",
@@ -26,7 +32,7 @@ export function createStoreModelHelpers() {
       updatedAt: timestamp,
       draftGoal: "",
       draftContext: "",
-      settings: createDefaultThreadSettings(),
+      settings: normalizeThreadSettings(settings),
       serverThreadId: null,
       bootstrapTranscript: "",
       bootstrapMode: null,
@@ -169,19 +175,20 @@ export function createStoreModelHelpers() {
       return createDefaultThreadSettings();
     }
 
-      return {
-        profile: typeof value.profile === "string" ? value.profile : "",
-        accessMode: typeof value.accessMode === "string" ? value.accessMode : "",
-        authAccountId: typeof value.authAccountId === "string" ? value.authAccountId : "",
-        model: typeof value.model === "string" ? value.model : "",
-        reasoning: typeof value.reasoning === "string" ? value.reasoning : "",
-        approvalPolicy: typeof value.approvalPolicy === "string" ? value.approvalPolicy : "",
-        sandboxMode: typeof value.sandboxMode === "string" ? value.sandboxMode : "",
-        webSearchMode: typeof value.webSearchMode === "string" ? value.webSearchMode : "",
-        networkAccessEnabled: normalizeOptionalBooleanSetting(value.networkAccessEnabled),
-        thirdPartyProviderId: typeof value.thirdPartyProviderId === "string" ? value.thirdPartyProviderId : "",
-        thirdPartyModel: typeof value.thirdPartyModel === "string" ? value.thirdPartyModel : "",
-      };
+    return {
+      profile: typeof value.profile === "string" ? value.profile : "",
+      accessMode: typeof value.accessMode === "string" ? value.accessMode : "",
+      authAccountId: typeof value.authAccountId === "string" ? value.authAccountId : "",
+      model: typeof value.model === "string" ? value.model : "",
+      reasoning: typeof value.reasoning === "string" ? value.reasoning : "",
+      approvalPolicy: typeof value.approvalPolicy === "string" ? value.approvalPolicy : "",
+      sandboxMode: typeof value.sandboxMode === "string" ? value.sandboxMode : "",
+      webSearchMode: typeof value.webSearchMode === "string" ? value.webSearchMode : "",
+      networkAccessEnabled: normalizeOptionalBooleanSetting(value.networkAccessEnabled),
+      thirdPartyProviderId: typeof value.thirdPartyProviderId === "string" ? value.thirdPartyProviderId : "",
+      thirdPartyModel: typeof value.thirdPartyModel === "string" ? value.thirdPartyModel : "",
+      workspacePath: typeof value.workspacePath === "string" ? value.workspacePath.trim() : "",
+    };
   }
 
   function normalizeTurnOptions(value) {

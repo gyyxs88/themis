@@ -1,3 +1,5 @@
+import { inheritWorkspaceSettings } from "./session-workspace.js";
+
 export function createSidebarActions(app) {
   const { dom, store } = app;
 
@@ -224,8 +226,13 @@ export function createSidebarActions(app) {
         return;
       }
 
-      store.createAndActivateThread();
+      const activeThread = store.getActiveThread();
+      const nextThread = store.createAndActivateThread({
+        settings: inheritWorkspaceSettings(activeThread),
+      });
+
       store.clearTransientStatus();
+      void app.sessionSettings.persistThreadSettings(nextThread.id, nextThread.settings, { quiet: true });
       app.runtime.workspaceToolsOpen = false;
       app.renderer.renderAll();
       app.layout.closeMobileSidebar();

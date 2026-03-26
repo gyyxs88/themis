@@ -153,11 +153,11 @@ export function createStore(app) {
     saveState();
   }
 
-  function updateThreadSettings(patch) {
+  function updateThreadSettings(patch, options = {}) {
     const thread = getActiveThread();
 
     if (!thread) {
-      return;
+      return null;
     }
 
     const constrained = helpers.applyThirdPartyWebSearchConstraint(thread.settings, patch);
@@ -172,11 +172,14 @@ export function createStore(app) {
     }
     touchThread(thread.id);
     saveState();
-    void app.sessionSettings?.persistThreadSettings(thread.id, thread.settings, { quiet: true });
+    if (options.persist !== false) {
+      void app.sessionSettings?.persistThreadSettings(thread.id, thread.settings, { quiet: true });
+    }
+    return thread.settings;
   }
 
-  function createAndActivateThread() {
-    const thread = models.createThread();
+  function createAndActivateThread(options = {}) {
+    const thread = models.createThread(options);
     state.threads.unshift(thread);
     state.activeThreadId = thread.id;
     trimThreads();

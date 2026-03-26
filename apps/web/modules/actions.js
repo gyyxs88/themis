@@ -2,6 +2,7 @@ import { createComposerActions } from "./actions-composer.js";
 import { createSessionActions } from "./actions-session.js";
 import { createSidebarActions } from "./actions-sidebar.js";
 import { createStreamActions } from "./actions-stream.js";
+import { isWorkspaceLocked, normalizeWorkspacePath } from "./session-workspace.js";
 
 export function createActions(app) {
   const { dom, store } = app;
@@ -37,6 +38,53 @@ export function createActions(app) {
       return !app.runtime.thirdPartyEditor.submitting;
     }
 
+    async function persistWorkspaceSettings() {
+      const thread = store.getActiveThread();
+
+      if (!thread || app.runtime.sessionControlBusy || store.isBusy() || isWorkspaceLocked(thread)) {
+        return;
+      }
+
+      const previousSettings = {
+        ...thread.settings,
+      };
+
+      store.updateThreadSettings(
+        {
+          workspacePath: normalizeWorkspacePath(dom.sessionWorkspaceInput.value),
+        },
+        {
+          persist: false,
+        },
+      );
+
+      const updatedThread = store.getThreadById(thread.id);
+
+      if (!updatedThread) {
+        return;
+      }
+
+      try {
+        await app.sessionSettings.persistThreadSettings(updatedThread.id, updatedThread.settings, {
+          throwOnError: true,
+        });
+        store.clearTransientStatus();
+      } catch (error) {
+        updatedThread.settings = {
+          ...store.createDefaultThreadSettings(),
+          ...previousSettings,
+        };
+        store.touchThread(updatedThread.id);
+        store.saveState();
+        store.setTransientStatus(
+          updatedThread.id,
+          error instanceof Error && error.message ? `保存工作区失败：${error.message}` : "保存工作区失败。",
+        );
+      }
+
+      app.renderer.renderAll();
+    }
+
     dom.forkThreadButton.addEventListener("click", async () => {
       await sessionActions.handleForkSession();
     });
@@ -60,6 +108,19 @@ export function createActions(app) {
 
     dom.identityLinkCodeButton.addEventListener("click", async () => {
       await app.identity.issueLinkCode();
+    });
+
+    dom.sessionWorkspaceApplyButton.addEventListener("click", async () => {
+      await persistWorkspaceSettings();
+    });
+
+    dom.sessionWorkspaceInput.addEventListener("keydown", async (event) => {
+      if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+        return;
+      }
+
+      event.preventDefault();
+      await persistWorkspaceSettings();
     });
 
     dom.workspaceToolsPanel.addEventListener("click", (event) => {

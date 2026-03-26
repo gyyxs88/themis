@@ -488,6 +488,39 @@
               >
                 <section class="workspace-tool-group">
                   <div class="tool-group-head">
+                    <h3>工作区</h3>
+                    <span class="meta-label">当前会话执行目录</span>
+                  </div>
+
+                  <div class="settings-stack">
+                    <p id="session-workspace-note" class="settings-section-copy">
+                      当前会话还没有单独绑定工作区，会回退到 Themis 启动目录。
+                    </p>
+
+                    <label class="settings-field">
+                      <span>服务端本机绝对路径</span>
+                      <input
+                        id="session-workspace-input"
+                        type="text"
+                        placeholder="/srv/projects/themis"
+                        autocomplete="off"
+                        spellcheck="false"
+                      />
+                    </label>
+
+                    <div class="settings-inline-actions">
+                      <button id="session-workspace-apply-button" type="button" class="toolbar-button subtle">
+                        保存工作区
+                      </button>
+                      <p class="settings-inline-copy">
+                        只对当前会话生效；新会话默认继承当前会话；已执行过任务的会话不可修改。
+                      </p>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
                     <h3>模式切换</h3>
                     <span class="meta-label">当前会话接入方式</span>
                   </div>

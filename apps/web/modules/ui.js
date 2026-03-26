@@ -5,6 +5,7 @@ import {
   renderTurnMarkup,
 } from "./ui-markup.js";
 import { requiresAuthentication, requiresLocalBrowserForChatgptLogin } from "./auth.js";
+import { buildWorkspaceNote, isWorkspaceLocked, normalizeWorkspacePath } from "./session-workspace.js";
 
 export function createRenderer(app) {
   const { dom, store, utils } = app;
@@ -98,6 +99,7 @@ export function createRenderer(app) {
     renderThirdPartyProviderSelect(settings, effectiveSettings);
     renderThirdPartyModelSelect(settings, effectiveSettings);
     renderModeSwitchControls(settings, effectiveSettings);
+    renderSessionWorkspaceControls(thread);
     renderReasoningSelect(settings, effectiveSettings);
     dom.approvalSelect.value = effectiveSettings.approvalPolicy ?? "";
     renderSandboxSelect(effectiveSettings);
@@ -362,6 +364,15 @@ export function createRenderer(app) {
     dom.accessModePendingNote.textContent = pendingNote;
 
     renderAccessModeNote(settings, effectiveSettings, app.runtime.auth);
+  }
+
+  function renderSessionWorkspaceControls(thread) {
+    dom.sessionWorkspaceInput.value = normalizeWorkspacePath(thread?.settings?.workspacePath);
+    dom.sessionWorkspaceNote.textContent = buildWorkspaceNote(thread);
+
+    const locked = isWorkspaceLocked(thread);
+    dom.sessionWorkspaceInput.disabled = locked;
+    dom.sessionWorkspaceApplyButton.disabled = locked;
   }
 
   function renderSandboxSelect(effectiveSettings) {
@@ -981,13 +992,15 @@ export function createRenderer(app) {
   }
 
   function syncBusyState() {
+    const activeThread = store.getActiveThread();
     const runBusy = store.isBusy();
-    const settings = store.getActiveThread()?.settings ?? store.createDefaultThreadSettings();
+    const settings = activeThread?.settings ?? store.createDefaultThreadSettings();
     const effectiveSettings = store.resolveEffectiveSettings(settings);
     const accessMode = store.resolveAccessMode(settings);
     const thirdPartySelection = store.resolveThirdPartySelection(settings);
     const modeSwitchDraft = app.modeSwitch.getDraft(settings);
     const thirdPartyEditor = app.runtime.thirdPartyEditor;
+    const workspaceLocked = isWorkspaceLocked(activeThread);
     const authMissing = accessMode === "auth" && requiresAuthentication(app.runtime.auth);
     const thirdPartyUnavailable = accessMode === "third-party"
       && (
@@ -1032,6 +1045,8 @@ export function createRenderer(app) {
       || app.runtime.identity?.savingTaskSettings
       || modeSwitchDraft.accessMode !== "auth"
       || !app.runtime.auth.accounts.length;
+    dom.sessionWorkspaceInput.disabled = controlsBusy || runBusy || workspaceLocked;
+    dom.sessionWorkspaceApplyButton.disabled = controlsBusy || runBusy || workspaceLocked;
     dom.accessModeApplyButton.disabled = controlsBusy
       || !modeSwitchDraft.dirty
       || (
