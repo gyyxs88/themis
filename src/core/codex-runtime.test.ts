@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import type { ThreadOptions } from "@openai/codex-sdk";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import type { TaskRequest } from "../types/index.js";
 import { CodexTaskRuntime } from "./codex-runtime.js";
+import type { CodexThreadSessionStore } from "./codex-session-store.js";
 import type { OpenAICompatibleProviderConfig } from "./openai-compatible-provider.js";
 
 function createProviderConfig(): OpenAICompatibleProviderConfig {
@@ -125,3 +127,138 @@ test("第三方模型未声明图片输入时会阻止图片附件请求", () =>
     rmSync(workingDirectory, { recursive: true, force: true });
   }
 });
+
+test("runTask 会优先使用会话绑定的工作区", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-session-workspace-"));
+  const controlDirectory = join(root, "control");
+  const sessionWorkspace = join(root, "session-workspace");
+  mkdirSync(controlDirectory);
+  mkdirSync(sessionWorkspace);
+
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+
+  runtimeStore.saveSessionTaskSettings({
+    sessionId: "session-runtime-1",
+    settings: {
+      workspacePath: sessionWorkspace,
+    },
+    createdAt: "2026-03-26T00:00:00.000Z",
+    updatedAt: "2026-03-26T00:00:00.000Z",
+  });
+
+  const capturedThreadOptions: ThreadOptions[] = [];
+  const sessionStore = createSessionStoreDouble(runtimeStore, capturedThreadOptions);
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+    sessionStore,
+  });
+
+  try {
+    await runtime.runTask(createRequest({
+      requestId: "req-runtime-1",
+      taskId: "task-runtime-1",
+      user: {
+        userId: "",
+        displayName: "User",
+      },
+      channelContext: {
+        sessionId: "session-runtime-1",
+      },
+    }));
+
+    assert.equal(capturedThreadOptions.length, 1);
+    assert.equal(capturedThreadOptions[0]?.workingDirectory, sessionWorkspace);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runTask 在会话工作区失效时会报错", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-session-workspace-invalid-"));
+  const controlDirectory = join(root, "control");
+  const sessionWorkspace = join(root, "session-workspace");
+  mkdirSync(controlDirectory);
+  mkdirSync(sessionWorkspace);
+
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+
+  runtimeStore.saveSessionTaskSettings({
+    sessionId: "session-runtime-2",
+    settings: {
+      workspacePath: sessionWorkspace,
+    },
+    createdAt: "2026-03-26T00:00:00.000Z",
+    updatedAt: "2026-03-26T00:00:00.000Z",
+  });
+
+  rmSync(sessionWorkspace, { recursive: true, force: true });
+
+  const capturedThreadOptions: ThreadOptions[] = [];
+  const sessionStore = createSessionStoreDouble(runtimeStore, capturedThreadOptions);
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+    sessionStore,
+  });
+
+  try {
+    await assert.rejects(async () => runtime.runTask(createRequest({
+      requestId: "req-runtime-2",
+      taskId: "task-runtime-2",
+      user: {
+        userId: "",
+        displayName: "User",
+      },
+      channelContext: {
+        sessionId: "session-runtime-2",
+      },
+    })), /当前会话绑定的工作区不可用，请新建会话后重新设置。/);
+
+    assert.equal(capturedThreadOptions.length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function createSessionStoreDouble(
+  runtimeStore: SqliteCodexSessionRegistry,
+  capturedThreadOptions: ThreadOptions[],
+): CodexThreadSessionStore {
+  return {
+    getSessionRegistry: () => runtimeStore,
+    resolveThreadId: async () => null,
+    acquire: async (_request: TaskRequest, threadOptions: ThreadOptions) => {
+      capturedThreadOptions.push(threadOptions);
+
+      return {
+        sessionId: _request.channelContext.sessionId,
+        threadId: "thread-1",
+        sessionMode: "created",
+        thread: {
+          id: "thread-1",
+          runStreamed: async () => ({
+            events: (async function* () {
+              yield { type: "thread.started", thread_id: "thread-1" };
+              yield { type: "turn.started" };
+              yield {
+                type: "item.completed",
+                item: {
+                  type: "agent_message",
+                  id: "item-1",
+                  text: "done",
+                },
+              };
+              yield { type: "turn.completed", usage: {} };
+            })(),
+          }),
+        } as never,
+        release: async () => {},
+      };
+    },
+  } as unknown as CodexThreadSessionStore;
+}

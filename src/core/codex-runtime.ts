@@ -25,6 +25,7 @@ import { buildAssistantStyleSessionPayload } from "./assistant-style.js";
 import { ConversationService } from "./conversation-service.js";
 import { IdentityLinkService } from "./identity-link-service.js";
 import { buildBootstrapPrompt, buildTaskPrompt } from "./prompt.js";
+import { validateWorkspacePath } from "./session-workspace.js";
 import {
   applyThemisGlobalDefaultsToRuntimeCatalog,
   applyThemisGlobalDefaultsToTaskOptions,
@@ -69,6 +70,8 @@ interface ResolvedRuntimeTarget {
   providerConfig: OpenAICompatibleProviderConfig | null;
   sessionStore: CodexThreadSessionStore;
 }
+
+const SESSION_WORKSPACE_UNAVAILABLE_ERROR = "当前会话绑定的工作区不可用，请新建会话后重新设置。";
 
 export interface CodexTaskRuntimeHooks {
   onEvent?: (event: TaskEvent) => Promise<void> | void;
@@ -153,9 +156,10 @@ export class CodexTaskRuntime {
       await emit(createTaskEvent(taskId, request.requestId, "task.received", "queued", "Themis accepted the web request."));
 
       const target = this.resolveRuntimeTarget(request, hooks.allowUnsupportedThirdPartyModel === true);
+      const executionWorkingDirectory = this.resolveExecutionWorkingDirectory(request);
       const threadOptions = buildThreadOptions(
         request,
-        this.workingDirectory,
+        executionWorkingDirectory,
         this.skipGitRepoCheck,
         target.accessMode,
         target.providerConfig,
@@ -426,6 +430,26 @@ export class CodexTaskRuntime {
       providerConfig,
       sessionStore: providerSessionStore,
     };
+  }
+
+  private resolveExecutionWorkingDirectory(request: TaskRequest): string {
+    const sessionId = request.channelContext.sessionId?.trim();
+
+    if (!sessionId) {
+      return this.workingDirectory;
+    }
+
+    const workspacePath = this.runtimeStore.getSessionTaskSettings(sessionId)?.settings.workspacePath?.trim();
+
+    if (!workspacePath) {
+      return this.workingDirectory;
+    }
+
+    try {
+      return validateWorkspacePath(workspacePath);
+    } catch {
+      throw new Error(SESSION_WORKSPACE_UNAVAILABLE_ERROR);
+    }
   }
 
   private async resolveThreadIdForFork(sessionId: string): Promise<string | null> {

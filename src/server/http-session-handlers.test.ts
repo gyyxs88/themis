@@ -1,0 +1,128 @@
+import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import type { Server } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import { SqliteCodexSessionRegistry } from "../storage/index.js";
+import { createThemisHttpServer } from "./http-server.js";
+
+interface TestServerContext {
+  server: Server;
+  baseUrl: string;
+  root: string;
+}
+
+async function withHttpServer(
+  run: (context: TestServerContext) => Promise<void>,
+): Promise<void> {
+  const root = mkdtempSync(join(tmpdir(), "themis-http-session-settings-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: root,
+    runtimeStore,
+  });
+  const server = createThemisHttpServer({ runtime });
+  const listeningServer = await listenServer(server);
+  const address = listeningServer.address();
+
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to resolve server address.");
+  }
+
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  try {
+    await run({
+      server: listeningServer,
+      baseUrl,
+      root,
+    });
+  } finally {
+    await closeServer(listeningServer);
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("PUT /api/sessions/:id/settings 会保存合法 workspacePath", async () => {
+  await withHttpServer(async ({ baseUrl, root }) => {
+    const workspace = join(root, "workspace");
+    mkdirSync(workspace);
+
+    const response = await fetch(`${baseUrl}/api/sessions/session-http-1/settings`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        settings: {
+          profile: "dev",
+          workspacePath: workspace,
+        },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+
+    const payload = await response.json() as Record<string, unknown>;
+    assert.equal(payload.ok, true);
+    assert.equal(payload.sessionId, "session-http-1");
+    assert.deepEqual(payload.settings, {
+      profile: "dev",
+      workspacePath: workspace,
+    });
+  });
+});
+
+test("PUT /api/sessions/:id/settings 会拒绝相对路径 workspacePath", async () => {
+  await withHttpServer(async ({ baseUrl }) => {
+    const response = await fetch(`${baseUrl}/api/sessions/session-http-2/settings`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        settings: {
+          workspacePath: "relative/project",
+        },
+      }),
+    });
+
+    assert.equal(response.status, 400);
+
+    const payload = await response.json() as {
+      error?: {
+        code?: string;
+        message?: string;
+      };
+    };
+    assert.equal(payload.error?.code, "INVALID_REQUEST");
+    assert.match(payload.error?.message ?? "", /绝对路径/);
+  });
+});
+
+function listenServer(server: Server): Promise<Server> {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve(server);
+    });
+  });
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}

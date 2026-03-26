@@ -1,9 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import {
-  isSessionTaskSettingsEmpty,
-  normalizeSessionTaskSettings,
-} from "../core/session-task-settings.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import {
+  SESSION_WORKSPACE_LOCKED_ERROR,
+  persistSessionTaskSettings,
+} from "../core/session-settings-service.js";
 import type { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
@@ -102,38 +102,23 @@ export async function handleSessionSettingsWrite(
     }
 
     const payload = await readJsonBody(request) as { settings?: unknown };
-    const settings = normalizeSessionTaskSettings(payload?.settings ?? payload);
-    const existing = store.getSessionTaskSettings(sessionId);
-    const now = new Date().toISOString();
-
-    if (isSessionTaskSettingsEmpty(settings)) {
-      store.deleteSessionTaskSettings(sessionId);
-      writeJson(response, 200, {
-        ok: true,
-        sessionId,
-        cleared: true,
-        settings: null,
-        createdAt: existing?.createdAt ?? null,
-        updatedAt: now,
+    const patch = hasOwnProperty(payload, "settings") ? payload.settings : payload;
+    const result = persistSessionTaskSettings(store, sessionId, patch, new Date().toISOString());
+    writeJson(response, 200, {
+      ok: true,
+      ...result,
+    });
+  } catch (error) {
+    if (isSessionSettingsRequestError(error)) {
+      writeJson(response, 400, {
+        error: {
+          code: "INVALID_REQUEST",
+          message: toErrorMessage(error),
+        },
       });
       return;
     }
 
-    store.saveSessionTaskSettings({
-      sessionId,
-      settings,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-    });
-
-    writeJson(response, 200, {
-      ok: true,
-      sessionId,
-      settings,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-    });
-  } catch (error) {
     writeJson(response, resolveErrorStatusCode(error, true), {
       error: createTaskError(error, true),
     });
@@ -149,4 +134,25 @@ function extractSessionIdFromSettingsPath(pathname: string): string {
   }
 
   return decodeURIComponent(pathname.slice(prefix.length, pathname.length - suffix.length)).trim();
+}
+
+function hasOwnProperty(value: unknown, key: string): value is Record<string, unknown> {
+  return typeof value === "object"
+    && value !== null
+    && Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function isSessionSettingsRequestError(error: unknown): boolean {
+  const message = toErrorMessage(error);
+  return message === SESSION_WORKSPACE_LOCKED_ERROR
+    || message === "Session id is required."
+    || message === "工作区不能为空。"
+    || message === "只支持服务端本机绝对路径。"
+    || message === "工作区不存在。"
+    || message === "工作区不是目录。"
+    || message === "工作区不可访问。";
+}
+
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
