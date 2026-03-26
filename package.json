@@ -21,8 +21,8 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@openai/codex-sdk": "^0.116.0",
     "@larksuiteoapi/node-sdk": "^1.59.0",
+    "@openai/codex-sdk": "0.117.0-alpha.12",
     "better-sqlite3": "^12.8.0"
   }
 }
