@@ -1,6 +1,7 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
 import type { EventHandles } from "@larksuiteoapi/node-sdk";
 import { InMemoryCommunicationRouter } from "../../communication/router.js";
+import type { CodexRuntimeCatalog } from "../../core/codex-app-server.js";
 import { CodexAuthRuntime } from "../../core/codex-auth.js";
 import { CodexTaskRuntime } from "../../core/codex-runtime.js";
 import {
@@ -9,6 +10,7 @@ import {
   normalizeSessionTaskSettings,
 } from "../../core/session-task-settings.js";
 import { appendTaskReplyQuotaFooter } from "../../core/task-reply-quota.js";
+import { applyThemisGlobalDefaultsToRuntimeCatalog } from "../../core/task-defaults.js";
 import { createTaskError } from "../../server/http-errors.js";
 import {
   APPROVAL_POLICIES,
@@ -530,16 +532,34 @@ export class FeishuChannelService {
     }
 
     const settings = this.readSessionSettings(sessionId);
+    const runtimeConfig = await this.readRuntimeConfig();
+    const accounts = this.authRuntime.listAccounts();
+    const sessionAccountId = normalizeText(settings.authAccountId);
+    const resolvedAccount = sessionAccountId
+      ? findAuthAccountById(accounts, sessionAccountId)
+      : this.authRuntime.getActiveAccount();
+    const resolvedAccountLabel = resolvedAccount
+      ? formatAuthAccountLabel(resolvedAccount, sessionAccountId)
+      : sessionAccountId ?? null;
     const lines = [
       `当前会话：${sessionId}`,
       "",
-      ...formatSessionSettingsLines(settings),
+      ...formatSessionSettingsLines(settings, runtimeConfig, resolvedAccountLabel),
       "",
-      "说明：未设置的项会回退到运行时默认值。",
+      "说明：这里展示的是当前会话实际会使用的配置；Themis 默认会补齐 sandbox=workspace-write、search=live、network=on、approval=never。",
       "飞书当前可直接修改：/sandbox /search /network /approval /account use",
     ];
 
     await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async readRuntimeConfig(): Promise<CodexRuntimeCatalog | null> {
+    try {
+      return applyThemisGlobalDefaultsToRuntimeCatalog(await this.runtime.readRuntimeConfig());
+    } catch (error) {
+      this.logger.warn(`[themis/feishu] 读取运行时默认配置失败：${toErrorMessage(error)}`);
+      return null;
+    }
   }
 
   private async handleAccountCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
@@ -692,7 +712,7 @@ export class FeishuChannelService {
     const sandboxMode = parseSandboxModeArgument(args);
 
     if (sandboxMode === null) {
-      await this.safeSendText(context.chatId, "用法：/sandbox <default|read-only|workspace-write|danger-full-access>");
+      await this.safeSendText(context.chatId, "用法：/sandbox <read-only|workspace-write|danger-full-access>");
       return;
     }
 
@@ -705,7 +725,7 @@ export class FeishuChannelService {
     const webSearchMode = parseWebSearchModeArgument(args);
 
     if (webSearchMode === null) {
-      await this.safeSendText(context.chatId, "用法：/search <default|disabled|cached|live>");
+      await this.safeSendText(context.chatId, "用法：/search <disabled|cached|live>");
       return;
     }
 
@@ -718,7 +738,7 @@ export class FeishuChannelService {
     const networkAccessEnabled = parseNetworkAccessArgument(args);
 
     if (networkAccessEnabled === null) {
-      await this.safeSendText(context.chatId, "用法：/network <default|on|off>");
+      await this.safeSendText(context.chatId, "用法：/network <on|off>");
       return;
     }
 
@@ -737,7 +757,7 @@ export class FeishuChannelService {
     const approvalPolicy = parseApprovalPolicyArgument(args);
 
     if (approvalPolicy === null) {
-      await this.safeSendText(context.chatId, "用法：/approval <default|never|on-request|on-failure|untrusted>");
+      await this.safeSendText(context.chatId, "用法：/approval <never|on-request|on-failure|untrusted>");
       return;
     }
 
@@ -779,15 +799,15 @@ export class FeishuChannelService {
       "/link <绑定码> 可选：认领一个旧 Web 浏览器身份",
       "/reset confirm 清空当前 principal 的人格档案、历史和记忆，并重新开始",
       "/settings 查看当前会话配置",
-      "/sandbox <default|read-only|workspace-write|danger-full-access>",
-      "/search <default|disabled|cached|live>",
-      "/network <default|on|off>",
-      "/approval <default|never|on-request|on-failure|untrusted>",
+      "/sandbox <read-only|workspace-write|danger-full-access>",
+      "/search <disabled|cached|live>",
+      "/network <on|off>",
+      "/approval <never|on-request|on-failure|untrusted>",
       "/msgupdate 测试机器人是否能原地更新自己刚发出的文本消息",
       "/quota 查看当前 Codex / ChatGPT 额度信息",
       "",
       "Web 和飞书默认共享同一套会话列表；切到同一个 conversationId 后，会继续复用后端已有上下文。",
-      "以上配置只作用于当前会话；未设置的项会回退到运行时默认值。",
+      "以上配置只作用于当前会话；/settings 只展示当前可确认的实际值。",
       "直接发送普通文本即可继续当前会话。",
       "如果当前会话还有任务在运行，新消息会先打断旧任务，再自动开始新的请求。",
       currentSessionId ? `当前会话：${currentSessionId}` : "当前还没有激活会话，直接发消息时会自动创建。",
@@ -1393,57 +1413,41 @@ function normalizeText(value: unknown): string | null {
   return text ? text : null;
 }
 
-function parseSandboxModeArgument(args: string[]): SandboxMode | undefined | null {
+function parseSandboxModeArgument(args: string[]): SandboxMode | null {
   const value = normalizeText(args.join(" "))?.toLowerCase();
 
   if (!value) {
     return null;
-  }
-
-  if (value === "default") {
-    return undefined;
   }
 
   return SANDBOX_MODES.includes(value as SandboxMode) ? (value as SandboxMode) : null;
 }
 
-function parseWebSearchModeArgument(args: string[]): WebSearchMode | undefined | null {
+function parseWebSearchModeArgument(args: string[]): WebSearchMode | null {
   const value = normalizeText(args.join(" "))?.toLowerCase();
 
   if (!value) {
     return null;
-  }
-
-  if (value === "default") {
-    return undefined;
   }
 
   return WEB_SEARCH_MODES.includes(value as WebSearchMode) ? (value as WebSearchMode) : null;
 }
 
-function parseApprovalPolicyArgument(args: string[]): ApprovalPolicy | undefined | null {
+function parseApprovalPolicyArgument(args: string[]): ApprovalPolicy | null {
   const value = normalizeText(args.join(" "))?.toLowerCase();
 
   if (!value) {
     return null;
-  }
-
-  if (value === "default") {
-    return undefined;
   }
 
   return APPROVAL_POLICIES.includes(value as ApprovalPolicy) ? (value as ApprovalPolicy) : null;
 }
 
-function parseNetworkAccessArgument(args: string[]): boolean | undefined | null {
+function parseNetworkAccessArgument(args: string[]): boolean | null {
   const value = normalizeText(args.join(" "))?.toLowerCase();
 
   if (!value) {
-    return null;
-  }
-
-  if (value === "default") {
-    return undefined;
+      return null;
   }
 
   if (["on", "true", "1", "yes", "enabled"].includes(value)) {
@@ -1457,26 +1461,55 @@ function parseNetworkAccessArgument(args: string[]): boolean | undefined | null 
   return null;
 }
 
-function formatSessionSettingsLines(settings: SessionTaskSettings): string[] {
+function formatSessionSettingsLines(
+  settings: SessionTaskSettings,
+  runtimeConfig: CodexRuntimeCatalog | null,
+  authAccountLabel: string | null,
+): string[] {
   const normalized = normalizeSessionTaskSettings(settings);
+  const effective = resolveEffectiveSessionSettings(normalized, runtimeConfig);
+  const lines = [
+    "当前可确认配置：",
+    `接入方式：${effective.accessMode}`,
+  ];
 
-  if (isSessionTaskSettingsEmpty(normalized)) {
-    return ["当前没有单独配置，后续会使用运行时默认值。"];
+  if (authAccountLabel) {
+    lines.push(`认证账号：${authAccountLabel}`);
   }
 
-  return [
-    "当前配置：",
-    `接入方式：${formatOptionalSetting(normalized.accessMode)}`,
-    `认证账号：${normalized.authAccountId ? normalized.authAccountId : "跟随默认账号"}`,
-    `模型：${formatOptionalSetting(normalized.model)}`,
-    `第三方供应商：${formatOptionalSetting(normalized.thirdPartyProviderId)}`,
-    `第三方模型：${formatOptionalSetting(normalized.thirdPartyModel)}`,
-    `推理强度：${formatOptionalSetting(normalized.reasoning)}`,
-    `审批策略：${formatOptionalSetting(normalized.approvalPolicy)}`,
-    `沙箱模式：${formatOptionalSetting(normalized.sandboxMode)}`,
-    `联网搜索：${formatOptionalSetting(normalized.webSearchMode)}`,
-    `网络访问：${formatOptionalBoolean(normalized.networkAccessEnabled)}`,
-  ];
+  if (effective.model) {
+    lines.push(`模型：${effective.model}`);
+  }
+
+  if (effective.thirdPartyProviderId) {
+    lines.push(`第三方供应商：${effective.thirdPartyProviderId}`);
+  }
+
+  if (effective.thirdPartyModel) {
+    lines.push(`第三方模型：${effective.thirdPartyModel}`);
+  }
+
+  if (effective.reasoning) {
+    lines.push(`推理强度：${effective.reasoning}`);
+  }
+
+  if (effective.approvalPolicy) {
+    lines.push(`审批策略：${effective.approvalPolicy}`);
+  }
+
+  if (effective.sandboxMode) {
+    lines.push(`沙箱模式：${effective.sandboxMode}`);
+  }
+
+  if (effective.webSearchMode) {
+    lines.push(`联网搜索：${effective.webSearchMode}`);
+  }
+
+  if (typeof effective.networkAccessEnabled === "boolean") {
+    lines.push(`网络访问：${formatBooleanValue(effective.networkAccessEnabled)}`);
+  }
+
+  return lines;
 }
 
 function formatOptionalSetting(value: string | null | undefined): string {
@@ -1486,6 +1519,45 @@ function formatOptionalSetting(value: string | null | undefined): string {
 function formatOptionalBoolean(value: boolean | null | undefined): string {
   if (typeof value !== "boolean") {
     return "默认";
+  }
+
+  return value ? "开启" : "关闭";
+}
+
+function resolveEffectiveSessionSettings(
+  settings: SessionTaskSettings,
+  runtimeConfig: CodexRuntimeCatalog | null,
+): {
+  accessMode: string;
+  model: string | null;
+  thirdPartyProviderId: string | null;
+  thirdPartyModel: string | null;
+  reasoning: string | null;
+  approvalPolicy: string | null;
+  sandboxMode: string | null;
+  webSearchMode: string | null;
+  networkAccessEnabled: boolean | null;
+} {
+  const runtimeDefaults = runtimeConfig?.defaults ?? null;
+
+  return {
+    accessMode: settings.accessMode ?? "auth",
+    model: settings.model ?? runtimeDefaults?.model ?? runtimeConfig?.models.find((entry) => entry.isDefault)?.model ?? null,
+    thirdPartyProviderId: settings.thirdPartyProviderId ?? null,
+    thirdPartyModel: settings.thirdPartyModel ?? null,
+    reasoning: settings.reasoning ?? runtimeDefaults?.reasoning ?? null,
+    approvalPolicy: settings.approvalPolicy ?? runtimeDefaults?.approvalPolicy ?? null,
+    sandboxMode: settings.sandboxMode ?? runtimeDefaults?.sandboxMode ?? null,
+    webSearchMode: settings.webSearchMode ?? runtimeDefaults?.webSearchMode ?? null,
+    networkAccessEnabled: typeof settings.networkAccessEnabled === "boolean"
+      ? settings.networkAccessEnabled
+      : runtimeDefaults?.networkAccessEnabled ?? null,
+  };
+}
+
+function formatBooleanValue(value: boolean | null | undefined): string {
+  if (typeof value !== "boolean") {
+    return "未配置";
   }
 
   return value ? "开启" : "关闭";

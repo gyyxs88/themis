@@ -12,6 +12,7 @@ import {
   type TaskOptions,
   type WebSearchMode,
 } from "../types/index.js";
+import { applyThemisGlobalDefaultsToTaskOptions } from "./task-defaults.js";
 
 export function normalizeSessionTaskSettings(value: unknown): SessionTaskSettings {
   if (!isRecord(value)) {
@@ -64,16 +65,12 @@ export function buildTaskOptionsFromSessionTaskSettings(
 ): TaskOptions | undefined {
   const normalized = normalizeSessionTaskSettings(settings);
 
-  if (isSessionTaskSettingsEmpty(normalized)) {
-    return undefined;
-  }
-
   const accessMode = normalized.accessMode === "third-party" ? "third-party" : normalized.accessMode;
   const model = accessMode === "third-party"
     ? normalized.thirdPartyModel || undefined
     : normalized.model || undefined;
 
-  const options: TaskOptions = {
+  const options = applyThemisGlobalDefaultsToTaskOptions({
     ...(normalized.profile ? { profile: normalized.profile } : {}),
     ...(accessMode ? { accessMode } : {}),
     ...(normalized.authAccountId ? { authAccountId: normalized.authAccountId } : {}),
@@ -86,7 +83,7 @@ export function buildTaskOptionsFromSessionTaskSettings(
       ? { networkAccessEnabled: normalized.networkAccessEnabled }
       : {}),
     ...(normalized.thirdPartyProviderId ? { thirdPartyProviderId: normalized.thirdPartyProviderId } : {}),
-  };
+  });
 
   return Object.keys(options).length ? options : undefined;
 }

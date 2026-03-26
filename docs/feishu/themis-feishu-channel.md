@@ -159,7 +159,7 @@ infra/local/themis.db
 
 ### `/settings`
 
-查看当前会话保存的服务端配置。
+查看当前会话当前实际会使用的服务端配置。
 
 当前会展示：
 
@@ -172,21 +172,28 @@ infra/local/themis.db
 - 联网搜索
 - 网络访问
 
-未设置的项会回退到运行时默认值。
+Themis 当前有一层全局默认配置，会在任务下发前显式补齐：
 
-### `/sandbox <default|read-only|workspace-write|danger-full-access>`
+- 沙箱模式：`workspace-write`
+- 联网搜索：`live`
+- 网络访问：`on`
+- 审批策略：`never`
+
+`/settings` 展示的是“当前会实际使用的配置”，因此会把这层全局默认一起展示出来。
+
+### `/sandbox <read-only|workspace-write|danger-full-access>`
 
 设置当前会话的沙箱模式。
 
-### `/search <default|disabled|cached|live>`
+### `/search <disabled|cached|live>`
 
 设置当前会话的联网搜索模式。
 
-### `/network <default|on|off>`
+### `/network <on|off>`
 
 设置当前会话的网络访问开关。
 
-### `/approval <default|never|on-request|on-failure|untrusted>`
+### `/approval <never|on-request|on-failure|untrusted>`
 
 设置当前会话的审批策略。
 

@@ -26,6 +26,10 @@ import { ConversationService } from "./conversation-service.js";
 import { IdentityLinkService } from "./identity-link-service.js";
 import { buildBootstrapPrompt, buildTaskPrompt } from "./prompt.js";
 import {
+  applyThemisGlobalDefaultsToRuntimeCatalog,
+  applyThemisGlobalDefaultsToTaskOptions,
+} from "./task-defaults.js";
+import {
   PrincipalPersonaService,
   type PrincipalPersonaOnboardingInterceptResult,
 } from "./principal-persona-service.js";
@@ -104,7 +108,10 @@ export class CodexTaskRuntime {
 
   async runTask(request: TaskRequest, hooks: CodexTaskRuntimeHooks = {}): Promise<TaskResult> {
     const resolvedRequest = this.conversationService.resolveRequest(request);
-    request = resolvedRequest.request;
+    request = {
+      ...resolvedRequest.request,
+      options: applyThemisGlobalDefaultsToTaskOptions(resolvedRequest.request.options),
+    };
     const principalId = resolvedRequest.principalId;
     const onboardingIntercept = principalId && this.principalPersonaService.shouldRunOnboarding(request, principalId)
       ? this.principalPersonaService.maybeHandleOnboardingTurn(principalId, request)
@@ -288,7 +295,9 @@ export class CodexTaskRuntime {
       env: buildCodexProcessEnv(authAccount.codexHome),
       configOverrides: createCodexAuthStorageConfigOverrides(),
     });
-    return createUnifiedRuntimeCatalog(runtimeCatalog, this.providerConfigs);
+    return applyThemisGlobalDefaultsToRuntimeCatalog(
+      createUnifiedRuntimeCatalog(runtimeCatalog, this.providerConfigs),
+    );
   }
 
   getRuntimeStore(): SqliteCodexSessionRegistry {

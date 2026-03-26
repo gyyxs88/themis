@@ -15,7 +15,7 @@
 - Web 与飞书当前都统一采用“新消息默认打断旧任务”的跟进行为。
 - 飞书与 Web 现在默认共享同一套 conversation 视图；飞书 `/sessions` 可看到 Web 创建的会话，切到同一个 `conversationId` 后会继续复用后端已有上下文。
 - 当前激活会话不会跨端自动同步；Web 和飞书各自保留“当前正在聊哪一条”的本地状态，需要手动切到目标 `conversationId`。
-- 飞书与 Web 已共用同一种服务端会话配置存储机制；飞书任务发起时会读取当前会话保存的 `sandbox / web search / network / approval` 等选项。
+- 飞书与 Web 已共用同一种服务端会话配置存储机制；Themis 还会在服务端补一层全局默认：`sandbox=workspace-write`、`web search=live`、`network=on`、`approval=never`，任务发送时会显式带上，`/settings` 也会按这套实际使用值展示。
 - Web 仍保留浏览器级 identity 与绑定码，但它已降级为可选能力，主要用于认领旧浏览器身份，不再是跨渠道共享会话的前提。
 - 现阶段仍基于 `@openai/codex-sdk` 高层 thread API，没有桌面版那种 guide 当前运行的公开能力。
 
