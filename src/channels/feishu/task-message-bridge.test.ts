@@ -1,0 +1,162 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  FeishuTaskMessageBridge,
+  normalizeComparableReply,
+} from "./task-message-bridge.js";
+
+test("顺序延迟：第二条 progress 到来时才发送上一条，并补新的处理中占位", async () => {
+  const operations: string[] = [];
+  let nextMessageId = 1;
+  const bridge = createBridge(operations, () => `message-${nextMessageId++}`);
+
+  await bridge.prepareResponseSlot();
+  await bridge.deliver(createProgressMessage("req-1", "item-1", "第一条"));
+
+  assert.deepEqual(operations, ["create:处理中..."]);
+
+  await bridge.deliver(createProgressMessage("req-1", "item-2", "第二条"));
+
+  assert.deepEqual(operations, [
+    "create:处理中...",
+    "update:message-1:第一条",
+    "create:处理中...",
+  ]);
+
+  await bridge.deliver(createResultMessage("req-1", "第二条\n\n额度剩余：5h 87%｜1w 95%"));
+
+  assert.deepEqual(operations, [
+    "create:处理中...",
+    "update:message-1:第一条",
+    "create:处理中...",
+    "update:message-2:第二条\n\n额度剩余：5h 87%｜1w 95%",
+  ]);
+});
+
+test("最终消息与缓存 progress 仅额度不同：只更新最后一个占位，不重复发送上一条", async () => {
+  const operations: string[] = [];
+  let nextMessageId = 1;
+  const bridge = createBridge(operations, () => `message-${nextMessageId++}`);
+
+  await bridge.prepareResponseSlot();
+  await bridge.deliver(createProgressMessage("req-2", "item-1", "同一条正文"));
+  await bridge.deliver(createResultMessage("req-2", "同一条正文\n\n额度剩余：5h 87%｜1w 95%"));
+
+  assert.deepEqual(operations, [
+    "create:处理中...",
+    "update:message-1:同一条正文\n\n额度剩余：5h 87%｜1w 95%",
+  ]);
+});
+
+test("最终消息与缓存 progress 不同：会先发送缓存，再发送最终消息", async () => {
+  const operations: string[] = [];
+  let nextMessageId = 1;
+  const bridge = createBridge(operations, () => `message-${nextMessageId++}`);
+
+  await bridge.prepareResponseSlot();
+  await bridge.deliver(createProgressMessage("req-3", "item-1", "上一条"));
+  await bridge.deliver(createResultMessage("req-3", "最终条"));
+
+  assert.deepEqual(operations, [
+    "create:处理中...",
+    "update:message-1:上一条",
+    "create:最终条",
+  ]);
+});
+
+test("静默超时会补发缓存 progress，并保留新的处理中占位", async () => {
+  const operations: string[] = [];
+  let nextMessageId = 1;
+  const bridge = createBridge(operations, () => `message-${nextMessageId++}`, 20);
+
+  await bridge.prepareResponseSlot();
+  await bridge.deliver(createProgressMessage("req-4", "item-1", "超时补发"));
+  await wait(50);
+
+  assert.deepEqual(operations, [
+    "create:处理中...",
+    "update:message-1:超时补发",
+    "create:处理中...",
+  ]);
+
+  await bridge.deliver(createResultMessage("req-4", "最终完成"));
+
+  assert.deepEqual(operations, [
+    "create:处理中...",
+    "update:message-1:超时补发",
+    "create:处理中...",
+    "update:message-2:最终完成",
+  ]);
+});
+
+test("normalizeComparableReply 会忽略尾部额度信息", () => {
+  assert.equal(
+    normalizeComparableReply("正文\n\n额度剩余：5h 87%｜1w 95%"),
+    "正文",
+  );
+  assert.equal(normalizeComparableReply("正文"), "正文");
+});
+
+function createBridge(
+  operations: string[],
+  nextMessageId: () => string,
+  progressFlushTimeoutMs = 60_000,
+): FeishuTaskMessageBridge {
+  return new FeishuTaskMessageBridge({
+    createText: async (text) => {
+      operations.push(`create:${text}`);
+      return {
+        data: {
+          message_id: nextMessageId(),
+        },
+      };
+    },
+    updateText: async (messageId, text) => {
+      operations.push(`update:${messageId}:${text}`);
+      return {
+        data: {
+          message_id: messageId,
+        },
+      };
+    },
+    sendText: async (text) => {
+      operations.push(`send:${text}`);
+    },
+    splitText: (text) => {
+      const normalized = text.trim();
+      return normalized ? [normalized] : [];
+    },
+    progressFlushTimeoutMs,
+  });
+}
+
+function createProgressMessage(requestId: string, itemId: string, text: string) {
+  return {
+    kind: "event" as const,
+    requestId,
+    title: "task.progress",
+    text,
+    metadata: {
+      itemType: "agent_message",
+      threadEventType: "item.completed",
+      itemId,
+    },
+  };
+}
+
+function createResultMessage(requestId: string, text: string) {
+  return {
+    kind: "result" as const,
+    requestId,
+    title: "task.completed",
+    text,
+    metadata: {
+      status: "completed",
+      output: text,
+    },
+  };
+}
+
+async function wait(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}

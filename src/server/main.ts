@@ -1,6 +1,9 @@
 import { FeishuChannelService } from "../channels/index.js";
+import { loadProjectEnv } from "../config/project-env.js";
 import { CodexAuthRuntime, CodexTaskRuntime } from "../core/index.js";
 import { createThemisHttpServer, resolveListenAddresses } from "./http-server.js";
+
+loadProjectEnv();
 
 const host = process.env.THEMIS_HOST ?? "0.0.0.0";
 const port = Number.parseInt(process.env.THEMIS_PORT ?? "3100", 10);

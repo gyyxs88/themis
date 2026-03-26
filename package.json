@@ -3,7 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "themis": "./themis"
+  },
   "scripts": {
+    "themis": "tsx src/cli/main.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "dev:web": "tsx watch --clear-screen=false src/server/main.ts",

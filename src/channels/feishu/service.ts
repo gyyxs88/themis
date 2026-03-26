@@ -23,7 +23,12 @@ import {
 import { FeishuAdapter } from "./adapter.js";
 import { renderFeishuAssistantMessage, type FeishuRenderedMessageDraft } from "./message-renderer.js";
 import { FeishuSessionStore, type FeishuConversationKey } from "./session-store.js";
-import type { FeishuDeliveryMessage, FeishuTaskPayload } from "./types.js";
+import {
+  DEFAULT_FEISHU_PROGRESS_FLUSH_TIMEOUT_MS,
+  FeishuTaskMessageBridge,
+  type FeishuMessageMutationResponse,
+} from "./task-message-bridge.js";
+import type { FeishuTaskPayload } from "./types.js";
 
 type FeishuMessageReceiveEvent = Parameters<NonNullable<EventHandles["im.message.receive_v1"]>>[0];
 
@@ -61,14 +66,6 @@ interface FeishuActiveSessionTask {
   completed: Promise<void>;
 }
 
-interface FeishuMessageMutationResponse {
-  code?: number | undefined;
-  msg?: string | undefined;
-  data?: {
-    message_id?: string | undefined;
-  } | undefined;
-}
-
 export interface FeishuChannelServiceOptions {
   runtime: CodexTaskRuntime;
   authRuntime: CodexAuthRuntime;
@@ -77,6 +74,7 @@ export interface FeishuChannelServiceOptions {
   appSecret?: string;
   loggerLevel?: Lark.LoggerLevel;
   useEnvProxy?: boolean;
+  progressFlushTimeoutMs?: number;
   sessionStore?: FeishuSessionStore;
   logger?: FeishuChannelLogger;
 }
@@ -92,6 +90,7 @@ export class FeishuChannelService {
   private readonly appSecret: string;
   private readonly loggerLevel: Lark.LoggerLevel;
   private readonly useEnvProxy: boolean;
+  private readonly progressFlushTimeoutMs: number;
   private readonly sessionStore: FeishuSessionStore;
   private readonly logger: FeishuChannelLogger;
   private readonly client: Lark.Client | null;
@@ -110,6 +109,10 @@ export class FeishuChannelService {
     this.appSecret = normalizeText(options.appSecret ?? process.env.FEISHU_APP_SECRET) ?? "";
     this.loggerLevel = options.loggerLevel ?? parseFeishuLoggerLevel(process.env.FEISHU_LOG_LEVEL);
     this.useEnvProxy = options.useEnvProxy ?? parseBooleanEnv(process.env.FEISHU_USE_ENV_PROXY);
+    this.progressFlushTimeoutMs = normalizePositiveInteger(
+      options.progressFlushTimeoutMs ?? parseIntegerEnv(process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS),
+      DEFAULT_FEISHU_PROGRESS_FLUSH_TIMEOUT_MS,
+    );
     this.sessionStore = options.sessionStore ?? new FeishuSessionStore();
     this.logger = options.logger ?? console;
 
@@ -310,10 +313,11 @@ export class FeishuChannelService {
     const bridge = new FeishuTaskMessageBridge({
       createText: async (text) => this.createAssistantMessage(context.chatId, text),
       updateText: async (messageId, text) => this.updateAssistantMessage(messageId, text),
-      deleteMessage: async (messageId) => this.deleteMessage(messageId),
       sendText: async (text) => {
         await this.createAssistantMessage(context.chatId, text);
       },
+      splitText: splitForFeishuText,
+      progressFlushTimeoutMs: this.progressFlushTimeoutMs,
     });
     const router = new InMemoryCommunicationRouter();
     const adapter = new FeishuAdapter({
@@ -1120,20 +1124,6 @@ export class FeishuChannelService {
     });
   }
 
-  private async deleteMessage(messageId: string): Promise<void> {
-    const client = this.client;
-
-    if (!client) {
-      throw new Error("飞书客户端未就绪，或消息内容为空。");
-    }
-
-    await client.im.v1.message.delete({
-      path: {
-        message_id: messageId,
-      },
-    });
-  }
-
   private async safeSendText(chatId: string, text: string): Promise<void> {
     const normalizedText = text.trim();
 
@@ -1150,263 +1140,6 @@ export class FeishuChannelService {
     for (const chunk of decorateTaggedChunks(text, tag)) {
       await this.safeSendText(chatId, chunk);
     }
-  }
-}
-
-class FeishuTaskMessageBridge {
-  private static readonly PLACEHOLDER_TEXT = "处理中...";
-  private static readonly NEXT_PLACEHOLDER_DELAY_MS = 800;
-
-  private readonly deliveredProgress = new Map<string, string>();
-  private readonly createText: (text: string) => Promise<FeishuMessageMutationResponse>;
-  private readonly updateText: (messageId: string, text: string) => Promise<FeishuMessageMutationResponse>;
-  private readonly deleteMessage: (messageId: string) => Promise<void>;
-  private readonly sendText: (text: string) => Promise<void>;
-  private currentPlaceholderMessageId: string | null = null;
-  private currentPlaceholderUpdatable = false;
-  private lastProgressText: string | null = null;
-  private nextPlaceholderTimer: ReturnType<typeof setTimeout> | null = null;
-  private nextPlaceholderOperation: Promise<void> | null = null;
-  private resolveNextPlaceholderOperation: (() => void) | null = null;
-
-  constructor(options: {
-    createText: (text: string) => Promise<FeishuMessageMutationResponse>;
-    updateText: (messageId: string, text: string) => Promise<FeishuMessageMutationResponse>;
-    deleteMessage: (messageId: string) => Promise<void>;
-    sendText: (text: string) => Promise<void>;
-  }) {
-    this.createText = options.createText;
-    this.updateText = options.updateText;
-    this.deleteMessage = options.deleteMessage;
-    this.sendText = options.sendText;
-  }
-
-  async prepareResponseSlot(): Promise<void> {
-    await this.ensureCurrentPlaceholder();
-  }
-
-  async deliver(message: FeishuDeliveryMessage): Promise<void> {
-    switch (message.kind) {
-      case "event":
-        await this.deliverProgress(message);
-        return;
-      case "result":
-        await this.deliverResult(message);
-        return;
-      case "error":
-        await this.deliverTerminalText(buildFeishuTerminalStateText("执行异常", message.text));
-        return;
-      default:
-        return;
-    }
-  }
-
-  private async deliverProgress(message: FeishuDeliveryMessage): Promise<void> {
-    const metadata = asRecord(message.metadata);
-    const itemType = normalizeText(metadata?.itemType);
-    const threadEventType = normalizeText(metadata?.threadEventType);
-
-    if (itemType !== "agent_message" || threadEventType !== "item.completed") {
-      return;
-    }
-
-    const text = resolveDeliveryText(message, metadata);
-
-    if (!text) {
-      return;
-    }
-
-    const itemId = normalizeText(metadata?.itemId) ?? message.requestId;
-    const previous = this.deliveredProgress.get(itemId);
-
-    if (previous === text) {
-      return;
-    }
-
-    this.deliveredProgress.set(itemId, text);
-    await this.deliverProgressText(text);
-  }
-
-  private async deliverResult(message: FeishuDeliveryMessage): Promise<void> {
-    const metadata = asRecord(message.metadata);
-    const status = normalizeText(metadata?.status) ?? "completed";
-    const text = resolveDeliveryText(message, metadata);
-
-    if (status === "completed") {
-      if (!text) {
-        return;
-      }
-
-      await this.deliverCompletedText(text);
-      return;
-    }
-
-    if (status === "cancelled") {
-      await this.deliverTerminalText(buildFeishuTerminalStateText("任务已取消", text));
-      return;
-    }
-
-    await this.deliverTerminalText(buildFeishuTerminalStateText("任务失败", text));
-  }
-
-  private async deliverProgressText(text: string): Promise<void> {
-    const normalizedText = normalizeText(text);
-
-    if (!normalizedText) {
-      return;
-    }
-
-    await this.cancelScheduledPlaceholder();
-    await this.ensureCurrentPlaceholder();
-    await this.fillCurrentPlaceholder(normalizedText);
-    this.lastProgressText = normalizedText;
-    this.scheduleNextPlaceholder();
-  }
-
-  private async deliverCompletedText(text: string): Promise<void> {
-    const normalizedText = normalizeText(text);
-
-    if (!normalizedText) {
-      return;
-    }
-
-    await this.cancelScheduledPlaceholder();
-
-    if (normalizedText === this.lastProgressText) {
-      await this.discardCurrentPlaceholder();
-      this.clearCurrentPlaceholder();
-      return;
-    }
-
-    await this.ensureCurrentPlaceholder();
-    await this.fillCurrentPlaceholder(normalizedText);
-    this.clearCurrentPlaceholder();
-  }
-
-  private async deliverTerminalText(text: string): Promise<void> {
-    const normalizedText = normalizeText(text);
-
-    if (!normalizedText) {
-      return;
-    }
-
-    await this.cancelScheduledPlaceholder();
-    await this.ensureCurrentPlaceholder();
-    await this.fillCurrentPlaceholder(normalizedText);
-    this.clearCurrentPlaceholder();
-  }
-
-  private async sendStandaloneMessage(text: string): Promise<{ messageId: string | null; updatable: boolean }> {
-    const chunks = splitForFeishuText(text);
-
-    if (!chunks.length) {
-      return {
-        messageId: null,
-        updatable: false,
-      };
-    }
-
-    const [firstChunk, ...remainingChunks] = chunks;
-
-    if (!firstChunk) {
-      return {
-        messageId: null,
-        updatable: false,
-      };
-    }
-
-    const created = await this.createText(firstChunk);
-    const messageId = normalizeText(created.data?.message_id);
-
-    for (const chunk of remainingChunks) {
-      await this.sendText(chunk);
-    }
-
-    return {
-      messageId,
-      updatable: Boolean(messageId),
-    };
-  }
-  private async ensureCurrentPlaceholder(): Promise<void> {
-    if (this.currentPlaceholderUpdatable && this.currentPlaceholderMessageId) {
-      return;
-    }
-
-    const placeholder = await this.sendStandaloneMessage(FeishuTaskMessageBridge.PLACEHOLDER_TEXT);
-    this.currentPlaceholderMessageId = placeholder.messageId;
-    this.currentPlaceholderUpdatable = placeholder.updatable;
-  }
-
-  private async fillCurrentPlaceholder(text: string): Promise<void> {
-    if (!this.currentPlaceholderUpdatable || !this.currentPlaceholderMessageId) {
-      await this.sendStandaloneMessage(text);
-      return;
-    }
-
-    const chunks = splitForFeishuText(text);
-    const [firstChunk, ...remainingChunks] = chunks;
-
-    if (!firstChunk) {
-      return;
-    }
-
-    await this.updateText(this.currentPlaceholderMessageId, firstChunk);
-
-    for (const chunk of remainingChunks) {
-      await this.sendText(chunk);
-    }
-  }
-
-  private scheduleNextPlaceholder(): void {
-    this.clearCurrentPlaceholder();
-    this.finishScheduledPlaceholder();
-
-    this.nextPlaceholderOperation = new Promise<void>((resolve) => {
-      this.resolveNextPlaceholderOperation = resolve;
-      this.nextPlaceholderTimer = setTimeout(() => {
-        this.nextPlaceholderTimer = null;
-        void this.ensureCurrentPlaceholder()
-          .catch(() => {})
-          .finally(() => {
-            this.finishScheduledPlaceholder();
-          });
-      }, FeishuTaskMessageBridge.NEXT_PLACEHOLDER_DELAY_MS);
-    });
-  }
-
-  private async discardCurrentPlaceholder(): Promise<void> {
-    if (!this.currentPlaceholderUpdatable || !this.currentPlaceholderMessageId) {
-      return;
-    }
-
-    await this.deleteMessage(this.currentPlaceholderMessageId);
-  }
-
-  private clearCurrentPlaceholder(): void {
-    this.currentPlaceholderMessageId = null;
-    this.currentPlaceholderUpdatable = false;
-  }
-
-  private async cancelScheduledPlaceholder(): Promise<void> {
-    const timer = this.nextPlaceholderTimer;
-
-    if (timer) {
-      clearTimeout(timer);
-      this.nextPlaceholderTimer = null;
-      this.finishScheduledPlaceholder();
-      return;
-    }
-
-    if (this.nextPlaceholderOperation) {
-      await this.nextPlaceholderOperation;
-    }
-  }
-
-  private finishScheduledPlaceholder(): void {
-    const resolve = this.resolveNextPlaceholderOperation;
-    this.resolveNextPlaceholderOperation = null;
-    this.nextPlaceholderOperation = null;
-    resolve?.();
   }
 }
 
@@ -1514,26 +1247,6 @@ function toConversationKey(context: FeishuIncomingContext): FeishuConversationKe
   };
 }
 
-function resolveDeliveryText(
-  message: FeishuDeliveryMessage,
-  metadata: Record<string, unknown> | null,
-): string | null {
-  const directText = normalizeText(message.text);
-
-  if (directText) {
-    return directText;
-  }
-
-  const itemText = normalizeText(metadata?.itemText);
-
-  if (itemText) {
-    return itemText;
-  }
-
-  const output = normalizeText(metadata?.output);
-  return output ?? null;
-}
-
 function decorateTaggedChunks(text: string, tag: string): string[] {
   const normalizedText = text.trim();
 
@@ -1583,16 +1296,6 @@ function splitForFeishuText(text: string, reservedChars = 0): string[] {
   }
 
   return chunks.filter(Boolean);
-}
-
-function buildFeishuTerminalStateText(label: string, text: string | null): string {
-  const normalizedText = normalizeText(text);
-
-  if (!normalizedText) {
-    return label;
-  }
-
-  return `${normalizedText}\n\n${label}`;
 }
 
 function formatRateLimitLine(
@@ -1850,6 +1553,25 @@ function parseFeishuLoggerLevel(value: string | undefined): Lark.LoggerLevel {
 function parseBooleanEnv(value: string | undefined): boolean {
   const normalized = normalizeText(value)?.toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function parseIntegerEnv(value: string | undefined): number | undefined {
+  const normalized = normalizeText(value);
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  const parsed = Number.parseInt(normalized, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+
+  return Math.max(1, Math.round(value));
 }
 
 function buildFeishuHttpInstance(options: {

@@ -1,0 +1,14 @@
+[Unit]
+Description=Themis dev web watcher
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/themis
+ExecStart=/usr/bin/env npm run dev:web
+Restart=always
+RestartSec=2
+Environment=NODE_ENV=development
+
+[Install]
+WantedBy=default.target

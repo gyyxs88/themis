@@ -11,6 +11,7 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 - 后端围绕 `@openai/codex-sdk` 做会话复用、流式输出、分叉上下文和历史恢复。
 - 本地 SQLite `infra/local/themis.db` 负责持久化 conversation、turn、event、touched files、identity 和第三方兼容 provider 配置。
 - Web 端已支持 Codex 认证、设备码登录、多账号自动建槽与管理、会话级手动切号、历史加载、会话分叉、第三方兼容接入、首次对话长期画像建档、principal 级长期人格配置和运行参数设置。
+- 项目级 CLI 已提供可直接执行的 `themis` 入口；无参数进入交互模式，也支持 `init / status / config` 子命令。
 
 ## 目录说明
 
@@ -20,7 +21,7 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 - `docs/memory/YYYY/MM/`：已验证、可长期复用的专题记忆。
 - `memory/`：共享项目工作台，存放项目概览、架构现状、任务状态、决策记录和当前会话。
 - `infra/`：本地数据库、生成配置和环境相关文件。
-- `tests/`：测试目录预留；当前还没有自动化测试文件。
+- `src/**/*.test.ts`：当前基础自动化测试，主要覆盖 `auth`、`runtime`、第三方 provider 配置等核心约束。
 - `temp/`：临时脚本和一次性辅助文件。
 
 ## 文档与记忆分层
@@ -32,7 +33,7 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 - `memory/architecture/`：当前实现形态、运行路径和边界。
 - `memory/tasks/`：`backlog / in-progress / done` 工作台。
 - `memory/decisions/`：项目级长期决策记录。
-- `memory/sessions/active.md`：当前会话上下文，只记录正在推进的工作，不沉淀长期知识。
+- `memory/sessions/`：当前会话上下文目录；仓库默认只提交说明文件，实际 `active.md` 为本地会话文件，按需创建且不纳入版本控制。
 - `docs/memory/YYYY/MM/`：经过验证、后续大概率还会反复使用的结论、坑点、接口特性和操作前提。
 - `docs/product/`：产品和架构规划文档，表达设计意图，不直接等同当前实现。
 - `docs/feishu/`：飞书渠道的当前接入说明。
@@ -51,7 +52,7 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 - NDJSON 流式任务输出：支持中途事件、最终结果、取消和断连中止。
 - 回复额度尾注：认证模式下，Web / 飞书最终回复会附带当前认证返回的额度剩余尾注；当前 ChatGPT 常见会显示 `5h` 和 `1w` 两个窗口。
 - 多账号认证池：当前只针对 ChatGPT 登录态做多账号自动建槽；Themis 会按真实账号邮箱自动创建并命名账号槽位，自动把认证文件归档到对应 `CODEX_HOME`；再次检测到同邮箱时会直接复用已有槽位。Web 可查看账号、切默认账号，并给当前会话单独固定认证账号；飞书支持 `/account list`、`/account current`、`/account use`。
-- 飞书长连接主链路：普通文本消息、会话切换、命令、额度查询，以及“短延迟处理中占位槽位 + 消息编辑更新 + 飞书富文本渲染”的回复桥接。
+- 飞书长连接主链路：普通文本消息、会话切换、命令、额度查询，以及“处理中占位槽位 + 顺序延迟 progress 缓冲 + 消息编辑更新 + 飞书富文本渲染”的回复桥接。
 - 身份与会话辅助：Web 浏览器身份、一次性绑定码、跨端接入已有 `conversationId`。
 - 长期协作档案：首次对话会进入一次性 bootstrap，用 4 轮分组采集称呼、长期背景、协作偏好，以及 Themis 的长期人格字段（语言风格 / 性格标签 / 补充说明 / SOUL），并按 `principal` 持久化；后续跨 Web / 飞书、跨会话复用。
 - principal 重置：Web 顶部按钮和飞书 `/reset confirm` 都可以清空当前 principal 的人格档案、对话历史、会话设置和后端线程索引，并重新开始。
@@ -60,10 +61,10 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 
 ## 当前未落地能力
 
-- 自动化测试。
+- 更完整的自动化测试覆盖；当前只有 `src/core/*.test.ts` 这类基础单元测试，`router`、`session store`、`fork`、`history API` 和 Web stream 主链路仍缺覆盖。
 - Markdown memory 的运行时自动读写服务。
 - LAN Web UI 的访问控制和审计日志。
-- Operator CLI。
+- 更完整的 Operator CLI；当前只提供项目级 `init / status / config` 入口。
 
 ## 本地运行
 
@@ -73,22 +74,72 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 npm install
 ```
 
-2. 确保本机已有可用的 Codex 认证。
+2. 初始化本地配置入口：
+
+```bash
+./themis
+```
+
+或显式执行子命令：
+
+```bash
+npm run themis -- init
+```
+
+常用 CLI：
+
+```bash
+./themis status
+./themis config list
+./themis config set FEISHU_APP_ID cli_xxx
+```
+
+如果希望像 `codex` 一样直接输入 `themis`，推荐在仓库根目录执行一次：
+
+```bash
+./themis install
+```
+
+之后就可以直接运行：
+
+```bash
+themis
+themis status
+```
+
+保留的 npm 方式：
+
+```bash
+npm run themis -- status
+npm run themis -- config list
+npm run themis -- config set FEISHU_APP_ID cli_xxx
+```
+
+`init` 会优先从仓库根目录的 `.env.example` 生成 `.env.local`。服务启动时会自动加载 `.env` / `.env.local`；真实 shell 环境变量优先级更高。
+
+3. 确保本机已有可用的 Codex 认证。
 
 常见方式：
 
 - 本机已有 Codex / ChatGPT 登录态。
-- 或者环境里已提供 `CODEX_API_KEY`。
+- 或者在 shell / `.env.local` 里提供 `CODEX_API_KEY`。
 - 多账号模式下，默认账号会沿用当前 `CODEX_HOME` 或 `~/.codex`；当 Themis 在 ChatGPT 登录态下检测到一个新账号时，会自动创建对应槽位并把认证文件保存到 `infra/local/codex-auth/<accountId>/`，同时默认强制 `cli_auth_credentials_store = "file"`。如果你先在 VS Code Codex、桌面版 Codex 或 CLI 里切了 ChatGPT 账号，再回到 Themis，Themis 会在下次读取认证状态或发送任务时自动识别并同步。纯 API Key 登录不在这套自动建槽/换号范围里。
 
-3. 如果需要飞书渠道，再额外配置：
+4. 如果需要飞书渠道，再额外配置：
 
 ```bash
 export FEISHU_APP_ID="cli_xxx"
 export FEISHU_APP_SECRET="xxx"
 ```
 
-4. 启动服务：
+也可以改用 CLI 写入 `.env.local`：
+
+```bash
+npm run themis -- config set FEISHU_APP_ID cli_xxx
+npm run themis -- config set FEISHU_APP_SECRET xxx
+```
+
+5. 启动服务：
 
 ```bash
 npm run dev:web
@@ -96,7 +147,12 @@ npm run dev:web
 
 `dev:web` 目前会监听后端 TypeScript 变更并自动重启；前端静态资源修改后仍需要手动刷新浏览器页面。
 
-5. 在浏览器打开：
+如果你希望把开发模式常驻到 `systemd --user` 并保留后端热更新，可参考：
+
+- [`infra/systemd/themis-dev.service.example`](./infra/systemd/themis-dev.service.example)
+- [`docs/repository/themis-systemd-dev-service.md`](./docs/repository/themis-systemd-dev-service.md)
+
+6. 在浏览器打开：
 
 ```text
 http://localhost:3100
@@ -107,6 +163,14 @@ http://localhost:3100
 - `THEMIS_HOST`
 - `THEMIS_PORT`
 - `THEMIS_TASK_TIMEOUT_MS`
+- `CODEX_HOME`
+- `CODEX_API_KEY`
+- `FEISHU_APP_ID`
+- `FEISHU_APP_SECRET`
+- `FEISHU_PROGRESS_FLUSH_TIMEOUT_MS`
+- `THEMIS_OPENAI_COMPAT_BASE_URL`
+- `THEMIS_OPENAI_COMPAT_API_KEY`
+- `THEMIS_OPENAI_COMPAT_MODEL`
 
 ## 建议阅读顺序
 
