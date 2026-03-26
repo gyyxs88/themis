@@ -12,6 +12,7 @@ interface TestServerContext {
   server: Server;
   baseUrl: string;
   root: string;
+  runtimeStore: SqliteCodexSessionRegistry;
 }
 
 async function withHttpServer(
@@ -40,6 +41,7 @@ async function withHttpServer(
       server: listeningServer,
       baseUrl,
       root,
+      runtimeStore,
     });
   } finally {
     await closeServer(listeningServer);
@@ -101,6 +103,62 @@ test("PUT /api/sessions/:id/settings 会拒绝相对路径 workspacePath", async
     };
     assert.equal(payload.error?.code, "INVALID_REQUEST");
     assert.match(payload.error?.message ?? "", /绝对路径/);
+  });
+});
+
+test("PUT /api/sessions/:id/settings 在冻结会话改成非法路径时返回冻结错误", async () => {
+  await withHttpServer(async ({ baseUrl, root, runtimeStore }) => {
+    const workspace = join(root, "workspace");
+    mkdirSync(workspace);
+
+    const saveResponse = await fetch(`${baseUrl}/api/sessions/session-http-frozen/settings`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        settings: {
+          workspacePath: workspace,
+        },
+      }),
+    });
+    assert.equal(saveResponse.status, 200);
+
+    runtimeStore.upsertTurnFromRequest({
+      requestId: "request-http-frozen-1",
+      sourceChannel: "web",
+      user: {
+        userId: "user-http-frozen-1",
+      },
+      goal: "hello",
+      channelContext: {
+        sessionId: "session-http-frozen",
+      },
+      createdAt: "2026-03-26T00:00:00.000Z",
+    }, "task-http-frozen-1");
+
+    const response = await fetch(`${baseUrl}/api/sessions/session-http-frozen/settings`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        settings: {
+          workspacePath: "relative/project",
+        },
+      }),
+    });
+
+    assert.equal(response.status, 400);
+
+    const payload = await response.json() as {
+      error?: {
+        code?: string;
+        message?: string;
+      };
+    };
+    assert.equal(payload.error?.code, "INVALID_REQUEST");
+    assert.equal(payload.error?.message, "当前会话已经执行过任务，不能再修改工作区；请先新建会话。");
   });
 });
 

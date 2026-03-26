@@ -128,6 +128,48 @@ test("persistSessionTaskSettings 在会话已有 turn 时禁止修改 workspaceP
   }
 });
 
+test("persistSessionTaskSettings 在冻结会话改成非法路径时仍优先抛冻结错误", () => {
+  const { root, store } = createStoreContext();
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+
+  try {
+    store.saveSessionTaskSettings({
+      sessionId: "session-2-invalid",
+      settings: {
+        workspacePath: workspace,
+      },
+      createdAt: "2026-03-26T00:00:00.000Z",
+      updatedAt: "2026-03-26T00:00:00.000Z",
+    });
+    store.upsertTurnFromRequest({
+      requestId: "request-2",
+      sourceChannel: "web",
+      user: {
+        userId: "user-2",
+      },
+      goal: "hello",
+      channelContext: {
+        sessionId: "session-2-invalid",
+      },
+      createdAt: "2026-03-26T00:00:00.000Z",
+    }, "task-2");
+
+    assert.throws(() => {
+      persistSessionTaskSettings(
+        store,
+        "session-2-invalid",
+        {
+          workspacePath: "relative/project",
+        },
+        "2026-03-26T01:00:00.000Z",
+      );
+    }, /当前会话已经执行过任务，不能再修改工作区；请先新建会话。/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("persistSessionTaskSettings 允许清空会话设置", () => {
   const { root, store } = createStoreContext();
   const workspace = join(root, "workspace");

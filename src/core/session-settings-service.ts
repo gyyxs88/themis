@@ -35,12 +35,13 @@ export function persistSessionTaskSettings(
   const mergedSettings = clearRequested
     ? {}
     : mergeSessionTaskSettings(existing?.settings ?? {}, normalizedPatch);
-  const normalizedSettings = normalizeWorkspaceField(mergedSettings);
 
-  if (workspaceChanged(existing?.settings?.workspacePath, normalizedSettings.workspacePath)
+  if (workspaceChanged(existing?.settings?.workspacePath, mergedSettings.workspacePath)
     && store.hasSessionTurn({ sessionId: normalizedSessionId })) {
     throw new Error(SESSION_WORKSPACE_LOCKED_ERROR);
   }
+
+  const normalizedSettings = normalizeWorkspaceField(mergedSettings);
 
   if (isSessionTaskSettingsEmpty(normalizedSettings)) {
     store.deleteSessionTaskSettings(normalizedSessionId);
