@@ -70,6 +70,32 @@ test("/workspace <path> 会写入当前会话工作区，/ws 作为别名可用"
   }
 });
 
+test("/workspace <path> 只影响当前 session，不会污染 principal 与 task payload options", async () => {
+  const harness = createHarness();
+
+  try {
+    const sessionId = "session-workspace-isolated";
+    const workspace = harness.createWorkspace("workspace-isolated");
+    harness.setCurrentSession(sessionId);
+
+    await harness.handleCommand("settings", ["network", "off"]);
+    harness.takeSingleMessage();
+    const beforePrincipal = harness.getStoredPrincipalTaskSettings();
+
+    await harness.handleCommand("workspace", [workspace]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /当前会话工作区已更新为：/);
+    assert.deepEqual(harness.getStoredPrincipalTaskSettings(), beforePrincipal);
+
+    const payload = harness.createTaskPayload(sessionId, "hello");
+    assert.equal("workspacePath" in (payload.options ?? {}), false);
+    assert.equal(payload.options?.networkAccessEnabled, false);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("/workspace <path> 在会话已执行任务后会拒绝修改", async () => {
   const harness = createHarness();
 
@@ -88,6 +114,36 @@ test("/workspace <path> 在会话已执行任务后会拒绝修改", async () =>
     const message = harness.takeSingleMessage();
     assert.match(message, new RegExp(escapeRegExp(SESSION_WORKSPACE_LOCKED_ERROR)));
     assert.equal(harness.readSessionSettings(sessionId)?.settings.workspacePath, workspaceA);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/workspace 在没有激活会话时返回清晰提示", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("workspace", []);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /当前还没有激活会话。直接发消息时会自动创建，或使用 \/new 手动新建。/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/workspace <非法路径> 返回共享校验错误且不写入 settings", async () => {
+  const harness = createHarness();
+
+  try {
+    const sessionId = "session-workspace-invalid-path";
+    harness.setCurrentSession(sessionId);
+
+    await harness.handleCommand("workspace", ["relative/project"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /只支持服务端本机绝对路径。/);
+    assert.equal(harness.readSessionSettings(sessionId), null);
   } finally {
     harness.cleanup();
   }
