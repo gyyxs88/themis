@@ -170,6 +170,74 @@ test("persistSessionTaskSettings 在冻结会话改成非法路径时仍优先�
   }
 });
 
+test("persistSessionTaskSettings 支持用空白 workspacePath 删除已有字段", () => {
+  const { root, store } = createStoreContext();
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+
+  try {
+    store.saveSessionTaskSettings({
+      sessionId: "session-clear-workspace",
+      settings: {
+        profile: "dev",
+        workspacePath: workspace,
+      },
+      createdAt: "2026-03-26T00:00:00.000Z",
+      updatedAt: "2026-03-26T00:00:00.000Z",
+    });
+
+    const result = persistSessionTaskSettings(
+      store,
+      "session-clear-workspace",
+      {
+        workspacePath: "   ",
+      },
+      "2026-03-26T01:00:00.000Z",
+    );
+
+    assert.equal(result.cleared, false);
+    assert.deepEqual(result.settings, {
+      profile: "dev",
+    });
+    assert.equal(store.getSessionTaskSettings("session-clear-workspace")?.settings.workspacePath, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("persistSessionTaskSettings 支持用空白字符串删除非 workspace 文本字段", () => {
+  const { root, store } = createStoreContext();
+
+  try {
+    store.saveSessionTaskSettings({
+      sessionId: "session-clear-profile",
+      settings: {
+        profile: "dev",
+        webSearchMode: "disabled",
+      },
+      createdAt: "2026-03-26T00:00:00.000Z",
+      updatedAt: "2026-03-26T00:00:00.000Z",
+    });
+
+    const result = persistSessionTaskSettings(
+      store,
+      "session-clear-profile",
+      {
+        profile: "   ",
+      },
+      "2026-03-26T01:00:00.000Z",
+    );
+
+    assert.equal(result.cleared, false);
+    assert.deepEqual(result.settings, {
+      webSearchMode: "disabled",
+    });
+    assert.equal(store.getSessionTaskSettings("session-clear-profile")?.settings.profile, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("persistSessionTaskSettings 允许清空会话设置", () => {
   const { root, store } = createStoreContext();
   const workspace = join(root, "workspace");

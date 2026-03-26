@@ -8,6 +8,19 @@ import {
 import { validateWorkspacePath } from "./session-workspace.js";
 
 const SESSION_WORKSPACE_LOCKED_ERROR = "当前会话已经执行过任务，不能再修改工作区；请先新建会话。";
+const SESSION_STRING_SETTING_KEYS: ReadonlyArray<keyof SessionTaskSettings> = [
+  "profile",
+  "accessMode",
+  "workspacePath",
+  "authAccountId",
+  "model",
+  "reasoning",
+  "approvalPolicy",
+  "sandboxMode",
+  "webSearchMode",
+  "thirdPartyProviderId",
+  "thirdPartyModel",
+];
 
 export interface PersistSessionTaskSettingsResult {
   sessionId: string;
@@ -32,9 +45,12 @@ export function persistSessionTaskSettings(
   const existing = store.getSessionTaskSettings(normalizedSessionId);
   const clearRequested = patch === null || (isRecord(patch) && Object.keys(patch).length === 0);
   const normalizedPatch = normalizeSessionTaskSettings(patch);
+  const baseSettings = clearRequested
+    ? {}
+    : applyExplicitStringFieldClears(existing?.settings ?? {}, patch);
   const mergedSettings = clearRequested
     ? {}
-    : mergeSessionTaskSettings(existing?.settings ?? {}, normalizedPatch);
+    : mergeSessionTaskSettings(baseSettings, normalizedPatch);
 
   if (workspaceChanged(existing?.settings?.workspacePath, mergedSettings.workspacePath)
     && store.hasSessionTurn({ sessionId: normalizedSessionId })) {
@@ -90,6 +106,39 @@ function workspaceChanged(previous?: string, next?: string): boolean {
 function normalizeWorkspaceValue(value: string | undefined): string {
   const normalized = typeof value === "string" ? value.trim() : "";
   return normalized || "";
+}
+
+function applyExplicitStringFieldClears(
+  base: SessionTaskSettings,
+  patch: unknown,
+): SessionTaskSettings {
+  if (!isRecord(patch)) {
+    return base;
+  }
+
+  let next = base;
+
+  for (const key of SESSION_STRING_SETTING_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(patch, key)) {
+      continue;
+    }
+
+    const rawValue = patch[key];
+
+    if (typeof rawValue !== "string" || rawValue.trim() !== "") {
+      continue;
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(next, key)) {
+      continue;
+    }
+
+    const mutable: SessionTaskSettings = { ...next };
+    delete (mutable as Record<string, unknown>)[key];
+    next = mutable;
+  }
+
+  return next;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
