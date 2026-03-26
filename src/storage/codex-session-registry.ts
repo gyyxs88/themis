@@ -2,10 +2,15 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import {
+  isPrincipalTaskSettingsEmpty,
+  normalizePrincipalTaskSettings,
+} from "../core/principal-task-settings.js";
+import {
   isSessionTaskSettingsEmpty,
   normalizeSessionTaskSettings,
 } from "../core/session-task-settings.js";
 import type {
+  PrincipalTaskSettings,
   PrincipalPersonaOnboardingState,
   PrincipalPersonaProfileData,
   SessionTaskSettings,
@@ -14,7 +19,7 @@ import type {
   TaskResult,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 8;
+const DATABASE_SCHEMA_VERSION = 9;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -101,6 +106,13 @@ export interface StoredAuthAccountRecord {
 export interface StoredPrincipalRecord {
   principalId: string;
   displayName?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoredPrincipalTaskSettingsRecord {
+  principalId: string;
+  settings: PrincipalTaskSettings;
   createdAt: string;
   updatedAt: string;
 }
@@ -194,6 +206,7 @@ export interface ResetPrincipalStateResult {
   clearedCodexSessionCount: number;
   clearedChannelBindingCount: number;
   clearedLinkCodeCount: number;
+  clearedPrincipalTaskSettings: boolean;
   clearedPersonaProfile: boolean;
   clearedPersonaOnboarding: boolean;
   resetAt: string;
@@ -248,6 +261,13 @@ interface AuthAccountRow {
 interface PrincipalRow {
   principal_id: string;
   display_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PrincipalTaskSettingsRow {
+  principal_id: string;
+  settings_json: string;
   created_at: string;
   updated_at: string;
 }
@@ -805,6 +825,86 @@ export class SqliteCodexSessionRegistry {
         created_at: record.createdAt,
         updated_at: record.updatedAt,
       });
+  }
+
+  getPrincipalTaskSettings(principalId: string): StoredPrincipalTaskSettingsRecord | null {
+    const normalized = principalId.trim();
+
+    if (!normalized) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT principal_id, settings_json, created_at, updated_at
+          FROM themis_principal_task_settings
+          WHERE principal_id = ?
+        `,
+      )
+      .get(normalized) as PrincipalTaskSettingsRow | undefined;
+
+    return row ? mapPrincipalTaskSettingsRow(row) : null;
+  }
+
+  savePrincipalTaskSettings(record: StoredPrincipalTaskSettingsRecord): void {
+    const principalId = record.principalId.trim();
+
+    if (!principalId) {
+      throw new Error("Principal task settings are missing principal id.");
+    }
+
+    const normalizedSettings = normalizePrincipalTaskSettings(record.settings);
+
+    if (isPrincipalTaskSettingsEmpty(normalizedSettings)) {
+      this.deletePrincipalTaskSettings(principalId);
+      return;
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_principal_task_settings (
+            principal_id,
+            settings_json,
+            created_at,
+            updated_at
+          ) VALUES (
+            @principal_id,
+            @settings_json,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(principal_id) DO UPDATE SET
+            settings_json = excluded.settings_json,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        principal_id: principalId,
+        settings_json: JSON.stringify(normalizedSettings),
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+  }
+
+  deletePrincipalTaskSettings(principalId: string): boolean {
+    const normalized = principalId.trim();
+
+    if (!normalized) {
+      return false;
+    }
+
+    const result = this.db
+      .prepare(
+        `
+          DELETE FROM themis_principal_task_settings
+          WHERE principal_id = ?
+        `,
+      )
+      .run(normalized);
+
+    return result.changes > 0;
   }
 
   getPrincipalPersonaProfile(principalId: string): StoredPrincipalPersonaProfileRecord | null {
@@ -1401,6 +1501,16 @@ export class SqliteCodexSessionRegistry {
         .run(normalizedPrincipalId)
         .changes > 0;
 
+      const clearedPrincipalTaskSettings = this.db
+        .prepare(
+          `
+            DELETE FROM themis_principal_task_settings
+            WHERE principal_id = ?
+          `,
+        )
+        .run(normalizedPrincipalId)
+        .changes > 0;
+
       const clearedLinkCodeCount = this.db
         .prepare(
           `
@@ -1429,6 +1539,7 @@ export class SqliteCodexSessionRegistry {
         clearedCodexSessionCount,
         clearedChannelBindingCount,
         clearedLinkCodeCount,
+        clearedPrincipalTaskSettings,
         clearedPersonaProfile,
         clearedPersonaOnboarding,
         resetAt,
@@ -2413,6 +2524,17 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_principals_updated_at_idx
       ON themis_principals(updated_at DESC);
 
+      CREATE TABLE IF NOT EXISTS themis_principal_task_settings (
+        principal_id TEXT PRIMARY KEY,
+        settings_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_principal_task_settings_updated_at_idx
+      ON themis_principal_task_settings(updated_at DESC);
+
       CREATE TABLE IF NOT EXISTS themis_principal_persona_profiles (
         principal_id TEXT PRIMARY KEY,
         profile_json TEXT NOT NULL,
@@ -2637,6 +2759,19 @@ export class SqliteCodexSessionRegistry {
   }
 
   private migrateSchema(database: Database.Database): void {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS themis_principal_task_settings (
+        principal_id TEXT PRIMARY KEY,
+        settings_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_principal_task_settings_updated_at_idx
+      ON themis_principal_task_settings(updated_at DESC);
+    `);
+
     const authAccountColumns = database
       .prepare(`PRAGMA table_info(themis_auth_accounts)`)
       .all() as Array<{ name: string }>;
@@ -2752,6 +2887,15 @@ function mapPrincipalRow(row: PrincipalRow): StoredPrincipalRecord {
   return {
     principalId: row.principal_id,
     ...(row.display_name ? { displayName: row.display_name } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapPrincipalTaskSettingsRow(row: PrincipalTaskSettingsRow): StoredPrincipalTaskSettingsRecord {
+  return {
+    principalId: row.principal_id,
+    settings: normalizePrincipalTaskSettings(safeParseJson(row.settings_json)),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

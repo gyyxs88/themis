@@ -113,6 +113,14 @@ export interface TaskOptions {
   additionalDirectories?: string[];
 }
 
+export interface PrincipalTaskSettings {
+  authAccountId?: string;
+  sandboxMode?: SandboxMode;
+  webSearchMode?: WebSearchMode;
+  networkAccessEnabled?: boolean;
+  approvalPolicy?: ApprovalPolicy;
+}
+
 export interface SessionTaskSettings {
   profile?: string;
   accessMode?: TaskAccessMode;
