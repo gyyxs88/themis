@@ -8,12 +8,14 @@ import {
   isPrincipalTaskSettingsEmpty,
   mergePrincipalTaskSettings,
 } from "../../core/principal-task-settings.js";
+import { persistSessionTaskSettings } from "../../core/session-settings-service.js";
 import { appendTaskReplyQuotaFooter } from "../../core/task-reply-quota.js";
 import { applyThemisGlobalDefaultsToRuntimeCatalog } from "../../core/task-defaults.js";
 import { createTaskError } from "../../server/http-errors.js";
 import {
   APPROVAL_POLICIES,
   type PrincipalTaskSettings,
+  type SessionTaskSettings,
   SANDBOX_MODES,
   WEB_SEARCH_MODES,
   type ApprovalPolicy,
@@ -272,6 +274,10 @@ export class FeishuChannelService {
       case "current":
         await this.sendCurrentSession(context.chatId, context);
         return;
+      case "workspace":
+      case "ws":
+        await this.handleWorkspaceCommand(command.args, context);
+        return;
       case "account":
         await this.handleAccountCommand(command.args, context);
         return;
@@ -486,6 +492,19 @@ export class FeishuChannelService {
       principalId: principal.principalId,
       settings: this.runtime.savePrincipalTaskSettings(principal.principalId, next),
     };
+  }
+
+  private readSessionTaskSettings(sessionId: string): SessionTaskSettings {
+    return this.runtime.getRuntimeStore().getSessionTaskSettings(sessionId)?.settings ?? {};
+  }
+
+  private writeSessionTaskSettings(sessionId: string, patch: unknown) {
+    return persistSessionTaskSettings(
+      this.runtime.getRuntimeStore(),
+      sessionId,
+      patch,
+      new Date().toISOString(),
+    );
   }
 
   private async sendSessionSettings(
@@ -1000,6 +1019,7 @@ export class FeishuChannelService {
       "/new 新建并切换到新会话",
       "/use <序号|conversationId> 切换到已有会话",
       "/current 查看当前会话",
+      "/workspace 查看或设置当前会话工作区",
       "/settings 查看设置树",
       "/link <绑定码> 可选：认领一个旧 Web 浏览器身份",
       "/reset confirm 清空当前 principal 的人格档案、历史和默认配置，并重新开始",
@@ -1042,8 +1062,80 @@ export class FeishuChannelService {
   }
 
   private async createNewSession(chatId: string, context: FeishuIncomingContext): Promise<void> {
-    const sessionId = this.sessionStore.createAndActivateSession(toConversationKey(context));
-    await this.safeSendText(chatId, `已创建新会话：${sessionId}\n后续直接发消息会进入这个新会话。`);
+    const conversationKey = toConversationKey(context);
+    const previousSessionId = this.sessionStore.getActiveSessionId(conversationKey);
+    const inheritedWorkspacePath = previousSessionId
+      ? normalizeText(this.readSessionTaskSettings(previousSessionId).workspacePath)
+      : null;
+    const sessionId = this.sessionStore.createAndActivateSession(conversationKey);
+
+    if (!inheritedWorkspacePath) {
+      await this.safeSendText(chatId, `已创建新会话：${sessionId}\n后续直接发消息会进入这个新会话。`);
+      return;
+    }
+
+    try {
+      const saved = this.writeSessionTaskSettings(sessionId, {
+        workspacePath: inheritedWorkspacePath,
+      });
+      const workspaceText = formatWorkspaceValue(saved.settings?.workspacePath);
+      await this.safeSendText(
+        chatId,
+        [
+          `已创建新会话：${sessionId}`,
+          `已继承上一会话工作区：${workspaceText}`,
+          "后续直接发消息会进入这个新会话。",
+        ].join("\n"),
+      );
+    } catch (error) {
+      await this.safeSendText(
+        chatId,
+        [
+          `已创建新会话：${sessionId}`,
+          `新会话已创建，但工作区继承失败：${toErrorMessage(error)}`,
+          "后续直接发消息会进入这个新会话；如需设置工作区，请执行 /workspace <绝对目录>。",
+        ].join("\n"),
+      );
+    }
+  }
+
+  private async handleWorkspaceCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const sessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
+
+    if (!sessionId) {
+      await this.safeSendText(context.chatId, "当前还没有激活会话。直接发消息时会自动创建，或使用 /new 手动新建。");
+      return;
+    }
+
+    const workspacePath = normalizeText(args.join(" "));
+
+    if (!workspacePath) {
+      await this.safeSendText(
+        context.chatId,
+        [
+          `当前会话：${sessionId}`,
+          `当前会话工作区：${formatWorkspaceValue(this.readSessionTaskSettings(sessionId).workspacePath)}`,
+          "使用 /workspace <绝对目录> 设置当前会话工作区。",
+        ].join("\n"),
+      );
+      return;
+    }
+
+    try {
+      const saved = this.writeSessionTaskSettings(sessionId, {
+        workspacePath,
+      });
+      await this.safeSendText(
+        context.chatId,
+        [
+          `当前会话：${sessionId}`,
+          `当前会话工作区已更新为：${formatWorkspaceValue(saved.settings?.workspacePath)}`,
+          "查看：/current",
+        ].join("\n"),
+      );
+    } catch (error) {
+      await this.safeSendText(context.chatId, toErrorMessage(error));
+    }
   }
 
   private async switchSession(args: string[], context: FeishuIncomingContext): Promise<void> {
@@ -1096,6 +1188,7 @@ export class FeishuChannelService {
       chatId,
       [
         `当前会话：${sessionId}`,
+        `当前会话工作区：${formatWorkspaceValue(this.readSessionTaskSettings(sessionId).workspacePath)}`,
         `当前 principal：${principal.principalId}`,
         `认证账号：${describePrincipalAccountCurrentValue(accountState)}`,
       ].join("\n"),
@@ -1720,6 +1813,11 @@ function formatBooleanCommandValue(value: boolean | null | undefined): string {
   }
 
   return value ? "on" : "off";
+}
+
+function formatWorkspaceValue(value: string | null | undefined): string {
+  const normalized = normalizeText(value);
+  return normalized ?? "未设置（回退到 Themis 启动目录）";
 }
 
 function resolvePrincipalAccountState<T extends { accountId: string; label?: string | null; accountEmail?: string | null }>(options: {

@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { CodexRuntimeCatalog } from "../../core/codex-app-server.js";
 import { IdentityLinkService } from "../../core/identity-link-service.js";
+import { SESSION_WORKSPACE_LOCKED_ERROR } from "../../core/session-settings-service.js";
 import type { CodexTaskRuntime } from "../../core/codex-runtime.js";
-import type { PrincipalTaskSettings } from "../../types/index.js";
+import type { PrincipalTaskSettings, SessionTaskSettings } from "../../types/index.js";
 import { SqliteCodexSessionRegistry } from "../../storage/index.js";
 import { FeishuChannelService } from "./service.js";
 import { FeishuSessionStore } from "./session-store.js";
@@ -20,10 +21,160 @@ test("/help 只展示第一层命令", async () => {
     const message = harness.takeSingleMessage();
     assert.match(message, /\/settings 查看设置树/);
     assert.match(message, /\/sessions 查看最近会话/);
+    assert.match(message, /\/workspace 查看或设置当前会话工作区/);
     assert.match(message, /\/quota 查看当前 Codex \/ ChatGPT 额度信息/);
     assert.doesNotMatch(message, /\/sandbox /);
     assert.doesNotMatch(message, /\/account list/);
     assert.doesNotMatch(message, /\/settings network/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/workspace 在无参数时展示当前会话工作区", async () => {
+  const harness = createHarness();
+
+  try {
+    const sessionId = "session-workspace-view";
+    const workspace = harness.createWorkspace("workspace-view");
+    harness.setCurrentSession(sessionId);
+    harness.writeSessionSettings(sessionId, {
+      workspacePath: workspace,
+    });
+
+    await harness.handleCommand("workspace", []);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, new RegExp(`当前会话：${sessionId}`));
+    assert.match(message, new RegExp(`当前会话工作区：${escapeRegExp(workspace)}`));
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/workspace <path> 会写入当前会话工作区，/ws 作为别名可用", async () => {
+  const harness = createHarness();
+
+  try {
+    const sessionId = "session-workspace-write";
+    const workspace = harness.createWorkspace("workspace-write");
+    harness.setCurrentSession(sessionId);
+
+    await harness.handleCommand("ws", [workspace]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /当前会话工作区已更新为：/);
+    assert.equal(harness.readSessionSettings(sessionId)?.settings.workspacePath, workspace);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/workspace <path> 在会话已执行任务后会拒绝修改", async () => {
+  const harness = createHarness();
+
+  try {
+    const sessionId = "session-workspace-frozen";
+    const workspaceA = harness.createWorkspace("workspace-frozen-a");
+    const workspaceB = harness.createWorkspace("workspace-frozen-b");
+    harness.setCurrentSession(sessionId);
+    harness.writeSessionSettings(sessionId, {
+      workspacePath: workspaceA,
+    });
+    harness.appendTurn(sessionId);
+
+    await harness.handleCommand("workspace", [workspaceB]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, new RegExp(escapeRegExp(SESSION_WORKSPACE_LOCKED_ERROR)));
+    assert.equal(harness.readSessionSettings(sessionId)?.settings.workspacePath, workspaceA);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/new 会继承当前激活会话的 workspacePath（只继承 workspacePath）", async () => {
+  const harness = createHarness();
+
+  try {
+    const previousSessionId = "session-workspace-parent";
+    const workspace = harness.createWorkspace("workspace-parent");
+    harness.setCurrentSession(previousSessionId);
+    harness.writeSessionSettings(previousSessionId, {
+      workspacePath: workspace,
+      profile: "custom-profile",
+    });
+
+    await harness.handleCommand("new", []);
+
+    const message = harness.takeSingleMessage();
+    const nextSessionId = parseSessionIdFromNewMessage(message);
+    assert.notEqual(nextSessionId, previousSessionId);
+    assert.equal(harness.getCurrentSessionId(), nextSessionId);
+    assert.deepEqual(harness.readSessionSettings(nextSessionId)?.settings, {
+      workspacePath: workspace,
+    });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/new 在工作区继承失败时会明确提示并保留新会话", async () => {
+  const harness = createHarness();
+
+  try {
+    const previousSessionId = "session-workspace-parent-invalid";
+    const missingWorkspace = join(harness.getWorkingDirectory(), "workspace-missing");
+    harness.setCurrentSession(previousSessionId);
+    harness.writeSessionSettings(previousSessionId, {
+      workspacePath: missingWorkspace,
+    });
+
+    await harness.handleCommand("new", []);
+
+    const message = harness.takeSingleMessage();
+    const nextSessionId = parseSessionIdFromNewMessage(message);
+    assert.match(message, /新会话已创建，但工作区继承失败/);
+    assert.match(message, /工作区不存在/);
+    assert.equal(harness.getCurrentSessionId(), nextSessionId);
+    assert.equal(harness.readSessionSettings(nextSessionId), null);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/current 会显示当前会话工作区", async () => {
+  const harness = createHarness();
+
+  try {
+    const sessionId = "session-current-workspace";
+    const workspace = harness.createWorkspace("workspace-current");
+    harness.setCurrentSession(sessionId);
+    harness.writeSessionSettings(sessionId, {
+      workspacePath: workspace,
+    });
+
+    await harness.handleCommand("current", []);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, new RegExp(`当前会话：${sessionId}`));
+    assert.match(message, new RegExp(`当前会话工作区：${escapeRegExp(workspace)}`));
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/current 在未设置工作区时显示回退文案", async () => {
+  const harness = createHarness();
+
+  try {
+    const sessionId = "session-current-no-workspace";
+    harness.setCurrentSession(sessionId);
+
+    await harness.handleCommand("current", []);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /当前会话工作区：未设置（回退到 Themis 启动目录）/);
   } finally {
     harness.cleanup();
   }
@@ -267,6 +418,13 @@ function createHarness(runtimeCatalog = createRuntimeCatalog()) {
     }).principalId;
   }
 
+  function conversationKey() {
+    return {
+      chatId: context.chatId,
+      userId: context.userId,
+    };
+  }
+
   return {
     async handleCommand(name: string, args: string[]) {
       await (service as unknown as {
@@ -284,6 +442,49 @@ function createHarness(runtimeCatalog = createRuntimeCatalog()) {
       return (service as unknown as {
         createTaskPayload(incomingContext: typeof context, currentSessionId: string): { options?: Record<string, unknown> };
       }).createTaskPayload({ ...context, text }, sessionId);
+    },
+    getWorkingDirectory() {
+      return workingDirectory;
+    },
+    setCurrentSession(sessionId: string) {
+      sessionStore.setActiveSessionId(conversationKey(), sessionId);
+    },
+    getCurrentSessionId() {
+      return sessionStore.getActiveSessionId(conversationKey());
+    },
+    readSessionSettings(sessionId: string) {
+      return runtimeStore.getSessionTaskSettings(sessionId);
+    },
+    writeSessionSettings(sessionId: string, settings: SessionTaskSettings) {
+      const now = new Date().toISOString();
+      const existing = runtimeStore.getSessionTaskSettings(sessionId);
+      runtimeStore.saveSessionTaskSettings({
+        sessionId,
+        settings,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      });
+    },
+    appendTurn(sessionId: string, goal = "hello") {
+      const now = new Date().toISOString();
+      const seed = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      runtimeStore.upsertTurnFromRequest({
+        requestId: `request-${seed}`,
+        sourceChannel: "feishu",
+        user: {
+          userId: context.userId,
+        },
+        goal,
+        channelContext: {
+          sessionId,
+        },
+        createdAt: now,
+      }, `task-${seed}`);
+    },
+    createWorkspace(name: string) {
+      const workspace = join(workingDirectory, name);
+      mkdirSync(workspace, { recursive: true });
+      return workspace;
     },
     cleanup() {
       rmSync(workingDirectory, { recursive: true, force: true });
@@ -359,4 +560,14 @@ function createLogger() {
     warn() {},
     error() {},
   };
+}
+
+function parseSessionIdFromNewMessage(message: string): string {
+  const matched = message.match(/已创建新会话：([^\n]+)/);
+  assert.ok(matched?.[1], `无法从消息中解析会话 ID：${message}`);
+  return matched[1].trim();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
