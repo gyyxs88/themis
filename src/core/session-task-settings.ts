@@ -21,6 +21,7 @@ export function normalizeSessionTaskSettings(value: unknown): SessionTaskSetting
 
   const profile = normalizeText(value.profile);
   const accessMode = normalizeEnum<TaskAccessMode>(value.accessMode, TASK_ACCESS_MODES);
+  const workspacePath = normalizeText(value.workspacePath);
   const authAccountId = normalizeText(value.authAccountId);
   const model = normalizeText(value.model);
   const reasoning = normalizeEnum<ReasoningLevel>(value.reasoning, REASONING_LEVELS);
@@ -34,6 +35,7 @@ export function normalizeSessionTaskSettings(value: unknown): SessionTaskSetting
   return {
     ...(profile ? { profile } : {}),
     ...(accessMode ? { accessMode } : {}),
+    ...(workspacePath ? { workspacePath } : {}),
     ...(authAccountId ? { authAccountId } : {}),
     ...(model ? { model } : {}),
     ...(reasoning ? { reasoning } : {}),

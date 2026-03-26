@@ -124,6 +124,7 @@ export interface PrincipalTaskSettings {
 export interface SessionTaskSettings {
   profile?: string;
   accessMode?: TaskAccessMode;
+  workspacePath?: string;
   authAccountId?: string;
   model?: string;
   reasoning?: ReasoningLevel;
