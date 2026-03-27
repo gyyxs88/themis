@@ -6,5 +6,6 @@ export * from "./codex-session-store.js";
 export * from "./assistant-style.js";
 export * from "./identity-link-service.js";
 export * from "./principal-persona-service.js";
+export * from "./principal-skills-service.js";
 export * from "./prompt.js";
 export * from "./session-task-settings.js";

@@ -97,6 +97,14 @@ export function resolveManagedCodexHome(workingDirectory: string, accountId: str
   return resolve(workingDirectory, "infra/local/codex-auth", accountId);
 }
 
+export function resolveAuthAccountSkillsDirectory(codexHome: string): string {
+  return resolve(codexHome, "skills");
+}
+
+export function resolveAuthAccountSkillPath(codexHome: string, skillName: string): string {
+  return resolve(resolveAuthAccountSkillsDirectory(codexHome), skillName);
+}
+
 export function buildCodexProcessEnv(codexHome: string): Record<string, string> {
   const env = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
