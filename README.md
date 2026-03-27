@@ -11,7 +11,7 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 - 后端围绕 `@openai/codex-sdk` 做会话复用、流式输出、分叉上下文和历史恢复。
 - 本地 SQLite `infra/local/themis.db` 负责持久化 conversation、turn、event、touched files、identity 和第三方兼容 provider 配置。
 - Web 端已支持 Codex 认证、设备码登录、多账号自动建槽与管理、会话级手动切号、历史加载、会话分叉、第三方兼容接入、首次对话长期画像建档、principal 级长期人格配置和运行参数设置。
-- 项目级 CLI 已提供可直接执行的 `themis` 入口；无参数进入交互模式，也支持 `init / status / config` 子命令。
+- 项目级 CLI 已提供可直接执行的 `themis` 入口；无参数进入交互模式，也支持 `init / status / config / skill` 子命令。
 
 ## 目录说明
 
@@ -67,7 +67,7 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 - 更完整的自动化测试覆盖；当前只有 `src/core/*.test.ts` 这类基础单元测试，`router`、`session store`、`fork`、`history API` 和 Web stream 主链路仍缺覆盖。
 - Markdown memory 的运行时自动读写服务。
 - LAN Web UI 的访问控制和审计日志。
-- 更完整的 Operator CLI；当前只提供项目级 `init / status / config` 入口。
+- 更完整的 Operator CLI；当前已提供项目级 `init / status / config / skill` 入口，但更完整的运维命令树仍未完成。
 
 ## 本地运行
 
@@ -97,6 +97,16 @@ npm run themis -- init
 ./themis config set FEISHU_APP_ID cli_xxx
 ```
 
+常用 skills CLI：
+
+```bash
+./themis skill list
+./themis skill curated list
+./themis skill install local /srv/skills/demo-skill
+./themis skill install curated python-setup
+./themis skill sync demo-skill --force
+```
+
 如果希望像 `codex` 一样直接输入 `themis`，推荐在仓库根目录执行一次：
 
 ```bash
@@ -116,6 +126,7 @@ themis status
 npm run themis -- status
 npm run themis -- config list
 npm run themis -- config set FEISHU_APP_ID cli_xxx
+npm run themis -- skill list
 ```
 
 `init` 会优先从仓库根目录的 `.env.example` 生成 `.env.local`。服务启动时会自动加载 `.env` / `.env.local`；真实 shell 环境变量优先级更高。

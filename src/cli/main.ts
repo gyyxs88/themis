@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
@@ -27,6 +27,7 @@ import {
 
 const cwd = process.cwd();
 const launcherPath = fileURLToPath(new URL("../../themis", import.meta.url));
+const cliDatabasePath = resolve(cwd, "infra/local/themis.db");
 const CLI_PRINCIPAL_ID = "principal-local-owner";
 const shellEnv = new Map<string, string>(
   Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
@@ -317,28 +318,21 @@ function handleConfigUnset(args: string[]): void {
 }
 
 async function handleSkill(subcommand: string | undefined, args: string[]): Promise<void> {
-  const registry = createCliSkillRegistry();
-  ensureCliPrincipalRecord(registry, CLI_PRINCIPAL_ID);
-  const service = new PrincipalSkillsService({
-    workingDirectory: cwd,
-    registry,
-  });
-
   switch (subcommand) {
     case "list":
-      printSkillList(service.listPrincipalSkills(CLI_PRINCIPAL_ID));
+      handleSkillList(args);
       return;
     case "curated":
-      await handleSkillCurated(args, service);
+      await handleSkillCurated(args);
       return;
     case "install":
-      await handleSkillInstall(args, service);
+      await handleSkillInstall(args);
       return;
     case "remove":
-      handleSkillRemove(args, service);
+      handleSkillRemove(args);
       return;
     case "sync":
-      await handleSkillSync(args, service);
+      await handleSkillSync(args);
       return;
     default:
       throw new Error("skill 子命令仅支持 list / curated / install / remove / sync。");
@@ -440,6 +434,16 @@ function normalizeOptionalText(value: string | undefined): string | null {
   return normalized || null;
 }
 
+function normalizeCliAbsolutePath(value: string): string {
+  const normalized = value.trim();
+
+  if (!normalized || !isAbsolute(normalized)) {
+    throw new Error("技能来源路径必须是服务器本机绝对路径。");
+  }
+
+  return normalized;
+}
+
 function setProjectEnvFileContent(filePath: string, content: string): void {
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, content, "utf8");
@@ -447,8 +451,22 @@ function setProjectEnvFileContent(filePath: string, content: string): void {
 
 function createCliSkillRegistry(): SqliteCodexSessionRegistry {
   return new SqliteCodexSessionRegistry({
-    databaseFile: resolve(cwd, "infra/local/themis.db"),
+    databaseFile: cliDatabasePath,
   });
+}
+
+function createCliPrincipalSkillsService(): {
+  registry: SqliteCodexSessionRegistry;
+  service: PrincipalSkillsService;
+} {
+  const registry = createCliSkillRegistry();
+  return {
+    registry,
+    service: new PrincipalSkillsService({
+      workingDirectory: cwd,
+      registry,
+    }),
+  };
 }
 
 function ensureCliPrincipalRecord(registry: SqliteCodexSessionRegistry, principalId: string): void {
@@ -464,13 +482,23 @@ function ensureCliPrincipalRecord(registry: SqliteCodexSessionRegistry, principa
   });
 }
 
-async function handleSkillCurated(args: string[], service: PrincipalSkillsService): Promise<void> {
+function handleSkillList(args: string[]): void {
+  if (args.length > 0) {
+    throw new Error("用法：themis skill list");
+  }
+
+  const { service } = createCliPrincipalSkillsService();
+  printSkillList(service.listPrincipalSkills(CLI_PRINCIPAL_ID));
+}
+
+async function handleSkillCurated(args: string[]): Promise<void> {
   const [subcommand, ...rest] = args;
 
   if (subcommand !== "list" || rest.length > 0) {
     throw new Error("用法：themis skill curated list");
   }
 
+  const { service } = createCliPrincipalSkillsService();
   const curated = await service.listCuratedSkills(CLI_PRINCIPAL_ID);
 
   console.log(`当前 principal：${CLI_PRINCIPAL_ID}`);
@@ -488,17 +516,20 @@ async function handleSkillCurated(args: string[], service: PrincipalSkillsServic
   }
 }
 
-async function handleSkillInstall(args: string[], service: PrincipalSkillsService): Promise<void> {
+async function handleSkillInstall(args: string[]): Promise<void> {
   const [mode, ...rest] = args;
 
   switch (mode) {
     case "local": {
-      const [absolutePath, ...extra] = rest;
+      const [inputPath, ...extra] = rest;
 
-      if (!absolutePath || extra.length > 0) {
+      if (!inputPath || extra.length > 0) {
         throw new Error("用法：themis skill install local <ABSOLUTE_PATH>");
       }
 
+      const absolutePath = normalizeCliAbsolutePath(inputPath);
+      const { registry, service } = createCliPrincipalSkillsService();
+      ensureCliPrincipalRecord(registry, CLI_PRINCIPAL_ID);
       const result = await service.installFromLocalPath({
         principalId: CLI_PRINCIPAL_ID,
         absolutePath,
@@ -514,6 +545,8 @@ async function handleSkillInstall(args: string[], service: PrincipalSkillsServic
         throw new Error("用法：themis skill install url <GITHUB_URL> [REF]");
       }
 
+      const { registry, service } = createCliPrincipalSkillsService();
+      ensureCliPrincipalRecord(registry, CLI_PRINCIPAL_ID);
       const result = await service.installFromGithub({
         principalId: CLI_PRINCIPAL_ID,
         url,
@@ -530,6 +563,8 @@ async function handleSkillInstall(args: string[], service: PrincipalSkillsServic
         throw new Error("用法：themis skill install repo <REPO> <PATH> [REF]");
       }
 
+      const { registry, service } = createCliPrincipalSkillsService();
+      ensureCliPrincipalRecord(registry, CLI_PRINCIPAL_ID);
       const result = await service.installFromGithub({
         principalId: CLI_PRINCIPAL_ID,
         repo,
@@ -547,6 +582,8 @@ async function handleSkillInstall(args: string[], service: PrincipalSkillsServic
         throw new Error("用法：themis skill install curated <SKILL_NAME>");
       }
 
+      const { registry, service } = createCliPrincipalSkillsService();
+      ensureCliPrincipalRecord(registry, CLI_PRINCIPAL_ID);
       const result = await service.installFromCurated({
         principalId: CLI_PRINCIPAL_ID,
         skillName,
@@ -560,13 +597,14 @@ async function handleSkillInstall(args: string[], service: PrincipalSkillsServic
   }
 }
 
-function handleSkillRemove(args: string[], service: PrincipalSkillsService): void {
+function handleSkillRemove(args: string[]): void {
   const [skillName, ...extra] = args;
 
   if (!skillName || extra.length > 0) {
     throw new Error("用法：themis skill remove <SKILL_NAME>");
   }
 
+  const { service } = createCliPrincipalSkillsService();
   const result = service.removeSkill(CLI_PRINCIPAL_ID, skillName);
 
   console.log(`已移除 skill：${result.skillName}`);
@@ -574,7 +612,7 @@ function handleSkillRemove(args: string[], service: PrincipalSkillsService): voi
   console.log(`- 已清理账号同步链接：${result.removedMaterializations}`);
 }
 
-async function handleSkillSync(args: string[], service: PrincipalSkillsService): Promise<void> {
+async function handleSkillSync(args: string[]): Promise<void> {
   const force = args.includes("--force");
   const positionals = args.filter((arg) => arg !== "--force");
   const [skillName, ...extra] = positionals;
@@ -583,6 +621,7 @@ async function handleSkillSync(args: string[], service: PrincipalSkillsService):
     throw new Error("用法：themis skill sync <SKILL_NAME> [--force]");
   }
 
+  const { service } = createCliPrincipalSkillsService();
   const result = await service.syncSkill(CLI_PRINCIPAL_ID, skillName, { force });
 
   printSkillSyncResult(result);
