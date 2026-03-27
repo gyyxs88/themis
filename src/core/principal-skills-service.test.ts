@@ -166,21 +166,46 @@ test("validateLocalSkillDirectory 会读取 SKILL.md frontmatter 并返回 canon
   }
 });
 
-test("listCuratedSkills 会解析 skill-installer 的 json 输出", async () => {
-  const { service, workingDirectory } = createService({
+test("listCuratedSkills 会按 principal 已安装记录计算 installed", async () => {
+  const { service, registry, workingDirectory } = createService({
     execScript: async (command, options) => {
       assert.match(command.join(" "), /list-skills\.py/);
       assert.equal(command.includes("--format"), true);
       assert.equal(command.includes("json"), true);
       assert.equal(typeof options?.env?.CODEX_HOME, "string");
-      return JSON.stringify([{ name: "python-setup", installed: false }]);
+      return JSON.stringify([
+        { name: "python-setup", installed: false },
+        { name: "shell-setup", installed: true },
+      ]);
     },
   });
+  const now = "2026-03-27T00:00:00.000Z";
 
   try {
-    const result = await service.listCuratedSkills();
+    registry.savePrincipal({
+      principalId: PRINCIPAL_ID,
+      displayName: "Tester",
+      createdAt: now,
+      updatedAt: now,
+    });
+    registry.savePrincipalSkill({
+      principalId: PRINCIPAL_ID,
+      skillName: "python-setup",
+      description: "installed by principal",
+      sourceType: "curated",
+      sourceRefJson: JSON.stringify({ repo: "openai/skills", path: "skills/.curated/python-setup" }),
+      managedPath: resolve(workingDirectory, "infra/local/principals", PRINCIPAL_ID, "skills", "python-setup"),
+      installStatus: "ready",
+      createdAt: now,
+      updatedAt: now,
+    });
 
-    assert.deepEqual(result, [{ name: "python-setup", installed: false }]);
+    const result = await service.listCuratedSkills(PRINCIPAL_ID);
+
+    assert.deepEqual(result, [
+      { name: "python-setup", installed: true },
+      { name: "shell-setup", installed: false },
+    ]);
   } finally {
     rmSync(workingDirectory, { recursive: true, force: true });
   }
@@ -265,6 +290,8 @@ test("installFromGithub 会支持 GitHub URL 安装并记录来源", async () =>
       assert.match(command.join(" "), /install-skill-from-github\.py/);
       assert.equal(command.includes("--url"), true);
       assert.equal(command.includes("https://github.com/demo/repo/tree/main/skills/url-demo"), true);
+      assert.equal(command.includes("--ref"), true);
+      assert.equal(command.includes("release-2026"), true);
       assert.equal(command.includes("--repo"), false);
       writeInstalledSkillFromCommand(command, {
         directoryName: "url-demo",
@@ -279,13 +306,14 @@ test("installFromGithub 会支持 GitHub URL 安装并记录来源", async () =>
     const result = await service.installFromGithub({
       principalId: PRINCIPAL_ID,
       url: "https://github.com/demo/repo/tree/main/skills/url-demo",
+      ref: "release-2026",
     });
 
     assert.equal(result.skill.skillName, "url-demo");
     assert.equal(result.skill.sourceType, "github-url");
     assert.equal(
       result.skill.sourceRefJson,
-      JSON.stringify({ url: "https://github.com/demo/repo/tree/main/skills/url-demo" }),
+      JSON.stringify({ url: "https://github.com/demo/repo/tree/main/skills/url-demo", ref: "release-2026" }),
     );
   } finally {
     rmSync(workingDirectory, { recursive: true, force: true });

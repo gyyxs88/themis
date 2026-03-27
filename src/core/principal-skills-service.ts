@@ -150,7 +150,8 @@ export class PrincipalSkillsService {
     };
   }
 
-  async listCuratedSkills(): Promise<CuratedSkillListItem[]> {
+  async listCuratedSkills(principalId: string): Promise<CuratedSkillListItem[]> {
+    const normalizedPrincipalId = normalizeRequiredText(principalId, "principalId 不能为空。");
     const output = await this.execScript(
       [
         "python3",
@@ -162,8 +163,11 @@ export class PrincipalSkillsService {
         env: buildCodexProcessEnv(this.resolveCliCodexHome()),
       },
     );
+    const installedSkillNames = new Set(
+      this.registry.listPrincipalSkills(normalizedPrincipalId).map((skill) => skill.skillName),
+    );
 
-    return normalizeCuratedSkillList(JSON.parse(output));
+    return normalizeCuratedSkillList(JSON.parse(output), installedSkillNames);
   }
 
   async installFromLocalPath(input: {
@@ -259,6 +263,10 @@ export class PrincipalSkillsService {
       }
 
       command.push("--url", url);
+
+      if (ref) {
+        command.push("--ref", ref);
+      }
     } else {
       const normalizedRepo = normalizeRequiredText(repo ?? "", "repo 不能为空。");
       const normalizedPath = normalizeRequiredText(path ?? "", "path 不能为空。");
@@ -281,7 +289,10 @@ export class PrincipalSkillsService {
         sourceType: url ? "github-url" : "github-repo-path",
         sourceRefJson: JSON.stringify(
           url
-            ? { url }
+            ? {
+              url,
+              ...(ref ? { ref } : {}),
+            }
             : {
               repo: repo!,
               path: path!,
@@ -658,7 +669,7 @@ function normalizeFrontmatterValue(value: string | undefined): string {
   return normalized;
 }
 
-function normalizeCuratedSkillList(value: unknown): CuratedSkillListItem[] {
+function normalizeCuratedSkillList(value: unknown, installedSkillNames: ReadonlySet<string>): CuratedSkillListItem[] {
   if (!Array.isArray(value)) {
     throw new Error("curated skills 输出必须是数组。");
   }
@@ -676,7 +687,7 @@ function normalizeCuratedSkillList(value: unknown): CuratedSkillListItem[] {
 
     return {
       name,
-      installed: item.installed === true,
+      installed: installedSkillNames.has(name),
     };
   });
 }
