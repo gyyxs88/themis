@@ -146,13 +146,39 @@ function normalizeSkillNamePayload(value: unknown, missingRequestMessage: string
   };
 }
 
+async function readAndNormalizePayload<T>(
+  request: IncomingMessage,
+  response: ServerResponse,
+  normalize: (value: unknown) => T,
+): Promise<T | null> {
+  try {
+    return normalize(await readJsonBody(request));
+  } catch (error) {
+    writeJson(response, resolveErrorStatusCode(error, false), {
+      error: createTaskError(error, false),
+    });
+    return null;
+  }
+}
+
+function writeRuntimeError(response: ServerResponse, error: unknown): void {
+  writeJson(response, resolveErrorStatusCode(error, true), {
+    error: createTaskError(error, true),
+  });
+}
+
 export async function handleSkillsList(
   request: IncomingMessage,
   response: ServerResponse,
   runtime: CodexTaskRuntime,
 ): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeSkillsIdentityPayload);
+
+  if (!payload) {
+    return;
+  }
+
   try {
-    const payload = normalizeSkillsIdentityPayload(await readJsonBody(request));
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
     const service = runtime.getPrincipalSkillsService();
 
@@ -161,9 +187,7 @@ export async function handleSkillsList(
       skills: service.listPrincipalSkills(identity.principalId),
     });
   } catch (error) {
-    writeJson(response, resolveErrorStatusCode(error, true), {
-      error: createTaskError(error, true),
-    });
+    writeRuntimeError(response, error);
   }
 }
 
@@ -172,8 +196,13 @@ export async function handleSkillsInstall(
   response: ServerResponse,
   runtime: CodexTaskRuntime,
 ): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeSkillsInstallPayload);
+
+  if (!payload) {
+    return;
+  }
+
   try {
-    const payload = normalizeSkillsInstallPayload(await readJsonBody(request));
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
     const service = runtime.getPrincipalSkillsService();
 
@@ -200,9 +229,7 @@ export async function handleSkillsInstall(
       result,
     });
   } catch (error) {
-    writeJson(response, resolveErrorStatusCode(error, true), {
-      error: createTaskError(error, true),
-    });
+    writeRuntimeError(response, error);
   }
 }
 
@@ -211,8 +238,17 @@ export async function handleSkillsRemove(
   response: ServerResponse,
   runtime: CodexTaskRuntime,
 ): Promise<void> {
+  const payload = await readAndNormalizePayload(
+    request,
+    response,
+    (value) => normalizeSkillNamePayload(value, "skills 删除请求缺少必要字段。"),
+  );
+
+  if (!payload) {
+    return;
+  }
+
   try {
-    const payload = normalizeSkillNamePayload(await readJsonBody(request), "skills 删除请求缺少必要字段。");
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
     const result = runtime.getPrincipalSkillsService().removeSkill(identity.principalId, payload.skillName);
 
@@ -221,9 +257,7 @@ export async function handleSkillsRemove(
       result,
     });
   } catch (error) {
-    writeJson(response, resolveErrorStatusCode(error, true), {
-      error: createTaskError(error, true),
-    });
+    writeRuntimeError(response, error);
   }
 }
 
@@ -232,8 +266,17 @@ export async function handleSkillsSync(
   response: ServerResponse,
   runtime: CodexTaskRuntime,
 ): Promise<void> {
+  const payload = await readAndNormalizePayload(
+    request,
+    response,
+    (value) => normalizeSkillNamePayload(value, "skills 重同步请求缺少必要字段。"),
+  );
+
+  if (!payload) {
+    return;
+  }
+
   try {
-    const payload = normalizeSkillNamePayload(await readJsonBody(request), "skills 重同步请求缺少必要字段。");
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
     const result = await runtime.getPrincipalSkillsService().syncSkill(identity.principalId, payload.skillName, {
       force: payload.force,
@@ -244,9 +287,7 @@ export async function handleSkillsSync(
       result,
     });
   } catch (error) {
-    writeJson(response, resolveErrorStatusCode(error, true), {
-      error: createTaskError(error, true),
-    });
+    writeRuntimeError(response, error);
   }
 }
 
@@ -255,8 +296,13 @@ export async function handleSkillsCuratedCatalog(
   response: ServerResponse,
   runtime: CodexTaskRuntime,
 ): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeSkillsIdentityPayload);
+
+  if (!payload) {
+    return;
+  }
+
   try {
-    const payload = normalizeSkillsIdentityPayload(await readJsonBody(request));
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
     const curated = await runtime.getPrincipalSkillsService().listCuratedSkills(identity.principalId);
 
@@ -265,8 +311,6 @@ export async function handleSkillsCuratedCatalog(
       curated,
     });
   } catch (error) {
-    writeJson(response, resolveErrorStatusCode(error, true), {
-      error: createTaskError(error, true),
-    });
+    writeRuntimeError(response, error);
   }
 }

@@ -132,6 +132,29 @@ async function postJson(
   });
 }
 
+async function assertInvalidRequest(
+  responsePromise: Promise<Response>,
+  expectedMessage: RegExp | string,
+): Promise<void> {
+  const response = await responsePromise;
+  assert.equal(response.status, 400);
+
+  const payload = await response.json() as {
+    error?: {
+      code?: string;
+      message?: string;
+    };
+  };
+  assert.equal(payload.error?.code, "INVALID_REQUEST");
+
+  if (typeof expectedMessage === "string") {
+    assert.equal(payload.error?.message, expectedMessage);
+    return;
+  }
+
+  assert.match(payload.error?.message ?? "", expectedMessage);
+}
+
 test("POST /api/skills/list 会按当前浏览器身份返回 principal skill 列表", async () => {
   await withSkillsServer(async ({ baseUrl, runtime, principalSkillsService }) => {
     const identity = runtime.getIdentityLinkService().ensureIdentity(buildSkillsIdentityPayload());
@@ -361,6 +384,52 @@ test("POST /api/auth/accounts 创建新账号后会自动补同步当前 princip
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }
+  });
+});
+
+test("POST /api/skills/remove 缺少 skillName 时返回 400 INVALID_REQUEST", async () => {
+  await withSkillsServer(async ({ baseUrl }) => {
+    await assertInvalidRequest(
+      postJson(baseUrl, "/api/skills/remove", buildSkillsIdentityPayload()),
+      "skill 名称不能为空。",
+    );
+  });
+});
+
+test("POST /api/skills/install 传未知 source.type 时返回 400 INVALID_REQUEST", async () => {
+  await withSkillsServer(async ({ baseUrl }) => {
+    await assertInvalidRequest(
+      postJson(baseUrl, "/api/skills/install", {
+        ...buildSkillsIdentityPayload(),
+        source: {
+          type: "unknown-source",
+        },
+      }),
+      "不支持的 skills 来源类型。",
+    );
+  });
+});
+
+test("POST /api/skills/install 缺少 local-path 必填字段时返回 400 INVALID_REQUEST", async () => {
+  await withSkillsServer(async ({ baseUrl }) => {
+    await assertInvalidRequest(
+      postJson(baseUrl, "/api/skills/install", {
+        ...buildSkillsIdentityPayload(),
+        source: {
+          type: "local-path",
+        },
+      }),
+      "本机路径不能为空。",
+    );
+  });
+});
+
+test("POST /api/skills/list 传空对象时返回 400 INVALID_REQUEST", async () => {
+  await withSkillsServer(async ({ baseUrl }) => {
+    await assertInvalidRequest(
+      postJson(baseUrl, "/api/skills/list", {}),
+      "身份请求缺少必要字段。",
+    );
   });
 });
 
