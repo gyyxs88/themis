@@ -367,24 +367,28 @@ export class PrincipalSkillsService {
           throw new Error(`技能 ${basename(managedPath)} 已安装，如需覆盖请显式 replace。`);
         }
 
-        renameSync(managedPath, backupPath);
+        this.renameManagedSkillPath(managedPath, backupPath);
         movedExisting = true;
       }
 
-      renameSync(incomingPath, managedPath);
+      this.renameManagedSkillPath(incomingPath, managedPath);
 
       if (movedExisting && existsSync(backupPath)) {
         rmSync(backupPath, { recursive: true, force: true });
       }
     } catch (error) {
       if (movedExisting && !existsSync(managedPath) && existsSync(backupPath)) {
-        renameSync(backupPath, managedPath);
+        this.renameManagedSkillPath(backupPath, managedPath);
       }
 
       throw error;
     } finally {
       rmSync(incomingRoot, { recursive: true, force: true });
     }
+  }
+
+  private renameManagedSkillPath(fromPath: string, toPath: string): void {
+    renameSync(fromPath, toPath);
   }
 }
 
