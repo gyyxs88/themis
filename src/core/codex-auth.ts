@@ -56,6 +56,7 @@ export interface CodexAuthSnapshot extends CodexAuthStatus {
 export interface CodexAuthRuntimeOptions {
   workingDirectory?: string;
   registry?: SqliteCodexSessionRegistry;
+  onManagedAccountReady?: (account: StoredAuthAccountRecord) => Promise<void> | void;
 }
 
 export interface CodexAuthAccountCreateInput {
@@ -88,12 +89,14 @@ interface AuthAccountRuntimeState {
 export class CodexAuthRuntime {
   private readonly workingDirectory: string;
   private readonly registry: SqliteCodexSessionRegistry;
+  private readonly onManagedAccountReady: ((account: StoredAuthAccountRecord) => Promise<void> | void) | undefined;
   private readonly accountStates = new Map<string, AuthAccountRuntimeState>();
   private operationChain: Promise<unknown> = Promise.resolve();
 
   constructor(options: CodexAuthRuntimeOptions = {}) {
     this.workingDirectory = options.workingDirectory ?? process.cwd();
     this.registry = options.registry ?? new SqliteCodexSessionRegistry();
+    this.onManagedAccountReady = options.onManagedAccountReady;
     ensureAuthAccountBootstrap(this.workingDirectory, this.registry);
   }
 
@@ -331,7 +334,7 @@ export class CodexAuthRuntime {
     }
 
     if (status.authenticated) {
-      account = this.syncAuthenticatedAccountRecord(account, status);
+      account = await this.syncAuthenticatedAccountRecord(account, status);
       state.lastError = null;
       await this.disposeBrowserLoginSession(state, false);
       await this.disposeDeviceLoginSession(state, false);
@@ -368,16 +371,16 @@ export class CodexAuthRuntime {
     const accountLabel = status.account?.email?.trim() || accountEmail;
 
     if (existing) {
-      return this.activateAuthenticatedAccount(existing, defaultCodexHome, accountEmail, accountLabel);
+      return await this.activateAuthenticatedAccount(existing, defaultCodexHome, accountEmail, accountLabel);
     }
 
-    return this.createAuthenticatedManagedAccount(defaultCodexHome, accountEmail, accountLabel);
+    return await this.createAuthenticatedManagedAccount(defaultCodexHome, accountEmail, accountLabel);
   }
 
-  private syncAuthenticatedAccountRecord(
+  private async syncAuthenticatedAccountRecord(
     account: StoredAuthAccountRecord,
     status: CodexAuthStatus,
-  ): StoredAuthAccountRecord {
+  ): Promise<StoredAuthAccountRecord> {
     const accountEmail = normalizeAccountEmail(status.account?.email);
 
     if (!accountEmail) {
@@ -388,30 +391,33 @@ export class CodexAuthRuntime {
     const accountLabel = status.account?.email?.trim() || accountEmail;
 
     if (existing && existing.accountId !== account.accountId) {
-      return this.activateAuthenticatedAccount(existing, account.codexHome, accountEmail, accountLabel);
+      return await this.activateAuthenticatedAccount(existing, account.codexHome, accountEmail, accountLabel);
     }
 
     if (this.isDefaultSourceAccountRecord(account)) {
-      return this.createAuthenticatedManagedAccount(account.codexHome, accountEmail, accountLabel);
+      return await this.createAuthenticatedManagedAccount(account.codexHome, accountEmail, accountLabel);
     }
 
     const normalizedStoredEmail = normalizeAccountEmail(account.accountEmail);
 
     if (normalizedStoredEmail && normalizedStoredEmail !== accountEmail) {
-      return this.createAuthenticatedManagedAccount(account.codexHome, accountEmail, accountLabel);
+      return await this.createAuthenticatedManagedAccount(account.codexHome, accountEmail, accountLabel);
     }
 
-    return this.updateManagedAccountIdentity(account, accountEmail, accountLabel);
+    return await this.updateManagedAccountIdentity(account, accountEmail, accountLabel);
   }
 
-  private activateAuthenticatedAccount(
+  private async activateAuthenticatedAccount(
     account: StoredAuthAccountRecord,
     sourceCodexHome: string,
     accountEmail: string,
     accountLabel: string,
-  ): StoredAuthAccountRecord {
+  ): Promise<StoredAuthAccountRecord> {
     ensureAuthAccountCodexHome(this.workingDirectory, account.codexHome);
     copyCodexAuthFile(sourceCodexHome, account.codexHome);
+    const shouldNotify = !account.isActive
+      || normalizeAccountEmail(account.accountEmail) !== accountEmail
+      || account.label !== accountLabel;
 
     const updated: StoredAuthAccountRecord = {
       ...account,
@@ -422,14 +428,20 @@ export class CodexAuthRuntime {
     };
 
     this.registry.saveAuthAccount(updated);
-    return this.registry.getAuthAccount(updated.accountId) ?? updated;
+    const hydrated = this.registry.getAuthAccount(updated.accountId) ?? updated;
+
+    if (shouldNotify) {
+      await this.notifyManagedAccountReady(hydrated);
+    }
+
+    return hydrated;
   }
 
-  private createAuthenticatedManagedAccount(
+  private async createAuthenticatedManagedAccount(
     sourceCodexHome: string,
     accountEmail: string,
     accountLabel: string,
-  ): StoredAuthAccountRecord {
+  ): Promise<StoredAuthAccountRecord> {
     const record = createManagedAuthAccountRecord(this.workingDirectory, this.registry, {
       label: accountLabel,
       accountEmail,
@@ -438,14 +450,16 @@ export class CodexAuthRuntime {
     ensureAuthAccountCodexHome(this.workingDirectory, record.codexHome);
     copyCodexAuthFile(sourceCodexHome, record.codexHome);
     this.registry.saveAuthAccount(record);
-    return this.registry.getAuthAccount(record.accountId) ?? record;
+    const hydrated = this.registry.getAuthAccount(record.accountId) ?? record;
+    await this.notifyManagedAccountReady(hydrated);
+    return hydrated;
   }
 
-  private updateManagedAccountIdentity(
+  private async updateManagedAccountIdentity(
     account: StoredAuthAccountRecord,
     accountEmail: string,
     accountLabel: string,
-  ): StoredAuthAccountRecord {
+  ): Promise<StoredAuthAccountRecord> {
     if (account.label === accountLabel && normalizeAccountEmail(account.accountEmail) === accountEmail && account.isActive) {
       return account;
     }
@@ -459,7 +473,9 @@ export class CodexAuthRuntime {
     };
 
     this.registry.saveAuthAccount(updated);
-    return this.registry.getAuthAccount(updated.accountId) ?? updated;
+    const hydrated = this.registry.getAuthAccount(updated.accountId) ?? updated;
+    await this.notifyManagedAccountReady(hydrated);
+    return hydrated;
   }
 
   private async cancelPendingSessions(state: AuthAccountRuntimeState): Promise<void> {
@@ -730,6 +746,10 @@ export class CodexAuthRuntime {
     const task = this.operationChain.then(operation, operation);
     this.operationChain = task.then(() => undefined, () => undefined);
     return await task;
+  }
+
+  private async notifyManagedAccountReady(account: StoredAuthAccountRecord): Promise<void> {
+    await this.onManagedAccountReady?.(account);
   }
 }
 

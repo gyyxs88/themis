@@ -43,6 +43,8 @@ import {
   handleThirdPartyProviderCreate,
 } from "./http-third-party-probe.js";
 
+const DEFAULT_PRIVATE_ASSISTANT_PRINCIPAL_ID = "principal-local-owner";
+
 export interface ThemisHttpServerOptions {
   host?: string;
   port?: number;
@@ -55,6 +57,16 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
   const runtime = options.runtime ?? new CodexTaskRuntime();
   const authRuntime = options.authRuntime ?? new CodexAuthRuntime({
     registry: runtime.getRuntimeStore(),
+    onManagedAccountReady: async (account) => {
+      try {
+        await runtime.getPrincipalSkillsService().syncAllSkillsToAuthAccount(
+          DEFAULT_PRIVATE_ASSISTANT_PRINCIPAL_ID,
+          account.accountId,
+        );
+      } catch (error) {
+        console.error(`[themis/auth] 自动补同步 skills 失败：${toErrorMessage(error)}`);
+      }
+    },
   });
   const runtimeStore = runtime.getRuntimeStore();
   const taskTimeoutMs = options.taskTimeoutMs ?? resolveTaskTimeoutMs();

@@ -594,6 +594,58 @@ test("syncAllSkillsToAuthAccount 不会把单账号补同步结果误写成全�
   }
 });
 
+test("listPrincipalSkills 会返回受管账号同步摘要和 materializations", async () => {
+  const { service, workingDirectory } = createServiceWithAccounts(["default", "backup"]);
+  const conflictPath = resolve(workingDirectory, "infra/local/codex-auth/backup/skills/demo-skill");
+  const skillDir = createLocalSkillFixture({
+    dirName: "demo",
+    skillName: "demo-skill",
+    description: "demo",
+  });
+
+  mkdirSync(dirname(conflictPath), { recursive: true });
+  writeFileSync(conflictPath, "conflict\n", "utf8");
+
+  try {
+    await service.installFromLocalPath({
+      principalId: PRINCIPAL_ID,
+      absolutePath: skillDir,
+    });
+
+    const [skill] = service.listPrincipalSkills(PRINCIPAL_ID) as Array<{
+      skillName: string;
+      summary?: {
+        totalAccounts: number;
+        syncedCount: number;
+        conflictCount: number;
+        failedCount: number;
+      };
+      materializations?: Array<{
+        targetId: string;
+        state: string;
+      }>;
+    }>;
+
+    assert.equal(skill?.skillName, "demo-skill");
+    assert.deepEqual(skill?.summary, {
+      totalAccounts: 2,
+      syncedCount: 1,
+      conflictCount: 1,
+      failedCount: 0,
+    });
+    assert.deepEqual(
+      skill?.materializations?.map((item) => ({ targetId: item.targetId, state: item.state })),
+      [
+        { targetId: "backup", state: "conflict" },
+        { targetId: "default", state: "synced" },
+      ],
+    );
+  } finally {
+    rmSync(skillDir, { recursive: true, force: true });
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
 test("syncSkillToAuthAccount 会把 symlink 指向 principal 受管目录", async () => {
   const { service, workingDirectory } = createServiceWithAccounts(["default"]);
   const skillDir = createLocalSkillFixture({

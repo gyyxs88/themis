@@ -156,7 +156,7 @@ async function assertInvalidRequest(
 }
 
 test("POST /api/skills/list 会按当前浏览器身份返回 principal skill 列表", async () => {
-  await withSkillsServer(async ({ baseUrl, runtime, principalSkillsService }) => {
+  await withSkillsServer(async ({ baseUrl, runtime, principalSkillsService, managedAccountId }) => {
     const identity = runtime.getIdentityLinkService().ensureIdentity(buildSkillsIdentityPayload());
     const fixture = createLocalSkillFixture({
       dirName: "demo",
@@ -175,13 +175,30 @@ test("POST /api/skills/list 会按当前浏览器身份返回 principal skill �
 
       const payload = await response.json() as {
         identity?: { principalId?: string };
-        skills?: Array<{ skillName?: string; description?: string; installStatus?: string }>;
+        skills?: Array<{
+          skillName?: string;
+          description?: string;
+          installStatus?: string;
+          summary?: { totalAccounts?: number; syncedCount?: number };
+          materializations?: Array<{ targetId?: string; state?: string }>;
+        }>;
       };
       assert.equal(payload.identity?.principalId, PRINCIPAL_ID);
       assert.equal(payload.skills?.length, 1);
       assert.equal(payload.skills?.[0]?.skillName, "demo-skill");
       assert.equal(payload.skills?.[0]?.description, "demo");
       assert.equal(payload.skills?.[0]?.installStatus, "ready");
+      assert.equal(payload.skills?.[0]?.summary?.totalAccounts, 1);
+      assert.equal(payload.skills?.[0]?.summary?.syncedCount, 1);
+      assert.deepEqual(
+        payload.skills?.[0]?.materializations?.map((item) => ({
+          targetId: item.targetId,
+          state: item.state,
+        })),
+        [
+          { targetId: managedAccountId, state: "synced" },
+        ],
+      );
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }
@@ -381,6 +398,41 @@ test("POST /api/auth/accounts 创建新账号后会自动补同步当前 princip
         )).isSymbolicLink(),
         true,
       );
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+});
+
+test("POST /api/identity/reset 会删除 principal skills 的受管目录和账号槽位物化", async () => {
+  await withSkillsServer(async ({ baseUrl, runtime, principalSkillsService, runtimeStore, managedAccountId }) => {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(buildSkillsIdentityPayload());
+    const fixture = createLocalSkillFixture({
+      dirName: "demo",
+      skillName: "demo-skill",
+      description: "demo",
+    });
+    const accountSkillPath = resolve(
+      runtimeStore.getAuthAccount(managedAccountId)?.codexHome ?? "",
+      "skills",
+      "demo-skill",
+    );
+
+    try {
+      await principalSkillsService.installFromLocalPath({
+        principalId: identity.principalId,
+        absolutePath: fixture.skillDir,
+      });
+
+      const installedManagedPath = runtimeStore.getPrincipalSkill(PRINCIPAL_ID, "demo-skill")?.managedPath ?? "";
+      assert.ok(installedManagedPath);
+
+      const response = await postJson(baseUrl, "/api/identity/reset", buildSkillsIdentityPayload());
+      assert.equal(response.status, 200);
+
+      assert.equal(runtimeStore.getPrincipalSkill(PRINCIPAL_ID, "demo-skill"), null);
+      assert.equal(existsSync(installedManagedPath), false);
+      assert.equal(existsSync(accountSkillPath), false);
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }

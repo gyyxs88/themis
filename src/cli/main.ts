@@ -660,9 +660,22 @@ function printSkillList(skills: ReturnType<PrincipalSkillsService["listPrincipal
     console.log(`   来源：${describeSkillSource(skill.sourceType, skill.sourceRefJson)}`);
     console.log(`   说明：${skill.description}`);
     console.log(`   受管目录：${skill.managedPath}`);
+    console.log(
+      `   已同步：${skill.summary.syncedCount}/${skill.summary.totalAccounts}，`
+      + `冲突 ${skill.summary.conflictCount}，失败 ${skill.summary.failedCount}`,
+    );
 
     if (skill.lastError) {
       console.log(`   最近错误：${skill.lastError}`);
+    }
+
+    for (const materialization of skill.materializations) {
+      if (materialization.state === "synced") {
+        continue;
+      }
+
+      const detail = materialization.lastError ? `：${materialization.lastError}` : "";
+      console.log(`   账号槽位 ${materialization.targetId} [${materialization.state}]${detail}`);
     }
   }
 }

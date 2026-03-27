@@ -1243,7 +1243,7 @@ export class FeishuChannelService {
         channelUserId: context.userId,
       });
       const resetAt = new Date().toISOString();
-      const reset = this.runtime.getRuntimeStore().resetPrincipalState(identity.principalId, resetAt);
+      const reset = this.runtime.resetPrincipalState(identity.principalId, resetAt);
       const nextSessionId = this.sessionStore.createAndActivateSession(conversationKey);
       const lines = [
         `已重置 principal：${identity.principalId}`,

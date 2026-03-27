@@ -349,6 +349,11 @@ export class CodexTaskRuntime {
     return this.principalSkillsService;
   }
 
+  resetPrincipalState(principalId: string, resetAt: string) {
+    this.principalSkillsService.removeAllSkills(principalId);
+    return this.runtimeStore.resetPrincipalState(principalId, resetAt);
+  }
+
   getPrincipalTaskSettings(principalId?: string): PrincipalTaskSettings | null {
     const normalizedPrincipalId = normalizeOptionalText(principalId);
 

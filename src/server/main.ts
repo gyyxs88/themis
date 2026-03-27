@@ -3,6 +3,8 @@ import { loadProjectEnv } from "../config/project-env.js";
 import { CodexAuthRuntime, CodexTaskRuntime } from "../core/index.js";
 import { createThemisHttpServer, resolveListenAddresses } from "./http-server.js";
 
+const DEFAULT_PRIVATE_ASSISTANT_PRINCIPAL_ID = "principal-local-owner";
+
 loadProjectEnv();
 
 const host = process.env.THEMIS_HOST ?? "0.0.0.0";
@@ -11,6 +13,17 @@ const taskTimeoutMs = Number.parseInt(process.env.THEMIS_TASK_TIMEOUT_MS ?? "300
 const runtime = new CodexTaskRuntime();
 const authRuntime = new CodexAuthRuntime({
   registry: runtime.getRuntimeStore(),
+  onManagedAccountReady: async (account) => {
+    try {
+      await runtime.getPrincipalSkillsService().syncAllSkillsToAuthAccount(
+        DEFAULT_PRIVATE_ASSISTANT_PRINCIPAL_ID,
+        account.accountId,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[themis/auth] 自动补同步 skills 失败：${message}`);
+    }
+  },
 });
 const feishuService = new FeishuChannelService({
   runtime,

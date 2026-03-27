@@ -59,6 +59,11 @@ export interface PrincipalSkillInstallResult {
   summary: PrincipalSkillSyncSummary;
 }
 
+export interface PrincipalSkillListItem extends StoredPrincipalSkillRecord {
+  materializations: StoredPrincipalSkillMaterializationRecord[];
+  summary: PrincipalSkillSyncSummary;
+}
+
 export interface PrincipalSkillRemoveResult {
   skillName: string;
   removedManagedPath: boolean;
@@ -156,9 +161,13 @@ export class PrincipalSkillsService {
     };
   }
 
-  listPrincipalSkills(principalId: string): StoredPrincipalSkillRecord[] {
+  listPrincipalSkills(principalId: string): PrincipalSkillListItem[] {
     const normalizedPrincipalId = normalizeRequiredText(principalId, "principalId 不能为空。");
-    return this.registry.listPrincipalSkills(normalizedPrincipalId);
+    const allManagedAccounts = this.listManagedAuthAccounts();
+
+    return this.registry
+      .listPrincipalSkills(normalizedPrincipalId)
+      .map((skill) => this.buildPrincipalSkillListItem(skill, allManagedAccounts));
   }
 
   async listCuratedSkills(principalId: string): Promise<CuratedSkillListItem[]> {
@@ -383,6 +392,14 @@ export class PrincipalSkillsService {
     };
   }
 
+  removeAllSkills(principalId: string): PrincipalSkillRemoveResult[] {
+    const normalizedPrincipalId = normalizeRequiredText(principalId, "principalId 不能为空。");
+
+    return this.registry
+      .listPrincipalSkills(normalizedPrincipalId)
+      .map((skill) => this.removeSkill(normalizedPrincipalId, skill.skillName));
+  }
+
   private async syncSkillToAllAuthAccounts(
     principalId: string,
     skillName: string,
@@ -421,9 +438,9 @@ export class PrincipalSkillsService {
       await this.syncSkillToAuthAccount(skill, normalizedAccountId, options);
     }
 
-    const materializations = this.registry.listPrincipalSkillMaterializations(skill.principalId, skill.skillName);
-    const managedMaterializations = filterMaterializations(allManagedAccounts, materializations);
-    const summary = summarizeMaterializations(allManagedAccounts, managedMaterializations);
+    const skillListItem = this.buildPrincipalSkillListItem(skill, allManagedAccounts);
+    const managedMaterializations = skillListItem.materializations;
+    const summary = skillListItem.summary;
     const installStatus = resolveInstallStatus(summary);
     const lastError = pickFirstIssue(managedMaterializations);
     const updatedAt = new Date().toISOString();
@@ -552,6 +569,22 @@ export class PrincipalSkillsService {
 
     const requested = new Set(accountIds.map((accountId) => normalizeRequiredText(accountId, "accountId 不能为空。")));
     return this.listManagedAuthAccounts().filter((account) => requested.has(account.accountId));
+  }
+
+  private buildPrincipalSkillListItem(
+    skill: StoredPrincipalSkillRecord,
+    managedAccounts = this.listManagedAuthAccounts(),
+  ): PrincipalSkillListItem {
+    const materializations = filterMaterializations(
+      managedAccounts,
+      this.registry.listPrincipalSkillMaterializations(skill.principalId, skill.skillName),
+    );
+
+    return {
+      ...skill,
+      materializations,
+      summary: summarizeMaterializations(managedAccounts, materializations),
+    };
   }
 
   private createSkillInstallStagingRoot(): string {

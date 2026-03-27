@@ -60,7 +60,7 @@ export async function handleIdentityReset(
     const payload = normalizeIdentityPayload(await readJsonBody(request));
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
     const resetAt = new Date().toISOString();
-    const reset = runtime.getRuntimeStore().resetPrincipalState(identity.principalId, resetAt);
+    const reset = runtime.resetPrincipalState(identity.principalId, resetAt);
 
     writeJson(response, 200, {
       ok: true,

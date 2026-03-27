@@ -177,3 +177,73 @@ test("themis skill install local <absolute-path> 能走通最小安装路径", (
     rmSync(resolve(skillDir, ".."), { recursive: true, force: true });
   }
 });
+
+test("themis skill list 会输出每个 skill 的账号槽位同步摘要", () => {
+  const workspace = createWorkspace();
+  const dbPath = resolve(workspace, "infra/local/themis.db");
+  const registry = new SqliteCodexSessionRegistry({ databaseFile: dbPath });
+  const now = "2026-03-27T00:00:00.000Z";
+  const managedPath = resolve(workspace, "infra/local/principals", cliPrincipalId, "skills", "demo-skill");
+
+  try {
+    mkdirSync(managedPath, { recursive: true });
+    registry.savePrincipal({
+      principalId: cliPrincipalId,
+      createdAt: now,
+      updatedAt: now,
+    });
+    registry.saveAuthAccount({
+      accountId: "default",
+      label: "default",
+      codexHome: resolve(workspace, "infra/local/codex-auth/default"),
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+    registry.saveAuthAccount({
+      accountId: "backup",
+      label: "backup",
+      codexHome: resolve(workspace, "infra/local/codex-auth/backup"),
+      isActive: false,
+      createdAt: now,
+      updatedAt: now,
+    });
+    registry.savePrincipalSkill({
+      principalId: cliPrincipalId,
+      skillName: "demo-skill",
+      description: "demo skill",
+      sourceType: "local-path",
+      sourceRefJson: JSON.stringify({ absolutePath: "/tmp/demo-skill" }),
+      managedPath,
+      installStatus: "partially_synced",
+      createdAt: now,
+      updatedAt: now,
+    });
+    registry.savePrincipalSkillMaterialization({
+      principalId: cliPrincipalId,
+      skillName: "demo-skill",
+      targetKind: "auth-account",
+      targetId: "default",
+      targetPath: resolve(workspace, "infra/local/codex-auth/default/skills/demo-skill"),
+      state: "synced",
+      lastSyncedAt: now,
+    });
+    registry.savePrincipalSkillMaterialization({
+      principalId: cliPrincipalId,
+      skillName: "demo-skill",
+      targetKind: "auth-account",
+      targetId: "backup",
+      targetPath: resolve(workspace, "infra/local/codex-auth/backup/skills/demo-skill"),
+      state: "failed",
+      lastError: "backup failed",
+    });
+
+    const result = runCli(["skill", "list"], workspace);
+
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /已同步：1\/2/);
+    assert.match(result.stdout, /冲突 0，失败 1/);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
