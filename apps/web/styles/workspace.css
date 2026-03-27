@@ -479,6 +479,16 @@
   color: #715c1d;
 }
 
+.skills-install-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.skills-install-grid-triple {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .skill-card {
   display: grid;
   gap: 12px;
@@ -1152,6 +1162,11 @@
     width: 100%;
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .skills-install-grid,
+  .skills-install-grid-triple {
+    grid-template-columns: 1fr;
   }
 
   .auth-device-login-actions {

@@ -20,6 +20,7 @@ export function createDefaultSkillsState() {
   return {
     status: "idle",
     errorMessage: "",
+    noticeMessage: "",
     skills: [],
     curated: [],
     loading: false,
@@ -31,6 +32,9 @@ export function createDefaultSkillsState() {
 export function createSkillsController(app) {
   const { dom } = app;
   let controlsBound = false;
+  let skillsLoadRequestId = 0;
+  let curatedLoadRequestId = 0;
+  let refreshRequestId = 0;
 
   function bindControls() {
     if (controlsBound) {
@@ -50,13 +54,44 @@ export function createSkillsController(app) {
       void runSafely(() => installFromLocalPath(dom.skillsLocalPathInput?.value || ""));
     });
 
-    dom?.skillsLocalPathInput?.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
-        return;
-      }
+    bindSubmitOnEnter(dom?.skillsLocalPathInput, () => installFromLocalPath(dom.skillsLocalPathInput?.value || ""));
+    bindSubmitOnEnter(dom?.skillsGithubUrlInput, () => installFromGitHubUrl(
+      dom.skillsGithubUrlInput?.value || "",
+      dom.skillsGithubUrlRefInput?.value || "",
+    ));
+    bindSubmitOnEnter(dom?.skillsGithubUrlRefInput, () => installFromGitHubUrl(
+      dom.skillsGithubUrlInput?.value || "",
+      dom.skillsGithubUrlRefInput?.value || "",
+    ));
+    bindSubmitOnEnter(dom?.skillsGithubRepoInput, () => installFromGitHubRepoPath(
+      dom.skillsGithubRepoInput?.value || "",
+      dom.skillsGithubPathInput?.value || "",
+      dom.skillsGithubRepoRefInput?.value || "",
+    ));
+    bindSubmitOnEnter(dom?.skillsGithubPathInput, () => installFromGitHubRepoPath(
+      dom.skillsGithubRepoInput?.value || "",
+      dom.skillsGithubPathInput?.value || "",
+      dom.skillsGithubRepoRefInput?.value || "",
+    ));
+    bindSubmitOnEnter(dom?.skillsGithubRepoRefInput, () => installFromGitHubRepoPath(
+      dom.skillsGithubRepoInput?.value || "",
+      dom.skillsGithubPathInput?.value || "",
+      dom.skillsGithubRepoRefInput?.value || "",
+    ));
 
-      event.preventDefault();
-      void runSafely(() => installFromLocalPath(dom.skillsLocalPathInput?.value || ""));
+    dom?.skillsInstallGithubUrlButton?.addEventListener("click", () => {
+      void runSafely(() => installFromGitHubUrl(
+        dom.skillsGithubUrlInput?.value || "",
+        dom.skillsGithubUrlRefInput?.value || "",
+      ));
+    });
+
+    dom?.skillsInstallGithubRepoButton?.addEventListener("click", () => {
+      void runSafely(() => installFromGitHubRepoPath(
+        dom.skillsGithubRepoInput?.value || "",
+        dom.skillsGithubPathInput?.value || "",
+        dom.skillsGithubRepoRefInput?.value || "",
+      ));
     });
 
     dom?.skillsRefreshButton?.addEventListener("click", () => {
@@ -94,14 +129,14 @@ export function createSkillsController(app) {
       const sectionButton = event.target.closest("[data-settings-section]");
 
       if (sectionButton?.dataset.settingsSection === "skills") {
-        void runSafely(() => refresh({ quiet: true }));
+        void runSafely(refresh);
       }
     });
 
     dom?.workspaceToolsToggle?.addEventListener("click", () => {
       queueMicrotask(() => {
         if (app.runtime.workspaceToolsOpen && app.runtime.workspaceToolsSection === "skills") {
-          void runSafely(() => refresh({ quiet: true }));
+          void runSafely(refresh);
         }
       });
     });
@@ -121,12 +156,100 @@ export function createSkillsController(app) {
   function buildSkillsIdentityPayload() {
     const browserUserId = normalizeText(app.runtime.identity?.browserUserId) || "browser-local";
     const authEmail = normalizeText(app.runtime.auth?.account?.email);
+    const displayName = authEmail || `Themis Web ${browserUserId.slice(-6)}`;
 
     return {
       channel: "web",
       channelUserId: browserUserId,
-      ...(authEmail ? { displayName: authEmail } : {}),
+      ...(displayName ? { displayName } : {}),
     };
+  }
+
+  function bindSubmitOnEnter(input, action) {
+    input?.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+        return;
+      }
+
+      event.preventDefault();
+      void action().catch(() => {
+        // Errors are already reflected in skills state for the UI.
+      });
+    });
+  }
+
+  function startReadState() {
+    setState({
+      loading: true,
+      errorMessage: "",
+      noticeMessage: "",
+    });
+    render();
+  }
+
+  function applyReadError(error, requestId, requestType) {
+    const latestRequestId = requestType === "skills" ? skillsLoadRequestId : curatedLoadRequestId;
+
+    if (requestId !== latestRequestId) {
+      return;
+    }
+
+    setState({
+      status: "error",
+      loading: false,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+    render();
+  }
+
+  async function refreshAfterMutation() {
+    try {
+      await refresh({ quiet: true });
+    } catch {
+      setState({
+        status: "ready",
+        loading: false,
+        errorMessage: "",
+        noticeMessage: "操作已成功，但刷新最新列表失败，请手动刷新。",
+      });
+      render();
+    }
+  }
+
+  async function runInstallMutation(source, replace = false) {
+    return await runMutation("installing", "/api/skills/install", {
+      ...buildSkillsIdentityPayload(),
+      replace,
+      source,
+    });
+  }
+
+  async function runMutation(busyKey, url, payload) {
+    setState({
+      [busyKey]: true,
+      errorMessage: "",
+      noticeMessage: "",
+    });
+    render();
+
+    try {
+      const data = await postSkills(url, payload);
+      const result = normalizeMutationResult(data?.result);
+      await refreshAfterMutation();
+      return result;
+    } catch (error) {
+      setState({
+        status: "error",
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+      render();
+      throw error;
+    } finally {
+      setState({
+        [busyKey]: false,
+      });
+      render();
+    }
   }
 
   async function postSkills(url, payload) {
@@ -145,77 +268,93 @@ export function createSkillsController(app) {
   }
 
   async function load(options = {}) {
+    const requestId = ++skillsLoadRequestId;
     const quiet = options.quiet === true;
+    const keepBusy = options.keepBusy === true;
 
     if (!quiet) {
-      setState({
-        loading: true,
-        errorMessage: "",
-      });
-      render();
+      startReadState();
     }
 
     try {
       const data = await postSkills("/api/skills/list", buildSkillsIdentityPayload());
+
+      if (requestId !== skillsLoadRequestId) {
+        return app.runtime.skills;
+      }
+
       const nextState = normalizeSkillsList(data);
       app.runtime.skills = {
         ...app.runtime.skills,
         ...nextState,
         status: "ready",
-        loading: false,
+        loading: keepBusy ? app.runtime.skills.loading : false,
         errorMessage: "",
+        noticeMessage: "",
       };
       render();
       return app.runtime.skills;
     } catch (error) {
-      setState({
-        status: "error",
-        loading: false,
-        errorMessage: error instanceof Error ? error.message : String(error),
-      });
-      render();
+      applyReadError(error, requestId, "skills");
       throw error;
     }
   }
 
   async function loadCuratedCatalog(options = {}) {
+    const requestId = ++curatedLoadRequestId;
     const quiet = options.quiet === true;
+    const keepBusy = options.keepBusy === true;
 
     if (!quiet) {
-      setState({
-        loading: true,
-        errorMessage: "",
-      });
-      render();
+      startReadState();
     }
 
     try {
       const data = await postSkills("/api/skills/catalog/curated", buildSkillsIdentityPayload());
+
+      if (requestId !== curatedLoadRequestId) {
+        return {
+          curated: app.runtime.skills.curated,
+        };
+      }
+
       const curated = normalizeCuratedList(data?.curated);
       setState({
         status: "ready",
         curated,
-        loading: false,
+        loading: keepBusy ? app.runtime.skills.loading : false,
         errorMessage: "",
+        noticeMessage: "",
       });
       render();
       return {
         curated,
       };
     } catch (error) {
-      setState({
-        status: "error",
-        loading: false,
-        errorMessage: error instanceof Error ? error.message : String(error),
-      });
-      render();
+      applyReadError(error, requestId, "curated");
       throw error;
     }
   }
 
   async function refresh(options = {}) {
-    await load({ quiet: options.quiet === true });
-    return await loadCuratedCatalog({ quiet: options.quiet === true });
+    const quiet = options.quiet === true;
+    const requestId = ++refreshRequestId;
+
+    if (!quiet) {
+      startReadState();
+    }
+
+    try {
+      await load({ quiet: true, keepBusy: !quiet });
+      return await loadCuratedCatalog({ quiet: true, keepBusy: !quiet });
+    } finally {
+      if (!quiet && requestId === refreshRequestId) {
+        setState({
+          loading: false,
+        });
+        render();
+      }
+    }
   }
 
   async function installFromLocalPath(path, replace = false) {
@@ -224,41 +363,67 @@ export function createSkillsController(app) {
     if (!absolutePath) {
       setState({
         errorMessage: "请先填写 Themis 服务所在机器上的本机目录。",
+        noticeMessage: "",
       });
       render();
       return null;
     }
 
-    setState({
-      installing: true,
-      errorMessage: "",
-    });
-    render();
+    return await runInstallMutation({
+      type: "local-path",
+      absolutePath,
+    }, replace);
+  }
 
-    try {
-      const data = await postSkills("/api/skills/install", {
-        ...buildSkillsIdentityPayload(),
-        replace,
-        source: {
-          type: "local-path",
-          absolutePath,
-        },
-      });
-      await refresh({ quiet: true });
-      return normalizeMutationResult(data?.result);
-    } catch (error) {
+  async function installFromGitHubUrl(url, ref = "", replace = false) {
+    const normalizedUrl = normalizeText(url);
+    const normalizedRef = normalizeText(ref);
+
+    if (!normalizedUrl) {
       setState({
-        status: "error",
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorMessage: "请先填写 GitHub URL。",
+        noticeMessage: "",
       });
       render();
-      throw error;
-    } finally {
-      setState({
-        installing: false,
-      });
-      render();
+      return null;
     }
+
+    return await runInstallMutation({
+      type: "github-url",
+      url: normalizedUrl,
+      ...(normalizedRef ? { ref: normalizedRef } : {}),
+    }, replace);
+  }
+
+  async function installFromGitHubRepoPath(repo, path, ref = "", replace = false) {
+    const normalizedRepo = normalizeText(repo);
+    const normalizedPath = normalizeText(path);
+    const normalizedRef = normalizeText(ref);
+
+    if (!normalizedRepo) {
+      setState({
+        errorMessage: "请先填写 GitHub repo，例如 openai/codex。",
+        noticeMessage: "",
+      });
+      render();
+      return null;
+    }
+
+    if (!normalizedPath) {
+      setState({
+        errorMessage: "请先填写 repo 内 path。",
+        noticeMessage: "",
+      });
+      render();
+      return null;
+    }
+
+    return await runInstallMutation({
+      type: "github-repo-path",
+      repo: normalizedRepo,
+      path: normalizedPath,
+      ...(normalizedRef ? { ref: normalizedRef } : {}),
+    }, replace);
   }
 
   async function installCuratedSkill(skillName, replace = false) {
@@ -268,36 +433,10 @@ export function createSkillsController(app) {
       return null;
     }
 
-    setState({
-      installing: true,
-      errorMessage: "",
-    });
-    render();
-
-    try {
-      const data = await postSkills("/api/skills/install", {
-        ...buildSkillsIdentityPayload(),
-        replace,
-        source: {
-          type: "curated",
-          skillName: normalizedSkillName,
-        },
-      });
-      await refresh({ quiet: true });
-      return normalizeMutationResult(data?.result);
-    } catch (error) {
-      setState({
-        status: "error",
-        errorMessage: error instanceof Error ? error.message : String(error),
-      });
-      render();
-      throw error;
-    } finally {
-      setState({
-        installing: false,
-      });
-      render();
-    }
+    return await runInstallMutation({
+      type: "curated",
+      skillName: normalizedSkillName,
+    }, replace);
   }
 
   async function removeSkill(skillName) {
@@ -307,32 +446,10 @@ export function createSkillsController(app) {
       return null;
     }
 
-    setState({
-      syncing: true,
-      errorMessage: "",
+    return await runMutation("syncing", "/api/skills/remove", {
+      ...buildSkillsIdentityPayload(),
+      skillName: normalizedSkillName,
     });
-    render();
-
-    try {
-      const data = await postSkills("/api/skills/remove", {
-        ...buildSkillsIdentityPayload(),
-        skillName: normalizedSkillName,
-      });
-      await refresh({ quiet: true });
-      return normalizeMutationResult(data?.result);
-    } catch (error) {
-      setState({
-        status: "error",
-        errorMessage: error instanceof Error ? error.message : String(error),
-      });
-      render();
-      throw error;
-    } finally {
-      setState({
-        syncing: false,
-      });
-      render();
-    }
   }
 
   async function syncSkill(skillName, force = false) {
@@ -342,33 +459,11 @@ export function createSkillsController(app) {
       return null;
     }
 
-    setState({
-      syncing: true,
-      errorMessage: "",
+    return await runMutation("syncing", "/api/skills/sync", {
+      ...buildSkillsIdentityPayload(),
+      skillName: normalizedSkillName,
+      force,
     });
-    render();
-
-    try {
-      const data = await postSkills("/api/skills/sync", {
-        ...buildSkillsIdentityPayload(),
-        skillName: normalizedSkillName,
-        force,
-      });
-      await refresh({ quiet: true });
-      return normalizeMutationResult(data?.result);
-    } catch (error) {
-      setState({
-        status: "error",
-        errorMessage: error instanceof Error ? error.message : String(error),
-      });
-      render();
-      throw error;
-    } finally {
-      setState({
-        syncing: false,
-      });
-      render();
-    }
   }
 
   return {
@@ -377,6 +472,8 @@ export function createSkillsController(app) {
     loadCuratedCatalog,
     refresh,
     installFromLocalPath,
+    installFromGitHubUrl,
+    installFromGitHubRepoPath,
     installCuratedSkill,
     removeSkill,
     syncSkill,

@@ -75,7 +75,64 @@ test("load 会读取列表并回写到运行时状态", async () => {
     assert.equal(calls[0].method, "POST");
     assert.equal(calls[0].body.channel, "web");
     assert.equal(calls[0].body.channelUserId, "browser-123");
+    assert.equal(calls[0].body.displayName, "Themis Web er-123");
     assert.equal(app.renderer.renderAllCallCount, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("load 在新请求已完成后会忽略旧请求响应", async () => {
+  const state = createDefaultSkillsState();
+  const app = createAppStub(state);
+  const controller = createSkillsController(app);
+  const originalFetch = globalThis.fetch;
+  const pending = [];
+
+  try {
+    globalThis.fetch = (url) => {
+      const deferred = createDeferred();
+      pending.push({
+        url,
+        ...deferred,
+      });
+      return deferred.promise;
+    };
+
+    const firstLoadPromise = controller.load();
+
+    assert.equal(app.runtime.skills.loading, true);
+
+    const secondLoadPromise = controller.load();
+
+    pending[1].resolve(jsonResponse({
+      skills: [
+        {
+          skillName: "fresh-skill",
+          description: "fresh",
+          sourceType: "local-path",
+          installStatus: "ready",
+        },
+      ],
+    }));
+
+    await secondLoadPromise;
+
+    pending[0].resolve(jsonResponse({
+      skills: [
+        {
+          skillName: "stale-skill",
+          description: "stale",
+          sourceType: "local-path",
+          installStatus: "ready",
+        },
+      ],
+    }));
+
+    await firstLoadPromise;
+
+    assert.equal(app.runtime.skills.loading, false);
+    assert.equal(app.runtime.skills.skills[0].skillName, "fresh-skill");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -142,6 +199,104 @@ test("installFromLocalPath 成功后会刷新 skills 和 curated 状态", async 
     assert.equal(calls[0].url, "/api/skills/install");
     assert.equal(calls[0].body.source.absolutePath, "/srv/skills/demo");
     assert.equal(calls[0].body.replace, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("installFromGitHubUrl 和 installFromGitHubRepoPath 会发送对应 source payload", async () => {
+  const state = createDefaultSkillsState();
+  const app = createAppStub(state);
+  const controller = createSkillsController(app);
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+
+  try {
+    globalThis.fetch = async (url, init = {}) => {
+      calls.push({
+        url,
+        method: init.method ?? "GET",
+        body: init.body ? JSON.parse(init.body) : null,
+      });
+
+      if (url === "/api/skills/install") {
+        return jsonResponse({
+          result: {
+            skill: {
+              skillName: "demo-skill",
+            },
+          },
+        });
+      }
+
+      if (url === "/api/skills/list") {
+        return jsonResponse({ skills: [] });
+      }
+
+      if (url === "/api/skills/catalog/curated") {
+        return jsonResponse({ curated: [] });
+      }
+
+      throw new Error(`unexpected fetch ${url}`);
+    };
+
+    await controller.installFromGitHubUrl("https://github.com/openai/example-skill", "main");
+    await controller.installFromGitHubRepoPath("openai/example-skills", "skills/demo", "v1");
+
+    assert.equal(calls[0].url, "/api/skills/install");
+    assert.deepEqual(calls[0].body.source, {
+      type: "github-url",
+      url: "https://github.com/openai/example-skill",
+      ref: "main",
+    });
+    assert.equal(calls[3].url, "/api/skills/install");
+    assert.deepEqual(calls[3].body.source, {
+      type: "github-repo-path",
+      repo: "openai/example-skills",
+      path: "skills/demo",
+      ref: "v1",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("mutation 成功但 refresh 失败时不应把 mutation 当失败，且 busy 会恢复", async () => {
+  const state = createDefaultSkillsState();
+  const app = createAppStub(state);
+  const controller = createSkillsController(app);
+  const originalFetch = globalThis.fetch;
+
+  try {
+    globalThis.fetch = async (url, init = {}) => {
+      if (url === "/api/skills/install") {
+        return jsonResponse({
+          result: {
+            skill: {
+              skillName: "demo-skill",
+            },
+          },
+        });
+      }
+
+      if (url === "/api/skills/list") {
+        return jsonResponse({
+          error: {
+            message: "列表刷新失败",
+          },
+        }, 500);
+      }
+
+      throw new Error(`unexpected fetch ${url} ${init.method ?? "GET"}`);
+    };
+
+    const result = await controller.installFromLocalPath("/srv/skills/demo");
+
+    assert.equal(result.skill.skillName, "demo-skill");
+    assert.equal(app.runtime.skills.installing, false);
+    assert.equal(app.runtime.skills.loading, false);
+    assert.equal(app.runtime.skills.errorMessage, "");
+    assert.equal(app.runtime.skills.noticeMessage, "操作已成功，但刷新最新列表失败，请手动刷新。");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -241,6 +396,9 @@ function createAppStub(skillsState) {
       identity: {
         browserUserId: "browser-123",
       },
+      auth: {
+        account: null,
+      },
     },
     utils: {
       safeReadJson: async (response) => response.json(),
@@ -259,4 +417,19 @@ function jsonResponse(payload, status = 200) {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function createDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+
+  return {
+    promise,
+    resolve,
+    reject,
+  };
 }

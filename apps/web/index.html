@@ -755,6 +755,68 @@
                         />
                       </label>
 
+                      <div class="skills-install-grid">
+                        <label class="settings-field">
+                          <span>从 GitHub URL 安装</span>
+                          <input
+                            id="skills-github-url-input"
+                            type="text"
+                            placeholder="例如：https://github.com/openai/codex/tree/main/skills/example"
+                            autocomplete="off"
+                            spellcheck="false"
+                          />
+                        </label>
+                        <label class="settings-field">
+                          <span>可选 ref</span>
+                          <input
+                            id="skills-github-url-ref-input"
+                            type="text"
+                            placeholder="例如：main / v1.0.0 / commit SHA"
+                            autocomplete="off"
+                            spellcheck="false"
+                          />
+                        </label>
+                      </div>
+                      <div class="toolbar-row">
+                        <button id="skills-install-github-url-button" type="button" class="toolbar-button subtle">从 GitHub URL 安装</button>
+                      </div>
+
+                      <div class="skills-install-grid skills-install-grid-triple">
+                        <label class="settings-field">
+                          <span>从 GitHub repo/path 安装</span>
+                          <input
+                            id="skills-github-repo-input"
+                            type="text"
+                            placeholder="例如：openai/codex"
+                            autocomplete="off"
+                            spellcheck="false"
+                          />
+                        </label>
+                        <label class="settings-field">
+                          <span>repo 内 path</span>
+                          <input
+                            id="skills-github-path-input"
+                            type="text"
+                            placeholder="例如：skills/example"
+                            autocomplete="off"
+                            spellcheck="false"
+                          />
+                        </label>
+                        <label class="settings-field">
+                          <span>可选 ref</span>
+                          <input
+                            id="skills-github-repo-ref-input"
+                            type="text"
+                            placeholder="例如：main / v1.0.0 / commit SHA"
+                            autocomplete="off"
+                            spellcheck="false"
+                          />
+                        </label>
+                      </div>
+                      <div class="toolbar-row">
+                        <button id="skills-install-github-repo-button" type="button" class="toolbar-button subtle">从 GitHub repo/path 安装</button>
+                      </div>
+
                       <div class="toolbar-row">
                         <button id="skills-install-local-button" type="button" class="toolbar-button subtle">从本机目录安装</button>
                         <button id="skills-refresh-button" type="button" class="toolbar-button subtle">刷新</button>

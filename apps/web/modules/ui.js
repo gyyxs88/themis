@@ -226,7 +226,9 @@ export function createRenderer(app) {
       ? "error"
       : busy
         ? "loading"
-        : "supported";
+        : skillsState.noticeMessage
+          ? "inconclusive"
+          : "supported";
 
     dom.skillsStatusNote.classList.toggle("hidden", !statusMessage);
     dom.skillsStatusNote.textContent = statusMessage;
@@ -1083,7 +1085,20 @@ export function createRenderer(app) {
     dom.conversationLinkButton.disabled = controlsBusy;
     dom.identityLinkCodeButton.disabled = controlsBusy || app.runtime.identity?.issuing;
     dom.skillsLocalPathInput.disabled = controlsBusy || app.runtime.skills.loading || app.runtime.skills.installing || app.runtime.skills.syncing;
+    dom.skillsGithubUrlInput.disabled = controlsBusy || app.runtime.skills.loading || app.runtime.skills.installing || app.runtime.skills.syncing;
+    dom.skillsGithubUrlRefInput.disabled = controlsBusy || app.runtime.skills.loading || app.runtime.skills.installing || app.runtime.skills.syncing;
+    dom.skillsGithubRepoInput.disabled = controlsBusy || app.runtime.skills.loading || app.runtime.skills.installing || app.runtime.skills.syncing;
+    dom.skillsGithubPathInput.disabled = controlsBusy || app.runtime.skills.loading || app.runtime.skills.installing || app.runtime.skills.syncing;
+    dom.skillsGithubRepoRefInput.disabled = controlsBusy || app.runtime.skills.loading || app.runtime.skills.installing || app.runtime.skills.syncing;
     dom.skillsInstallLocalButton.disabled = controlsBusy
+      || app.runtime.skills.loading
+      || app.runtime.skills.installing
+      || app.runtime.skills.syncing;
+    dom.skillsInstallGithubUrlButton.disabled = controlsBusy
+      || app.runtime.skills.loading
+      || app.runtime.skills.installing
+      || app.runtime.skills.syncing;
+    dom.skillsInstallGithubRepoButton.disabled = controlsBusy
       || app.runtime.skills.loading
       || app.runtime.skills.installing
       || app.runtime.skills.syncing;
@@ -1279,6 +1294,10 @@ function resolveSkillsStatusMessage(skillsState) {
 
   if (skillsState.loading) {
     return "正在读取当前 principal 的 skills 与 curated 列表。";
+  }
+
+  if (skillsState.noticeMessage) {
+    return skillsState.noticeMessage;
   }
 
   return "";
