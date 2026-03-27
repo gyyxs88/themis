@@ -24,6 +24,7 @@ import {
 import { buildAssistantStyleSessionPayload } from "./assistant-style.js";
 import { ConversationService } from "./conversation-service.js";
 import { IdentityLinkService } from "./identity-link-service.js";
+import { PrincipalSkillsService } from "./principal-skills-service.js";
 import { buildBootstrapPrompt, buildTaskPrompt } from "./prompt.js";
 import { validateWorkspacePath } from "./session-workspace.js";
 import {
@@ -61,6 +62,7 @@ export interface CodexTaskRuntimeOptions {
   runtimeStore?: SqliteCodexSessionRegistry;
   providerConfigs?: OpenAICompatibleProviderConfig[] | null;
   providerConfig?: OpenAICompatibleProviderConfig | null;
+  principalSkillsService?: PrincipalSkillsService;
 }
 
 interface ResolvedRuntimeTarget {
@@ -88,6 +90,7 @@ export class CodexTaskRuntime {
   private readonly identityLinkService: IdentityLinkService;
   private readonly conversationService: ConversationService;
   private readonly principalPersonaService: PrincipalPersonaService;
+  private readonly principalSkillsService: PrincipalSkillsService;
   private providerConfigs: OpenAICompatibleProviderConfig[];
   private readonly authClients = new Map<string, Codex>();
   private readonly authSessionStores = new Map<string, CodexThreadSessionStore>();
@@ -104,6 +107,10 @@ export class CodexTaskRuntime {
     this.identityLinkService = new IdentityLinkService(this.runtimeStore);
     this.conversationService = new ConversationService(this.runtimeStore, this.identityLinkService);
     this.principalPersonaService = new PrincipalPersonaService(this.runtimeStore);
+    this.principalSkillsService = options.principalSkillsService ?? new PrincipalSkillsService({
+      workingDirectory: this.workingDirectory,
+      registry: this.runtimeStore,
+    });
     this.providerConfigs = options.providerConfigs
       ?? (options.providerConfig
         ? [options.providerConfig]
@@ -336,6 +343,10 @@ export class CodexTaskRuntime {
 
   getPrincipalPersonaService(): PrincipalPersonaService {
     return this.principalPersonaService;
+  }
+
+  getPrincipalSkillsService(): PrincipalSkillsService {
+    return this.principalSkillsService;
   }
 
   getPrincipalTaskSettings(principalId?: string): PrincipalTaskSettings | null {

@@ -21,6 +21,13 @@ import {
   handleIdentityTaskSettingsUpdate,
 } from "./http-identity.js";
 import { handleRuntimeConfig } from "./http-runtime-config.js";
+import {
+  handleSkillsCuratedCatalog,
+  handleSkillsInstall,
+  handleSkillsList,
+  handleSkillsRemove,
+  handleSkillsSync,
+} from "./http-skills.js";
 import { writeJson } from "./http-responses.js";
 import {
   handleSessionForkContext,
@@ -93,7 +100,7 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/accounts") {
-        return handleAuthAccountCreate(request, response, authRuntime);
+        return handleAuthAccountCreate(request, response, authRuntime, runtime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/account/select") {
@@ -118,6 +125,26 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/identity/task-settings") {
         return handleIdentityTaskSettingsUpdate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/skills/list") {
+        return handleSkillsList(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/skills/install") {
+        return handleSkillsInstall(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/skills/remove") {
+        return handleSkillsRemove(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/skills/sync") {
+        return handleSkillsSync(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/skills/catalog/curated") {
+        return handleSkillsCuratedCatalog(request, response, runtime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/login") {

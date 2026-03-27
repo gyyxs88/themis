@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
 import { CodexAuthRuntime, type CodexAuthSnapshot } from "../core/codex-auth.js";
+import type { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { readJsonBody } from "./http-request.js";
 import { toErrorMessage } from "./http-errors.js";
 import { writeJson } from "./http-responses.js";
@@ -27,6 +28,8 @@ interface BrowserLoginContext {
   localOrigin: string;
   sshTunnelCommand: string | null;
 }
+
+const DEFAULT_PRIVATE_ASSISTANT_PRINCIPAL_ID = "principal-local-owner";
 
 export async function handleAuthStatus(
   request: IncomingMessage,
@@ -150,6 +153,7 @@ export async function handleAuthAccountCreate(
   request: IncomingMessage,
   response: ServerResponse,
   authRuntime: CodexAuthRuntime,
+  runtime?: CodexTaskRuntime,
 ): Promise<void> {
   try {
     const payload = (await readJsonBody(request)) as AuthAccountCreatePayload;
@@ -170,6 +174,10 @@ export async function handleAuthAccountCreate(
       ...(normalizeOptionalText(payload.accountId) ? { accountId: normalizeOptionalText(payload.accountId)! } : {}),
       activate: typeof payload.activate === "boolean" ? payload.activate : true,
     });
+    await runtime?.getPrincipalSkillsService().syncAllSkillsToAuthAccount(
+      DEFAULT_PRIVATE_ASSISTANT_PRINCIPAL_ID,
+      account.accountId,
+    );
     const auth = await authRuntime.readSnapshot(account.accountId);
     writeJson(response, 200, {
       account,

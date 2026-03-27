@@ -59,6 +59,12 @@ export interface PrincipalSkillInstallResult {
   summary: PrincipalSkillSyncSummary;
 }
 
+export interface PrincipalSkillRemoveResult {
+  skillName: string;
+  removedManagedPath: boolean;
+  removedMaterializations: number;
+}
+
 export interface CuratedSkillListItem {
   name: string;
   installed: boolean;
@@ -148,6 +154,11 @@ export class PrincipalSkillsService {
       description,
       skillFilePath,
     };
+  }
+
+  listPrincipalSkills(principalId: string): StoredPrincipalSkillRecord[] {
+    const normalizedPrincipalId = normalizeRequiredText(principalId, "principalId 不能为空。");
+    return this.registry.listPrincipalSkills(normalizedPrincipalId);
   }
 
   async listCuratedSkills(principalId: string): Promise<CuratedSkillListItem[]> {
@@ -320,6 +331,56 @@ export class PrincipalSkillsService {
     for (const skill of this.registry.listPrincipalSkills(normalizedPrincipalId)) {
       await this.syncSkillToSpecificAccounts(skill, [normalizedAccountId], options);
     }
+  }
+
+  async syncSkill(
+    principalId: string,
+    skillName: string,
+    options: SyncAuthAccountOptions = {},
+  ): Promise<PrincipalSkillInstallResult> {
+    const normalizedPrincipalId = normalizeRequiredText(principalId, "principalId 不能为空。");
+    const normalizedSkillName = normalizeRequiredText(skillName, "skillName 不能为空。");
+
+    return this.syncSkillToAllAuthAccounts(normalizedPrincipalId, normalizedSkillName, options);
+  }
+
+  removeSkill(principalId: string, skillName: string): PrincipalSkillRemoveResult {
+    const normalizedPrincipalId = normalizeRequiredText(principalId, "principalId 不能为空。");
+    const normalizedSkillName = normalizeRequiredText(skillName, "skillName 不能为空。");
+    const skill = this.registry.getPrincipalSkill(normalizedPrincipalId, normalizedSkillName);
+
+    if (!skill) {
+      throw new Error(`技能 ${normalizedSkillName} 不存在。`);
+    }
+
+    const managedPath = resolve(skill.managedPath);
+    let removedMaterializations = 0;
+
+    for (const account of this.listManagedAuthAccounts()) {
+      const targetPath = resolveAuthAccountSkillPath(account.codexHome, normalizedSkillName);
+
+      if (!existsSync(targetPath) || !isExpectedSkillSymlink(targetPath, managedPath)) {
+        continue;
+      }
+
+      rmSync(targetPath, { recursive: true, force: true });
+      removedMaterializations += 1;
+    }
+
+    const removedManagedPath = existsSync(managedPath);
+
+    if (removedManagedPath) {
+      rmSync(managedPath, { recursive: true, force: true });
+    }
+
+    this.registry.deletePrincipalSkillMaterializations(normalizedPrincipalId, normalizedSkillName);
+    this.registry.deletePrincipalSkill(normalizedPrincipalId, normalizedSkillName);
+
+    return {
+      skillName: normalizedSkillName,
+      removedManagedPath,
+      removedMaterializations,
+    };
   }
 
   private async syncSkillToAllAuthAccounts(
