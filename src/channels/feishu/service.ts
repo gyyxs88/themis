@@ -245,6 +245,24 @@ export class FeishuChannelService {
   }
 
   private async handleCommand(command: ParsedFeishuCommand, context: FeishuIncomingContext): Promise<void> {
+    const startedAt = Date.now();
+    let status = "ok";
+
+    try {
+      await this.dispatchCommand(command, context);
+    } catch (error) {
+      status = `error:${toErrorMessage(error)}`;
+      throw error;
+    } finally {
+      const elapsedMs = Math.max(0, Date.now() - startedAt);
+      const commandLabel = normalizeText(command.raw) ?? `/${command.name}`;
+      this.logger.info(
+        `[themis/feishu] 斜杠命令完成：command=${commandLabel} elapsedMs=${elapsedMs} status=${status} chat=${context.chatId} message=${context.messageId}`,
+      );
+    }
+  }
+
+  private async dispatchCommand(command: ParsedFeishuCommand, context: FeishuIncomingContext): Promise<void> {
     switch (command.name) {
       case "help":
       case "h":
@@ -1428,16 +1446,33 @@ export class FeishuChannelService {
       throw new Error("飞书客户端未就绪，或消息内容为空。");
     }
 
-    return client.im.v1.message.create({
-      params: {
-        receive_id_type: "chat_id",
-      },
-      data: {
-        receive_id: chatId,
-        msg_type: draft.msgType,
-        content: draft.content,
-      },
-    });
+    const startedAt = Date.now();
+    const payloadBytes = Buffer.byteLength(draft.content, "utf8");
+
+    try {
+      const response = await client.im.v1.message.create({
+        params: {
+          receive_id_type: "chat_id",
+        },
+        data: {
+          receive_id: chatId,
+          msg_type: draft.msgType,
+          content: draft.content,
+        },
+      });
+      const elapsedMs = Math.max(0, Date.now() - startedAt);
+      const createdMessageId = normalizeText(response.data?.message_id) ?? "-";
+      this.logger.info(
+        `[themis/feishu] 飞书消息发送完成：action=create msgType=${draft.msgType} chat=${chatId} message=${createdMessageId} elapsedMs=${elapsedMs} bytes=${payloadBytes}`,
+      );
+      return response;
+    } catch (error) {
+      const elapsedMs = Math.max(0, Date.now() - startedAt);
+      this.logger.error(
+        `[themis/feishu] 飞书消息发送失败：action=create msgType=${draft.msgType} chat=${chatId} elapsedMs=${elapsedMs} bytes=${payloadBytes} error=${toErrorMessage(error)}`,
+      );
+      throw error;
+    }
   }
 
   private async updateMessage(
@@ -1450,15 +1485,31 @@ export class FeishuChannelService {
       throw new Error("飞书客户端未就绪，或消息内容为空。");
     }
 
-    return client.im.v1.message.update({
-      path: {
-        message_id: messageId,
-      },
-      data: {
-        msg_type: draft.msgType,
-        content: draft.content,
-      },
-    });
+    const startedAt = Date.now();
+    const payloadBytes = Buffer.byteLength(draft.content, "utf8");
+
+    try {
+      const response = await client.im.v1.message.update({
+        path: {
+          message_id: messageId,
+        },
+        data: {
+          msg_type: draft.msgType,
+          content: draft.content,
+        },
+      });
+      const elapsedMs = Math.max(0, Date.now() - startedAt);
+      this.logger.info(
+        `[themis/feishu] 飞书消息发送完成：action=update msgType=${draft.msgType} chat=- message=${messageId} elapsedMs=${elapsedMs} bytes=${payloadBytes}`,
+      );
+      return response;
+    } catch (error) {
+      const elapsedMs = Math.max(0, Date.now() - startedAt);
+      this.logger.error(
+        `[themis/feishu] 飞书消息发送失败：action=update msgType=${draft.msgType} chat=- message=${messageId} elapsedMs=${elapsedMs} bytes=${payloadBytes} error=${toErrorMessage(error)}`,
+      );
+      throw error;
+    }
   }
 
   private async safeSendText(chatId: string, text: string): Promise<void> {

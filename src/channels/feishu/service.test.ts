@@ -360,6 +360,57 @@ test("/settings foo 会回退到 settings 第一层帮助", async () => {
   }
 });
 
+test("斜杠命令会记录完成耗时日志", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("help", []);
+    harness.takeSingleMessage();
+
+    const commandLogs = harness.getInfoLogs().filter((entry) => entry.includes("斜杠命令完成"));
+    assert.equal(commandLogs.length, 1);
+    assert.match(commandLogs[0] ?? "", /command=\/help/);
+    assert.match(commandLogs[0] ?? "", /elapsedMs=\d+/);
+    assert.match(commandLogs[0] ?? "", /chat=chat-1/);
+    assert.match(commandLogs[0] ?? "", /message=message-1/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书文本发送会记录接口耗时日志", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.setClient({
+      im: {
+        v1: {
+          message: {
+            create: async () => ({
+              data: {
+                message_id: "msg-created-1",
+              },
+            }),
+          },
+        },
+      },
+    });
+
+    await harness.createTextMessage("chat-1", "hello");
+
+    const sendLogs = harness.getInfoLogs().filter((entry) => entry.includes("飞书消息发送完成"));
+    assert.equal(sendLogs.length, 1);
+    assert.match(sendLogs[0] ?? "", /action=create/);
+    assert.match(sendLogs[0] ?? "", /msgType=text/);
+    assert.match(sendLogs[0] ?? "", /chat=chat-1/);
+    assert.match(sendLogs[0] ?? "", /message=msg-created-1/);
+    assert.match(sendLogs[0] ?? "", /elapsedMs=\d+/);
+    assert.match(sendLogs[0] ?? "", /bytes=\d+/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 function createHarness(runtimeCatalog = createRuntimeCatalog()) {
   const workingDirectory = mkdtempSync(join(tmpdir(), "themis-feishu-service-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
@@ -406,6 +457,7 @@ function createHarness(runtimeCatalog = createRuntimeCatalog()) {
       return settings;
     },
   } as unknown as CodexTaskRuntime;
+  const loggerState = createLogger();
   const service = new FeishuChannelService({
     runtime,
     authRuntime: {
@@ -450,7 +502,7 @@ function createHarness(runtimeCatalog = createRuntimeCatalog()) {
     } as never,
     taskTimeoutMs: 5_000,
     sessionStore,
-    logger: createLogger(),
+    logger: loggerState.logger,
   });
   const messages: string[] = [];
   const context = {
@@ -491,8 +543,19 @@ function createHarness(runtimeCatalog = createRuntimeCatalog()) {
       assert.equal(messages.length, 1);
       return messages.pop() ?? "";
     },
+    getInfoLogs() {
+      return [...loggerState.infoLogs];
+    },
     getStoredPrincipalTaskSettings() {
       return runtimeStore.getPrincipalTaskSettings(ensurePrincipalId())?.settings ?? null;
+    },
+    async createTextMessage(chatId: string, text: string) {
+      return await (service as unknown as {
+        createTextMessage(targetChatId: string, value: string): Promise<unknown>;
+      }).createTextMessage(chatId, text);
+    },
+    setClient(client: unknown) {
+      (service as unknown as { client: unknown }).client = client;
     },
     createTaskPayload(sessionId: string, text: string) {
       return (service as unknown as {
@@ -611,10 +674,25 @@ function createRuntimeModel(model: string, defaultReasoningEffort: string, isDef
 }
 
 function createLogger() {
+  const infoLogs: string[] = [];
+  const warnLogs: string[] = [];
+  const errorLogs: string[] = [];
+
   return {
-    info() {},
-    warn() {},
-    error() {},
+    logger: {
+      info(message: string) {
+        infoLogs.push(message);
+      },
+      warn(message: string) {
+        warnLogs.push(message);
+      },
+      error(message: string) {
+        errorLogs.push(message);
+      },
+    },
+    infoLogs,
+    warnLogs,
+    errorLogs,
   };
 }
 
