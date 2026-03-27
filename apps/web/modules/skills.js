@@ -35,6 +35,7 @@ export function createSkillsController(app) {
   let skillsLoadRequestId = 0;
   let curatedLoadRequestId = 0;
   let refreshRequestId = 0;
+  let activeRefreshCycle = null;
 
   function bindControls() {
     if (controlsBound) {
@@ -187,28 +188,35 @@ export function createSkillsController(app) {
     render();
   }
 
-  function isCurrentReadRequest(requestType, requestId, refreshCycleId = 0) {
+  function isCurrentRefreshCycle(refreshCycle = null) {
+    return !refreshCycle || refreshCycle === activeRefreshCycle;
+  }
+
+  function isCurrentReadRequest(requestType, requestId, refreshCycle = null) {
     const latestRequestId = requestType === "skills" ? skillsLoadRequestId : curatedLoadRequestId;
 
     if (requestId !== latestRequestId) {
       return false;
     }
 
-    if (refreshCycleId > 0 && refreshCycleId !== refreshRequestId) {
+    if (!isCurrentRefreshCycle(refreshCycle)) {
       return false;
     }
 
     return true;
   }
 
-  function applyReadError(error, requestId, requestType, refreshCycleId = 0) {
-    if (!isCurrentReadRequest(requestType, requestId, refreshCycleId)) {
+  function applyReadError(error, requestId, requestType, options = {}) {
+    const keepBusy = options.keepBusy === true;
+    const refreshCycle = options.refreshCycle ?? null;
+
+    if (!isCurrentReadRequest(requestType, requestId, refreshCycle)) {
       return;
     }
 
     setState({
       status: "error",
-      loading: false,
+      loading: keepBusy ? app.runtime.skills.loading : false,
       errorMessage: error instanceof Error ? error.message : String(error),
     });
     render();
@@ -283,7 +291,7 @@ export function createSkillsController(app) {
     const requestId = ++skillsLoadRequestId;
     const quiet = options.quiet === true;
     const keepBusy = options.keepBusy === true;
-    const refreshCycleId = typeof options.refreshCycleId === "number" ? options.refreshCycleId : 0;
+    const refreshCycle = options.refreshCycle ?? null;
 
     if (!quiet) {
       startReadState();
@@ -292,7 +300,7 @@ export function createSkillsController(app) {
     try {
       const data = await postSkills("/api/skills/list", buildSkillsIdentityPayload());
 
-      if (!isCurrentReadRequest("skills", requestId, refreshCycleId)) {
+      if (!isCurrentReadRequest("skills", requestId, refreshCycle)) {
         return app.runtime.skills;
       }
 
@@ -308,7 +316,14 @@ export function createSkillsController(app) {
       render();
       return app.runtime.skills;
     } catch (error) {
-      applyReadError(error, requestId, "skills", refreshCycleId);
+      if (!isCurrentRefreshCycle(refreshCycle)) {
+        return app.runtime.skills;
+      }
+
+      applyReadError(error, requestId, "skills", {
+        keepBusy,
+        refreshCycle,
+      });
       throw error;
     }
   }
@@ -317,7 +332,7 @@ export function createSkillsController(app) {
     const requestId = ++curatedLoadRequestId;
     const quiet = options.quiet === true;
     const keepBusy = options.keepBusy === true;
-    const refreshCycleId = typeof options.refreshCycleId === "number" ? options.refreshCycleId : 0;
+    const refreshCycle = options.refreshCycle ?? null;
 
     if (!quiet) {
       startReadState();
@@ -326,7 +341,7 @@ export function createSkillsController(app) {
     try {
       const data = await postSkills("/api/skills/catalog/curated", buildSkillsIdentityPayload());
 
-      if (!isCurrentReadRequest("curated", requestId, refreshCycleId)) {
+      if (!isCurrentReadRequest("curated", requestId, refreshCycle)) {
         return {
           curated: app.runtime.skills.curated,
         };
@@ -345,7 +360,16 @@ export function createSkillsController(app) {
         curated,
       };
     } catch (error) {
-      applyReadError(error, requestId, "curated", refreshCycleId);
+      if (!isCurrentRefreshCycle(refreshCycle)) {
+        return {
+          curated: app.runtime.skills.curated,
+        };
+      }
+
+      applyReadError(error, requestId, "curated", {
+        keepBusy,
+        refreshCycle,
+      });
       throw error;
     }
   }
@@ -353,16 +377,18 @@ export function createSkillsController(app) {
   async function refresh(options = {}) {
     const quiet = options.quiet === true;
     const requestId = ++refreshRequestId;
+    const refreshCycle = { requestId };
+    activeRefreshCycle = refreshCycle;
 
     if (!quiet) {
       startReadState();
     }
 
     try {
-      await load({ quiet: true, keepBusy: !quiet, refreshCycleId: requestId });
-      return await loadCuratedCatalog({ quiet: true, keepBusy: !quiet, refreshCycleId: requestId });
+      await load({ quiet: true, keepBusy: true, refreshCycle });
+      return await loadCuratedCatalog({ quiet: true, keepBusy: true, refreshCycle });
     } catch (error) {
-      if (requestId !== refreshRequestId) {
+      if (!isCurrentRefreshCycle(refreshCycle)) {
         return {
           curated: app.runtime.skills.curated,
         };
@@ -370,7 +396,7 @@ export function createSkillsController(app) {
 
       throw error;
     } finally {
-      if (!quiet && requestId === refreshRequestId) {
+      if (isCurrentRefreshCycle(refreshCycle)) {
         setState({
           loading: false,
         });
