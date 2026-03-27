@@ -2003,6 +2003,32 @@ export class SqliteCodexSessionRegistry {
         )
         .run(sourceId);
 
+      const sourceSkills = this.listPrincipalSkills(sourceId);
+      const targetSkillNames = new Set(
+        this.listPrincipalSkills(targetId).map((skill) => skill.skillName),
+      );
+
+      for (const skill of sourceSkills) {
+        if (targetSkillNames.has(skill.skillName)) {
+          continue;
+        }
+
+        this.savePrincipalSkill({
+          ...skill,
+          principalId: targetId,
+          updatedAt,
+        });
+
+        const sourceMaterializations = this.listPrincipalSkillMaterializations(sourceId, skill.skillName);
+
+        for (const materialization of sourceMaterializations) {
+          this.savePrincipalSkillMaterialization({
+            ...materialization,
+            principalId: targetId,
+          });
+        }
+      }
+
       const sourceBindings = this.db
         .prepare(
           `

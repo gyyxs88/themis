@@ -173,3 +173,124 @@ test("resetPrincipalState 会清理 skills 主记录和物化状态", () => {
     rmSync(workingDirectory, { recursive: true, force: true });
   }
 });
+
+test("mergePrincipals 会把 source principal 的 skills 和 materializations 复制到 target principal", () => {
+  const workingDirectory = mkdtempSync(join(tmpdir(), "themis-principal-skill-merge-"));
+
+  try {
+    const registry = new SqliteCodexSessionRegistry({
+      databaseFile: join(workingDirectory, "infra/local/themis.db"),
+    });
+
+    registry.savePrincipal({
+      principalId: "principal-source",
+      displayName: "Source",
+      createdAt: "2026-03-27T00:00:00.000Z",
+      updatedAt: "2026-03-27T00:00:00.000Z",
+    });
+
+    registry.savePrincipal({
+      principalId: "principal-target",
+      displayName: "Target",
+      createdAt: "2026-03-27T00:00:00.000Z",
+      updatedAt: "2026-03-27T00:00:00.000Z",
+    });
+
+    registry.savePrincipalSkill({
+      principalId: "principal-source",
+      skillName: "demo-skill",
+      description: "source skill",
+      sourceType: "local-path",
+      sourceRefJson: "{\"path\":\"/srv/source\"}",
+      managedPath: "/srv/themis/source/demo-skill",
+      installStatus: "ready",
+      createdAt: "2026-03-27T00:00:00.000Z",
+      updatedAt: "2026-03-27T00:00:00.000Z",
+    });
+
+    registry.savePrincipalSkillMaterialization({
+      principalId: "principal-source",
+      skillName: "demo-skill",
+      targetKind: "auth-account",
+      targetId: "default",
+      targetPath: "/srv/themis/auth/default/skills/demo-skill",
+      state: "synced",
+      lastSyncedAt: "2026-03-27T00:00:00.000Z",
+    });
+
+    registry.mergePrincipals(
+      "principal-source",
+      "principal-target",
+      "2026-03-27T00:00:01.000Z",
+    );
+
+    assert.equal(registry.getPrincipalSkill("principal-target", "demo-skill")?.skillName, "demo-skill");
+    assert.equal(
+      registry.listPrincipalSkillMaterializations("principal-target", "demo-skill")[0]?.targetPath,
+      "/srv/themis/auth/default/skills/demo-skill",
+    );
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test("mergePrincipals 遇到同名 skill 时保留 target principal 的记录", () => {
+  const workingDirectory = mkdtempSync(join(tmpdir(), "themis-principal-skill-merge-conflict-"));
+
+  try {
+    const registry = new SqliteCodexSessionRegistry({
+      databaseFile: join(workingDirectory, "infra/local/themis.db"),
+    });
+
+    registry.savePrincipal({
+      principalId: "principal-source",
+      displayName: "Source",
+      createdAt: "2026-03-27T00:00:00.000Z",
+      updatedAt: "2026-03-27T00:00:00.000Z",
+    });
+
+    registry.savePrincipal({
+      principalId: "principal-target",
+      displayName: "Target",
+      createdAt: "2026-03-27T00:00:00.000Z",
+      updatedAt: "2026-03-27T00:00:00.000Z",
+    });
+
+    registry.savePrincipalSkill({
+      principalId: "principal-source",
+      skillName: "shared-skill",
+      description: "source skill",
+      sourceType: "local-path",
+      sourceRefJson: "{\"path\":\"/srv/source\"}",
+      managedPath: "/srv/themis/source/shared-skill",
+      installStatus: "ready",
+      createdAt: "2026-03-27T00:00:00.000Z",
+      updatedAt: "2026-03-27T00:00:00.000Z",
+    });
+
+    registry.savePrincipalSkill({
+      principalId: "principal-target",
+      skillName: "shared-skill",
+      description: "target skill",
+      sourceType: "curated",
+      sourceRefJson: "{\"id\":\"shared-skill\"}",
+      managedPath: "/srv/themis/target/shared-skill",
+      installStatus: "ready",
+      createdAt: "2026-03-27T00:00:00.000Z",
+      updatedAt: "2026-03-27T00:00:00.000Z",
+    });
+
+    registry.mergePrincipals(
+      "principal-source",
+      "principal-target",
+      "2026-03-27T00:00:01.000Z",
+    );
+
+    assert.equal(
+      registry.getPrincipalSkill("principal-target", "shared-skill")?.description,
+      "target skill",
+    );
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
