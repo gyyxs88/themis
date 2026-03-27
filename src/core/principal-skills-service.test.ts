@@ -9,8 +9,16 @@ import { PrincipalSkillsService } from "./principal-skills-service.js";
 
 const PRINCIPAL_ID = "principal-local-owner";
 const requireFromHere = createRequire(import.meta.url);
+type ScriptExec = (
+  command: string[],
+  options?: { cwd?: string; env?: Record<string, string> },
+) => Promise<string>;
 
-function createService(): { service: PrincipalSkillsService; workingDirectory: string; registry: SqliteCodexSessionRegistry } {
+function createService(options: { execScript?: ScriptExec } = {}): {
+  service: PrincipalSkillsService;
+  workingDirectory: string;
+  registry: SqliteCodexSessionRegistry;
+} {
   const workingDirectory = mkdtempSync(join(tmpdir(), "themis-principal-skills-service-"));
   const registry = new SqliteCodexSessionRegistry({
     databaseFile: join(workingDirectory, "infra/local/themis.db"),
@@ -20,18 +28,22 @@ function createService(): { service: PrincipalSkillsService; workingDirectory: s
     service: new PrincipalSkillsService({
       workingDirectory,
       registry,
+      ...(options.execScript ? { execScript: options.execScript } : {}),
     }),
     workingDirectory,
     registry,
   };
 }
 
-function createServiceWithAccounts(accountIds: string[]): {
+function createServiceWithAccounts(
+  accountIds: string[],
+  options: { execScript?: ScriptExec } = {},
+): {
   service: PrincipalSkillsService;
   workingDirectory: string;
   registry: SqliteCodexSessionRegistry;
 } {
-  const context = createService();
+  const context = createService(options);
   const now = "2026-03-27T00:00:00.000Z";
 
   context.registry.savePrincipal({
@@ -101,6 +113,38 @@ function createSymlinkedLocalSkillFixture(input: {
   };
 }
 
+function resolveInstallerDest(command: string[]): string {
+  const destIndex = command.indexOf("--dest");
+
+  if (destIndex === -1 || !command[destIndex + 1]) {
+    throw new Error(`installer command missing --dest: ${command.join(" ")}`);
+  }
+
+  return command[destIndex + 1]!;
+}
+
+function writeInstalledSkillFromCommand(
+  command: string[],
+  input: { directoryName: string; skillName: string; description: string },
+): void {
+  const destRoot = resolveInstallerDest(command);
+  const skillDir = resolve(destRoot, input.directoryName);
+  mkdirSync(skillDir, { recursive: true });
+  writeFileSync(
+    resolve(skillDir, "SKILL.md"),
+    [
+      "---",
+      `name: ${input.skillName}`,
+      `description: ${input.description}`,
+      "---",
+      "",
+      "# Installed",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+}
+
 test("validateLocalSkillDirectory 会读取 SKILL.md frontmatter 并返回 canonical skill name", async () => {
   const { service, workingDirectory } = createService();
   const skillDir = createLocalSkillFixture({
@@ -118,6 +162,132 @@ test("validateLocalSkillDirectory 会读取 SKILL.md frontmatter 并返回 canon
     assert.equal(result.skillFilePath, resolve(skillDir, "SKILL.md"));
   } finally {
     rmSync(skillDir, { recursive: true, force: true });
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test("listCuratedSkills 会解析 skill-installer 的 json 输出", async () => {
+  const { service, workingDirectory } = createService({
+    execScript: async (command, options) => {
+      assert.match(command.join(" "), /list-skills\.py/);
+      assert.equal(command.includes("--format"), true);
+      assert.equal(command.includes("json"), true);
+      assert.equal(typeof options?.env?.CODEX_HOME, "string");
+      return JSON.stringify([{ name: "python-setup", installed: false }]);
+    },
+  });
+
+  try {
+    const result = await service.listCuratedSkills();
+
+    assert.deepEqual(result, [{ name: "python-setup", installed: false }]);
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test("installFromCurated 会调用 install-skill-from-github.py 安装到 staging 再转成 principal 受管 skill", async () => {
+  const { service, workingDirectory } = createServiceWithAccounts(["default"], {
+    execScript: async (command) => {
+      assert.match(command.join(" "), /install-skill-from-github\.py/);
+      assert.equal(command.includes("--repo"), true);
+      assert.equal(command.includes("openai/skills"), true);
+      assert.equal(command.includes("--path"), true);
+      assert.equal(command.includes("skills/.curated/python-setup"), true);
+      writeInstalledSkillFromCommand(command, {
+        directoryName: "python-setup",
+        skillName: "python-setup",
+        description: "python curated skill",
+      });
+      return "";
+    },
+  });
+
+  try {
+    const result = await service.installFromCurated({
+      principalId: PRINCIPAL_ID,
+      skillName: "python-setup",
+    });
+
+    assert.equal(result.skill.skillName, "python-setup");
+    assert.equal(result.skill.sourceType, "curated");
+    assert.equal(
+      result.skill.sourceRefJson,
+      JSON.stringify({ repo: "openai/skills", path: "skills/.curated/python-setup" }),
+    );
+    assert.equal(result.summary.syncedCount, 1);
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test("installFromGithub 会支持 repo/path 安装并记录来源", async () => {
+  const { service, workingDirectory } = createServiceWithAccounts(["default"], {
+    execScript: async (command) => {
+      assert.match(command.join(" "), /install-skill-from-github\.py/);
+      assert.equal(command.includes("--repo"), true);
+      assert.equal(command.includes("demo/repo"), true);
+      assert.equal(command.includes("--path"), true);
+      assert.equal(command.includes("skills/github-demo"), true);
+      assert.equal(command.includes("--ref"), true);
+      assert.equal(command.includes("feature-branch"), true);
+      writeInstalledSkillFromCommand(command, {
+        directoryName: "github-demo",
+        skillName: "github-demo",
+        description: "github repo skill",
+      });
+      return "";
+    },
+  });
+
+  try {
+    const result = await service.installFromGithub({
+      principalId: PRINCIPAL_ID,
+      repo: "demo/repo",
+      path: "skills/github-demo",
+      ref: "feature-branch",
+    });
+
+    assert.equal(result.skill.skillName, "github-demo");
+    assert.equal(result.skill.sourceType, "github-repo-path");
+    assert.equal(
+      result.skill.sourceRefJson,
+      JSON.stringify({ repo: "demo/repo", path: "skills/github-demo", ref: "feature-branch" }),
+    );
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test("installFromGithub 会支持 GitHub URL 安装并记录来源", async () => {
+  const { service, workingDirectory } = createServiceWithAccounts(["default"], {
+    execScript: async (command) => {
+      assert.match(command.join(" "), /install-skill-from-github\.py/);
+      assert.equal(command.includes("--url"), true);
+      assert.equal(command.includes("https://github.com/demo/repo/tree/main/skills/url-demo"), true);
+      assert.equal(command.includes("--repo"), false);
+      writeInstalledSkillFromCommand(command, {
+        directoryName: "url-demo",
+        skillName: "url-demo",
+        description: "github url skill",
+      });
+      return "";
+    },
+  });
+
+  try {
+    const result = await service.installFromGithub({
+      principalId: PRINCIPAL_ID,
+      url: "https://github.com/demo/repo/tree/main/skills/url-demo",
+    });
+
+    assert.equal(result.skill.skillName, "url-demo");
+    assert.equal(result.skill.sourceType, "github-url");
+    assert.equal(
+      result.skill.sourceRefJson,
+      JSON.stringify({ url: "https://github.com/demo/repo/tree/main/skills/url-demo" }),
+    );
+  } finally {
     rmSync(workingDirectory, { recursive: true, force: true });
   }
 });

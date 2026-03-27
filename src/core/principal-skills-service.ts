@@ -1,9 +1,11 @@
+import { spawn } from "node:child_process";
 import {
   cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   readlinkSync,
   renameSync,
@@ -11,18 +13,22 @@ import {
   statSync,
   symlinkSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type {
   SqliteCodexSessionRegistry,
   StoredAuthAccountRecord,
 } from "../storage/index.js";
 import {
+  buildCodexProcessEnv,
   ensureAuthAccountCodexHome,
   isManagedAuthAccountCodexHome,
   resolveAuthAccountSkillPath,
   resolveAuthAccountSkillsDirectory,
+  resolveDefaultCodexHome,
 } from "./auth-accounts.js";
 import type {
+  PrincipalSkillSourceType,
   StoredPrincipalSkillMaterializationRecord,
   StoredPrincipalSkillRecord,
 } from "./principal-skills.js";
@@ -37,6 +43,7 @@ export interface ValidatedSkillDirectory {
 export interface PrincipalSkillsServiceOptions {
   workingDirectory: string;
   registry: SqliteCodexSessionRegistry;
+  execScript?: ScriptExec;
 }
 
 export interface PrincipalSkillSyncSummary {
@@ -52,6 +59,18 @@ export interface PrincipalSkillInstallResult {
   summary: PrincipalSkillSyncSummary;
 }
 
+export interface CuratedSkillListItem {
+  name: string;
+  installed: boolean;
+}
+
+interface ScriptExecOptions {
+  cwd?: string;
+  env?: Record<string, string>;
+}
+
+type ScriptExec = (command: string[], options?: ScriptExecOptions) => Promise<string>;
+
 interface SyncAuthAccountOptions {
   force?: boolean;
 }
@@ -61,13 +80,43 @@ interface SkillMaterializationOutcome {
   issueMessage: string | null;
 }
 
+interface InstallValidatedSkillInput {
+  principalId: string;
+  sourcePath: string;
+  replace: boolean;
+  sourceType: PrincipalSkillSourceType;
+  sourceRefJson: string;
+}
+
+interface InstallFromValidatedStagingInput {
+  principalId: string;
+  stagingRoot: string;
+  replace: boolean;
+  sourceType: PrincipalSkillSourceType;
+  sourceRefJson: string;
+}
+
+const SYSTEM_SKILL_INSTALLER_ROOT = resolve(
+  homedir(),
+  ".codex",
+  "skills",
+  ".system",
+  "skill-installer",
+  "scripts",
+);
+const CURATED_SKILLS_REPO = "openai/skills";
+const CURATED_SKILLS_PATH = "skills/.curated";
+const DEFAULT_GITHUB_REF = "main";
+
 export class PrincipalSkillsService {
   private readonly workingDirectory: string;
   private readonly registry: SqliteCodexSessionRegistry;
+  private readonly execScript: ScriptExec;
 
   constructor(options: PrincipalSkillsServiceOptions) {
     this.workingDirectory = resolve(options.workingDirectory);
     this.registry = options.registry;
+    this.execScript = options.execScript ?? defaultExecScript;
   }
 
   async validateLocalSkillDirectory(skillPath: string): Promise<ValidatedSkillDirectory> {
@@ -101,40 +150,144 @@ export class PrincipalSkillsService {
     };
   }
 
+  async listCuratedSkills(): Promise<CuratedSkillListItem[]> {
+    const output = await this.execScript(
+      [
+        "python3",
+        this.resolveSystemSkillInstallerScript("list-skills.py"),
+        "--format",
+        "json",
+      ],
+      {
+        env: buildCodexProcessEnv(this.resolveCliCodexHome()),
+      },
+    );
+
+    return normalizeCuratedSkillList(JSON.parse(output));
+  }
+
   async installFromLocalPath(input: {
     principalId: string;
     absolutePath: string;
     replace?: boolean;
   }): Promise<PrincipalSkillInstallResult> {
     const principalId = normalizeRequiredText(input.principalId, "principalId 不能为空。");
+    const absolutePath = resolveAbsoluteSkillDirectory(input.absolutePath);
     const stagingRoot = this.createSkillInstallStagingRoot();
-    const stagedSkillPath = join(stagingRoot, basename(resolveAbsoluteSkillDirectory(input.absolutePath)));
+    const stagedSkillPath = join(stagingRoot, basename(absolutePath));
 
     try {
-      cpSync(resolveAbsoluteSkillDirectory(input.absolutePath), stagedSkillPath, { recursive: true });
+      cpSync(absolutePath, stagedSkillPath, { recursive: true });
 
-      const validated = await this.validateLocalSkillDirectory(stagedSkillPath);
-      const managedPath = this.resolveManagedSkillPath(principalId, validated.skillName);
-      const existing = this.registry.getPrincipalSkill(principalId, validated.skillName);
-      const now = new Date().toISOString();
-
-      this.prepareManagedSkillTarget(principalId, validated.skillName, input.replace === true);
-      this.writeManagedSkillDirectory(validated.sourcePath, managedPath, input.replace === true);
-
-      this.registry.savePrincipalSkill({
+      return await this.installFromValidatedStaging({
         principalId,
-        skillName: validated.skillName,
-        description: validated.description,
+        stagingRoot,
+        replace: input.replace === true,
         sourceType: "local-path",
-        sourceRefJson: JSON.stringify({ absolutePath: resolveAbsoluteSkillDirectory(input.absolutePath) }),
-        managedPath,
-        installStatus: "syncing",
-        createdAt: existing?.createdAt ?? now,
-        updatedAt: now,
+        sourceRefJson: JSON.stringify({ absolutePath }),
+      });
+    } finally {
+      rmSync(stagingRoot, { recursive: true, force: true });
+    }
+  }
+
+  async installFromCurated(input: {
+    principalId: string;
+    skillName: string;
+    replace?: boolean;
+  }): Promise<PrincipalSkillInstallResult> {
+    const principalId = normalizeRequiredText(input.principalId, "principalId 不能为空。");
+    const skillName = normalizeRequiredText(input.skillName, "skillName 不能为空。");
+
+    assertManagedSkillName(skillName);
+    const stagingRoot = this.createSkillInstallStagingRoot();
+    const repoPath = `${CURATED_SKILLS_PATH}/${skillName}`;
+
+    try {
+      await this.execScript(
+        [
+          "python3",
+          this.resolveSystemSkillInstallerScript("install-skill-from-github.py"),
+          "--repo",
+          CURATED_SKILLS_REPO,
+          "--path",
+          repoPath,
+          "--dest",
+          stagingRoot,
+        ],
+        {
+          env: buildCodexProcessEnv(this.resolveCliCodexHome()),
+        },
+      );
+
+      return await this.installFromValidatedStaging({
+        principalId,
+        stagingRoot,
+        replace: input.replace === true,
+        sourceType: "curated",
+        sourceRefJson: JSON.stringify({ repo: CURATED_SKILLS_REPO, path: repoPath }),
+      });
+    } finally {
+      rmSync(stagingRoot, { recursive: true, force: true });
+    }
+  }
+
+  async installFromGithub(input: {
+    principalId: string;
+    repo?: string;
+    path?: string;
+    url?: string;
+    ref?: string;
+    replace?: boolean;
+  }): Promise<PrincipalSkillInstallResult> {
+    const principalId = normalizeRequiredText(input.principalId, "principalId 不能为空。");
+    const url = normalizeOptionalText(input.url);
+    const repo = normalizeOptionalText(input.repo);
+    const path = normalizeOptionalText(input.path);
+    const ref = normalizeOptionalText(input.ref);
+    const stagingRoot = this.createSkillInstallStagingRoot();
+    const command = [
+      "python3",
+      this.resolveSystemSkillInstallerScript("install-skill-from-github.py"),
+      "--dest",
+      stagingRoot,
+    ];
+
+    if (url) {
+      if (repo || path) {
+        throw new Error("GitHub URL 安装模式下不能再传 repo/path。");
+      }
+
+      command.push("--url", url);
+    } else {
+      const normalizedRepo = normalizeRequiredText(repo ?? "", "repo 不能为空。");
+      const normalizedPath = normalizeRequiredText(path ?? "", "path 不能为空。");
+      command.push("--repo", normalizedRepo, "--path", normalizedPath);
+
+      if (ref) {
+        command.push("--ref", ref);
+      }
+    }
+
+    try {
+      await this.execScript(command, {
+        env: buildCodexProcessEnv(this.resolveCliCodexHome()),
       });
 
-      return await this.syncSkillToAllAuthAccounts(principalId, validated.skillName, {
-        force: input.replace === true,
+      return await this.installFromValidatedStaging({
+        principalId,
+        stagingRoot,
+        replace: input.replace === true,
+        sourceType: url ? "github-url" : "github-repo-path",
+        sourceRefJson: JSON.stringify(
+          url
+            ? { url }
+            : {
+              repo: repo!,
+              path: path!,
+              ref: ref ?? DEFAULT_GITHUB_REF,
+            },
+        ),
       });
     } finally {
       rmSync(stagingRoot, { recursive: true, force: true });
@@ -331,8 +484,54 @@ export class PrincipalSkillsService {
     return mkdtempSync(join(stagingBase, "install-"));
   }
 
+  private async installFromValidatedStaging(
+    input: InstallFromValidatedStagingInput,
+  ): Promise<PrincipalSkillInstallResult> {
+    return this.installValidatedSkill({
+      principalId: input.principalId,
+      sourcePath: resolveSingleSkillDirectory(input.stagingRoot),
+      replace: input.replace,
+      sourceType: input.sourceType,
+      sourceRefJson: input.sourceRefJson,
+    });
+  }
+
+  private async installValidatedSkill(input: InstallValidatedSkillInput): Promise<PrincipalSkillInstallResult> {
+    const validated = await this.validateLocalSkillDirectory(input.sourcePath);
+    const managedPath = this.resolveManagedSkillPath(input.principalId, validated.skillName);
+    const existing = this.registry.getPrincipalSkill(input.principalId, validated.skillName);
+    const now = new Date().toISOString();
+
+    this.prepareManagedSkillTarget(input.principalId, validated.skillName, input.replace);
+    this.writeManagedSkillDirectory(validated.sourcePath, managedPath, input.replace);
+
+    this.registry.savePrincipalSkill({
+      principalId: input.principalId,
+      skillName: validated.skillName,
+      description: validated.description,
+      sourceType: input.sourceType,
+      sourceRefJson: input.sourceRefJson,
+      managedPath,
+      installStatus: "syncing",
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    });
+
+    return this.syncSkillToAllAuthAccounts(input.principalId, validated.skillName, {
+      force: input.replace,
+    });
+  }
+
   private resolveManagedSkillPath(principalId: string, skillName: string): string {
     return resolve(this.workingDirectory, "infra/local/principals", principalId, "skills", skillName);
+  }
+
+  private resolveSystemSkillInstallerScript(scriptName: string): string {
+    return resolve(SYSTEM_SKILL_INSTALLER_ROOT, scriptName);
+  }
+
+  private resolveCliCodexHome(): string {
+    return resolveDefaultCodexHome();
   }
 
   private prepareManagedSkillTarget(principalId: string, skillName: string, replace: boolean): void {
@@ -414,6 +613,16 @@ function resolveAbsoluteSkillDirectory(skillPath: string): string {
   return resolve(normalized);
 }
 
+function resolveSingleSkillDirectory(stagingRoot: string): string {
+  const entries = readdirSync(stagingRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+
+  if (entries.length !== 1) {
+    throw new Error("staging 目录必须且只能包含一个技能目录。");
+  }
+
+  return resolve(stagingRoot, entries[0]!.name);
+}
+
 function parseSkillFrontmatter(markdown: string): { name: string; description: string } {
   const match = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---/);
 
@@ -449,6 +658,29 @@ function normalizeFrontmatterValue(value: string | undefined): string {
   return normalized;
 }
 
+function normalizeCuratedSkillList(value: unknown): CuratedSkillListItem[] {
+  if (!Array.isArray(value)) {
+    throw new Error("curated skills 输出必须是数组。");
+  }
+
+  return value.map((item) => {
+    if (!isRecord(item)) {
+      throw new Error("curated skill 条目格式不合法。");
+    }
+
+    const name = normalizeOptionalText(item.name);
+
+    if (!name) {
+      throw new Error("curated skill 条目缺少 name。");
+    }
+
+    return {
+      name,
+      installed: item.installed === true,
+    };
+  });
+}
+
 function assertManagedSkillName(skillName: string): void {
   if (skillName === ".system" || skillName.startsWith(".system/")) {
     throw new Error("不允许接管 .system 名称空间。");
@@ -467,6 +699,19 @@ function normalizeRequiredText(value: string, message: string): string {
   }
 
   return normalized;
+}
+
+function normalizeOptionalText(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized ? normalized : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function isExpectedSkillSymlink(targetPath: string, expectedPath: string): boolean {
@@ -551,4 +796,39 @@ function pickFirstIssue(materializations: StoredPrincipalSkillMaterializationRec
   }
 
   return undefined;
+}
+
+function defaultExecScript(command: string[], options: ScriptExecOptions = {}): Promise<string> {
+  if (command.length === 0) {
+    return Promise.reject(new Error("script command 不能为空。"));
+  }
+
+  return new Promise((resolvePromise, reject) => {
+    const [file, ...args] = command;
+    const child = spawn(file!, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (chunk: string | Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk: string | Buffer) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", (error) => {
+      reject(error);
+    });
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolvePromise(stdout.trim());
+        return;
+      }
+
+      reject(new Error(stderr.trim() || stdout.trim() || `脚本执行失败：${command.join(" ")}`));
+    });
+  });
 }
