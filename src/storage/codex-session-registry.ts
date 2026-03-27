@@ -6,6 +6,15 @@ import {
   normalizePrincipalTaskSettings,
 } from "../core/principal-task-settings.js";
 import {
+  normalizePrincipalSkillInstallStatus,
+  normalizePrincipalSkillMaterializationRecordInput,
+  normalizePrincipalSkillMaterializationState,
+  normalizePrincipalSkillRecordInput,
+  normalizePrincipalSkillSourceType,
+  type StoredPrincipalSkillMaterializationRecord,
+  type StoredPrincipalSkillRecord,
+} from "../core/principal-skills.js";
+import {
   isSessionTaskSettingsEmpty,
   normalizeSessionTaskSettings,
 } from "../core/session-task-settings.js";
@@ -19,7 +28,7 @@ import type {
   TaskResult,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 9;
+const DATABASE_SCHEMA_VERSION = 10;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -115,6 +124,30 @@ export interface StoredPrincipalTaskSettingsRecord {
   settings: PrincipalTaskSettings;
   createdAt: string;
   updatedAt: string;
+}
+
+interface PrincipalSkillRow {
+  principal_id: string;
+  skill_name: string;
+  description: string;
+  source_type: string;
+  source_ref_json: string;
+  managed_path: string;
+  install_status: string;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PrincipalSkillMaterializationRow {
+  principal_id: string;
+  skill_name: string;
+  target_kind: string;
+  target_id: string;
+  target_path: string;
+  state: string;
+  last_synced_at: string | null;
+  last_error: string | null;
 }
 
 export interface StoredPrincipalPersonaProfileRecord {
@@ -907,6 +940,306 @@ export class SqliteCodexSessionRegistry {
     return result.changes > 0;
   }
 
+  getPrincipalSkill(principalId: string, skillName: string): StoredPrincipalSkillRecord | null {
+    const normalizedPrincipalId = principalId.trim();
+    const normalizedSkillName = skillName.trim();
+
+    if (!normalizedPrincipalId || !normalizedSkillName) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            principal_id,
+            skill_name,
+            description,
+            source_type,
+            source_ref_json,
+            managed_path,
+            install_status,
+            last_error,
+            created_at,
+            updated_at
+          FROM themis_principal_skills
+          WHERE principal_id = ?
+            AND skill_name = ?
+        `,
+      )
+      .get(normalizedPrincipalId, normalizedSkillName) as PrincipalSkillRow | undefined;
+
+    return row ? mapPrincipalSkillRow(row) : null;
+  }
+
+  listPrincipalSkills(principalId: string): StoredPrincipalSkillRecord[] {
+    const normalizedPrincipalId = principalId.trim();
+
+    if (!normalizedPrincipalId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            principal_id,
+            skill_name,
+            description,
+            source_type,
+            source_ref_json,
+            managed_path,
+            install_status,
+            last_error,
+            created_at,
+            updated_at
+          FROM themis_principal_skills
+          WHERE principal_id = ?
+          ORDER BY skill_name ASC
+        `,
+      )
+      .all(normalizedPrincipalId) as PrincipalSkillRow[];
+
+    return rows.map(mapPrincipalSkillRow);
+  }
+
+  savePrincipalSkill(record: StoredPrincipalSkillRecord): void {
+    const normalizedRecord = normalizePrincipalSkillRecordInput(record);
+    const sourceType = normalizePrincipalSkillSourceType(normalizedRecord.sourceType);
+    const installStatus = normalizePrincipalSkillInstallStatus(normalizedRecord.installStatus);
+
+    if (
+      !normalizedRecord.principalId ||
+      !normalizedRecord.skillName ||
+      !normalizedRecord.description ||
+      !sourceType ||
+      !normalizedRecord.sourceRefJson ||
+      !normalizedRecord.managedPath ||
+      !installStatus ||
+      !normalizedRecord.createdAt ||
+      !normalizedRecord.updatedAt
+    ) {
+      throw new Error("Principal skill record is incomplete.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_principal_skills (
+            principal_id,
+            skill_name,
+            description,
+            source_type,
+            source_ref_json,
+            managed_path,
+            install_status,
+            last_error,
+            created_at,
+            updated_at
+          ) VALUES (
+            @principal_id,
+            @skill_name,
+            @description,
+            @source_type,
+            @source_ref_json,
+            @managed_path,
+            @install_status,
+            @last_error,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(principal_id, skill_name) DO UPDATE SET
+            description = excluded.description,
+            source_type = excluded.source_type,
+            source_ref_json = excluded.source_ref_json,
+            managed_path = excluded.managed_path,
+            install_status = excluded.install_status,
+            last_error = excluded.last_error,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        principal_id: normalizedRecord.principalId,
+        skill_name: normalizedRecord.skillName,
+        description: normalizedRecord.description,
+        source_type: sourceType,
+        source_ref_json: normalizedRecord.sourceRefJson,
+        managed_path: normalizedRecord.managedPath,
+        install_status: installStatus,
+        last_error: normalizedRecord.lastError ?? null,
+        created_at: normalizedRecord.createdAt,
+        updated_at: normalizedRecord.updatedAt,
+      });
+  }
+
+  deletePrincipalSkill(principalId: string, skillName: string): boolean {
+    const normalizedPrincipalId = principalId.trim();
+    const normalizedSkillName = skillName.trim();
+
+    if (!normalizedPrincipalId || !normalizedSkillName) {
+      return false;
+    }
+
+    const result = this.db
+      .prepare(
+        `
+          DELETE FROM themis_principal_skills
+          WHERE principal_id = ?
+            AND skill_name = ?
+        `,
+      )
+      .run(normalizedPrincipalId, normalizedSkillName);
+
+    return result.changes > 0;
+  }
+
+  savePrincipalSkillMaterialization(record: StoredPrincipalSkillMaterializationRecord): void {
+    const normalizedRecord = normalizePrincipalSkillMaterializationRecordInput(record);
+    const state = normalizePrincipalSkillMaterializationState(normalizedRecord.state);
+
+    if (
+      !normalizedRecord.principalId ||
+      !normalizedRecord.skillName ||
+      normalizedRecord.targetKind !== "auth-account" ||
+      !normalizedRecord.targetId ||
+      !normalizedRecord.targetPath ||
+      !state
+    ) {
+      throw new Error("Principal skill materialization record is incomplete.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_principal_skill_materializations (
+            principal_id,
+            skill_name,
+            target_kind,
+            target_id,
+            target_path,
+            state,
+            last_synced_at,
+            last_error
+          ) VALUES (
+            @principal_id,
+            @skill_name,
+            @target_kind,
+            @target_id,
+            @target_path,
+            @state,
+            @last_synced_at,
+            @last_error
+          )
+          ON CONFLICT(principal_id, skill_name, target_kind, target_id) DO UPDATE SET
+            target_path = excluded.target_path,
+            state = excluded.state,
+            last_synced_at = excluded.last_synced_at,
+            last_error = excluded.last_error
+        `,
+      )
+      .run({
+        principal_id: normalizedRecord.principalId,
+        skill_name: normalizedRecord.skillName,
+        target_kind: "auth-account",
+        target_id: normalizedRecord.targetId,
+        target_path: normalizedRecord.targetPath,
+        state,
+        last_synced_at: normalizedRecord.lastSyncedAt ?? null,
+        last_error: normalizedRecord.lastError ?? null,
+      });
+  }
+
+  listPrincipalSkillMaterializations(
+    principalId: string,
+    skillName?: string,
+  ): StoredPrincipalSkillMaterializationRecord[] {
+    const normalizedPrincipalId = principalId.trim();
+
+    if (!normalizedPrincipalId) {
+      return [];
+    }
+
+    if (typeof skillName === "string" && skillName.trim()) {
+      const normalizedSkillName = skillName.trim();
+      const rows = this.db
+        .prepare(
+          `
+            SELECT
+              principal_id,
+              skill_name,
+              target_kind,
+              target_id,
+              target_path,
+              state,
+              last_synced_at,
+              last_error
+            FROM themis_principal_skill_materializations
+            WHERE principal_id = ?
+              AND skill_name = ?
+            ORDER BY target_kind ASC, target_id ASC
+          `,
+        )
+        .all(normalizedPrincipalId, normalizedSkillName) as PrincipalSkillMaterializationRow[];
+
+      return rows.map(mapPrincipalSkillMaterializationRow);
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            principal_id,
+            skill_name,
+            target_kind,
+            target_id,
+            target_path,
+            state,
+            last_synced_at,
+            last_error
+          FROM themis_principal_skill_materializations
+          WHERE principal_id = ?
+          ORDER BY skill_name ASC, target_kind ASC, target_id ASC
+        `,
+      )
+      .all(normalizedPrincipalId) as PrincipalSkillMaterializationRow[];
+
+    return rows.map(mapPrincipalSkillMaterializationRow);
+  }
+
+  deletePrincipalSkillMaterializations(principalId: string, skillName?: string): number {
+    const normalizedPrincipalId = principalId.trim();
+
+    if (!normalizedPrincipalId) {
+      return 0;
+    }
+
+    if (typeof skillName === "string" && skillName.trim()) {
+      const normalizedSkillName = skillName.trim();
+      const result = this.db
+        .prepare(
+          `
+            DELETE FROM themis_principal_skill_materializations
+            WHERE principal_id = ?
+              AND skill_name = ?
+          `,
+        )
+        .run(normalizedPrincipalId, normalizedSkillName);
+
+      return result.changes;
+    }
+
+    const result = this.db
+      .prepare(
+        `
+          DELETE FROM themis_principal_skill_materializations
+          WHERE principal_id = ?
+        `,
+      )
+      .run(normalizedPrincipalId);
+
+    return result.changes;
+  }
+
   getPrincipalPersonaProfile(principalId: string): StoredPrincipalPersonaProfileRecord | null {
     const normalized = principalId.trim();
 
@@ -1510,6 +1843,24 @@ export class SqliteCodexSessionRegistry {
         )
         .run(normalizedPrincipalId)
         .changes > 0;
+
+      this.db
+        .prepare(
+          `
+            DELETE FROM themis_principal_skill_materializations
+            WHERE principal_id = ?
+          `,
+        )
+        .run(normalizedPrincipalId);
+
+      this.db
+        .prepare(
+          `
+            DELETE FROM themis_principal_skills
+            WHERE principal_id = ?
+          `,
+        )
+        .run(normalizedPrincipalId);
 
       const clearedLinkCodeCount = this.db
         .prepare(
@@ -2535,6 +2886,36 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_principal_task_settings_updated_at_idx
       ON themis_principal_task_settings(updated_at DESC);
 
+      CREATE TABLE IF NOT EXISTS themis_principal_skills (
+        principal_id TEXT NOT NULL,
+        skill_name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_ref_json TEXT NOT NULL,
+        managed_path TEXT NOT NULL,
+        install_status TEXT NOT NULL,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (principal_id, skill_name),
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS themis_principal_skill_materializations (
+        principal_id TEXT NOT NULL,
+        skill_name TEXT NOT NULL,
+        target_kind TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        target_path TEXT NOT NULL,
+        state TEXT NOT NULL,
+        last_synced_at TEXT,
+        last_error TEXT,
+        PRIMARY KEY (principal_id, skill_name, target_kind, target_id),
+        FOREIGN KEY (principal_id, skill_name)
+          REFERENCES themis_principal_skills(principal_id, skill_name)
+          ON DELETE CASCADE
+      );
+
       CREATE TABLE IF NOT EXISTS themis_principal_persona_profiles (
         principal_id TEXT PRIMARY KEY,
         profile_json TEXT NOT NULL,
@@ -2770,6 +3151,36 @@ export class SqliteCodexSessionRegistry {
 
       CREATE INDEX IF NOT EXISTS themis_principal_task_settings_updated_at_idx
       ON themis_principal_task_settings(updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS themis_principal_skills (
+        principal_id TEXT NOT NULL,
+        skill_name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_ref_json TEXT NOT NULL,
+        managed_path TEXT NOT NULL,
+        install_status TEXT NOT NULL,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (principal_id, skill_name),
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS themis_principal_skill_materializations (
+        principal_id TEXT NOT NULL,
+        skill_name TEXT NOT NULL,
+        target_kind TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        target_path TEXT NOT NULL,
+        state TEXT NOT NULL,
+        last_synced_at TEXT,
+        last_error TEXT,
+        PRIMARY KEY (principal_id, skill_name, target_kind, target_id),
+        FOREIGN KEY (principal_id, skill_name)
+          REFERENCES themis_principal_skills(principal_id, skill_name)
+          ON DELETE CASCADE
+      );
     `);
 
     const authAccountColumns = database
@@ -2898,6 +3309,36 @@ function mapPrincipalTaskSettingsRow(row: PrincipalTaskSettingsRow): StoredPrinc
     settings: normalizePrincipalTaskSettings(safeParseJson(row.settings_json)),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function mapPrincipalSkillRow(row: PrincipalSkillRow): StoredPrincipalSkillRecord {
+  return {
+    principalId: row.principal_id,
+    skillName: row.skill_name,
+    description: row.description,
+    sourceType: row.source_type as StoredPrincipalSkillRecord["sourceType"],
+    sourceRefJson: row.source_ref_json,
+    managedPath: row.managed_path,
+    installStatus: row.install_status as StoredPrincipalSkillRecord["installStatus"],
+    ...(row.last_error ? { lastError: row.last_error } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapPrincipalSkillMaterializationRow(
+  row: PrincipalSkillMaterializationRow,
+): StoredPrincipalSkillMaterializationRecord {
+  return {
+    principalId: row.principal_id,
+    skillName: row.skill_name,
+    targetKind: row.target_kind as StoredPrincipalSkillMaterializationRecord["targetKind"],
+    targetId: row.target_id,
+    targetPath: row.target_path,
+    state: row.state as StoredPrincipalSkillMaterializationRecord["state"],
+    ...(row.last_synced_at ? { lastSyncedAt: row.last_synced_at } : {}),
+    ...(row.last_error ? { lastError: row.last_error } : {}),
   };
 }
 
