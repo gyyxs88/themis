@@ -256,6 +256,366 @@ test("/settings 只返回下一层配置项", async () => {
   }
 });
 
+test("/help 会展示 /skills 第一层入口", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("help", []);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /\/skills 查看和维护当前 principal 的 skills/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/skills foo 会回退到 /skills 自己的帮助", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("skills", ["foo"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /Skills 管理：/);
+    assert.match(message, /\/skills curated/);
+    assert.match(message, /\/skills install local <ABSOLUTE_PATH>/);
+    assert.match(message, /第一版不支持带空格路径/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/skills 在无安装项时返回空列表提示", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("skills", []);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /当前 principal：principal-local-owner/);
+    assert.match(message, /暂无已安装 skill/);
+    assert.match(message, /查看：\/skills curated/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/skills list 会展示同步摘要和异常账号", async () => {
+  const harness = createHarness({
+    listItems: [
+      {
+        skillName: "demo-skill",
+        description: "demo",
+        installStatus: "partially_synced",
+        sourceType: "local-path",
+        sourceRefJson: JSON.stringify({ absolutePath: "/srv/demo-skill" }),
+        managedPath: "/srv/themis/skills/demo-skill",
+        summary: { totalAccounts: 2, syncedCount: 1, conflictCount: 0, failedCount: 1 },
+        materializations: [
+          { targetId: "acc-1", state: "synced" },
+          { targetId: "acc-2", state: "failed", lastError: "quota blocked" },
+        ],
+      },
+    ],
+  });
+
+  try {
+    await harness.handleCommand("skills", ["list"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /1\. demo-skill/);
+    assert.match(message, /已同步 1\/2，冲突 0，失败 1/);
+    assert.match(message, /账号槽位 acc-2 \[failed\]：quota blocked/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/skills curated 会展示 curated 列表和安装状态", async () => {
+  const harness = createHarness({
+    curatedItems: [
+      { name: "python-setup", installed: true },
+      { name: "debugger", installed: false },
+    ],
+  });
+
+  try {
+    await harness.handleCommand("skills", ["curated"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /当前 principal：principal-local-owner/);
+    assert.match(message, /1\. python-setup \[已安装\]/);
+    assert.match(message, /2\. debugger \[未安装\]/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/skills install local 会调用本机路径安装写操作", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("skills", ["install", "local", "/srv/themis/skills/demo-skill"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /技能已安装：demo-skill/);
+    assert.match(message, /安装状态：ready/);
+    assert.match(message, /安装来源：本机路径 \/srv\/themis\/skills\/demo-skill/);
+    assert.deepEqual(harness.getSkillWriteCalls(), [
+      {
+        method: "installFromLocalPath",
+        principalId: "principal-local-owner",
+        absolutePath: "/srv/themis/skills/demo-skill",
+      },
+    ]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/skills install url 会调用 GitHub URL 安装写操作", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("skills", [
+      "install",
+      "url",
+      "https://github.com/demo/repo/tree/main/skills/url-skill",
+    ]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /技能已安装：url-skill/);
+    assert.match(message, /安装来源：GitHub URL https:\/\/github\.com\/demo\/repo\/tree\/main\/skills\/url-skill/);
+    assert.deepEqual(harness.getSkillWriteCalls(), [
+      {
+        method: "installFromGithub",
+        principalId: "principal-local-owner",
+        url: "https://github.com/demo/repo/tree/main/skills/url-skill",
+      },
+    ]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/skills install url <url> <ref> 会透传可选 ref", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("skills", [
+      "install",
+      "url",
+      "https://github.com/demo/repo/tree/main/skills/url-skill",
+      "release-2026",
+    ]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /技能已安装：url-skill/);
+    assert.match(message, /GitHub ref：release-2026/);
+    assert.deepEqual(harness.getSkillWriteCalls(), [
+      {
+        method: "installFromGithub",
+        principalId: "principal-local-owner",
+        url: "https://github.com/demo/repo/tree/main/skills/url-skill",
+        ref: "release-2026",
+      },
+    ]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/skills install repo 会调用 GitHub repo/path 安装写操作", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("skills", ["install", "repo", "demo/repo", "skills/repo-skill", "release-2026"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /技能已安装：repo-skill/);
+    assert.match(message, /安装来源：GitHub 仓库 demo\/repo skills\/repo-skill/);
+    assert.match(message, /GitHub ref：release-2026/);
+    assert.deepEqual(harness.getSkillWriteCalls(), [
+      {
+        method: "installFromGithub",
+        principalId: "principal-local-owner",
+        repo: "demo/repo",
+        path: "skills/repo-skill",
+        ref: "release-2026",
+      },
+    ]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/skills install curated 会调用 curated 安装写操作", async () => {
+  const harness = createHarness({
+    curatedItems: [
+      { name: "python-setup", installed: false },
+    ],
+  });
+
+  try {
+    await harness.handleCommand("skills", ["install", "curated", "python-setup"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /技能已安装：python-setup/);
+    assert.match(message, /安装来源：curated skill python-setup/);
+    assert.deepEqual(harness.getSkillWriteCalls(), [
+      {
+        method: "installFromCurated",
+        principalId: "principal-local-owner",
+        skillName: "python-setup",
+      },
+    ]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/skills remove <name> 会调用删除写操作", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("skills", ["install", "local", "/srv/themis/skills/demo-skill"]);
+    harness.takeSingleMessage();
+
+    await harness.handleCommand("skills", ["remove", "demo-skill"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /技能已删除：demo-skill/);
+    assert.match(message, /已删除受管目录：是/);
+    assert.deepEqual(harness.getSkillWriteCalls().map((call) => call.method), [
+      "installFromLocalPath",
+      "removeSkill",
+    ]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/skills sync <name> 会调用同步写操作", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("skills", ["install", "local", "/srv/themis/skills/demo-skill"]);
+    harness.takeSingleMessage();
+
+    await harness.handleCommand("skills", ["sync", "demo-skill"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /已重同步 skill：demo-skill/);
+    assert.match(message, /安装状态：ready/);
+    assert.match(message, /已同步 2\/2，冲突 0，失败 0/);
+    assert.deepEqual(harness.getSkillWriteCalls().map((call) => call.method), [
+      "installFromLocalPath",
+      "syncSkill",
+    ]);
+    assert.deepEqual(harness.getSkillWriteCalls()[1], {
+      method: "syncSkill",
+      principalId: "principal-local-owner",
+      skillName: "demo-skill",
+      force: false,
+    });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/skills sync <name> force 会以自然语言参数触发强制同步", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("skills", ["install", "local", "/srv/themis/skills/demo-skill"]);
+    harness.takeSingleMessage();
+
+    await harness.handleCommand("skills", ["sync", "demo-skill", "force"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /已重同步 skill：demo-skill/);
+    assert.match(message, /模式：强制同步/);
+    assert.match(message, /安装状态：ready/);
+    assert.match(message, /已同步 2\/2，冲突 0，失败 0/);
+    assert.deepEqual(harness.getSkillWriteCalls()[1], {
+      method: "syncSkill",
+      principalId: "principal-local-owner",
+      skillName: "demo-skill",
+      force: true,
+    });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/skills install 缺参数或未知 mode 时会返回清晰用法", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("skills", ["install"]);
+    const missingMode = harness.takeSingleMessage();
+    assert.match(missingMode, /\/skills install <local\|url\|repo\|curated>/);
+    assert.match(missingMode, /\/skills install url <GITHUB_URL> \[REF\]/);
+
+    await harness.handleCommand("skills", ["install", "foo"]);
+    const unknownMode = harness.takeSingleMessage();
+    assert.match(unknownMode, /未识别的 install 模式：foo/);
+    assert.match(unknownMode, /\/skills install repo <REPO> <PATH> \[REF\]/);
+
+    await harness.handleCommand("skills", ["remove"]);
+    const missingRemove = harness.takeSingleMessage();
+    assert.match(missingRemove, /\/skills remove <SKILL_NAME>/);
+
+    await harness.handleCommand("skills", ["sync"]);
+    const missingSync = harness.takeSingleMessage();
+    assert.match(missingSync, /\/skills sync <SKILL_NAME> \[force\]/);
+    assert.match(missingSync, /force 是自然语言参数/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/skills install local 缺路径时返回 local 的明确用法", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("skills", ["install", "local"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /用法：\/skills install local <ABSOLUTE_PATH>/);
+    assert.doesNotMatch(message, /未识别的 install 模式：local/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/skills remove 缺少名称时返回 remove 的明确用法", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("skills", ["remove"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /用法：\/skills remove <SKILL_NAME>/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/skills ls 不作为 list 别名，而是回退到 /skills 帮助", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("skills", ["ls"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /未识别的 skills 子命令：ls/);
+    assert.match(message, /\/skills list 查看当前 principal 已安装的 skills/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("/settings network 只展示当前值和选项，不会修改 principal 配置", async () => {
   const harness = createHarness();
 
@@ -411,7 +771,53 @@ test("飞书文本发送会记录接口耗时日志", async () => {
   }
 });
 
-function createHarness(runtimeCatalog = createRuntimeCatalog()) {
+type FeishuHarnessSkillItem = {
+  skillName: string;
+  description: string;
+  installStatus: string;
+  sourceType: string;
+  sourceRefJson: string;
+  managedPath: string;
+  summary: { totalAccounts: number; syncedCount: number; conflictCount: number; failedCount: number };
+  materializations: Array<{ targetId: string; state: string; lastError?: string }>;
+  lastError?: string;
+};
+
+type FeishuHarnessCuratedItem = { name: string; installed: boolean };
+
+type FeishuHarnessSkillCall =
+  | { method: "installFromLocalPath"; principalId: string; absolutePath: string; replace?: boolean }
+  | {
+    method: "installFromGithub";
+    principalId: string;
+    repo?: string;
+    path?: string;
+    url?: string;
+    ref?: string;
+    replace?: boolean;
+  }
+  | { method: "installFromCurated"; principalId: string; skillName: string; replace?: boolean }
+  | { method: "removeSkill"; principalId: string; skillName: string }
+  | { method: "syncSkill"; principalId: string; skillName: string; force?: boolean };
+
+function createHarness(
+  runtimeCatalogOrSkillsOverrides?: CodexRuntimeCatalog | {
+    listItems?: Array<FeishuHarnessSkillItem>;
+    curatedItems?: Array<FeishuHarnessCuratedItem>;
+  },
+  skillsOverrides?: {
+    listItems?: Array<FeishuHarnessSkillItem>;
+    curatedItems?: Array<FeishuHarnessCuratedItem>;
+  },
+) {
+  const runtimeCatalog =
+    runtimeCatalogOrSkillsOverrides && "models" in runtimeCatalogOrSkillsOverrides
+      ? runtimeCatalogOrSkillsOverrides
+      : createRuntimeCatalog();
+  const normalizedSkillsOverrides =
+    runtimeCatalogOrSkillsOverrides && "models" in runtimeCatalogOrSkillsOverrides
+      ? skillsOverrides
+      : runtimeCatalogOrSkillsOverrides;
   const workingDirectory = mkdtempSync(join(tmpdir(), "themis-feishu-service-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(workingDirectory, "infra/local/themis.db"),
@@ -434,9 +840,167 @@ function createHarness(runtimeCatalog = createRuntimeCatalog()) {
       codexHome: "/tmp/codex-beta",
     },
   ];
+  const skillsState = {
+    listItems: normalizedSkillsOverrides?.listItems ?? [],
+    curatedItems: normalizedSkillsOverrides?.curatedItems ?? [],
+    writeCalls: [] as FeishuHarnessSkillCall[],
+  };
+  function currentPrincipalId(): string {
+    return ensurePrincipalId();
+  }
+
+  function buildManagedPath(skillName: string): string {
+    return join(workingDirectory, "infra/local/principals", currentPrincipalId(), "skills", skillName);
+  }
+
+  function buildSkillSummary(totalAccounts = accounts.length) {
+    return {
+      totalAccounts,
+      syncedCount: totalAccounts,
+      conflictCount: 0,
+      failedCount: 0,
+    };
+  }
+
+  function buildSkillMaterializations(totalAccounts = accounts.length) {
+    return accounts.slice(0, totalAccounts).map((account) => ({
+      targetId: account.accountId,
+      state: "synced",
+    }));
+  }
+
+  function buildSkillItem(input: {
+    skillName: string;
+    description?: string;
+    sourceType: string;
+    sourceRefJson: string;
+    installStatus?: string;
+  }): FeishuHarnessSkillItem {
+    return {
+      skillName: input.skillName,
+      description: input.description ?? `${input.skillName} description`,
+      installStatus: input.installStatus ?? "ready",
+      sourceType: input.sourceType,
+      sourceRefJson: input.sourceRefJson,
+      managedPath: buildManagedPath(input.skillName),
+      summary: buildSkillSummary(),
+      materializations: buildSkillMaterializations(),
+    };
+  }
+
+  function upsertSkillItem(item: FeishuHarnessSkillItem): void {
+    const index = skillsState.listItems.findIndex((existing) => existing.skillName === item.skillName);
+    if (index >= 0) {
+      skillsState.listItems[index] = item;
+      return;
+    }
+    skillsState.listItems.push(item);
+  }
+
+  function syncCuratedInstalledFlag(skillName: string, installed: boolean): void {
+    const existing = skillsState.curatedItems.find((item) => item.name === skillName);
+    if (existing) {
+      existing.installed = installed;
+      return;
+    }
+    skillsState.curatedItems.push({ name: skillName, installed });
+  }
+
+  function removeSkillItem(skillName: string): FeishuHarnessSkillItem {
+    const index = skillsState.listItems.findIndex((item) => item.skillName === skillName);
+    if (index === -1) {
+      throw new Error(`技能 ${skillName} 不存在。`);
+    }
+    const [removed] = skillsState.listItems.splice(index, 1);
+    if (!removed) {
+      throw new Error(`技能 ${skillName} 删除失败。`);
+    }
+    syncCuratedInstalledFlag(skillName, false);
+    return removed;
+  }
+
+  const principalSkillsService = {
+    listPrincipalSkills: () => skillsState.listItems,
+    listCuratedSkills: async () => skillsState.curatedItems,
+    installFromLocalPath: async (input: { principalId: string; absolutePath: string; replace?: boolean }) => {
+      skillsState.writeCalls.push({ method: "installFromLocalPath", ...input });
+      const skillName = input.absolutePath.split("/").filter(Boolean).pop() ?? "local-skill";
+      const item = buildSkillItem({
+        skillName,
+        description: `installed from local path ${input.absolutePath}`,
+        sourceType: "local-path",
+        sourceRefJson: JSON.stringify({ absolutePath: input.absolutePath }),
+      });
+      upsertSkillItem(item);
+      syncCuratedInstalledFlag(skillName, true);
+      return { skill: item, materializations: item.materializations, summary: item.summary };
+    },
+    installFromGithub: async (input: {
+      principalId: string;
+      repo?: string;
+      path?: string;
+      url?: string;
+      ref?: string;
+      replace?: boolean;
+    }) => {
+      skillsState.writeCalls.push({ method: "installFromGithub", ...input });
+      const skillName = (input.path ?? input.url ?? "github-skill").split("/").filter(Boolean).pop() ?? "github-skill";
+      const sourceRefJson = input.url
+        ? JSON.stringify({ url: input.url, ...(input.ref ? { ref: input.ref } : {}) })
+        : JSON.stringify({ repo: input.repo, path: input.path, ...(input.ref ? { ref: input.ref } : {}) });
+      const sourceType = input.url ? "github-url" : "github-repo-path";
+      const item = buildSkillItem({
+        skillName,
+        description: `installed from ${sourceType}`,
+        sourceType,
+        sourceRefJson,
+      });
+      upsertSkillItem(item);
+      syncCuratedInstalledFlag(skillName, true);
+      return { skill: item, materializations: item.materializations, summary: item.summary };
+    },
+    installFromCurated: async (input: { principalId: string; skillName: string; replace?: boolean }) => {
+      skillsState.writeCalls.push({ method: "installFromCurated", ...input });
+      const item = buildSkillItem({
+        skillName: input.skillName,
+        description: `installed curated skill ${input.skillName}`,
+        sourceType: "curated",
+        sourceRefJson: JSON.stringify({ repo: "openai/skills", path: `skills/.curated/${input.skillName}` }),
+      });
+      upsertSkillItem(item);
+      syncCuratedInstalledFlag(input.skillName, true);
+      return { skill: item, materializations: item.materializations, summary: item.summary };
+    },
+    removeSkill: (principalId: string, skillName: string) => {
+      skillsState.writeCalls.push({ method: "removeSkill", principalId, skillName });
+      const removed = removeSkillItem(skillName);
+      return {
+        skillName: removed.skillName,
+        removedManagedPath: true,
+        removedMaterializations: removed.materializations.length,
+      };
+    },
+    syncSkill: async (principalId: string, skillName: string, options?: { force?: boolean }) => {
+      skillsState.writeCalls.push({
+        method: "syncSkill",
+        principalId,
+        skillName,
+        ...(typeof options?.force === "boolean" ? { force: options.force } : {}),
+      });
+      const item = skillsState.listItems.find((entry) => entry.skillName === skillName);
+      if (!item) {
+        throw new Error(`技能 ${skillName} 不存在。`);
+      }
+      item.summary = buildSkillSummary();
+      item.materializations = buildSkillMaterializations();
+      item.installStatus = "ready";
+      return { skill: item, materializations: item.materializations, summary: item.summary };
+    },
+  };
   const runtime = {
     getRuntimeStore: () => runtimeStore,
     getIdentityLinkService: () => identityService,
+    getPrincipalSkillsService: () => principalSkillsService,
     readRuntimeConfig: async (): Promise<CodexRuntimeCatalog> => runtimeCatalog,
     getPrincipalTaskSettings: (principalId?: string): PrincipalTaskSettings | null => {
       if (!principalId) {
@@ -542,6 +1106,9 @@ function createHarness(runtimeCatalog = createRuntimeCatalog()) {
     takeSingleMessage() {
       assert.equal(messages.length, 1);
       return messages.pop() ?? "";
+    },
+    getSkillWriteCalls() {
+      return [...skillsState.writeCalls];
     },
     getInfoLogs() {
       return [...loggerState.infoLogs];

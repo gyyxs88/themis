@@ -289,6 +289,9 @@ export class FeishuChannelService {
       case "balance":
         await this.sendQuota(context.chatId, context);
         return;
+      case "skills":
+        await this.handleSkillsCommand(command.args, context);
+        return;
       case "current":
         await this.sendCurrentSession(context.chatId, context);
         return;
@@ -1039,6 +1042,7 @@ export class FeishuChannelService {
       "/current 查看当前会话",
       "/workspace 查看或设置当前会话工作区",
       "/settings 查看设置树",
+      "/skills 查看和维护当前 principal 的 skills",
       "/link <绑定码> 可选：认领一个旧 Web 浏览器身份",
       "/reset confirm 清空当前 principal 的人格档案、历史和默认配置，并重新开始",
       "/msgupdate 测试机器人是否能原地更新自己刚发出的文本消息",
@@ -1052,6 +1056,444 @@ export class FeishuChannelService {
     ].join("\n");
 
     await this.safeSendText(chatId, helpText);
+  }
+
+  private async handleSkillsCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const subcommand = normalizeText(args[0])?.toLowerCase() ?? "";
+
+    switch (subcommand) {
+      case "":
+      case "list":
+        await this.sendSkillsList(context.chatId, context);
+        return;
+      case "curated":
+        await this.sendSkillsCurated(context.chatId, context);
+        return;
+      case "install":
+        await this.handleSkillsInstallCommand(args.slice(1), context);
+        return;
+      case "remove":
+        await this.handleSkillsRemoveCommand(args.slice(1), context);
+        return;
+      case "sync":
+        await this.handleSkillsSyncCommand(args.slice(1), context);
+        return;
+      default:
+        await this.sendSkillsHelp(context.chatId, context, subcommand);
+        return;
+    }
+  }
+
+  private async handleSkillsInstallCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const mode = normalizeText(args[0])?.toLowerCase() ?? "";
+
+    switch (mode) {
+      case "local":
+        await this.installSkillsFromLocal(args.slice(1), context);
+        return;
+      case "url":
+        await this.installSkillsFromUrl(args.slice(1), context);
+        return;
+      case "repo":
+        await this.installSkillsFromRepo(args.slice(1), context);
+        return;
+      case "curated":
+        await this.installSkillsFromCurated(args.slice(1), context);
+        return;
+      case "":
+        await this.sendSkillsInstallHelp(context.chatId, context);
+        return;
+      default:
+        await this.sendSkillsInstallHelp(context.chatId, context, {
+          invalidMode: mode,
+        });
+        return;
+    }
+  }
+
+  private async handleSkillsRemoveCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const skillName = normalizeText(args[0]);
+
+    if (!skillName || args.length !== 1) {
+      await this.sendSkillsRemoveHelp(context.chatId, context, args.join(" ") || undefined);
+      return;
+    }
+
+    const principal = this.ensurePrincipalIdentity(context);
+    const result = this.runtime.getPrincipalSkillsService().removeSkill(principal.principalId, skillName);
+
+    await this.safeSendText(
+      context.chatId,
+      [
+        `当前 principal：${principal.principalId}`,
+        `技能已删除：${result.skillName}`,
+        `已清理账号同步链接：${result.removedMaterializations}`,
+        `已删除受管目录：${result.removedManagedPath ? "是" : "否"}`,
+        "查看：/skills list",
+      ].join("\n"),
+    );
+  }
+
+  private async handleSkillsSyncCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const skillName = normalizeText(args[0]);
+    const syncMode = normalizeText(args[1])?.toLowerCase() ?? "";
+    const force = syncMode === "" ? false : parseSkillsSyncForceArgument(syncMode);
+
+    if (!skillName || args.length > 2 || (args.length === 2 && force === null)) {
+      await this.sendSkillsSyncHelp(context.chatId, context, skillName ?? undefined, args.slice(1).join(" ") || undefined);
+      return;
+    }
+
+    const principal = this.ensurePrincipalIdentity(context);
+    const result = await this.runtime.getPrincipalSkillsService().syncSkill(principal.principalId, skillName, {
+      force: force === true,
+    });
+
+    await this.safeSendText(
+      context.chatId,
+      [
+        `当前 principal：${principal.principalId}`,
+        `已重同步 skill：${result.skill.skillName}`,
+        force ? "模式：强制同步" : null,
+        `安装状态：${result.skill.installStatus}`,
+        formatSkillSyncSummary(result.summary),
+        result.skill.lastError ? `最近错误：${result.skill.lastError}` : null,
+        "查看：/skills list",
+      ].filter((line): line is string => line !== null).join("\n"),
+    );
+  }
+
+  private async installSkillsFromLocal(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const absolutePath = normalizeText(args[0]);
+    const invalidValue = args.join(" ");
+
+    if (!absolutePath || args.length !== 1) {
+      await this.sendSkillsInstallHelp(context.chatId, context, {
+        usageLine: "用法：/skills install local <ABSOLUTE_PATH>",
+        ...(invalidValue ? { invalidValue } : {}),
+      });
+      return;
+    }
+
+    const principal = this.ensurePrincipalIdentity(context);
+    const result = await this.runtime.getPrincipalSkillsService().installFromLocalPath({
+      principalId: principal.principalId,
+      absolutePath,
+    });
+
+    await this.sendSkillsInstallResult(
+      context.chatId,
+      principal.principalId,
+      result.skill.skillName,
+      result.skill.installStatus,
+      result.skill.lastError,
+      [
+      `安装来源：本机路径 ${absolutePath}`,
+      formatSkillSyncSummary(result.summary),
+      ],
+    );
+  }
+
+  private async installSkillsFromUrl(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const url = normalizeText(args[0]);
+    const ref = normalizeText(args[1]);
+    const invalidValue = args.join(" ");
+
+    if (!url || args.length > 2) {
+      await this.sendSkillsInstallHelp(context.chatId, context, {
+        usageLine: "用法：/skills install url <GITHUB_URL> [REF]",
+        ...(invalidValue ? { invalidValue } : {}),
+      });
+      return;
+    }
+
+    const principal = this.ensurePrincipalIdentity(context);
+    const result = await this.runtime.getPrincipalSkillsService().installFromGithub({
+      principalId: principal.principalId,
+      url,
+      ...(ref ? { ref } : {}),
+    });
+
+    await this.sendSkillsInstallResult(
+      context.chatId,
+      principal.principalId,
+      result.skill.skillName,
+      result.skill.installStatus,
+      result.skill.lastError,
+      [
+      `安装来源：GitHub URL ${url}`,
+      ref ? `GitHub ref：${ref}` : null,
+      formatSkillSyncSummary(result.summary),
+      ],
+    );
+  }
+
+  private async installSkillsFromRepo(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const repo = normalizeText(args[0]);
+    const path = normalizeText(args[1]);
+    const ref = normalizeText(args[2]);
+    const invalidValue = args.join(" ");
+
+    if (!repo || !path || args.length > 3) {
+      await this.sendSkillsInstallHelp(context.chatId, context, {
+        usageLine: "用法：/skills install repo <REPO> <PATH> [REF]",
+        ...(invalidValue ? { invalidValue } : {}),
+      });
+      return;
+    }
+
+    const principal = this.ensurePrincipalIdentity(context);
+    const result = await this.runtime.getPrincipalSkillsService().installFromGithub({
+      principalId: principal.principalId,
+      repo,
+      path,
+      ...(ref ? { ref } : {}),
+    });
+
+    await this.sendSkillsInstallResult(
+      context.chatId,
+      principal.principalId,
+      result.skill.skillName,
+      result.skill.installStatus,
+      result.skill.lastError,
+      [
+      `安装来源：GitHub 仓库 ${repo} ${path}`,
+      ref ? `GitHub ref：${ref}` : null,
+      formatSkillSyncSummary(result.summary),
+      ],
+    );
+  }
+
+  private async installSkillsFromCurated(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const skillName = normalizeText(args[0]);
+    const invalidValue = args.join(" ");
+
+    if (!skillName || args.length !== 1) {
+      await this.sendSkillsInstallHelp(context.chatId, context, {
+        usageLine: "用法：/skills install curated <SKILL_NAME>",
+        ...(invalidValue ? { invalidValue } : {}),
+      });
+      return;
+    }
+
+    const principal = this.ensurePrincipalIdentity(context);
+    const result = await this.runtime.getPrincipalSkillsService().installFromCurated({
+      principalId: principal.principalId,
+      skillName,
+    });
+
+    await this.sendSkillsInstallResult(
+      context.chatId,
+      principal.principalId,
+      result.skill.skillName,
+      result.skill.installStatus,
+      result.skill.lastError,
+      [
+      `安装来源：curated skill ${skillName}`,
+      formatSkillSyncSummary(result.summary),
+      ],
+    );
+  }
+
+  private async sendSkillsHelp(
+    chatId: string,
+    context: FeishuIncomingContext,
+    invalidSegment?: string,
+  ): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const lines = [
+      "Skills 管理：",
+      `当前 principal：${principal.principalId}`,
+      invalidSegment ? `未识别的 skills 子命令：${invalidSegment}` : null,
+      "/skills 查看和维护当前 principal 的 skills",
+      "/skills list 查看当前 principal 已安装的 skills",
+      "/skills curated 查看可安装的 curated skills",
+      "/skills install local <ABSOLUTE_PATH> 从本机绝对路径安装 skill（第一版不支持带空格路径）",
+      "/skills install url <GITHUB_URL> [REF] 从 GitHub URL 安装 skill",
+      "/skills install repo <REPO> <PATH> [REF] 从 GitHub 仓库路径安装 skill",
+      "/skills install curated <SKILL_NAME> 从 curated 列表安装 skill",
+      "/skills remove <SKILL_NAME> 删除已安装 skill",
+      "/skills sync <SKILL_NAME> [force] 重新同步 skill 到当前 principal 的所有账号槽位",
+      "",
+      "如果想查看已安装项，请发送 /skills list。",
+      "如果想查看可安装项，请发送 /skills curated。",
+    ].filter((line): line is string => line !== null);
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendSkillsInstallHelp(
+    chatId: string,
+    context: FeishuIncomingContext,
+    options: {
+      invalidMode?: string;
+      usageLine?: string;
+      invalidValue?: string;
+    } = {},
+  ): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const lines = [
+      options.invalidMode ? `未识别的 install 模式：${options.invalidMode}` : null,
+      options.usageLine ?? "用法：/skills install <local|url|repo|curated>",
+      `当前 principal：${principal.principalId}`,
+      options.invalidValue ? `参数不完整或格式不正确：${options.invalidValue}` : null,
+      "/skills install local <ABSOLUTE_PATH> 从本机绝对路径安装 skill（第一版不支持带空格路径）",
+      "/skills install url <GITHUB_URL> [REF] 从 GitHub URL 安装 skill",
+      "/skills install repo <REPO> <PATH> [REF] 从 GitHub 仓库路径安装 skill",
+      "/skills install curated <SKILL_NAME> 从 curated 列表安装 skill",
+      "",
+      "如果想查看已安装项，请发送 /skills list。",
+      "如果想查看可安装项，请发送 /skills curated。",
+    ].filter((line): line is string => line !== null);
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendSkillsRemoveHelp(
+    chatId: string,
+    context: FeishuIncomingContext,
+    invalidValue?: string,
+  ): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const lines = [
+      "用法：/skills remove <SKILL_NAME>",
+      `当前 principal：${principal.principalId}`,
+      invalidValue ? `参数不完整或格式不正确：${invalidValue}` : null,
+      "/skills remove <SKILL_NAME> 删除已安装 skill",
+      "",
+      "如果想查看已安装项，请发送 /skills list。",
+    ].filter((line): line is string => line !== null);
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendSkillsSyncHelp(
+    chatId: string,
+    context: FeishuIncomingContext,
+    skillName?: string,
+    invalidValue?: string,
+  ): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const lines = [
+      "用法：/skills sync <SKILL_NAME> [force]",
+      `当前 principal：${principal.principalId}`,
+      !skillName ? "缺少 skill 名称。" : null,
+      invalidValue ? `未识别的同步参数：${invalidValue}` : null,
+      "/skills sync <SKILL_NAME> [force] 重新同步 skill 到当前 principal 的所有账号槽位",
+      "",
+      "force 是自然语言参数，例如：/skills sync demo-skill force",
+      "如果想查看已安装项，请发送 /skills list。",
+    ].filter((line): line is string => line !== null);
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendSkillsInstallResult(
+    chatId: string,
+    principalId: string,
+    skillName: string,
+    installStatus: string,
+    lastError: string | null | undefined,
+    sourceLines: Array<string | null>,
+  ): Promise<void> {
+    const lines = [
+      `当前 principal：${principalId}`,
+      `技能已安装：${skillName}`,
+      `安装状态：${installStatus}`,
+      ...sourceLines.filter((line): line is string => typeof line === "string" && line.trim().length > 0),
+      lastError ? `最近错误：${lastError}` : null,
+      "查看：/skills list",
+    ].filter((line): line is string => line !== null);
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendSkillsList(chatId: string, context: FeishuIncomingContext): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const skills = this.runtime.getPrincipalSkillsService().listPrincipalSkills(principal.principalId);
+
+    if (!skills.length) {
+      await this.safeSendText(
+        chatId,
+        [
+          `当前 principal：${principal.principalId}`,
+          "已安装 skills",
+          "已安装总数：0",
+          "暂无已安装 skill。",
+          "查看：/skills curated",
+        ].join("\n"),
+      );
+      return;
+    }
+
+    const lines = [
+      `当前 principal：${principal.principalId}`,
+      "已安装 skills",
+      `已安装总数：${skills.length}`,
+      "",
+      ...skills.flatMap((skill, index) => {
+        const linesForSkill = [
+          `${index + 1}. ${skill.skillName}`,
+          `   状态：${skill.installStatus}`,
+          `   来源：${describeSkillSource(skill.sourceType, skill.sourceRefJson)}`,
+          `   说明：${skill.description}`,
+          `   受管目录：${skill.managedPath}`,
+          `   ${formatSkillSyncSummary(skill.summary)}`,
+        ];
+
+        if (skill.lastError) {
+          linesForSkill.push(`   最近错误：${skill.lastError}`);
+        }
+
+        for (const materialization of skill.materializations) {
+          if (materialization.state === "synced") {
+            continue;
+          }
+
+          const detail = materialization.lastError ? `：${materialization.lastError}` : "";
+          linesForSkill.push(`   账号槽位 ${materialization.targetId} [${materialization.state}]${detail}`);
+        }
+
+        if (index < skills.length - 1) {
+          linesForSkill.push("");
+        }
+
+        return linesForSkill;
+      }),
+      "",
+      "查看：/skills curated",
+    ];
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendSkillsCurated(chatId: string, context: FeishuIncomingContext): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const curatedSkills = await this.runtime.getPrincipalSkillsService().listCuratedSkills(principal.principalId);
+
+    if (!curatedSkills.length) {
+      await this.safeSendText(
+        chatId,
+        [
+          `当前 principal：${principal.principalId}`,
+          "可安装 curated skills",
+          "暂无可安装 curated skill。",
+          "查看：/skills list",
+        ].join("\n"),
+      );
+      return;
+    }
+
+    const lines = [
+      `当前 principal：${principal.principalId}`,
+      "可安装 curated skills",
+      "",
+      ...curatedSkills.map((skill, index) => `${index + 1}. ${skill.name} ${skill.installed ? "[已安装]" : "[未安装]"}`),
+      "",
+      "查看：/skills list",
+    ];
+
+    await this.safeSendText(chatId, lines.join("\n"));
   }
 
   private async sendSessionList(chatId: string, context: FeishuIncomingContext): Promise<void> {
@@ -1801,6 +2243,11 @@ function parseWebSearchModeArgument(args: string[]): WebSearchMode | null {
   return WEB_SEARCH_MODES.includes(value as WebSearchMode) ? (value as WebSearchMode) : null;
 }
 
+function parseSkillsSyncForceArgument(value: string): boolean | null {
+  const normalized = normalizeText(value)?.toLowerCase();
+  return normalized === "force" ? true : null;
+}
+
 function parseApprovalPolicyArgument(args: string[]): ApprovalPolicy | null {
   const value = normalizeText(args.join(" "))?.toLowerCase();
 
@@ -1869,6 +2316,69 @@ function formatBooleanCommandValue(value: boolean | null | undefined): string {
 function formatWorkspaceValue(value: string | null | undefined): string {
   const normalized = normalizeText(value);
   return normalized ?? "未设置（回退到 Themis 启动目录）";
+}
+
+function formatSkillSyncSummary(summary: {
+  totalAccounts: number;
+  syncedCount: number;
+  conflictCount: number;
+  failedCount: number;
+}): string {
+  return `已同步 ${summary.syncedCount}/${summary.totalAccounts}，冲突 ${summary.conflictCount}，失败 ${summary.failedCount}`;
+}
+
+function describeSkillSource(sourceType: string, sourceRefJson: string): string {
+  const sourceRef = parseSkillSourceRef(sourceRefJson);
+
+  switch (sourceType) {
+    case "local-path":
+      return sourceRef?.absolutePath && typeof sourceRef.absolutePath === "string"
+        ? `本地路径：${sourceRef.absolutePath}`
+        : `本地路径：${sourceRefJson}`;
+    case "github-url":
+      return describeGithubUrlSkillSource(sourceRef);
+    case "github-repo-path":
+      return describeGithubRepoPathSkillSource(sourceRef);
+    case "curated":
+      return describeCuratedSkillSource(sourceRef);
+    default:
+      return `${sourceType}：${sourceRefJson}`;
+  }
+}
+
+function describeGithubUrlSkillSource(sourceRef: Record<string, unknown> | null): string {
+  if (!sourceRef?.url || typeof sourceRef.url !== "string") {
+    return "GitHub URL：未知";
+  }
+
+  const ref = typeof sourceRef.ref === "string" && sourceRef.ref.trim() ? `，ref：${sourceRef.ref}` : "";
+  return `GitHub URL：${sourceRef.url}${ref}`;
+}
+
+function describeGithubRepoPathSkillSource(sourceRef: Record<string, unknown> | null): string {
+  if (!sourceRef?.repo || !sourceRef.path || typeof sourceRef.repo !== "string" || typeof sourceRef.path !== "string") {
+    return "GitHub 仓库路径：未知";
+  }
+
+  const ref = typeof sourceRef.ref === "string" && sourceRef.ref.trim() ? `，ref：${sourceRef.ref}` : "";
+  return `GitHub 仓库：${sourceRef.repo} / ${sourceRef.path}${ref}`;
+}
+
+function describeCuratedSkillSource(sourceRef: Record<string, unknown> | null): string {
+  if (!sourceRef?.repo || !sourceRef.path || typeof sourceRef.repo !== "string" || typeof sourceRef.path !== "string") {
+    return "curated：未知";
+  }
+
+  return `curated：${sourceRef.repo} / ${sourceRef.path}`;
+}
+
+function parseSkillSourceRef(sourceRefJson: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(sourceRefJson);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function resolvePrincipalAccountState<T extends { accountId: string; label?: string | null; accountEmail?: string | null }>(options: {
