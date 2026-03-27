@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -7,6 +8,7 @@ import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
 
 const PRINCIPAL_ID = "principal-local-owner";
+const requireFromHere = createRequire(import.meta.url);
 
 function createService(): { service: PrincipalSkillsService; workingDirectory: string; registry: SqliteCodexSessionRegistry } {
   const workingDirectory = mkdtempSync(join(tmpdir(), "themis-principal-skills-service-"));
@@ -248,6 +250,58 @@ test("installFromLocalPath replace=true 在切换阶段第二次 rename 失败�
     assert.equal(readFileSync(managedSkillFilePath, "utf8").includes("description: old demo"), true);
   } finally {
     serviceWithRenameHook.renameManagedSkillPath = originalRenameManagedSkillPath;
+    rmSync(originalSkillDir, { recursive: true, force: true });
+    rmSync(replacementSkillDir, { recursive: true, force: true });
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test("installFromLocalPath replace=true 在切换成功后 cleanup 失败也不会阻止 metadata 更新", async () => {
+  const { service, registry, workingDirectory } = createServiceWithAccounts(["default"]);
+  const originalSkillDir = createLocalSkillFixture({
+    dirName: "demo-old",
+    skillName: "demo-skill",
+    description: "old demo",
+  });
+  const replacementSkillDir = createLocalSkillFixture({
+    dirName: "demo-new",
+    skillName: "demo-skill",
+    description: "new demo",
+  });
+  const commonJsFs = requireFromHere("node:fs") as typeof import("node:fs");
+  const originalRmSync = commonJsFs.rmSync;
+  let injected = false;
+
+  commonJsFs.rmSync = ((targetPath: Parameters<typeof rmSync>[0], options?: Parameters<typeof rmSync>[1]) => {
+    if (!injected && typeof targetPath === "string" && targetPath.includes(".backup-")) {
+      injected = true;
+      throw new Error("backup cleanup failed");
+    }
+
+    return originalRmSync(targetPath, options);
+  }) as typeof commonJsFs.rmSync;
+  syncBuiltinESMExports();
+
+  try {
+    await service.installFromLocalPath({
+      principalId: PRINCIPAL_ID,
+      absolutePath: originalSkillDir,
+    });
+
+    const result = await service.installFromLocalPath({
+      principalId: PRINCIPAL_ID,
+      absolutePath: replacementSkillDir,
+      replace: true,
+    });
+
+    assert.equal(result.skill.description, "new demo");
+    assert.equal(
+      registry.getPrincipalSkill(PRINCIPAL_ID, "demo-skill")?.description,
+      "new demo",
+    );
+  } finally {
+    commonJsFs.rmSync = originalRmSync;
+    syncBuiltinESMExports();
     rmSync(originalSkillDir, { recursive: true, force: true });
     rmSync(replacementSkillDir, { recursive: true, force: true });
     rmSync(workingDirectory, { recursive: true, force: true });

@@ -358,6 +358,7 @@ export class PrincipalSkillsService {
     const incomingPath = join(incomingRoot, basename(managedPath));
     const backupPath = `${managedPath}.backup-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     let movedExisting = false;
+    let switchedToManaged = false;
 
     try {
       cpSync(sourcePath, incomingPath, { recursive: true });
@@ -372,9 +373,10 @@ export class PrincipalSkillsService {
       }
 
       this.renameManagedSkillPath(incomingPath, managedPath);
+      switchedToManaged = true;
 
       if (movedExisting && existsSync(backupPath)) {
-        rmSync(backupPath, { recursive: true, force: true });
+        this.cleanupManagedSkillPath(backupPath, switchedToManaged);
       }
     } catch (error) {
       if (movedExisting && !existsSync(managedPath) && existsSync(backupPath)) {
@@ -383,12 +385,22 @@ export class PrincipalSkillsService {
 
       throw error;
     } finally {
-      rmSync(incomingRoot, { recursive: true, force: true });
+      this.cleanupManagedSkillPath(incomingRoot, switchedToManaged);
     }
   }
 
   private renameManagedSkillPath(fromPath: string, toPath: string): void {
     renameSync(fromPath, toPath);
+  }
+
+  private cleanupManagedSkillPath(targetPath: string, bestEffort: boolean): void {
+    try {
+      rmSync(targetPath, { recursive: true, force: true });
+    } catch (error) {
+      if (!bestEffort) {
+        throw error;
+      }
+    }
   }
 }
 
