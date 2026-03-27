@@ -177,6 +177,7 @@ export class PrincipalSkillsService {
     options: SyncAuthAccountOptions = {},
   ): Promise<PrincipalSkillInstallResult> {
     const managedAccounts = this.resolveManagedAuthAccounts(accountIds);
+    const allManagedAccounts = this.listManagedAuthAccounts();
     const seen = new Set<string>();
 
     for (const account of managedAccounts) {
@@ -191,7 +192,7 @@ export class PrincipalSkillsService {
     }
 
     const materializations = this.registry.listPrincipalSkillMaterializations(skill.principalId, skill.skillName);
-    const summary = summarizeMaterializations(managedAccounts, materializations);
+    const summary = summarizeMaterializations(allManagedAccounts, materializations);
     const installStatus = resolveInstallStatus(summary);
     const lastError = pickFirstIssue(materializations);
     const updatedAt = new Date().toISOString();
