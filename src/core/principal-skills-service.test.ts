@@ -284,12 +284,33 @@ test("installFromGithub 会支持 repo/path 安装并记录来源", async () => 
   }
 });
 
-test("installFromGithub 会支持 GitHub URL 安装并记录来源", async () => {
+test("installFromGithub 在 URL 已显式带 ref 时会拒绝额外传 ref", async () => {
+  const { service, workingDirectory } = createServiceWithAccounts(["default"], {
+    execScript: async () => {
+      throw new Error("不应调用 installer 脚本");
+    },
+  });
+
+  try {
+    await assert.rejects(
+      () => service.installFromGithub({
+        principalId: PRINCIPAL_ID,
+        url: "https://github.com/demo/repo/tree/main/skills/url-demo",
+        ref: "release-2026",
+      }),
+      /URL 已经显式包含 GitHub ref.*不能再额外传 ref/i,
+    );
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test("installFromGithub 只会在 URL 不带 ref 时透传额外 ref 并记录来源", async () => {
   const { service, workingDirectory } = createServiceWithAccounts(["default"], {
     execScript: async (command) => {
       assert.match(command.join(" "), /install-skill-from-github\.py/);
       assert.equal(command.includes("--url"), true);
-      assert.equal(command.includes("https://github.com/demo/repo/tree/main/skills/url-demo"), true);
+      assert.equal(command.includes("https://github.com/demo/repo/skills/url-demo"), true);
       assert.equal(command.includes("--ref"), true);
       assert.equal(command.includes("release-2026"), true);
       assert.equal(command.includes("--repo"), false);
@@ -305,7 +326,7 @@ test("installFromGithub 会支持 GitHub URL 安装并记录来源", async () =>
   try {
     const result = await service.installFromGithub({
       principalId: PRINCIPAL_ID,
-      url: "https://github.com/demo/repo/tree/main/skills/url-demo",
+      url: "https://github.com/demo/repo/skills/url-demo",
       ref: "release-2026",
     });
 
@@ -313,7 +334,7 @@ test("installFromGithub 会支持 GitHub URL 安装并记录来源", async () =>
     assert.equal(result.skill.sourceType, "github-url");
     assert.equal(
       result.skill.sourceRefJson,
-      JSON.stringify({ url: "https://github.com/demo/repo/tree/main/skills/url-demo", ref: "release-2026" }),
+      JSON.stringify({ url: "https://github.com/demo/repo/skills/url-demo", ref: "release-2026" }),
     );
   } finally {
     rmSync(workingDirectory, { recursive: true, force: true });

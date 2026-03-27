@@ -262,6 +262,10 @@ export class PrincipalSkillsService {
         throw new Error("GitHub URL 安装模式下不能再传 repo/path。");
       }
 
+      if (ref && githubUrlContainsExplicitRef(url)) {
+        throw new Error("GitHub URL 已经显式包含 GitHub ref，不能再额外传 ref。");
+      }
+
       command.push("--url", url);
 
       if (ref) {
@@ -719,6 +723,21 @@ function normalizeOptionalText(value: unknown): string | null {
 
   const normalized = value.trim();
   return normalized ? normalized : null;
+}
+
+function githubUrlContainsExplicitRef(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+
+    if (parsed.hostname !== "github.com") {
+      return false;
+    }
+
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    return parts.length >= 4 && (parts[2] === "tree" || parts[2] === "blob");
+  } catch {
+    return false;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
