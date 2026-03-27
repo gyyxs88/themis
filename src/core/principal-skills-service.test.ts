@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
@@ -79,6 +79,26 @@ function createLocalSkillFixture(input: {
   return skillDir;
 }
 
+function createSymlinkedLocalSkillFixture(input: {
+  dirName: string;
+  linkName: string;
+  skillName: string;
+  description: string;
+}): { realDirectory: string; linkedDirectory: string } {
+  const realDirectory = createLocalSkillFixture({
+    dirName: input.dirName,
+    skillName: input.skillName,
+    description: input.description,
+  });
+  const linkedDirectory = resolve(dirname(realDirectory), input.linkName);
+  symlinkSync(realDirectory, linkedDirectory, "dir");
+
+  return {
+    realDirectory,
+    linkedDirectory,
+  };
+}
+
 test("validateLocalSkillDirectory 会读取 SKILL.md frontmatter 并返回 canonical skill name", async () => {
   const { service, workingDirectory } = createService();
   const skillDir = createLocalSkillFixture({
@@ -115,6 +135,27 @@ test("validateLocalSkillDirectory 会拒绝 .system skill", async () => {
     );
   } finally {
     rmSync(skillDir, { recursive: true, force: true });
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test("validateLocalSkillDirectory 会拒绝来源目录本身是 symlink", async () => {
+  const { service, workingDirectory } = createService();
+  const skillFixture = createSymlinkedLocalSkillFixture({
+    dirName: "real-demo",
+    linkName: "demo-link",
+    skillName: "demo-skill",
+    description: "demo",
+  });
+
+  try {
+    await assert.rejects(
+      () => service.validateLocalSkillDirectory(skillFixture.linkedDirectory),
+      /技能来源目录不能是 symlink/i,
+    );
+  } finally {
+    rmSync(skillFixture.linkedDirectory, { force: true });
+    rmSync(skillFixture.realDirectory, { recursive: true, force: true });
     rmSync(workingDirectory, { recursive: true, force: true });
   }
 });
@@ -208,6 +249,46 @@ test("syncSkillToAuthAccount 会把 symlink 指向 principal 受管目录", asyn
     );
   } finally {
     rmSync(skillDir, { recursive: true, force: true });
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test("installFromLocalPath 只会同步到受管认证账号槽位，不会接管外部 CODEX_HOME", async () => {
+  const { service, registry, workingDirectory } = createServiceWithAccounts(["default"]);
+  const externalRoot = mkdtempSync(join(tmpdir(), "themis-external-codex-home-"));
+  const externalCodexHome = resolve(externalRoot, ".codex-external");
+  const externalSkillPath = resolve(externalCodexHome, "skills", "demo-skill");
+  const skillDir = createLocalSkillFixture({
+    dirName: "demo",
+    skillName: "demo-skill",
+    description: "demo",
+  });
+
+  registry.saveAuthAccount({
+    accountId: "external",
+    label: "external",
+    codexHome: externalCodexHome,
+    isActive: false,
+    createdAt: "2026-03-27T00:00:00.000Z",
+    updatedAt: "2026-03-27T00:00:00.000Z",
+  });
+
+  try {
+    const result = await service.installFromLocalPath({
+      principalId: PRINCIPAL_ID,
+      absolutePath: skillDir,
+    });
+
+    assert.equal(result.summary.totalAccounts, 1);
+    assert.equal(result.summary.syncedCount, 1);
+    assert.equal(
+      registry.listPrincipalSkillMaterializations(PRINCIPAL_ID, "demo-skill").some((record) => record.targetId === "external"),
+      false,
+    );
+    assert.equal(existsSync(externalSkillPath), false);
+  } finally {
+    rmSync(skillDir, { recursive: true, force: true });
+    rmSync(externalRoot, { recursive: true, force: true });
     rmSync(workingDirectory, { recursive: true, force: true });
   }
 });

@@ -97,6 +97,13 @@ export function resolveManagedCodexHome(workingDirectory: string, accountId: str
   return resolve(workingDirectory, "infra/local/codex-auth", accountId);
 }
 
+export function isManagedAuthAccountCodexHome(workingDirectory: string, codexHome: string): boolean {
+  const managedRoot = resolve(workingDirectory, "infra/local/codex-auth");
+  const resolvedHome = resolve(codexHome);
+
+  return resolvedHome === managedRoot || resolvedHome.startsWith(`${managedRoot}${sep}`);
+}
+
 export function resolveAuthAccountSkillsDirectory(codexHome: string): string {
   return resolve(codexHome, "skills");
 }
@@ -216,10 +223,7 @@ function normalizeOptionalEmail(value: string | undefined): string | null {
 }
 
 function isManagedCodexHome(workingDirectory: string, codexHome: string): boolean {
-  const managedRoot = resolve(workingDirectory, "infra/local/codex-auth");
-  const resolvedHome = resolve(codexHome);
-
-  return resolvedHome === managedRoot || resolvedHome.startsWith(`${managedRoot}${sep}`);
+  return isManagedAuthAccountCodexHome(workingDirectory, codexHome);
 }
 
 function formatCodexTomlLiteral(value: string | number | boolean): string {

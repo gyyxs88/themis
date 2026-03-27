@@ -17,6 +17,7 @@ import type {
 } from "../storage/index.js";
 import {
   ensureAuthAccountCodexHome,
+  isManagedAuthAccountCodexHome,
   resolveAuthAccountSkillPath,
   resolveAuthAccountSkillsDirectory,
 } from "./auth-accounts.js";
@@ -70,6 +71,12 @@ export class PrincipalSkillsService {
 
   async validateLocalSkillDirectory(skillPath: string): Promise<ValidatedSkillDirectory> {
     const sourcePath = resolveAbsoluteSkillDirectory(skillPath);
+    const sourceLstat = lstatSync(sourcePath);
+
+    if (sourceLstat.isSymbolicLink()) {
+      throw new Error("技能来源目录不能是 symlink。");
+    }
+
     const stat = statSync(sourcePath);
 
     if (!stat.isDirectory()) {
@@ -157,8 +164,11 @@ export class PrincipalSkillsService {
       throw new Error(`技能 ${skillName} 不存在。`);
     }
 
-    const accountIds = this.registry.listAuthAccounts().map((account) => account.accountId);
-    return this.syncSkillToSpecificAccounts(skill, accountIds, options);
+    return this.syncSkillToSpecificAccounts(
+      skill,
+      this.listManagedAuthAccounts().map((account) => account.accountId),
+      options,
+    );
   }
 
   private async syncSkillToSpecificAccounts(
@@ -166,10 +176,11 @@ export class PrincipalSkillsService {
     accountIds: string[],
     options: SyncAuthAccountOptions = {},
   ): Promise<PrincipalSkillInstallResult> {
+    const managedAccounts = this.resolveManagedAuthAccounts(accountIds);
     const seen = new Set<string>();
 
-    for (const accountId of accountIds) {
-      const normalizedAccountId = normalizeRequiredText(accountId, "accountId 不能为空。");
+    for (const account of managedAccounts) {
+      const normalizedAccountId = normalizeRequiredText(account.accountId, "accountId 不能为空。");
 
       if (seen.has(normalizedAccountId)) {
         continue;
@@ -180,7 +191,7 @@ export class PrincipalSkillsService {
     }
 
     const materializations = this.registry.listPrincipalSkillMaterializations(skill.principalId, skill.skillName);
-    const summary = summarizeMaterializations(this.registry.listAuthAccounts(), materializations);
+    const summary = summarizeMaterializations(managedAccounts, materializations);
     const installStatus = resolveInstallStatus(summary);
     const lastError = pickFirstIssue(materializations);
     const updatedAt = new Date().toISOString();
@@ -294,6 +305,21 @@ export class PrincipalSkillsService {
         issueMessage: message,
       };
     }
+  }
+
+  private listManagedAuthAccounts(): StoredAuthAccountRecord[] {
+    return this.registry
+      .listAuthAccounts()
+      .filter((account) => isManagedAuthAccountCodexHome(this.workingDirectory, account.codexHome));
+  }
+
+  private resolveManagedAuthAccounts(accountIds: string[]): StoredAuthAccountRecord[] {
+    if (accountIds.length === 0) {
+      return this.listManagedAuthAccounts();
+    }
+
+    const requested = new Set(accountIds.map((accountId) => normalizeRequiredText(accountId, "accountId 不能为空。")));
+    return this.listManagedAuthAccounts().filter((account) => requested.has(account.accountId));
   }
 
   private createSkillInstallStagingRoot(): string {
