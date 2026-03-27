@@ -138,6 +138,190 @@ test("load 在新请求已完成后会忽略旧请求响应", async () => {
   }
 });
 
+test("refresh 在新 refresh 已开始后会忽略旧 curated 成功响应", async () => {
+  const state = createDefaultSkillsState();
+  const app = createAppStub(state);
+  const controller = createSkillsController(app);
+  const originalFetch = globalThis.fetch;
+  const pending = [];
+
+  try {
+    globalThis.fetch = (url) => {
+      const deferred = createDeferred();
+      pending.push({
+        url,
+        ...deferred,
+      });
+      return deferred.promise;
+    };
+
+    const refresh1Promise = controller.refresh();
+
+    assert.equal(app.runtime.skills.loading, true);
+    assert.equal(pending[0].url, "/api/skills/list");
+
+    pending[0].resolve(jsonResponse({
+      skills: [
+        {
+          skillName: "stale-skill",
+          description: "stale",
+          sourceType: "local-path",
+          installStatus: "ready",
+        },
+      ],
+    }));
+    await waitForPendingRequest(pending, 1, "/api/skills/catalog/curated");
+
+    assert.equal(pending[1].url, "/api/skills/catalog/curated");
+
+    const refresh2Promise = controller.refresh();
+
+    assert.equal(app.runtime.skills.loading, true);
+    await waitForPendingRequest(pending, 2, "/api/skills/list");
+    assert.equal(pending[2].url, "/api/skills/list");
+
+    pending[1].resolve(jsonResponse({
+      curated: [
+        {
+          name: "stale-curated",
+          installed: true,
+        },
+      ],
+    }));
+    await flushMicrotasks();
+
+    assert.equal(app.runtime.skills.loading, true);
+    assert.deepEqual(app.runtime.skills.curated, []);
+    assert.equal(app.runtime.skills.errorMessage, "");
+
+    pending[2].resolve(jsonResponse({
+      skills: [
+        {
+          skillName: "fresh-skill",
+          description: "fresh",
+          sourceType: "local-path",
+          installStatus: "ready",
+        },
+      ],
+    }));
+    await waitForPendingRequest(pending, 3, "/api/skills/catalog/curated");
+
+    assert.equal(pending[3].url, "/api/skills/catalog/curated");
+
+    pending[3].resolve(jsonResponse({
+      curated: [
+        {
+          name: "fresh-curated",
+          installed: true,
+        },
+      ],
+    }));
+
+    await Promise.all([refresh1Promise, refresh2Promise]);
+
+    assert.equal(app.runtime.skills.loading, false);
+    assert.equal(app.runtime.skills.skills[0].skillName, "fresh-skill");
+    assert.equal(app.runtime.skills.curated[0].name, "fresh-curated");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("refresh 在新 refresh 已开始后会忽略旧 curated 失败，不改 loading 或错误态", async () => {
+  const state = createDefaultSkillsState();
+  state.curated = [
+    {
+      name: "persisted-curated",
+      installed: false,
+    },
+  ];
+  const app = createAppStub(state);
+  const controller = createSkillsController(app);
+  const originalFetch = globalThis.fetch;
+  const pending = [];
+
+  try {
+    globalThis.fetch = (url) => {
+      const deferred = createDeferred();
+      pending.push({
+        url,
+        ...deferred,
+      });
+      return deferred.promise;
+    };
+
+    const refresh1Promise = controller.refresh().then(
+      () => ({ status: "fulfilled" }),
+      (error) => ({ status: "rejected", error }),
+    );
+
+    await waitForPendingRequest(pending, 0, "/api/skills/list");
+    pending[0].resolve(jsonResponse({
+      skills: [
+        {
+          skillName: "stale-skill",
+          description: "stale",
+          sourceType: "local-path",
+          installStatus: "ready",
+        },
+      ],
+    }));
+    await waitForPendingRequest(pending, 1, "/api/skills/catalog/curated");
+
+    const refresh2Promise = controller.refresh();
+
+    assert.equal(app.runtime.skills.loading, true);
+    await waitForPendingRequest(pending, 2, "/api/skills/list");
+    assert.equal(pending[1].url, "/api/skills/catalog/curated");
+    assert.equal(pending[2].url, "/api/skills/list");
+
+    pending[1].resolve(jsonResponse({
+      error: {
+        message: "旧 curated 失败",
+      },
+    }, 500));
+    await flushMicrotasks();
+
+    assert.equal(app.runtime.skills.loading, true);
+    assert.equal(app.runtime.skills.errorMessage, "");
+    assert.deepEqual(app.runtime.skills.curated, [
+      {
+        name: "persisted-curated",
+        installed: false,
+      },
+    ]);
+
+    pending[2].resolve(jsonResponse({
+      skills: [
+        {
+          skillName: "fresh-skill",
+          description: "fresh",
+          sourceType: "local-path",
+          installStatus: "ready",
+        },
+      ],
+    }));
+    await waitForPendingRequest(pending, 3, "/api/skills/catalog/curated");
+
+    pending[3].resolve(jsonResponse({
+      curated: [
+        {
+          name: "fresh-curated",
+          installed: true,
+        },
+      ],
+    }));
+
+    await Promise.all([refresh1Promise, refresh2Promise]);
+
+    assert.equal(app.runtime.skills.loading, false);
+    assert.equal(app.runtime.skills.errorMessage, "");
+    assert.equal(app.runtime.skills.curated[0].name, "fresh-curated");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("installFromLocalPath 成功后会刷新 skills 和 curated 状态", async () => {
   const state = createDefaultSkillsState();
   const app = createAppStub(state);
@@ -199,6 +383,102 @@ test("installFromLocalPath 成功后会刷新 skills 和 curated 状态", async 
     assert.equal(calls[0].url, "/api/skills/install");
     assert.equal(calls[0].body.source.absolutePath, "/srv/skills/demo");
     assert.equal(calls[0].body.replace, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("mutation 后的 quiet refresh 被新 refresh 覆盖时，旧 curated 失败不会写 notice 或清 loading", async () => {
+  const state = createDefaultSkillsState();
+  const app = createAppStub(state);
+  const controller = createSkillsController(app);
+  const originalFetch = globalThis.fetch;
+  const pending = [];
+
+  try {
+    globalThis.fetch = (url) => {
+      if (url === "/api/skills/install") {
+        return Promise.resolve(jsonResponse({
+          result: {
+            skill: {
+              skillName: "demo-skill",
+            },
+          },
+        }));
+      }
+
+      const deferred = createDeferred();
+      pending.push({
+        url,
+        ...deferred,
+      });
+      return deferred.promise;
+    };
+
+    const installPromise = controller.installFromLocalPath("/srv/skills/demo");
+    await waitForPendingRequest(pending, 0, "/api/skills/list");
+
+    assert.equal(pending[0].url, "/api/skills/list");
+
+    pending[0].resolve(jsonResponse({
+      skills: [
+        {
+          skillName: "stale-skill",
+          description: "stale",
+          sourceType: "local-path",
+          installStatus: "ready",
+        },
+      ],
+    }));
+    await waitForPendingRequest(pending, 1, "/api/skills/catalog/curated");
+
+    assert.equal(pending[1].url, "/api/skills/catalog/curated");
+
+    const refreshPromise = controller.refresh();
+
+    assert.equal(app.runtime.skills.loading, true);
+    await waitForPendingRequest(pending, 2, "/api/skills/list");
+    assert.equal(pending[2].url, "/api/skills/list");
+
+    pending[1].resolve(jsonResponse({
+      error: {
+        message: "quiet curated failed",
+      },
+    }, 500));
+    await flushMicrotasks();
+
+    assert.equal(app.runtime.skills.loading, true);
+    assert.equal(app.runtime.skills.noticeMessage, "");
+    assert.equal(app.runtime.skills.errorMessage, "");
+
+    pending[2].resolve(jsonResponse({
+      skills: [
+        {
+          skillName: "fresh-skill",
+          description: "fresh",
+          sourceType: "local-path",
+          installStatus: "ready",
+        },
+      ],
+    }));
+    await waitForPendingRequest(pending, 3, "/api/skills/catalog/curated");
+
+    pending[3].resolve(jsonResponse({
+      curated: [
+        {
+          name: "fresh-curated",
+          installed: true,
+        },
+      ],
+    }));
+
+    const [installResult] = await Promise.all([installPromise, refreshPromise]);
+
+    assert.equal(installResult.skill.skillName, "demo-skill");
+    assert.equal(app.runtime.skills.loading, false);
+    assert.equal(app.runtime.skills.noticeMessage, "");
+    assert.equal(app.runtime.skills.errorMessage, "");
+    assert.equal(app.runtime.skills.curated[0].name, "fresh-curated");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -432,4 +712,22 @@ function createDeferred() {
     resolve,
     reject,
   };
+}
+
+async function flushMicrotasks() {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await Promise.resolve();
+  }
+}
+
+async function waitForPendingRequest(pending, index, url) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (pending[index]?.url === url) {
+      return;
+    }
+
+    await flushMicrotasks();
+  }
+
+  assert.fail(`expected pending[${index}] to be ${url}, got ${pending[index]?.url ?? "missing"}`);
 }

@@ -482,9 +482,18 @@ function ensureCliPrincipalRecord(registry: SqliteCodexSessionRegistry, principa
   });
 }
 
+function cliSkillRegistryExists(): boolean {
+  return existsSync(cliDatabasePath);
+}
+
 function handleSkillList(args: string[]): void {
   if (args.length > 0) {
     throw new Error("用法：themis skill list");
+  }
+
+  if (!cliSkillRegistryExists()) {
+    printSkillList([]);
+    return;
   }
 
   const { service } = createCliPrincipalSkillsService();
@@ -604,6 +613,10 @@ function handleSkillRemove(args: string[]): void {
     throw new Error("用法：themis skill remove <SKILL_NAME>");
   }
 
+  if (!cliSkillRegistryExists()) {
+    throw new Error(`找不到 skill：${skillName}`);
+  }
+
   const { service } = createCliPrincipalSkillsService();
   const result = service.removeSkill(CLI_PRINCIPAL_ID, skillName);
 
@@ -619,6 +632,10 @@ async function handleSkillSync(args: string[]): Promise<void> {
 
   if (!skillName || extra.length > 0 || args.length !== positionals.length + (force ? 1 : 0)) {
     throw new Error("用法：themis skill sync <SKILL_NAME> [--force]");
+  }
+
+  if (!cliSkillRegistryExists()) {
+    throw new Error(`找不到 skill：${skillName}`);
   }
 
   const { service } = createCliPrincipalSkillsService();

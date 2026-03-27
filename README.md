@@ -103,6 +103,8 @@ npm run themis -- init
 ./themis skill list
 ./themis skill curated list
 ./themis skill install local /srv/skills/demo-skill
+./themis skill install url https://github.com/openai/codex/tree/main/skills/example
+./themis skill install repo openai/codex skills/example main
 ./themis skill install curated python-setup
 ./themis skill sync demo-skill --force
 ```
@@ -127,6 +129,7 @@ npm run themis -- status
 npm run themis -- config list
 npm run themis -- config set FEISHU_APP_ID cli_xxx
 npm run themis -- skill list
+npm run themis -- skill install curated python-setup
 ```
 
 `init` 会优先从仓库根目录的 `.env.example` 生成 `.env.local`。服务启动时会自动加载 `.env` / `.env.local`；真实 shell 环境变量优先级更高。
