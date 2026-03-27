@@ -109,6 +109,7 @@ export function createRenderer(app) {
     renderRuntimeConfigNote(settings, effectiveSettings);
     renderConversationLinkState(thread);
     renderIdentityState();
+    renderSkillsState();
     renderThirdPartyNotes(settings, effectiveSettings);
     renderThirdPartyEndpointProbeState(settings);
     renderThirdPartyProbeState(settings);
@@ -207,10 +208,50 @@ export function createRenderer(app) {
     dom.settingsRuntimeSection.setAttribute("aria-hidden", String(activeSection !== "runtime"));
     dom.settingsAuthSection.classList.toggle("hidden", activeSection !== "auth");
     dom.settingsAuthSection.setAttribute("aria-hidden", String(activeSection !== "auth"));
+    dom.settingsSkillsSection.classList.toggle("hidden", activeSection !== "skills");
+    dom.settingsSkillsSection.setAttribute("aria-hidden", String(activeSection !== "skills"));
     dom.settingsThirdPartySection.classList.toggle("hidden", activeSection !== "third-party");
     dom.settingsThirdPartySection.setAttribute("aria-hidden", String(activeSection !== "third-party"));
     dom.settingsModeSwitchSection.classList.toggle("hidden", activeSection !== "mode-switch");
     dom.settingsModeSwitchSection.setAttribute("aria-hidden", String(activeSection !== "mode-switch"));
+  }
+
+  function renderSkillsState() {
+    const skillsState = app.runtime.skills ?? {};
+    const skills = Array.isArray(skillsState.skills) ? skillsState.skills : [];
+    const curated = Array.isArray(skillsState.curated) ? skillsState.curated : [];
+    const busy = Boolean(skillsState.loading || skillsState.installing || skillsState.syncing);
+    const statusMessage = resolveSkillsStatusMessage(skillsState);
+    const statusTone = skillsState.errorMessage
+      ? "error"
+      : busy
+        ? "loading"
+        : "supported";
+
+    dom.skillsStatusNote.classList.toggle("hidden", !statusMessage);
+    dom.skillsStatusNote.textContent = statusMessage;
+    if (statusMessage) {
+      dom.skillsStatusNote.dataset.state = statusTone;
+    } else {
+      delete dom.skillsStatusNote.dataset.state;
+    }
+
+    dom.skillsListEmpty.classList.toggle("hidden", skills.length > 0);
+    dom.skillsList.innerHTML = skills
+      .map((skill) => renderSkillCard(skill, {
+        busy,
+        escapeHtml: utils.escapeHtml,
+        formatRelativeTime: utils.formatRelativeTime,
+      }))
+      .join("");
+
+    dom.skillsCuratedEmpty.classList.toggle("hidden", curated.length > 0);
+    dom.skillsCuratedList.innerHTML = curated
+      .map((item) => renderCuratedSkillCard(item, {
+        busy,
+        escapeHtml: utils.escapeHtml,
+      }))
+      .join("");
   }
 
   function renderModelSelect(settings, effectiveSettings) {
@@ -1041,6 +1082,20 @@ export function createRenderer(app) {
     dom.conversationLinkInput.disabled = controlsBusy;
     dom.conversationLinkButton.disabled = controlsBusy;
     dom.identityLinkCodeButton.disabled = controlsBusy || app.runtime.identity?.issuing;
+    dom.skillsLocalPathInput.disabled = controlsBusy || app.runtime.skills.loading || app.runtime.skills.installing || app.runtime.skills.syncing;
+    dom.skillsInstallLocalButton.disabled = controlsBusy
+      || app.runtime.skills.loading
+      || app.runtime.skills.installing
+      || app.runtime.skills.syncing;
+    dom.skillsRefreshButton.disabled = controlsBusy || app.runtime.skills.loading || app.runtime.skills.installing || app.runtime.skills.syncing;
+    dom.skillsPanelActions?.querySelectorAll("[data-skill-action]").forEach((button) => {
+      const installed = button.dataset.skillInstalled === "true";
+      button.disabled = controlsBusy
+        || app.runtime.skills.loading
+        || app.runtime.skills.installing
+        || app.runtime.skills.syncing
+        || (button.dataset.skillAction === "install-curated" && installed);
+    });
     dom.accessModeSelect.disabled = controlsBusy || !app.runtime.runtimeConfig.accessModes?.length;
     dom.modeSwitchAuthAccountSelect.disabled = controlsBusy
       || app.runtime.identity?.savingTaskSettings
@@ -1209,6 +1264,122 @@ export function createRenderer(app) {
   };
 }
 
+function resolveSkillsStatusMessage(skillsState) {
+  if (skillsState.errorMessage) {
+    return skillsState.errorMessage;
+  }
+
+  if (skillsState.installing) {
+    return "正在安装 skill，并同步到全部受管认证账号槽位。";
+  }
+
+  if (skillsState.syncing) {
+    return "正在重同步或删除 skill，请稍候。";
+  }
+
+  if (skillsState.loading) {
+    return "正在读取当前 principal 的 skills 与 curated 列表。";
+  }
+
+  return "";
+}
+
+function renderSkillCard(skill, options) {
+  const busyAttr = options.busy ? " disabled" : "";
+  const summary = skill.summary ?? {};
+  const totalAccounts = typeof summary.totalAccounts === "number" ? summary.totalAccounts : 0;
+  const syncedCount = typeof summary.syncedCount === "number" ? summary.syncedCount : 0;
+  const materializations = Array.isArray(skill.materializations) ? skill.materializations : [];
+  const summaryCopy = totalAccounts > 0
+    ? `已同步 ${syncedCount} / ${totalAccounts} 个账号槽位`
+    : "当前还没有受管认证账号槽位";
+  const materializationMarkup = materializations.length
+    ? `<div class="skill-materialization-list">${materializations.map((item) => {
+      const syncedAt = item.lastSyncedAt
+        ? `｜${options.escapeHtml(options.formatRelativeTime(item.lastSyncedAt))}`
+        : "";
+      const errorCopy = item.lastError
+        ? `<span class="skill-materialization-error">${options.escapeHtml(item.lastError)}</span>`
+        : "";
+
+      return `
+        <div class="skill-materialization-item">
+          <span>${options.escapeHtml(item.targetId || "未命名账号")}</span>
+          <span class="skill-materialization-state" data-state="${options.escapeHtml(item.state || "missing")}">
+            ${options.escapeHtml(formatMaterializationStateLabel(item.state))}
+          </span>
+          <span class="skill-materialization-time">${options.escapeHtml(syncedAt ? syncedAt.slice(1) : "待同步")}</span>
+          ${errorCopy}
+        </div>
+      `;
+    }).join("")}</div>`
+    : "";
+  const errorMarkup = skill.lastError
+    ? `<p class="skill-card-error">${options.escapeHtml(skill.lastError)}</p>`
+    : "";
+
+  return `
+    <article class="skill-card">
+      <div class="skill-card-head">
+        <div>
+          <h4>${options.escapeHtml(skill.skillName)}</h4>
+          <p class="skill-card-copy">${options.escapeHtml(skill.description || "暂无描述")}</p>
+        </div>
+        <div class="skill-card-actions">
+          <button
+            type="button"
+            class="toolbar-button subtle"
+            data-skill-action="sync"
+            data-skill-name="${options.escapeHtml(skill.skillName)}"${busyAttr}
+          >重同步</button>
+          <button
+            type="button"
+            class="ghost-button"
+            data-skill-action="remove"
+            data-skill-name="${options.escapeHtml(skill.skillName)}"${busyAttr}
+          >删除</button>
+        </div>
+      </div>
+      <div class="skill-pill-row">
+        <span class="skill-pill">${options.escapeHtml(formatSkillSourceLabel(skill.sourceType))}</span>
+        <span class="skill-pill" data-tone="${options.escapeHtml(skill.installStatus || "ready")}">
+          ${options.escapeHtml(formatInstallStatusLabel(skill.installStatus))}
+        </span>
+      </div>
+      <p class="skill-card-summary">${options.escapeHtml(summaryCopy)}</p>
+      ${errorMarkup}
+      ${materializationMarkup}
+    </article>
+  `;
+}
+
+function renderCuratedSkillCard(item, options) {
+  const disabled = options.busy || item.installed;
+
+  return `
+    <article class="skill-card skill-card-curated">
+      <div class="skill-card-head">
+        <div>
+          <h4>${options.escapeHtml(item.name)}</h4>
+          <p class="skill-card-copy">来自 OpenAI curated skills，可直接安装到当前 principal。</p>
+        </div>
+        <div class="skill-card-actions">
+          <span class="skill-pill"${item.installed ? ' data-tone="ready"' : ""}>
+            ${options.escapeHtml(item.installed ? "已安装" : "未安装")}
+          </span>
+          <button
+            type="button"
+            class="toolbar-button subtle"
+            data-skill-action="install-curated"
+            data-skill-name="${options.escapeHtml(item.name)}"
+            data-skill-installed="${item.installed ? "true" : "false"}"${disabled ? " disabled" : ""}
+          >${options.escapeHtml(item.installed ? "已安装" : "安装")}</button>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
 function buildModelOptionLabel(model, defaultModel) {
   if (model.model === defaultModel) {
     return `${model.displayName}（默认）`;
@@ -1234,7 +1405,52 @@ function resolveModelFallbackLabel(runtimeConfig) {
 }
 
 function resolveWorkspaceToolsSection(section) {
-  return ["runtime", "auth", "third-party", "mode-switch"].includes(section) ? section : "runtime";
+  return ["runtime", "auth", "skills", "third-party", "mode-switch"].includes(section) ? section : "runtime";
+}
+
+function formatSkillSourceLabel(sourceType) {
+  switch (sourceType) {
+    case "local-path":
+      return "本机目录";
+    case "github-url":
+      return "GitHub URL";
+    case "github-repo-path":
+      return "GitHub Repo/Path";
+    case "curated":
+      return "Curated";
+    default:
+      return "未知来源";
+  }
+}
+
+function formatInstallStatusLabel(status) {
+  switch (status) {
+    case "ready":
+      return "已同步";
+    case "syncing":
+      return "同步中";
+    case "partially_synced":
+      return "部分失败";
+    case "error":
+      return "异常";
+    default:
+      return "未知状态";
+  }
+}
+
+function formatMaterializationStateLabel(state) {
+  switch (state) {
+    case "synced":
+      return "已同步";
+    case "missing":
+      return "缺失";
+    case "conflict":
+      return "冲突";
+    case "failed":
+      return "失败";
+    default:
+      return "未知";
+  }
 }
 
 function formatIdentityTime(value) {

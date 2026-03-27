@@ -8,6 +8,7 @@ import { createLayoutController } from "./modules/layout.js";
 import { createDefaultModeSwitchDraftState, createModeSwitchController } from "./modules/mode-switch.js";
 import { createDefaultRuntimeConfigState, createRuntimeConfigController } from "./modules/runtime-config.js";
 import { createSessionSettingsController } from "./modules/session-settings.js";
+import { createDefaultSkillsState, createSkillsController } from "./modules/skills.js";
 import { createStore } from "./modules/store.js";
 import {
   createDefaultThirdPartyEndpointProbeState,
@@ -40,6 +41,7 @@ const app = {
     identity: null,
     workspaceToolsOpen: false,
     workspaceToolsSection: "runtime",
+    skills: createDefaultSkillsState(),
     runtimeConfig: createDefaultRuntimeConfigState(),
     modeSwitchDraft: createDefaultModeSwitchDraftState(),
     thirdPartyEditor: createDefaultThirdPartyEditorState(),
@@ -56,6 +58,8 @@ app.auth = createAuthController(app);
 app.identity = createIdentityController(app);
 app.runtimeConfig = createRuntimeConfigController(app);
 app.sessionSettings = createSessionSettingsController(app);
+app.skills = createSkillsController(app);
+app.skills.bindControls();
 app.modeSwitch = createModeSwitchController(app);
 app.thirdPartyEditor = createThirdPartyEditorController(app);
 app.thirdPartyEndpointProbe = createThirdPartyEndpointProbeController(app);

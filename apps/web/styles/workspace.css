@@ -434,6 +434,12 @@
   gap: 10px 12px;
 }
 
+.toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .settings-inline-copy {
   margin: 0;
   color: var(--muted);
@@ -471,6 +477,140 @@
   border-color: #e6ddbe;
   background: #fffcef;
   color: #715c1d;
+}
+
+.skill-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(17, 17, 17, 0.025), transparent 34%),
+    #ffffff;
+}
+
+.skill-card-curated {
+  gap: 10px;
+}
+
+.skill-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.skill-card-head h4,
+.skill-card-copy,
+.skill-card-summary,
+.skill-card-error {
+  margin: 0;
+}
+
+.skill-card-head h4 {
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.skill-card-copy,
+.skill-card-summary {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.skill-card-actions,
+.skill-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.skill-card-actions {
+  justify-content: flex-end;
+}
+
+.skill-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid #d7dce7;
+  border-radius: 999px;
+  background: #f7f9fc;
+  color: #3c4658;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.skill-pill[data-tone="ready"] {
+  border-color: #cadec8;
+  background: #f4fbf1;
+  color: #2f5b26;
+}
+
+.skill-pill[data-tone="syncing"] {
+  border-color: #e6ddbe;
+  background: #fffcef;
+  color: #715c1d;
+}
+
+.skill-pill[data-tone="partially_synced"],
+.skill-pill[data-tone="error"] {
+  border-color: #f0d4cf;
+  background: #fff7f6;
+  color: #8a3a2d;
+}
+
+.skill-card-error {
+  padding: 10px 12px;
+  border: 1px solid #f0d4cf;
+  border-radius: 14px;
+  background: #fff7f6;
+  color: #8a3a2d;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.skill-materialization-list {
+  display: grid;
+  gap: 8px;
+}
+
+.skill-materialization-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid #edf0f4;
+  border-radius: 14px;
+  background: #fbfcfd;
+  color: #536074;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.skill-materialization-state {
+  font-weight: 600;
+}
+
+.skill-materialization-state[data-state="synced"] {
+  color: #2f5b26;
+}
+
+.skill-materialization-state[data-state="conflict"],
+.skill-materialization-state[data-state="failed"] {
+  color: #8a3a2d;
+}
+
+.skill-materialization-state[data-state="missing"] {
+  color: #715c1d;
+}
+
+.skill-materialization-error {
+  color: #8a3a2d;
 }
 
 .auth-rate-limits {
@@ -1001,6 +1141,14 @@
   }
 
   .settings-inline-actions {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .toolbar-row,
+  .skill-card-head,
+  .skill-card-actions {
     width: 100%;
     flex-direction: column;
     align-items: stretch;

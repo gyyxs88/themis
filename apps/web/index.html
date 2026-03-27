@@ -218,6 +218,18 @@
                 </button>
 
                 <button
+                  id="settings-skills-tab"
+                  type="button"
+                  class="settings-nav-button"
+                  data-settings-section="skills"
+                  role="tab"
+                  aria-controls="settings-skills-section"
+                  aria-selected="false"
+                >
+                  <span class="settings-nav-title">Skills</span>
+                </button>
+
+                <button
                   id="settings-third-party-tab"
                   type="button"
                   class="settings-nav-button"
@@ -715,6 +727,55 @@
                     </div>
                   </div>
                 </section>
+              </section>
+
+              <section
+                id="settings-skills-section"
+                class="settings-panel hidden"
+                role="tabpanel"
+                aria-labelledby="settings-skills-tab"
+              >
+                <div id="skills-panel-actions" class="settings-panel">
+                  <section class="workspace-tool-group">
+                    <div class="tool-group-head">
+                      <h3>Skills</h3>
+                      <span class="meta-label">当前 principal</span>
+                    </div>
+                    <p id="skills-note" class="settings-section-copy">这些 skills 属于当前 principal。切换认证账号只影响额度，不影响 skills 清单；安装/卸载会同步到全部受管认证账号槽位。第一版只保证认证模式生效。</p>
+
+                    <div class="settings-stack">
+                      <label class="settings-field">
+                        <span>服务器本机目录导入</span>
+                        <input
+                          id="skills-local-path-input"
+                          type="text"
+                          placeholder="例如：/srv/skills/my-skill。这里填的是 Themis 服务所在机器上的本机目录。"
+                          autocomplete="off"
+                          spellcheck="false"
+                        />
+                      </label>
+
+                      <div class="toolbar-row">
+                        <button id="skills-install-local-button" type="button" class="toolbar-button subtle">从本机目录安装</button>
+                        <button id="skills-refresh-button" type="button" class="toolbar-button subtle">刷新</button>
+                      </div>
+
+                      <p id="skills-status-note" class="settings-section-copy settings-probe-note hidden" aria-live="polite"></p>
+                      <div id="skills-list-empty" class="settings-section-copy hidden">当前 principal 还没有已安装 skills。</div>
+                      <div id="skills-list" class="settings-stack"></div>
+                    </div>
+                  </section>
+
+                  <section class="workspace-tool-group">
+                    <div class="tool-group-head">
+                      <h3>Curated</h3>
+                      <span class="meta-label">OpenAI curated skills</span>
+                    </div>
+                    <p class="settings-section-copy">这里展示 OpenAI curated catalog，并标记当前 principal 是否已经安装。</p>
+                    <div id="skills-curated-empty" class="settings-section-copy hidden">暂时还没有拿到 curated skills 列表，可以稍后刷新重试。</div>
+                    <div id="skills-curated-list" class="settings-stack"></div>
+                  </section>
+                </div>
               </section>
             </div>
           </div>
