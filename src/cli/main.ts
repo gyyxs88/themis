@@ -6,6 +6,7 @@ import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { resolveCodexAuthFilePath, resolveDefaultCodexHome } from "../core/auth-accounts.js";
+import { PrincipalSkillsService } from "../core/principal-skills-service.js";
 import { readOpenAICompatibleProviderConfigs } from "../core/openai-compatible-provider.js";
 import {
   escapeEnvValue,
@@ -22,11 +23,11 @@ import {
   findProjectConfigDefinition,
   listProjectConfigDefinitionsBySection,
   listProjectConfigSections,
-  type ProjectConfigDefinition,
 } from "./config-schema.js";
 
 const cwd = process.cwd();
 const launcherPath = fileURLToPath(new URL("../../themis", import.meta.url));
+const CLI_PRINCIPAL_ID = "principal-local-owner";
 const shellEnv = new Map<string, string>(
   Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
 );
@@ -72,8 +73,11 @@ async function main(args: string[]): Promise<void> {
     case "config":
       handleConfig(subcommand, rest);
       return;
+    case "skill":
+      await handleSkill(subcommand, rest);
+      return;
     default:
-      throw new Error(`不支持的命令：${command}。可用命令：init / status / config / help。`);
+      throw new Error(`不支持的命令：${command}。可用命令：init / status / config / skill / help。`);
   }
 }
 
@@ -312,6 +316,35 @@ function handleConfigUnset(args: string[]): void {
   console.log(removed ? `已从 ${localEnvPath} 移除 ${definition.key}` : `${definition.key} 当前不在 ${localEnvPath} 中`);
 }
 
+async function handleSkill(subcommand: string | undefined, args: string[]): Promise<void> {
+  const registry = createCliSkillRegistry();
+  ensureCliPrincipalRecord(registry, CLI_PRINCIPAL_ID);
+  const service = new PrincipalSkillsService({
+    workingDirectory: cwd,
+    registry,
+  });
+
+  switch (subcommand) {
+    case "list":
+      printSkillList(service.listPrincipalSkills(CLI_PRINCIPAL_ID));
+      return;
+    case "curated":
+      await handleSkillCurated(args, service);
+      return;
+    case "install":
+      await handleSkillInstall(args, service);
+      return;
+    case "remove":
+      handleSkillRemove(args, service);
+      return;
+    case "sync":
+      await handleSkillSync(args, service);
+      return;
+    default:
+      throw new Error("skill 子命令仅支持 list / curated / install / remove / sync。");
+  }
+}
+
 function printHelp(): void {
   console.log("Themis 项目级 CLI");
   console.log("");
@@ -323,6 +356,14 @@ function printHelp(): void {
   console.log("- ./themis config list [--show-secrets]");
   console.log("- ./themis config set <KEY> <VALUE>");
   console.log("- ./themis config unset <KEY>");
+  console.log("- ./themis skill list");
+  console.log("- ./themis skill curated list");
+  console.log("- ./themis skill install local <ABSOLUTE_PATH>");
+  console.log("- ./themis skill install url <GITHUB_URL> [REF]");
+  console.log("- ./themis skill install repo <REPO> <PATH> [REF]");
+  console.log("- ./themis skill install curated <SKILL_NAME>");
+  console.log("- ./themis skill remove <SKILL_NAME>");
+  console.log("- ./themis skill sync <SKILL_NAME> [--force]");
   console.log("");
   console.log("如果希望像 codex/openclaw 一样直接输入 `themis`，建议执行 `./themis install`。");
 }
@@ -402,6 +443,254 @@ function normalizeOptionalText(value: string | undefined): string | null {
 function setProjectEnvFileContent(filePath: string, content: string): void {
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, content, "utf8");
+}
+
+function createCliSkillRegistry(): SqliteCodexSessionRegistry {
+  return new SqliteCodexSessionRegistry({
+    databaseFile: resolve(cwd, "infra/local/themis.db"),
+  });
+}
+
+function ensureCliPrincipalRecord(registry: SqliteCodexSessionRegistry, principalId: string): void {
+  if (registry.getPrincipal(principalId)) {
+    return;
+  }
+
+  const now = new Date().toISOString();
+  registry.savePrincipal({
+    principalId,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
+async function handleSkillCurated(args: string[], service: PrincipalSkillsService): Promise<void> {
+  const [subcommand, ...rest] = args;
+
+  if (subcommand !== "list" || rest.length > 0) {
+    throw new Error("用法：themis skill curated list");
+  }
+
+  const curated = await service.listCuratedSkills(CLI_PRINCIPAL_ID);
+
+  console.log(`当前 principal：${CLI_PRINCIPAL_ID}`);
+  console.log("可安装的 curated skills");
+  console.log("");
+
+  if (curated.length === 0) {
+    console.log("暂无 curated skill 可用。");
+    return;
+  }
+
+  for (const [index, item] of curated.entries()) {
+    const status = item.installed ? "已安装" : "未安装";
+    console.log(`${index + 1}. ${item.name} [${status}]`);
+  }
+}
+
+async function handleSkillInstall(args: string[], service: PrincipalSkillsService): Promise<void> {
+  const [mode, ...rest] = args;
+
+  switch (mode) {
+    case "local": {
+      const [absolutePath, ...extra] = rest;
+
+      if (!absolutePath || extra.length > 0) {
+        throw new Error("用法：themis skill install local <ABSOLUTE_PATH>");
+      }
+
+      const result = await service.installFromLocalPath({
+        principalId: CLI_PRINCIPAL_ID,
+        absolutePath,
+      });
+
+      printSkillInstallResult("本地目录", result.skill.skillName, result);
+      return;
+    }
+    case "url": {
+      const [url, ref, ...extra] = rest;
+
+      if (!url || extra.length > 0) {
+        throw new Error("用法：themis skill install url <GITHUB_URL> [REF]");
+      }
+
+      const result = await service.installFromGithub({
+        principalId: CLI_PRINCIPAL_ID,
+        url,
+        ...(ref ? { ref } : {}),
+      });
+
+      printSkillInstallResult("GitHub URL", result.skill.skillName, result);
+      return;
+    }
+    case "repo": {
+      const [repo, path, ref, ...extra] = rest;
+
+      if (!repo || !path || extra.length > 0) {
+        throw new Error("用法：themis skill install repo <REPO> <PATH> [REF]");
+      }
+
+      const result = await service.installFromGithub({
+        principalId: CLI_PRINCIPAL_ID,
+        repo,
+        path,
+        ...(ref ? { ref } : {}),
+      });
+
+      printSkillInstallResult("GitHub 仓库路径", result.skill.skillName, result);
+      return;
+    }
+    case "curated": {
+      const [skillName, ...extra] = rest;
+
+      if (!skillName || extra.length > 0) {
+        throw new Error("用法：themis skill install curated <SKILL_NAME>");
+      }
+
+      const result = await service.installFromCurated({
+        principalId: CLI_PRINCIPAL_ID,
+        skillName,
+      });
+
+      printSkillInstallResult("OpenAI curated", result.skill.skillName, result);
+      return;
+    }
+    default:
+      throw new Error("skill install 仅支持 local / url / repo / curated。");
+  }
+}
+
+function handleSkillRemove(args: string[], service: PrincipalSkillsService): void {
+  const [skillName, ...extra] = args;
+
+  if (!skillName || extra.length > 0) {
+    throw new Error("用法：themis skill remove <SKILL_NAME>");
+  }
+
+  const result = service.removeSkill(CLI_PRINCIPAL_ID, skillName);
+
+  console.log(`已移除 skill：${result.skillName}`);
+  console.log(`- 受管目录已删除：${result.removedManagedPath ? "是" : "否"}`);
+  console.log(`- 已清理账号同步链接：${result.removedMaterializations}`);
+}
+
+async function handleSkillSync(args: string[], service: PrincipalSkillsService): Promise<void> {
+  const force = args.includes("--force");
+  const positionals = args.filter((arg) => arg !== "--force");
+  const [skillName, ...extra] = positionals;
+
+  if (!skillName || extra.length > 0 || args.length !== positionals.length + (force ? 1 : 0)) {
+    throw new Error("用法：themis skill sync <SKILL_NAME> [--force]");
+  }
+
+  const result = await service.syncSkill(CLI_PRINCIPAL_ID, skillName, { force });
+
+  printSkillSyncResult(result);
+}
+
+function printSkillList(skills: ReturnType<PrincipalSkillsService["listPrincipalSkills"]>): void {
+  console.log(`当前 principal：${CLI_PRINCIPAL_ID}`);
+  console.log("已安装 skills");
+  console.log("");
+
+  if (skills.length === 0) {
+    console.log("暂无已安装 skill。");
+    return;
+  }
+
+  for (const [index, skill] of skills.entries()) {
+    console.log(`${index + 1}. ${skill.skillName}`);
+    console.log(`   状态：${skill.installStatus}`);
+    console.log(`   来源：${describeSkillSource(skill.sourceType, skill.sourceRefJson)}`);
+    console.log(`   说明：${skill.description}`);
+    console.log(`   受管目录：${skill.managedPath}`);
+
+    if (skill.lastError) {
+      console.log(`   最近错误：${skill.lastError}`);
+    }
+  }
+}
+
+function printSkillInstallResult(
+  sourceLabel: string,
+  skillName: string,
+  result: Awaited<ReturnType<PrincipalSkillsService["installFromGithub"]>>,
+): void {
+  console.log(`已安装 skill：${skillName}`);
+  console.log(`- 来源：${sourceLabel}`);
+  console.log(`- 受管目录：${result.skill.managedPath}`);
+  console.log(`- 安装状态：${result.skill.installStatus}`);
+  console.log(
+    `- 同步结果：${result.summary.syncedCount}/${result.summary.totalAccounts} 成功，`
+    + `冲突 ${result.summary.conflictCount}，失败 ${result.summary.failedCount}`,
+  );
+}
+
+function printSkillSyncResult(result: Awaited<ReturnType<PrincipalSkillsService["syncSkill"]>>): void {
+  console.log(`已重同步 skill：${result.skill.skillName}`);
+  console.log(`- 安装状态：${result.skill.installStatus}`);
+  console.log(
+    `- 同步结果：${result.summary.syncedCount}/${result.summary.totalAccounts} 成功，`
+    + `冲突 ${result.summary.conflictCount}，失败 ${result.summary.failedCount}`,
+  );
+
+  if (result.skill.lastError) {
+    console.log(`- 最近错误：${result.skill.lastError}`);
+  }
+}
+
+function describeSkillSource(sourceType: string, sourceRefJson: string): string {
+  const sourceRef = parseSkillSourceRef(sourceRefJson);
+
+  switch (sourceType) {
+    case "local-path":
+      return sourceRef?.absolutePath && typeof sourceRef.absolutePath === "string"
+        ? `本地路径：${sourceRef.absolutePath}`
+        : `本地路径：${sourceRefJson}`;
+    case "github-url":
+      return describeGithubUrlSource(sourceRef);
+    case "github-repo-path":
+      return describeGithubRepoPathSource(sourceRef);
+    case "curated":
+      return describeCuratedSource(sourceRef);
+    default:
+      return `${sourceType}：${sourceRefJson}`;
+  }
+}
+
+function describeGithubUrlSource(sourceRef: Record<string, unknown> | null): string {
+  if (!sourceRef?.url || typeof sourceRef.url !== "string") {
+    return "GitHub URL：未知";
+  }
+
+  const ref = typeof sourceRef.ref === "string" && sourceRef.ref.trim() ? `，ref：${sourceRef.ref}` : "";
+  return `GitHub URL：${sourceRef.url}${ref}`;
+}
+
+function describeGithubRepoPathSource(sourceRef: Record<string, unknown> | null): string {
+  if (!sourceRef?.repo || !sourceRef.path || typeof sourceRef.repo !== "string" || typeof sourceRef.path !== "string") {
+    return "GitHub 仓库路径：未知";
+  }
+
+  const ref = typeof sourceRef.ref === "string" && sourceRef.ref.trim() ? `，ref：${sourceRef.ref}` : "";
+  return `GitHub 仓库：${sourceRef.repo} / ${sourceRef.path}${ref}`;
+}
+
+function describeCuratedSource(sourceRef: Record<string, unknown> | null): string {
+  if (!sourceRef?.repo || !sourceRef.path || typeof sourceRef.repo !== "string" || typeof sourceRef.path !== "string") {
+    return "curated：未知";
+  }
+
+  return `curated：${sourceRef.repo} / ${sourceRef.path}`;
+}
+
+function parseSkillSourceRef(sourceRefJson: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(sourceRefJson);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 async function runInteractiveShell(): Promise<void> {
