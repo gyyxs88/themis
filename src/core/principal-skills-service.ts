@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   readlinkSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -118,7 +119,7 @@ export class PrincipalSkillsService {
       const now = new Date().toISOString();
 
       this.prepareManagedSkillTarget(principalId, validated.skillName, input.replace === true);
-      cpSync(validated.sourcePath, managedPath, { recursive: true });
+      this.writeManagedSkillDirectory(validated.sourcePath, managedPath, input.replace === true);
 
       this.registry.savePrincipalSkill({
         principalId,
@@ -192,9 +193,10 @@ export class PrincipalSkillsService {
     }
 
     const materializations = this.registry.listPrincipalSkillMaterializations(skill.principalId, skill.skillName);
-    const summary = summarizeMaterializations(allManagedAccounts, materializations);
+    const managedMaterializations = filterMaterializations(allManagedAccounts, materializations);
+    const summary = summarizeMaterializations(allManagedAccounts, managedMaterializations);
     const installStatus = resolveInstallStatus(summary);
-    const lastError = pickFirstIssue(materializations);
+    const lastError = pickFirstIssue(managedMaterializations);
     const updatedAt = new Date().toISOString();
 
     this.registry.savePrincipalSkill({
@@ -218,7 +220,7 @@ export class PrincipalSkillsService {
 
     return {
       skill: updatedSkill,
-      materializations,
+      materializations: managedMaterializations,
       summary,
     };
   }
@@ -345,11 +347,44 @@ export class PrincipalSkillsService {
       if (!existingRecord) {
         throw new Error(`技能 ${skillName} 的受管目录已存在，但主记录缺失，请先修复本地状态。`);
       }
-
-      rmSync(managedPath, { recursive: true, force: true });
     }
 
     mkdirSync(dirname(managedPath), { recursive: true });
+  }
+
+  private writeManagedSkillDirectory(sourcePath: string, managedPath: string, replace: boolean): void {
+    const managedParentPath = dirname(managedPath);
+    const incomingRoot = mkdtempSync(join(managedParentPath, `${basename(managedPath)}.incoming-`));
+    const incomingPath = join(incomingRoot, basename(managedPath));
+    const backupPath = `${managedPath}.backup-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    let movedExisting = false;
+
+    try {
+      cpSync(sourcePath, incomingPath, { recursive: true });
+
+      if (existsSync(managedPath)) {
+        if (!replace) {
+          throw new Error(`技能 ${basename(managedPath)} 已安装，如需覆盖请显式 replace。`);
+        }
+
+        renameSync(managedPath, backupPath);
+        movedExisting = true;
+      }
+
+      renameSync(incomingPath, managedPath);
+
+      if (movedExisting && existsSync(backupPath)) {
+        rmSync(backupPath, { recursive: true, force: true });
+      }
+    } catch (error) {
+      if (movedExisting && !existsSync(managedPath) && existsSync(backupPath)) {
+        renameSync(backupPath, managedPath);
+      }
+
+      throw error;
+    } finally {
+      rmSync(incomingRoot, { recursive: true, force: true });
+    }
   }
 }
 
@@ -467,6 +502,14 @@ function summarizeMaterializations(
     conflictCount,
     failedCount,
   };
+}
+
+function filterMaterializations(
+  accounts: StoredAuthAccountRecord[],
+  materializations: StoredPrincipalSkillMaterializationRecord[],
+): StoredPrincipalSkillMaterializationRecord[] {
+  const targetAccountIds = new Set(accounts.map((account) => account.accountId));
+  return materializations.filter((materialization) => targetAccountIds.has(materialization.targetId));
 }
 
 function resolveInstallStatus(summary: PrincipalSkillSyncSummary): StoredPrincipalSkillRecord["installStatus"] {

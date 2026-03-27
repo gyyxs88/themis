@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -193,6 +193,71 @@ test("installFromLocalPath 会写入 principal 受管目录并给全部账号创
   }
 });
 
+test("installFromLocalPath replace=true 在准备新内容后立刻失败时会保留旧受管目录", async () => {
+  const { service, workingDirectory } = createServiceWithAccounts(["default"]);
+  const originalSkillDir = createLocalSkillFixture({
+    dirName: "demo-old",
+    skillName: "demo-skill",
+    description: "old demo",
+  });
+  const replacementSkillDir = createLocalSkillFixture({
+    dirName: "demo-new",
+    skillName: "demo-skill",
+    description: "new demo",
+  });
+  const managedSkillFilePath = resolve(
+    workingDirectory,
+    "infra/local/principals",
+    PRINCIPAL_ID,
+    "skills",
+    "demo-skill",
+    "SKILL.md",
+  );
+  const originalPrepareManagedSkillTarget = (
+    service as unknown as {
+      prepareManagedSkillTarget: (principalId: string, skillName: string, replace: boolean) => void;
+    }
+  ).prepareManagedSkillTarget;
+
+  try {
+    await service.installFromLocalPath({
+      principalId: PRINCIPAL_ID,
+      absolutePath: originalSkillDir,
+    });
+
+    (
+      service as unknown as {
+        prepareManagedSkillTarget: (principalId: string, skillName: string, replace: boolean) => void;
+      }
+    ).prepareManagedSkillTarget = (principalId: string, skillName: string, replace: boolean) => {
+      originalPrepareManagedSkillTarget.call(service, principalId, skillName, replace);
+      throw new Error("managed copy failed");
+    };
+
+    await assert.rejects(
+      () =>
+        service.installFromLocalPath({
+          principalId: PRINCIPAL_ID,
+          absolutePath: replacementSkillDir,
+          replace: true,
+        }),
+      /managed copy failed/,
+    );
+
+    assert.equal(existsSync(managedSkillFilePath), true);
+    assert.equal(readFileSync(managedSkillFilePath, "utf8").includes("description: old demo"), true);
+  } finally {
+    (
+      service as unknown as {
+        prepareManagedSkillTarget: (principalId: string, skillName: string, replace: boolean) => void;
+      }
+    ).prepareManagedSkillTarget = originalPrepareManagedSkillTarget;
+    rmSync(originalSkillDir, { recursive: true, force: true });
+    rmSync(replacementSkillDir, { recursive: true, force: true });
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
 test("syncAllSkillsToAuthAccount 会把已安装 skill 补同步到新账号槽位", async () => {
   const { service, registry, workingDirectory } = createServiceWithAccounts(["default"]);
   const skillDir = createLocalSkillFixture({
@@ -318,6 +383,59 @@ test("installFromLocalPath 只会同步到受管认证账号槽位，不会接�
       false,
     );
     assert.equal(existsSync(externalSkillPath), false);
+  } finally {
+    rmSync(skillDir, { recursive: true, force: true });
+    rmSync(externalRoot, { recursive: true, force: true });
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test("installFromLocalPath 返回结果和 lastError 不会被外部账号脏 materialization 污染", async () => {
+  const { service, registry, workingDirectory } = createServiceWithAccounts(["default"]);
+  const externalRoot = mkdtempSync(join(tmpdir(), "themis-external-codex-home-dirty-"));
+  const skillDir = createLocalSkillFixture({
+    dirName: "demo",
+    skillName: "demo-skill",
+    description: "demo",
+  });
+
+  registry.saveAuthAccount({
+    accountId: "external",
+    label: "external",
+    codexHome: resolve(externalRoot, ".codex-external"),
+    isActive: false,
+    createdAt: "2026-03-27T00:00:00.000Z",
+    updatedAt: "2026-03-27T00:00:00.000Z",
+  });
+
+  try {
+    await service.installFromLocalPath({
+      principalId: PRINCIPAL_ID,
+      absolutePath: skillDir,
+    });
+
+    registry.savePrincipalSkillMaterialization({
+      principalId: PRINCIPAL_ID,
+      skillName: "demo-skill",
+      targetKind: "auth-account",
+      targetId: "external",
+      targetPath: "/tmp/external-demo-skill",
+      state: "failed",
+      lastError: "external dirty error",
+    });
+
+    const result = await service.installFromLocalPath({
+      principalId: PRINCIPAL_ID,
+      absolutePath: skillDir,
+      replace: true,
+    });
+
+    assert.equal(result.skill.installStatus, "ready");
+    assert.equal(result.skill.lastError, undefined);
+    assert.deepEqual(
+      result.materializations.map((record) => record.targetId),
+      ["default"],
+    );
   } finally {
     rmSync(skillDir, { recursive: true, force: true });
     rmSync(externalRoot, { recursive: true, force: true });
