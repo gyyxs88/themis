@@ -81,6 +81,7 @@ test("consumeNdjsonStream handles ack -> event -> result -> done with real store
     assert.equal(turn.steps[4].text, "任务已完成");
     assert.equal(turn.steps[4].tone, "success");
     assert.equal(turn.state, "completed");
+    assert.ok(app.renderer.renderCalls.length > 0);
     assert.deepEqual(turn.result, {
       status: "completed",
       summary: "任务已完成",
@@ -147,6 +148,7 @@ test("consumeNdjsonStream handles ack -> fatal and clears active run state", asy
       status: "failed",
       summary: "后端执行失败",
     });
+    assert.ok(app.renderer.renderCalls.length > 0);
     assert.equal(turn.steps[2].title, "执行失败");
     assert.equal(turn.steps[2].text, "后端执行失败");
     assert.equal(turn.steps[2].tone, "error");
