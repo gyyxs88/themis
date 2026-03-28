@@ -113,11 +113,6 @@ test("/api/tasks/stream 会按 ack -> event* -> result -> done 顺序返回 NDJS
     assert.equal(response.status, 200);
 
     const lines = parseNdjson(await response.text());
-    assert.equal(lines.length, 4);
-    assert.equal(lines[0]?.kind, "ack");
-    assert.equal(lines[1]?.kind, "event");
-    assert.equal(lines[2]?.kind, "result");
-    assert.equal(lines[3]?.kind, "done");
     assert.deepEqual(lines.map((line) => line.kind), ["ack", "event", "result", "done"]);
 
     const done = lines[3];
@@ -189,9 +184,6 @@ test("/api/tasks/stream 在认证前置失败时不会发 ack，但会发 adapte
     assert.equal(response.status, 200);
 
     const lines = parseNdjson(await response.text());
-    assert.equal(lines.length, 2);
-    assert.equal(lines[0]?.kind, "error");
-    assert.equal(lines[1]?.kind, "fatal");
     assert.deepEqual(lines.map((line) => line.kind), ["error", "fatal"]);
     assert.equal(lines[0]?.title, "AUTH_REQUIRED");
     assert.equal(lines[1]?.title, "AUTH_REQUIRED");
