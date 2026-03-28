@@ -1,370 +1,190 @@
-# Themis Operator CLI Design
+# Themis 配置与运维 CLI 设计
 
-## Purpose
+## 目的
 
-This document defines the recommended operator CLI surface for the first Themis MVP.
+本文定义 Themis 当前产品边界下的 CLI 形态。
 
-This is not the main employee-facing product surface.
+这里的 CLI 不是员工主入口，也不是任务执行入口。
 
-Its purpose is to support:
+它的职责是：
 
-- local development
-- debugging
-- maintenance
-- admin operations
-- automation support
+- 本地初始化
+- 配置读写
+- 状态检查
+- 诊断与排障
+- skill 维护
+- 开发与运维辅助
 
-## Design Goals
+## 边界
 
-- operationally clear
-- task-oriented
-- safe by default
-- explicit about permissions
-- compatible with future automation
-- connected to Markdown memory
+Themis 的实际任务执行入口固定为：
 
-## Command Design Philosophy
+- LAN Web 聊天工作台
+- 飞书渠道
 
-Raw Codex is powerful but open-ended.
+CLI 不承担下面这些职责：
 
-For employees, Themis should primarily expose visual surfaces such as:
+- 直接提交实现类任务
+- 直接提交审查类任务
+- 直接提交文档编写任务
+- 复刻 `codex exec` / `codex review` 一类 agent 执行入口
 
-- LAN web frontend
-- Feishu plugin or bot-connected interface
+原因很简单：
 
-The operator CLI exists so technical users can inspect and control the system more directly.
+- 员工主路径已经明确是 Web / 飞书，不应该再做一套并行主入口
+- 如果 CLI 也能直接跑任务，产品心智会分裂
+- 会话、身份、历史、长期人格和渠道体验现在都围绕 Web / 飞书收敛
+- CLI 更适合做“把系统配好、查清楚、修顺畅”，而不是“代替渠道发任务”
 
-That means commands should map to common intentions, not raw technical toggles.
+## 设计目标
 
-Operators should usually start with:
+- 命令边界清楚
+- 结果可读，优先面向人
+- 对排障友好
+- 尽量少暴露 Codex 底层细节
+- 能服务本地开发和内部维护
+- 不与 Web / 飞书主链路抢职责
 
-- what they want to do
-- what role they are acting as
-- whether the run should update memory
+## 推荐命令面
 
-They should not need to think first about:
+当前已落地或应优先补齐的命令组：
 
-- low-level provider settings
-- prompt composition
-- manual memory file editing
-- Codex-specific config precedence
-
-## Primary Entry Command
-
-Recommended root command:
-
-```bash
-themis
-```
-
-Recommended first subcommands:
-
-- `themis start`
-- `themis review`
-- `themis docs`
-- `themis task`
-- `themis memory`
+- `themis init`
+- `themis status`
 - `themis config`
+- `themis skill`
 
-## Core Command Flows
+后续优先考虑补的命令组：
 
-### 1. Start A Guided Workflow
+- `themis auth`
+- `themis provider`
+- `themis service`
+- `themis doctor`
+- `themis export`
 
-Recommended form:
+## 命令组说明
 
-```bash
-themis start <workflow> "<goal>"
-```
+### `themis init`
 
-Examples:
+用于初始化本地开发和运行环境，例如：
 
-```bash
-themis start implement "Add a login retry mechanism"
-themis start investigate "Why are employee sessions timing out?"
-themis start docs "Update onboarding instructions for new staff"
-```
+- 生成 `.env.local`
+- 创建本地目录
+- 给出下一步操作提示
 
-This should be the main entrypoint for developers and operators.
+### `themis status`
 
-### 2. Review-Focused Shortcut
+用于查看当前 Themis 的整体可用状态，例如：
 
-Recommended form:
+- 本地配置文件是否存在
+- SQLite 是否已生成
+- Codex 认证材料是否可用
+- 飞书配置是否完整
+- 第三方 provider 是否已配置
 
-```bash
-themis review "<goal>"
-```
-
-Example:
-
-```bash
-themis review "Review the recent auth changes for security risks"
-```
-
-This is a shortcut for a common high-value workflow with findings-first output.
-
-### 3. Documentation-Focused Shortcut
-
-Recommended form:
-
-```bash
-themis docs "<goal>"
-```
-
-Example:
-
-```bash
-themis docs "Refresh the employee quick-start guide"
-```
-
-This is a safe default workflow optimized for documentation and memory sync.
-
-## Supporting Command Groups
-
-### `themis task`
-
-Purpose:
-
-- inspect or update task state in the Markdown memory system
-
-Suggested subcommands:
-
-- `themis task list`
-- `themis task add "<title>"`
-- `themis task start "<title>"`
-- `themis task done "<title>"`
-
-This gives a lightweight operational bridge between workflow runs and task memory.
-
-### `themis memory`
-
-Purpose:
-
-- inspect or maintain memory files directly
-
-Suggested subcommands:
-
-- `themis memory status`
-- `themis memory sync`
-- `themis memory session`
-- `themis memory decision "<title>"`
-
-This keeps memory visible as part of system operations.
+它回答的是“现在能不能用，大概卡在哪”。
 
 ### `themis config`
 
-Purpose:
+用于维护 Themis 项目级配置，而不是发任务。
 
-- display effective behavior without forcing users to read multiple config files manually
+建议长期保留：
 
-Suggested subcommands:
+- `themis config list`
+- `themis config set`
+- `themis config unset`
+
+后续如有必要再补：
 
 - `themis config show`
-- `themis config profile list`
 - `themis config doctor`
 
-This is especially useful because Codex configuration is layered and can otherwise feel opaque.
+### `themis skill`
 
-## Global Flags
+用于管理 Themis 侧的 skill 安装和同步，例如：
 
-Recommended first global flags:
+- 查看当前 principal 已安装 skills
+- 从本地 / URL / repo / curated 源安装 skill
+- 删除 skill
+- 同步 skill 到账号槽位
 
-- `--role <owner|employee>`
-- `--profile <name>`
-- `--model <id>`
-- `--reasoning <low|medium|high|xhigh>`
-- `--memory <auto|off|confirm>`
-- `--sandbox <read-only|workspace-write|danger-full-access>`
-- `--approval <never|untrusted|on-request>`
-- `--json`
+### `themis auth`
 
-## Flag Design Principles
+建议作为后续补充的运维命令组，职责是帮助确认“认证到底通没通”，例如：
 
-### Principle 1
+- 查看默认账号与当前激活账号
+- 检查认证文件是否存在
+- 检查多账号槽位和缺失项
+- 给出修复建议
 
-Flags may override defaults, but should not be required for normal use.
+它不负责代替 Web 做完整登录流程，但应该能把认证状态讲明白。
 
-### Principle 2
+### `themis provider`
 
-Dangerous flags should feel explicit and uncommon.
+建议作为后续补充的运维命令组，职责是帮助确认“第三方模型链路到底通没通”，例如：
 
-### Principle 3
+- 列出当前可读 provider
+- 查看默认模型和能力声明
+- 探测端点健康状态
+- 输出兼容性与告警信息
 
-Memory behavior should be user-visible, not hidden.
+### `themis service`
 
-### Principle 4
+建议作为后续补充的运维命令组，职责是帮助确认“服务有没有正常跑起来”，例如：
 
-Structured output support should exist early for automation and future integration.
+- 查看当前监听地址和端口
+- 检查本地 HTTP 服务可达性
+- 输出关键运行参数
+- 辅助 systemd 开发模式排查
 
-## Recommended Workflow Presets
+### `themis doctor`
 
-### `implement`
+建议作为聚合式诊断入口，把常见问题集中检查一遍，例如：
 
-User intent:
+- 缺失环境变量
+- 认证材料不可用
+- provider 配置不完整
+- 数据库或工作目录异常
+- 飞书配置不完整
 
-- make code or project changes
+它的目标不是替代所有子命令，而是给用户一个“一键看主要问题”的入口。
 
-Default posture:
+### `themis export`
 
-- role-aware write access
-- memory sync enabled
-- completion summary required
+建议作为排障辅助命令，输出便于人工分析的信息，例如：
 
-### `review`
+- 当前配置摘要
+- 认证与 provider 摘要
+- 服务状态摘要
+- 关键错误提示
 
-User intent:
+默认应避免泄露敏感信息，必要时通过显式参数控制。
 
-- inspect code quality, risk, or regressions
+## 输出原则
 
-Default posture:
+- 优先用中文，结论直接
+- 先说当前状态，再说问题，再说下一步
+- 少堆原始 JSON，多给人能看懂的摘要
+- 对危险操作保持显式
 
-- read-focused
-- findings-first output
-- minimal memory writes unless requested
+## 非目标
 
-### `investigate`
+下面这些不是这套 CLI 的目标：
 
-User intent:
+- 在 CLI 中直接和 Codex 对话
+- 在 CLI 中直接跑实现 / review / docs 工作流
+- 在 CLI 中替代 Web / 飞书的会话体验
+- 把 Codex 的所有原生命令原样搬进 Themis
 
-- understand an issue and narrow likely causes
+## 与 Web / 飞书的关系
 
-Default posture:
+- Web / 飞书负责“发起任务、看过程、接结果、保留会话体验”
+- CLI 负责“把系统配好、查清问题、协助维护”
 
-- medium or high reasoning
-- read-only or limited write depending on profile
-- produce diagnosis plus next actions
+这两层互相补位，但不重叠。
 
-### `docs`
+## 当前结论
 
-User intent:
+Themis CLI 应继续保留，并逐步补强。
 
-- update documentation, memory, or onboarding materials
-
-Default posture:
-
-- safer write permissions
-- strong memory synchronization
-- clear changed-files summary
-
-## Interaction Model
-
-### Default Experience
-
-An operator run should feel like this:
-
-1. user enters a goal
-2. Themis resolves workflow and safety settings
-3. Themis shows a short "run header"
-4. Codex-powered work begins
-5. progress updates appear
-6. final summary is shown
-7. memory updates are confirmed
-
-### Recommended Run Header
-
-Before work begins, Themis should print something like:
-
-```text
-Workflow: implement
-Role: employee
-Sandbox: workspace-write
-Approval: untrusted
-Memory sync: auto
-Goal: Add an onboarding helper command
-```
-
-This makes the run understandable before any work happens.
-
-## Output Design
-
-### Human Output
-
-For interactive use, output should emphasize:
-
-- what Themis is doing
-- current workflow
-- progress checkpoints
-- final result
-- memory changes made
-
-### Structured Output
-
-For automation or integration, `--json` should expose:
-
-- workflow metadata
-- effective runtime settings
-- progress events
-- final outcome
-- memory update results
-
-## Memory-Linked UX Rules
-
-Themis should make memory updates visible, not magical.
-
-Examples:
-
-- "Updated active session notes"
-- "Moved task to done"
-- "Decision note suggested but not created"
-
-This is important because durable context is one of the main product values.
-
-## Recommended Role Behavior
-
-### Owner
-
-Characteristics:
-
-- more control
-- more override freedom
-- better suited to implementation and architectural workflows
-
-### Employee
-
-Characteristics:
-
-- guided workflows first
-- safer permission defaults
-- less exposure to dangerous flags
-- stronger memory and onboarding support
-
-## Suggested Help Design
-
-The `--help` output should emphasize examples over exhaustive theory.
-
-Users should quickly see:
-
-- common commands
-- common workflows
-- safe usage patterns
-- where memory is written
-
-## Suggested Future Commands
-
-These are useful later, but not required in MVP:
-
-- `themis resume`
-- `themis plan`
-- `themis onboard`
-- `themis mcp`
-- `themis skill`
-
-## Anti-Patterns To Avoid
-
-- too many top-level commands
-- exposing every Codex toggle as a first-class concept
-- hiding safety mode from the user
-- silently rewriting many memory files
-- forcing employees to learn Codex internals before getting value
-
-## Command Design Summary
-
-The best MVP operator CLI design is:
-
-- one strong root command
-- workflow-first entry for technical users
-- visible safety header
-- role-aware defaults
-- explicit memory integration
-- optional structured output for future automation
-
-Employee usability should be delivered primarily through the web and Feishu channels, not through this CLI.
+但补强方向应是配置、诊断、维护和排障，而不是发展成另一套任务执行入口。
