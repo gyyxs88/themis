@@ -1,0 +1,365 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import type { Server } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import { SqliteCodexSessionRegistry } from "../storage/index.js";
+import type { TaskEvent, TaskRequest, TaskResult } from "../types/index.js";
+import { createThemisHttpServer } from "./http-server.js";
+import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
+
+interface TestServerContext {
+  baseUrl: string;
+  root: string;
+  runtimeStore: SqliteCodexSessionRegistry;
+  runtime: CodexTaskRuntime;
+  authHeaders: Record<string, string>;
+}
+
+const HISTORY_SESSION_COUNT = 101;
+const HISTORY_BASE_TIME = Date.UTC(2026, 2, 28, 10, 0, 0);
+
+async function withHttpServer(
+  run: (context: TestServerContext) => Promise<void>,
+): Promise<void> {
+  const root = mkdtempSync(join(tmpdir(), "themis-http-history-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: root,
+    runtimeStore,
+  });
+  const server = createThemisHttpServer({ runtime });
+  const listeningServer = await listenServer(server);
+  const address = listeningServer.address();
+
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to resolve server address.");
+  }
+
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const authHeaders = await createAuthenticatedWebHeaders({
+    baseUrl,
+    runtimeStore,
+  });
+
+  try {
+    await run({
+      baseUrl,
+      root,
+      runtimeStore,
+      runtime,
+      authHeaders,
+    });
+  } finally {
+    await closeServer(listeningServer);
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("GET /api/history/sessions 会使用默认 limit、拒绝非法 limit 并截断上限", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore, authHeaders }) => {
+    await seedRecentSessions(runtimeStore, HISTORY_SESSION_COUNT);
+
+    const defaultResponse = await fetch(`${baseUrl}/api/history/sessions`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    assert.equal(defaultResponse.status, 200);
+    const defaultPayload = await defaultResponse.json() as {
+      sessions?: Array<{
+        sessionId?: string;
+      }>;
+    };
+    assert.equal(defaultPayload.sessions?.length, 24);
+    assert.equal(defaultPayload.sessions?.[0]?.sessionId, "session-history-101");
+    assert.equal(defaultPayload.sessions?.at(-1)?.sessionId, "session-history-078");
+
+    const invalidResponse = await fetch(`${baseUrl}/api/history/sessions?limit=abc`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    assert.equal(invalidResponse.status, 200);
+    const invalidPayload = await invalidResponse.json() as {
+      sessions?: Array<{
+        sessionId?: string;
+      }>;
+    };
+    assert.equal(invalidPayload.sessions?.length, 24);
+
+    const clampedResponse = await fetch(`${baseUrl}/api/history/sessions?limit=200`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    assert.equal(clampedResponse.status, 200);
+    const clampedPayload = await clampedResponse.json() as {
+      sessions?: Array<{
+        sessionId?: string;
+      }>;
+    };
+    assert.equal(clampedPayload.sessions?.length, 100);
+    assert.equal(clampedPayload.sessions?.[0]?.sessionId, "session-history-101");
+    assert.equal(clampedPayload.sessions?.at(-1)?.sessionId, "session-history-002");
+  });
+});
+
+test("GET /api/history/sessions/:id 会返回 400 / 404 / 200，并带上 events 和 touchedFiles", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore, authHeaders }) => {
+    const sessionId = "session-history-detail";
+    const requestId = "request-history-detail";
+    const taskId = "task-history-detail";
+    const request = buildTaskRequest({
+      sessionId,
+      requestId,
+      taskId,
+      createdAt: timestamp(20),
+    });
+
+    runtimeStore.upsertTurnFromRequest(request, taskId);
+    runtimeStore.appendTaskEvent(buildTaskEvent({
+      requestId,
+      taskId,
+      type: "task.accepted",
+      status: "running",
+      timestamp: timestamp(21),
+    }));
+    runtimeStore.appendTaskEvent(buildTaskEvent({
+      requestId,
+      taskId,
+      type: "task.started",
+      status: "running",
+      timestamp: timestamp(22),
+    }));
+    runtimeStore.completeTaskTurn({
+      request,
+      result: buildTaskResult({
+        requestId,
+        taskId,
+        touchedFiles: [
+          "/workspace/src/a.ts",
+          "/workspace/src/b.ts",
+        ],
+        completedAt: timestamp(23),
+      }),
+      sessionMode: "resumed",
+      threadId: "thread-history-detail",
+    });
+
+    const invalidResponse = await fetch(`${baseUrl}/api/history/sessions/%20%20`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    assert.equal(invalidResponse.status, 400);
+    const invalidPayload = await invalidResponse.json() as {
+      error?: {
+        code?: string;
+        message?: string;
+      };
+    };
+    assert.equal(invalidPayload.error?.code, "INVALID_REQUEST");
+    assert.equal(invalidPayload.error?.message, "Missing session id.");
+
+    const notFoundResponse = await fetch(`${baseUrl}/api/history/sessions/session-history-missing`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    assert.equal(notFoundResponse.status, 404);
+    const notFoundPayload = await notFoundResponse.json() as {
+      error?: {
+        code?: string;
+        message?: string;
+      };
+    };
+    assert.equal(notFoundPayload.error?.code, "NOT_FOUND");
+    assert.equal(notFoundPayload.error?.message, "No stored history was found for this session.");
+
+    const response = await fetch(`${baseUrl}/api/history/sessions/${sessionId}`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json() as {
+      session?: {
+        sessionId?: string;
+        turnCount?: number;
+      };
+      turns?: Array<{
+        requestId?: string;
+        events?: Array<{
+          eventId?: string;
+          type?: string;
+          status?: string;
+        }>;
+        touchedFiles?: string[];
+      }>;
+    };
+
+    assert.equal(payload.session?.sessionId, sessionId);
+    assert.equal(payload.session?.turnCount, 1);
+    assert.equal(payload.turns?.length, 1);
+    assert.equal(payload.turns?.[0]?.requestId, requestId);
+    assert.deepEqual(payload.turns?.[0]?.events?.map((event) => event.type), [
+      "task.accepted",
+      "task.started",
+    ]);
+    assert.deepEqual(payload.turns?.[0]?.events?.map((event) => event.status), [
+      "running",
+      "running",
+    ]);
+    assert.deepEqual(payload.turns?.[0]?.touchedFiles, [
+      "/workspace/src/a.ts",
+      "/workspace/src/b.ts",
+    ]);
+  });
+});
+
+test("HEAD /api/history/sessions 与 HEAD /api/history/sessions/:id 不返回 body", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore, authHeaders }) => {
+    const sessionId = "session-history-head";
+    const requestId = "request-history-head";
+    const taskId = "task-history-head";
+    const request = buildTaskRequest({
+      sessionId,
+      requestId,
+      taskId,
+      createdAt: timestamp(40),
+    });
+
+    runtimeStore.upsertTurnFromRequest(request, taskId);
+    runtimeStore.completeTaskTurn({
+      request,
+      result: buildTaskResult({
+        requestId,
+        taskId,
+        completedAt: timestamp(41),
+      }),
+    });
+
+    const listResponse = await fetch(`${baseUrl}/api/history/sessions`, {
+      method: "HEAD",
+      headers: authHeaders,
+    });
+    assert.equal(listResponse.status, 200);
+    assert.equal(await listResponse.text(), "");
+
+    const detailResponse = await fetch(`${baseUrl}/api/history/sessions/${sessionId}`, {
+      method: "HEAD",
+      headers: authHeaders,
+    });
+    assert.equal(detailResponse.status, 200);
+    assert.equal(await detailResponse.text(), "");
+  });
+});
+
+async function seedRecentSessions(store: SqliteCodexSessionRegistry, count: number): Promise<void> {
+  for (let index = 1; index <= count; index += 1) {
+    const sessionId = formatSessionId(index);
+    const requestId = `request-history-${formatSessionId(index)}`;
+    const taskId = `task-history-${formatSessionId(index)}`;
+    const request = buildTaskRequest({
+      sessionId,
+      requestId,
+      taskId,
+      createdAt: timestamp(index),
+    });
+
+    store.upsertTurnFromRequest(request, taskId);
+    store.completeTaskTurn({
+      request,
+      result: buildTaskResult({
+        requestId,
+        taskId,
+        completedAt: timestamp(index, 30),
+      }),
+    });
+  }
+}
+
+function buildTaskRequest(input: {
+  sessionId: string;
+  requestId: string;
+  taskId: string;
+  createdAt: string;
+}): TaskRequest {
+  return {
+    requestId: input.requestId,
+    taskId: input.taskId,
+    sourceChannel: "web",
+    user: {
+      userId: "user-history",
+      displayName: "History User",
+    },
+    goal: `History test ${input.sessionId}`,
+    channelContext: {
+      sessionId: input.sessionId,
+    },
+    createdAt: input.createdAt,
+  };
+}
+
+function buildTaskEvent(input: {
+  requestId: string;
+  taskId: string;
+  type: TaskEvent["type"];
+  status: TaskEvent["status"];
+  timestamp: string;
+}): TaskEvent {
+  return {
+    eventId: `${input.requestId}-${input.type}-${input.timestamp}`,
+    requestId: input.requestId,
+    taskId: input.taskId,
+    type: input.type,
+    status: input.status,
+    timestamp: input.timestamp,
+  };
+}
+
+function buildTaskResult(input: {
+  requestId: string;
+  taskId: string;
+  touchedFiles?: string[];
+  completedAt: string;
+}): TaskResult {
+  return {
+    requestId: input.requestId,
+    taskId: input.taskId,
+    status: "completed",
+    summary: "History test completed.",
+    ...(input.touchedFiles ? { touchedFiles: input.touchedFiles } : {}),
+    completedAt: input.completedAt,
+  };
+}
+
+function formatSessionId(index: number): string {
+  return `session-history-${index.toString().padStart(3, "0")}`;
+}
+
+function timestamp(offsetMinutes: number, offsetSeconds = 0): string {
+  return new Date(HISTORY_BASE_TIME + (offsetMinutes * 60_000) + (offsetSeconds * 1_000)).toISOString();
+}
+
+function listenServer(server: Server): Promise<Server> {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve(server);
+    });
+  });
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
