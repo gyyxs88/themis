@@ -1,5 +1,6 @@
 import type { ChannelContext, ChannelId, ChannelUser } from "./channel.js";
 import type { MemoryUpdate } from "./memory.js";
+import type { RuntimeEngine } from "./runtime-engine.js";
 
 export const TASK_ATTACHMENT_TYPES = ["text", "link", "file", "image"] as const;
 
@@ -100,7 +101,7 @@ export interface TaskOptions {
   assistantMbti?: string;
   styleNotes?: string;
   assistantSoul?: string;
-  runtimeEngine?: "sdk" | "app-server";
+  runtimeEngine?: RuntimeEngine;
   authAccountId?: string;
   model?: string;
   reasoning?: ReasoningLevel;
