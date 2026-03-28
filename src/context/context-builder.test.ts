@@ -147,7 +147,9 @@ test("ContextBuilder 在扫描过程中响应 abort signal", async () => {
       request: createRequest(root),
       signal: abortController.signal,
     });
-    abortController.abort(new Error("manual abort"));
+    setTimeout(() => {
+      abortController.abort(new Error("manual abort"));
+    }, 0);
 
     await assert.rejects(async () => buildPromise, /abort/i);
   } finally {

@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { setImmediate as waitForNextTurn } from "node:timers/promises";
 import type {
   ContextBlock,
   ContextBuildInput,
@@ -403,7 +404,7 @@ function extractKeywords(goal: string, inputText?: string): string[] {
 
 async function checkpointAbort(signal: AbortSignal | undefined): Promise<void> {
   throwIfAborted(signal);
-  await Promise.resolve();
+  await waitForNextTurn();
   throwIfAborted(signal);
 }
 
