@@ -153,6 +153,42 @@ test("AppServerTaskRuntime 恢复会话时会使用存储里的 threadId，而�
       createdAt: "2026-03-28T12:00:00.000Z",
       updatedAt: "2026-03-28T12:00:00.000Z",
     });
+    fixture.runtimeStore.upsertTurnFromRequest({
+      requestId: "req-app-old-2",
+      taskId: "task-app-old-2",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "old app-server turn",
+      channelContext: { sessionId: "web-session-resume-1" },
+      createdAt: "2026-03-28T11:59:00.000Z",
+    }, "task-app-old-2");
+    fixture.runtimeStore.completeTaskTurn({
+      request: {
+        requestId: "req-app-old-2",
+        taskId: "task-app-old-2",
+        sourceChannel: "web",
+        user: { userId: "webui" },
+        goal: "old app-server turn",
+        channelContext: { sessionId: "web-session-resume-1" },
+        createdAt: "2026-03-28T11:59:00.000Z",
+      },
+      result: {
+        taskId: "task-app-old-2",
+        requestId: "req-app-old-2",
+        status: "completed",
+        summary: "app-server result",
+        structuredOutput: {
+          session: {
+            sessionId: "web-session-resume-1",
+            threadId: "thread-app-stored-1",
+            engine: "app-server",
+          },
+        },
+        completedAt: "2026-03-28T11:59:30.000Z",
+      },
+      sessionMode: "resumed",
+      threadId: "thread-app-stored-1",
+    });
 
     const result = await fixture.runtime.runTask({
       requestId: "req-app-2",
@@ -168,6 +204,75 @@ test("AppServerTaskRuntime 恢复会话时会使用存储里的 threadId，而�
     assert.equal(state.resumed.length, 1);
     assert.equal(state.resumed[0]?.threadId, "thread-app-stored-1");
     assert.equal(readSessionPayload(result).sessionId, "web-session-resume-1");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 遇到 SDK 旧会话 threadId 时会降级 startThread，而不是跨引擎 resume", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-new-engine",
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    fixture.runtimeStore.saveSession({
+      sessionId: "web-session-cross-engine-1",
+      threadId: "thread-sdk-old-1",
+      createdAt: "2026-03-28T12:00:00.000Z",
+      updatedAt: "2026-03-28T12:00:00.000Z",
+    });
+
+    fixture.runtimeStore.upsertTurnFromRequest({
+      requestId: "req-sdk-old-1",
+      taskId: "task-sdk-old-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "old sdk turn",
+      channelContext: { sessionId: "web-session-cross-engine-1" },
+      createdAt: "2026-03-28T11:59:00.000Z",
+    }, "task-sdk-old-1");
+    fixture.runtimeStore.completeTaskTurn({
+      request: {
+        requestId: "req-sdk-old-1",
+        taskId: "task-sdk-old-1",
+        sourceChannel: "web",
+        user: { userId: "webui" },
+        goal: "old sdk turn",
+        channelContext: { sessionId: "web-session-cross-engine-1" },
+        createdAt: "2026-03-28T11:59:00.000Z",
+      },
+      result: {
+        taskId: "task-sdk-old-1",
+        requestId: "req-sdk-old-1",
+        status: "completed",
+        summary: "sdk result",
+        structuredOutput: {
+          session: {
+            sessionId: "web-session-cross-engine-1",
+            threadId: "thread-sdk-old-1",
+            engine: "sdk",
+          },
+        },
+        completedAt: "2026-03-28T11:59:30.000Z",
+      },
+      sessionMode: "resumed",
+      threadId: "thread-sdk-old-1",
+    });
+
+    const result = await fixture.runtime.runTask({
+      requestId: "req-app-cross-1",
+      taskId: "task-app-cross-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "new app server turn",
+      channelContext: { channelSessionKey: "web-session-cross-engine-1" },
+      createdAt: "2026-03-28T12:00:00.000Z",
+    });
+
+    assert.equal(state.resumed.length, 0);
+    assert.equal(state.started.length, 1);
+    assert.equal(readSessionPayload(result).threadId, "thread-app-new-engine");
   } finally {
     fixture.cleanup();
   }
@@ -274,24 +379,34 @@ test("AppServerTaskRuntime 会按 session workspace 解析执行目录", async (
   }
 });
 
-test("AppServerTaskRuntime 在 timeoutMs 超时后会中止 runTask", { timeout: 200 }, async () => {
+test("AppServerTaskRuntime 在 onEvent 阻塞时也会响应外部 abort", { timeout: 400 }, async () => {
+  const controller = new AbortController();
   const { state, sessionFactory } = createSessionFactory({
-    startTurn: async () => await new Promise<{ turnId: string }>(() => {}),
+    startTurn: async () => ({ turnId: "turn-app-event-blocked" }),
   });
   const fixture = createRuntimeFixture({ sessionFactory });
 
   try {
+    setTimeout(() => {
+      controller.abort(new Error("EVENT_QUEUE_ABORT"));
+    }, 20);
+
     await assert.rejects(async () => await fixture.runtime.runTask({
       requestId: "req-app-5",
       taskId: "task-app-5",
       sourceChannel: "web",
       user: { userId: "webui" },
-      goal: "timeout",
+      goal: "event blocked",
       channelContext: { channelSessionKey: "web-session-timeout-1" },
       createdAt: "2026-03-28T12:00:00.000Z",
     }, {
-      timeoutMs: 20,
-    }), /TASK_TIMEOUT:20|超时/);
+      signal: controller.signal,
+      onEvent: async (event) => {
+        if (event.type === "task.received") {
+          await new Promise<void>(() => {});
+        }
+      },
+    }), /EVENT_QUEUE_ABORT/);
 
     assert.equal(state.closed, 1);
   } finally {

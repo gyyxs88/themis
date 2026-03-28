@@ -67,13 +67,8 @@ export class AppServerTaskRuntime {
     let sessionMode: "created" | "resumed" | "ephemeral" = "ephemeral";
     let resolvedThreadId: string | undefined;
 
-    const emit = async (
-      type: TaskEvent["type"],
-      status: TaskEvent["status"],
-      message: string,
-      payload?: Record<string, unknown>,
-    ): Promise<void> => {
-      await eventDelivery.deliver(createTaskEvent(taskId, request.requestId, type, status, message, payload));
+    const emit = async (event: TaskEvent): Promise<void> => {
+      await abortable(() => eventDelivery.deliver(event), signal);
     };
 
     this.runtimeStore.upsertTurnFromRequest(request, taskId);
@@ -100,35 +95,41 @@ export class AppServerTaskRuntime {
         }
       }));
 
-      await emit("task.received", "queued", "Themis accepted the web request.");
+      await emit(createTaskEvent(
+        taskId,
+        request.requestId,
+        "task.received",
+        "queued",
+        "Themis accepted the web request.",
+      ));
       throwIfAborted(signal);
 
       const executionWorkingDirectory = this.resolveExecutionWorkingDirectory(request);
       const sessionId = normalizeSessionId(request.channelContext.sessionId);
-      const storedThreadId = sessionId ? this.runtimeStore.resolveThreadId(sessionId) : null;
-      sessionMode = resolveSessionMode(sessionId, storedThreadId);
+      const resumableThreadId = sessionId ? resolveAppServerThreadId(this.runtimeStore, sessionId) : null;
+      sessionMode = resolveSessionMode(sessionId, resumableThreadId);
       const threadStartParams: AppServerThreadStartParams = {
         cwd: executionWorkingDirectory,
       };
 
-      const thread = storedThreadId
-        ? await abortable(() => activeSession.resumeThread(storedThreadId, threadStartParams), signal)
+      const thread = resumableThreadId
+        ? await abortable(() => activeSession.resumeThread(resumableThreadId, threadStartParams), signal)
         : await abortable(() => activeSession.startThread(threadStartParams), signal);
       const threadId = thread.threadId;
       resolvedThreadId = threadId;
       persistThreadSession(this.runtimeStore, sessionId, threadId, request.createdAt);
 
-      await emit("task.started", "running", "Codex task started.", {
+      await emit(createTaskEvent(taskId, request.requestId, "task.started", "running", "Codex task started.", {
         sessionMode,
         threadId,
         sessionId: sessionId || null,
         conversationId: sessionId || null,
         runtimeEngine: "app-server",
-      });
+      }));
       throwIfAborted(signal);
 
       await abortable(() => activeSession.startTurn(threadId, request.goal), signal);
-      await eventDelivery.flush();
+      await abortable(() => eventDelivery.flush(), signal);
       throwIfAborted(signal);
 
       const baseResult: TaskResult = {
@@ -162,8 +163,10 @@ export class AppServerTaskRuntime {
       const message = toErrorMessage(error);
 
       try {
-        await eventDelivery.flush();
-        await emit("task.failed", "failed", message);
+        if (!signal.aborted) {
+          await abortable(() => eventDelivery.flush(), signal);
+          await emit(createTaskEvent(taskId, request.requestId, "task.failed", "failed", message));
+        }
       } catch {
         // 保留原始执行错误，不让事件回调错误覆盖它。
       }
@@ -178,7 +181,9 @@ export class AppServerTaskRuntime {
       throw error;
     } finally {
       try {
-        await eventDelivery.flush();
+        if (!signal.aborted) {
+          await abortable(() => eventDelivery.flush(), signal);
+        }
       } catch {
         // finally 阶段不覆盖主错误。
       }
@@ -367,6 +372,32 @@ function persistThreadSession(
   });
 }
 
+function resolveAppServerThreadId(
+  runtimeStore: SqliteCodexSessionRegistry,
+  sessionId: string,
+): string | null {
+  const turns = runtimeStore.listSessionTurns(sessionId);
+
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index];
+
+    if (!turn || (turn.status !== "completed" && turn.status !== "failed")) {
+      continue;
+    }
+
+    const session = parseStructuredSession(turn.structuredOutputJson);
+
+    if (session?.engine !== "app-server") {
+      return null;
+    }
+
+    const threadId = normalizeSessionId(session.threadId) || normalizeSessionId(turn.codexThreadId);
+    return threadId || null;
+  }
+
+  return null;
+}
+
 function resolveSessionMode(
   sessionId: string,
   storedThreadId: string | null,
@@ -380,6 +411,36 @@ function resolveSessionMode(
 
 function normalizeSessionId(value: string | undefined): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function parseStructuredSession(structuredOutputJson: string | undefined): {
+  engine?: string;
+  threadId?: string;
+} | null {
+  if (!structuredOutputJson) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(structuredOutputJson) as {
+      session?: {
+        engine?: unknown;
+        threadId?: unknown;
+      };
+    };
+    const session = parsed.session;
+
+    if (!session || typeof session !== "object") {
+      return null;
+    }
+
+    return {
+      ...(typeof session.engine === "string" ? { engine: session.engine } : {}),
+      ...(typeof session.threadId === "string" ? { threadId: session.threadId } : {}),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function toUnsubscribe(value: void | (() => void)): (() => void) | undefined {
