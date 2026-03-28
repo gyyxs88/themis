@@ -375,7 +375,11 @@ export class WebAccessService {
     const now = this.now();
 
     if (Date.parse(session.expiresAt) <= Date.parse(now)) {
-      this.revokeSession({ sessionId: normalizedSessionId });
+      this.expireSession(normalizedSessionId, {
+        sessionId: normalizedSessionId,
+        tokenId: session.tokenId,
+        tokenLabel: token.label,
+      });
       return { ok: false, reason: "SESSION_EXPIRED" };
     }
 
@@ -427,6 +431,39 @@ export class WebAccessService {
         tokenId: session.tokenId,
         ...(tokenLabel ? { tokenLabel } : {}),
         ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
+      },
+    );
+  }
+
+  private expireSession(
+    sessionId: string,
+    context: {
+      sessionId: string;
+      tokenId: string;
+      tokenLabel: string;
+    },
+  ): void {
+    const now = this.now();
+    const session = this.registry.getWebSession(sessionId);
+
+    if (!session || session.revokedAt) {
+      return;
+    }
+
+    this.registry.revokeWebSession(sessionId, now, now);
+    this.appendAudit(
+      "web_access.session_expired",
+      "会话已过期",
+      {
+        sessionId: context.sessionId,
+        tokenId: context.tokenId,
+        tokenLabel: context.tokenLabel,
+        revokedAt: now,
+      },
+      {
+        sessionId: context.sessionId,
+        tokenId: context.tokenId,
+        tokenLabel: context.tokenLabel,
       },
     );
   }

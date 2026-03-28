@@ -148,6 +148,11 @@ test("authenticate 成功会创建 30 天 session 并写登录成功审计", () 
     assert.equal(loginSucceeded?.summary, "Web 登录成功");
     assert.equal(loginSucceeded?.sessionId, authenticated.session.sessionId);
     assert.equal(loginSucceeded?.tokenId, created.tokenId);
+
+    const storedToken = registry.getWebAccessTokenById(created.tokenId);
+    assert.ok(storedToken);
+    assert.equal(storedToken?.tokenHash.startsWith("scrypt:"), true);
+    assert.notEqual(storedToken?.tokenHash, "correct horse battery staple");
   } finally {
     rmSync(workingDirectory, { recursive: true, force: true });
   }
@@ -234,6 +239,83 @@ test("删除口令后关联 session 立即失效", () => {
   }
 });
 
+test("revokeSession 会写主动登出审计", () => {
+  const { workingDirectory, registry, service } = createService(() => NOW);
+
+  try {
+    service.createToken({
+      label: "owner",
+      secret: "correct horse battery staple",
+    });
+
+    const authenticated = service.authenticate({
+      secret: "correct horse battery staple",
+    });
+
+    assert.equal(authenticated.ok, true);
+    if (!authenticated.ok) {
+      throw new Error("expected authentication to succeed");
+    }
+
+    service.revokeSession({
+      sessionId: authenticated.session.sessionId,
+      remoteIp: "192.168.1.15",
+    });
+
+    const logoutAudit = registry
+      .listWebAuditEvents()
+      .find((event) => event.eventType === "web_access.session_revoked");
+
+    assert.ok(logoutAudit);
+    assert.equal(logoutAudit?.summary, "主动登出");
+    assert.equal(logoutAudit?.remoteIp, "192.168.1.15");
+    assert.equal(logoutAudit?.sessionId, authenticated.session.sessionId);
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test("recordDeniedAccess 会写被拒绝访问审计", () => {
+  const { workingDirectory, registry, service } = createService(() => NOW);
+
+  try {
+    const created = service.createToken({
+      label: "owner",
+      secret: "correct horse battery staple",
+    });
+
+    const authenticated = service.authenticate({
+      secret: "correct horse battery staple",
+    });
+
+    assert.equal(authenticated.ok, true);
+    if (!authenticated.ok) {
+      throw new Error("expected authentication to succeed");
+    }
+
+    service.recordDeniedAccess({
+      reason: "NO_SESSION",
+      sessionId: authenticated.session.sessionId,
+      tokenId: created.tokenId,
+      tokenLabel: "owner",
+      remoteIp: "192.168.1.16",
+    });
+
+    const deniedAudit = registry
+      .listWebAuditEvents()
+      .find((event) => event.eventType === "web_access.access_denied");
+
+    assert.ok(deniedAudit);
+    assert.equal(deniedAudit?.summary, "Web 访问被拒绝");
+    assert.equal(deniedAudit?.remoteIp, "192.168.1.16");
+    assert.equal(deniedAudit?.sessionId, authenticated.session.sessionId);
+    assert.equal(deniedAudit?.tokenLabel, "owner");
+    assert.equal(deniedAudit?.tokenId, created.tokenId);
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
 test("吊销后可用同名 label 重建新 token", () => {
   const { workingDirectory, registry, service } = createService(() => NOW);
 
@@ -301,7 +383,7 @@ test("renameToken 会写重命名审计", () => {
 
 test("readSession 过期分支返回 SESSION_EXPIRED", () => {
   let current = NOW;
-  const { workingDirectory, service } = createService(() => current);
+  const { workingDirectory, registry, service } = createService(() => current);
 
   try {
     service.createToken({
@@ -324,6 +406,14 @@ test("readSession 过期分支返回 SESSION_EXPIRED", () => {
       ok: false,
       reason: "SESSION_EXPIRED",
     });
+
+    const expiredAudit = registry
+      .listWebAuditEvents()
+      .find((event) => event.eventType === "web_access.session_expired");
+
+    assert.ok(expiredAudit);
+    assert.equal(expiredAudit?.summary, "会话已过期");
+    assert.equal(expiredAudit?.sessionId, authenticated.session.sessionId);
   } finally {
     rmSync(workingDirectory, { recursive: true, force: true });
   }
