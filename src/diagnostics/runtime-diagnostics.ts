@@ -93,6 +93,7 @@ export class RuntimeDiagnosticsService {
     let providerCount = 0;
     let providerIds: string[] = [];
     let providerReadError: string | undefined;
+    const activeProviderProfile = this.authRuntime?.readThirdPartyProviderProfile() ?? null;
     if (this.runtimeStore) {
       try {
         const configs = readOpenAICompatibleProviderConfigs(this.workingDirectory, this.runtimeStore);
@@ -114,7 +115,7 @@ export class RuntimeDiagnosticsService {
         ...(snapshotError ? { snapshotError } : {}),
       },
       provider: {
-        activeMode: providerCount > 0 ? "third-party" : "auth",
+        activeMode: activeProviderProfile ? "third-party" : "auth",
         providerCount,
         providerIds,
         ...(providerReadError ? { readError: providerReadError } : {}),
