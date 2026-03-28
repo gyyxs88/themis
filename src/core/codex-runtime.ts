@@ -210,16 +210,18 @@ export class CodexTaskRuntime {
             ...(principalId ? { principalId } : {}),
             ...(resolvedRequest.conversationId ? { conversationId: resolvedRequest.conversationId } : {}),
           });
-          await emit(
-            createTaskEvent(
-              taskId,
-              request.requestId,
-              "task.memory_updated",
-              "running",
-              "Memory updated at task start.",
-              { updates: startUpdates },
-            ),
-          );
+          if (startUpdates.length > 0) {
+            await emit(
+              createTaskEvent(
+                taskId,
+                request.requestId,
+                "task.memory_updated",
+                "running",
+                "Memory updated at task start.",
+                { updates: startUpdates },
+              ),
+            );
+          }
         } catch (error) {
           await emit(
             createTaskEvent(
@@ -343,16 +345,18 @@ export class CodexTaskRuntime {
             ...(resolvedRequest.conversationId ? { conversationId: resolvedRequest.conversationId } : {}),
             verified: true,
           });
-          await emit(
-            createTaskEvent(
-              taskId,
-              request.requestId,
-              "task.memory_updated",
-              "completed",
-              "Memory updated at task completion.",
-              { updates: completionMemoryUpdates },
-            ),
-          );
+          if (completionMemoryUpdates.length > 0) {
+            await emit(
+              createTaskEvent(
+                taskId,
+                request.requestId,
+                "task.memory_updated",
+                "completed",
+                "Memory updated at task completion.",
+                { updates: completionMemoryUpdates },
+              ),
+            );
+          }
         } catch (error) {
           completionMemoryUpdates = [];
           await emit(
