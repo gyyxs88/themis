@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { WebAccessService, type WebAccessSessionReadResult } from "../core/web-access.js";
+import { resolveRemoteIp } from "./http-audit.js";
 import { toErrorMessage } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
 import { clearSessionCookie, readCookie, setSessionCookie, WEB_SESSION_COOKIE } from "./http-cookies.js";
@@ -188,28 +189,6 @@ function normalizeOptionalText(value: unknown): string | null {
 
   const normalized = value.trim();
   return normalized ? normalized : null;
-}
-
-function resolveRemoteIp(request: IncomingMessage): string | undefined {
-  const forwarded = request.headers["x-forwarded-for"];
-
-  if (typeof forwarded === "string") {
-    const value = forwarded.split(",")[0]?.trim();
-
-    if (value) {
-      return value;
-    }
-  }
-
-  if (Array.isArray(forwarded)) {
-    const value = forwarded[0]?.split(",")[0]?.trim();
-
-    if (value) {
-      return value;
-    }
-  }
-
-  return request.socket.remoteAddress ?? undefined;
 }
 
 function createBootstrapHintHtml(): string {

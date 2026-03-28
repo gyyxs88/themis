@@ -5,6 +5,7 @@ import {
   persistSessionTaskSettings,
 } from "../core/session-settings-service.js";
 import type { SqliteCodexSessionRegistry } from "../storage/index.js";
+import { appendWebAuditEvent, buildRemoteIpContext } from "./http-audit.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
 import { writeJson } from "./http-responses.js";
@@ -104,6 +105,19 @@ export async function handleSessionSettingsWrite(
     const payload = await readJsonBody(request) as { settings?: unknown };
     const patch = hasOwnProperty(payload, "settings") ? payload.settings : payload;
     const result = persistSessionTaskSettings(store, sessionId, patch, new Date().toISOString());
+
+    appendWebAuditEvent(
+      store,
+      "web_access.session_settings_updated",
+      "session 任务设置已更新",
+      {
+        sessionId: result.sessionId,
+        cleared: result.cleared,
+        settings: result.settings,
+      },
+      buildRemoteIpContext(request),
+    );
+
     writeJson(response, 200, {
       ok: true,
       ...result,

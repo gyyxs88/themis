@@ -106,13 +106,13 @@ export class WebAccessService {
 
   createToken(input: CreateWebAccessTokenInput): WebAccessTokenSummary {
     const label = input.label.trim();
-    const secret = input.secret;
+    const secret = normalizeWebAccessSecret(input.secret);
 
     if (!label) {
       throw new Error("Web access token label is required.");
     }
 
-    if (secret.length === 0) {
+    if (!secret) {
       throw new Error("Web access token secret is required.");
     }
 
@@ -276,9 +276,9 @@ export class WebAccessService {
   }
 
   authenticate(input: AuthenticateWebAccessInput): WebAccessAuthenticationResult {
-    const secret = input.secret;
+    const secret = normalizeWebAccessSecret(input.secret);
 
-    if (secret.length === 0) {
+    if (!secret) {
       this.appendAudit(
         "web_access.login_failed",
         "Web 登录失败",
@@ -579,6 +579,10 @@ function verifyWebAccessSecret(secret: string, storedHash: string): boolean {
   }
 
   return timingSafeEqual(expected, actual);
+}
+
+function normalizeWebAccessSecret(secret: string): string {
+  return secret.trim();
 }
 
 function isActiveWebAccessTokenLabelConflictError(error: unknown): boolean {

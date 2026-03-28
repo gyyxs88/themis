@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
 import { CodexAuthRuntime, type CodexAuthSnapshot } from "../core/codex-auth.js";
 import type { CodexTaskRuntime } from "../core/codex-runtime.js";
+import { appendWebAuditEvent, buildRemoteIpContext } from "./http-audit.js";
 import { readJsonBody } from "./http-request.js";
 import { toErrorMessage } from "./http-errors.js";
 import { writeJson } from "./http-responses.js";
@@ -158,6 +159,7 @@ export async function handleAuthAccountCreate(
   try {
     const payload = (await readJsonBody(request)) as AuthAccountCreatePayload;
     const label = normalizeOptionalText(payload.label);
+    const activate = typeof payload.activate === "boolean" ? payload.activate : true;
 
     if (!label) {
       writeJson(response, 400, {
@@ -169,16 +171,33 @@ export async function handleAuthAccountCreate(
       return;
     }
 
+    const previousAccountId = authRuntime.getActiveAccount()?.accountId ?? null;
     const account = authRuntime.createAccount({
       label,
       ...(normalizeOptionalText(payload.accountId) ? { accountId: normalizeOptionalText(payload.accountId)! } : {}),
-      activate: typeof payload.activate === "boolean" ? payload.activate : true,
+      activate,
     });
     await runtime?.getPrincipalSkillsService().syncAllSkillsToAuthAccount(
       DEFAULT_PRIVATE_ASSISTANT_PRINCIPAL_ID,
       account.accountId,
     );
     const auth = await authRuntime.readSnapshot(account.accountId);
+
+    if (activate && account.accountId !== previousAccountId) {
+      appendWebAuditEvent(
+        authRuntime.getRuntimeStore(),
+        "web_access.auth_account_selected",
+        "默认认证账号已切换",
+        {
+          previousAccountId,
+          accountId: account.accountId,
+          accountLabel: account.label,
+          trigger: "account-created",
+        },
+        buildRemoteIpContext(request),
+      );
+    }
+
     writeJson(response, 200, {
       account,
       auth: enrichAuthSnapshot(authRuntime, auth, request),
@@ -212,8 +231,22 @@ export async function handleAuthAccountSelect(
       return;
     }
 
+    const previousAccountId = authRuntime.getActiveAccount()?.accountId ?? null;
     const account = authRuntime.setActiveAccount(accountId);
     const auth = await authRuntime.readSnapshot(account.accountId);
+
+    appendWebAuditEvent(
+      authRuntime.getRuntimeStore(),
+      "web_access.auth_account_selected",
+      "默认认证账号已切换",
+      {
+        previousAccountId,
+        accountId: account.accountId,
+        accountLabel: account.label,
+      },
+      buildRemoteIpContext(request),
+    );
+
     writeJson(response, 200, {
       account,
       auth: enrichAuthSnapshot(authRuntime, auth, request),

@@ -4,7 +4,8 @@ import { WebAdapter, type WebDeliveryMessage, type WebTaskPayload } from "../cha
 import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { appendTaskReplyQuotaFooter } from "../core/task-reply-quota.js";
-import type { TaskRequest } from "../types/index.js";
+import type { TaskRequest, TaskResult } from "../types/index.js";
+import { appendWebAuditEvent, resolveRemoteIp } from "./http-audit.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
 import { safeWriteNdjson, writeJson, writeNdjson } from "./http-responses.js";
@@ -56,6 +57,8 @@ export async function handleTaskStream(
 
     await ensureAuthAvailable(authRuntime, normalizedRequest);
 
+    recordTaskAcceptedAudit(runtime, request, normalizedRequest, "/api/tasks/stream");
+
     writeNdjson(response, {
       kind: "ack",
       requestId: normalizedRequest.requestId,
@@ -72,6 +75,10 @@ export async function handleTaskStream(
         await router.publishEvent(event);
       },
     });
+
+    if (result.status === "cancelled") {
+      recordTaskCancelledAudit(runtime, request, normalizedRequest, result, "/api/tasks/stream");
+    }
 
     await router.publishResult(result);
 
@@ -143,6 +150,8 @@ export async function handleTaskRun(
 
     await ensureAuthAvailable(authRuntime, normalizedRequest);
 
+    recordTaskAcceptedAudit(runtime, request, normalizedRequest, "/api/tasks/run");
+
     const result = await runtime.runTask(normalizedRequest, {
       timeoutMs: taskTimeoutMs,
       finalizeResult: (request, taskResult) => appendTaskReplyQuotaFooter(authRuntime, request, taskResult),
@@ -150,6 +159,10 @@ export async function handleTaskRun(
         await router.publishEvent(event);
       },
     });
+
+    if (result.status === "cancelled") {
+      recordTaskCancelledAudit(runtime, request, normalizedRequest, result, "/api/tasks/run");
+    }
 
     await router.publishResult(result);
 
@@ -201,4 +214,61 @@ async function ensureAuthAvailable(authRuntime: CodexAuthRuntime, request: TaskR
   }
 
   throw new Error("Not logged in");
+}
+
+function recordTaskAcceptedAudit(
+  runtime: CodexTaskRuntime,
+  request: IncomingMessage,
+  taskRequest: TaskRequest,
+  route: "/api/tasks/run" | "/api/tasks/stream",
+): void {
+  const remoteIp = resolveRemoteIp(request);
+
+  appendWebAuditEvent(
+    runtime.getRuntimeStore(),
+    "web_access.task_accepted",
+    "Web 任务已接受",
+    {
+      route,
+      requestId: taskRequest.requestId,
+      taskId: taskRequest.taskId ?? null,
+      sourceChannel: taskRequest.sourceChannel,
+      userId: taskRequest.user.userId,
+      ...(taskRequest.channelContext.sessionId ? { sessionId: taskRequest.channelContext.sessionId } : {}),
+      ...(taskRequest.channelContext.channelSessionKey ? { channelSessionKey: taskRequest.channelContext.channelSessionKey } : {}),
+    },
+    {
+      ...(remoteIp ? { remoteIp } : {}),
+    },
+  );
+}
+
+function recordTaskCancelledAudit(
+  runtime: CodexTaskRuntime,
+  request: IncomingMessage,
+  taskRequest: TaskRequest,
+  result: Pick<TaskResult, "taskId" | "requestId" | "status" | "summary">,
+  route: "/api/tasks/run" | "/api/tasks/stream",
+): void {
+  const remoteIp = resolveRemoteIp(request);
+
+  appendWebAuditEvent(
+    runtime.getRuntimeStore(),
+    "web_access.task_cancelled",
+    "Web 任务已取消",
+    {
+      route,
+      requestId: result.requestId,
+      taskId: result.taskId,
+      status: result.status,
+      summary: result.summary,
+      sourceChannel: taskRequest.sourceChannel,
+      userId: taskRequest.user.userId,
+      ...(taskRequest.channelContext.sessionId ? { sessionId: taskRequest.channelContext.sessionId } : {}),
+      ...(taskRequest.channelContext.channelSessionKey ? { channelSessionKey: taskRequest.channelContext.channelSessionKey } : {}),
+    },
+    {
+      ...(remoteIp ? { remoteIp } : {}),
+    },
+  );
 }

@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { normalizePrincipalTaskSettings } from "../core/principal-task-settings.js";
+import { appendWebAuditEvent, buildRemoteIpContext } from "./http-audit.js";
 import { readJsonBody } from "./http-request.js";
 import { writeJson } from "./http-responses.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
@@ -62,6 +63,20 @@ export async function handleIdentityReset(
     const resetAt = new Date().toISOString();
     const reset = runtime.resetPrincipalState(identity.principalId, resetAt);
 
+    appendWebAuditEvent(
+      runtime.getRuntimeStore(),
+      "web_access.principal_reset",
+      "principal 重置",
+      {
+        principalId: identity.principalId,
+        resetAt,
+        channel: identity.channel,
+        channelUserId: identity.channelUserId,
+        ...(payload.displayName ? { displayName: payload.displayName } : {}),
+      },
+      buildRemoteIpContext(request),
+    );
+
     writeJson(response, 200, {
       ok: true,
       identity,
@@ -118,6 +133,19 @@ export async function handleIdentityTaskSettingsUpdate(
     const taskSettings = runtime.savePrincipalTaskSettings(
       identity.principalId,
       normalizePrincipalTaskSettings(payload.settings),
+    );
+
+    appendWebAuditEvent(
+      runtime.getRuntimeStore(),
+      "web_access.identity_task_settings_updated",
+      "principal 任务设置已更新",
+      {
+        principalId: identity.principalId,
+        channel: identity.channel,
+        channelUserId: identity.channelUserId,
+        settings: taskSettings,
+      },
+      buildRemoteIpContext(request),
     );
 
     writeJson(response, 200, {

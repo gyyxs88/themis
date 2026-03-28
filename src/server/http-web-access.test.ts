@@ -136,6 +136,37 @@ test("HTTP Web 登录 cookie 与受保护 API 拦截主链路", async () => {
   });
 });
 
+test("Web 登录审计只使用 socket 来源 IP，不信任伪造的 X-Forwarded-For", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const service = new WebAccessService({ registry: runtimeStore });
+    service.createToken({
+      label: "owner-lan",
+      secret: "test-secret",
+      remoteIp: "127.0.0.1",
+    });
+
+    const loginResponse = await fetch(`${baseUrl}/api/web-auth/login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Forwarded-For": "203.0.113.88",
+      },
+      body: JSON.stringify({
+        token: "test-secret",
+      }),
+    });
+
+    assert.equal(loginResponse.status, 200);
+
+    const loginAudit = runtimeStore
+      .listWebAuditEvents()
+      .find((event) => event.eventType === "web_access.login_succeeded");
+
+    assert.ok(loginAudit);
+    assert.equal(loginAudit?.remoteIp, "127.0.0.1");
+  });
+});
+
 function extractCookie(setCookieHeader: string, name: string): string {
   const prefix = `${name}=`;
 

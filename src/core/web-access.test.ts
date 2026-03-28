@@ -189,6 +189,30 @@ test("authenticate 失败会返回失败 reason 并写登录失败审计", () =>
   }
 });
 
+test("创建 Web 口令时会规范化前后空格，登录也遵循同一规则", () => {
+  const { workingDirectory, service } = createService(() => NOW);
+
+  try {
+    const created = service.createToken({
+      label: "owner",
+      secret: "  correct horse battery staple  ",
+    });
+
+    const authenticated = service.authenticate({
+      secret: "correct horse battery staple",
+    });
+
+    assert.equal(authenticated.ok, true);
+    if (!authenticated.ok) {
+      throw new Error("expected authentication to succeed");
+    }
+
+    assert.equal(authenticated.session.token.tokenId, created.tokenId);
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
 test("删除口令后关联 session 立即失效", () => {
   const { workingDirectory, service } = createService(() => NOW);
 

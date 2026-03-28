@@ -57,7 +57,7 @@ async function withHttpServer(
 }
 
 test("PUT /api/sessions/:id/settings 会保存合法 workspacePath", async () => {
-  await withHttpServer(async ({ baseUrl, root, authHeaders }) => {
+  await withHttpServer(async ({ baseUrl, root, authHeaders, runtimeStore }) => {
     const workspace = join(root, "workspace");
     mkdirSync(workspace);
 
@@ -84,6 +84,14 @@ test("PUT /api/sessions/:id/settings 会保存合法 workspacePath", async () =>
       profile: "dev",
       workspacePath: workspace,
     });
+
+    const audit = runtimeStore
+      .listWebAuditEvents()
+      .find((event) => event.eventType === "web_access.session_settings_updated");
+
+    assert.ok(audit);
+    assert.equal(audit?.remoteIp, "127.0.0.1");
+    assert.equal(JSON.parse(audit?.payloadJson ?? "{}").sessionId, "session-http-1");
   });
 });
 
