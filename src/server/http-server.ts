@@ -22,6 +22,7 @@ import {
   handleIdentityTaskSettingsUpdate,
 } from "./http-identity.js";
 import { handleRuntimeConfig } from "./http-runtime-config.js";
+import { handleDiagnostics } from "./http-diagnostics.js";
 import {
   handleSkillsCuratedCatalog,
   handleSkillsInstall,
@@ -96,6 +97,10 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if ((request.method === "GET" || isHeadRequest) && url.pathname === "/api/runtime/config") {
         return handleRuntimeConfig(response, runtime, isHeadRequest);
+      }
+
+      if ((request.method === "GET" || isHeadRequest) && url.pathname === "/api/diagnostics") {
+        return handleDiagnostics(response, runtime, authRuntime, isHeadRequest);
       }
 
       if (request.method === "POST" && url.pathname === "/api/runtime/third-party/probe") {

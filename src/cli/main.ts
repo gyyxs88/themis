@@ -6,6 +6,7 @@ import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { resolveCodexAuthFilePath, resolveDefaultCodexHome } from "../core/auth-accounts.js";
+import { RuntimeDiagnosticsService, type RuntimeDiagnosticFileStatus } from "../diagnostics/runtime-diagnostics.js";
 import { PrincipalSkillsService } from "../core/principal-skills-service.js";
 import { WebAccessService } from "../core/web-access.js";
 import { readOpenAICompatibleProviderConfigs } from "../core/openai-compatible-provider.js";
@@ -68,9 +69,11 @@ async function main(args: string[]): Promise<void> {
       handleInstall([...(subcommand ? [subcommand] : []), ...rest]);
       return;
     case "status":
-    case "doctor":
     case "check":
       await handleStatus();
+      return;
+    case "doctor":
+      await handleDoctor(subcommand, rest);
       return;
     case "config":
       handleConfig(subcommand, rest);
@@ -82,7 +85,7 @@ async function main(args: string[]): Promise<void> {
       await handleSkill(subcommand, rest);
       return;
     default:
-      throw new Error(`不支持的命令：${command}。可用命令：init / status / config / auth / skill / help。`);
+      throw new Error(`不支持的命令：${command}。可用命令：init / status / check / doctor / config / auth / skill / help。`);
   }
 }
 
@@ -235,6 +238,80 @@ async function handleStatus(): Promise<void> {
 
   for (const [index, step] of nextSteps.entries()) {
     console.log(`${index + 1}. ${step}`);
+  }
+}
+
+async function handleDoctor(subcommand: string | undefined, args: string[]): Promise<void> {
+  const sections = [subcommand, ...args].filter((item): item is string => Boolean(item && item.trim()));
+  if (sections.length > 1) {
+    throw new Error("用法：themis doctor [context|auth|provider|memory|service]");
+  }
+
+  const selected = sections[0]?.trim().toLowerCase();
+  if (selected && !["context", "auth", "provider", "memory", "service"].includes(selected)) {
+    throw new Error("doctor 子命令仅支持 context / auth / provider / memory / service。");
+  }
+
+  const dbPath = resolve(cwd, "infra/local/themis.db");
+  const runtimeStore = existsSync(dbPath)
+    ? new SqliteCodexSessionRegistry({ databaseFile: dbPath })
+    : null;
+  const diagnostics = new RuntimeDiagnosticsService({
+    workingDirectory: cwd,
+    runtimeStore,
+    sqliteFilePath: dbPath,
+  });
+  const summary = await diagnostics.readSummary();
+
+  if (!selected) {
+    console.log("Themis 运行诊断");
+    console.log("");
+    console.log(`- 工作目录：${summary.workingDirectory}`);
+    console.log(`- auth：${summary.auth.authFileExists ? "ok" : "missing"} (${summary.auth.authFilePath})`);
+    console.log(`- provider：${summary.provider.activeMode} (${summary.provider.providerCount} 个)`);
+    console.log(`- context：${countOk(summary.context.files)}/${summary.context.files.length} ok`);
+    console.log(`- memory：${countOk(summary.memory.files)}/${summary.memory.files.length} ok`);
+    console.log(`- service/sqlite：${summary.service.sqlite.exists ? "ok" : "missing"} (${summary.service.sqlite.path})`);
+    return;
+  }
+
+  switch (selected) {
+    case "context":
+      console.log("Themis 诊断 - context");
+      printFileStatuses(summary.context.files);
+      return;
+    case "auth":
+      console.log("Themis 诊断 - auth");
+      console.log(`defaultCodexHome：${summary.auth.defaultCodexHome}`);
+      console.log(`authFile：${summary.auth.authFilePath}`);
+      console.log(`authFileExists：${summary.auth.authFileExists ? "ok" : "missing"}`);
+      if (summary.auth.snapshotAuthenticated !== null) {
+        console.log(`snapshotAuthenticated：${summary.auth.snapshotAuthenticated ? "yes" : "no"}`);
+      }
+      if (summary.auth.snapshotError) {
+        console.log(`snapshotError：${summary.auth.snapshotError}`);
+      }
+      return;
+    case "provider":
+      console.log("Themis 诊断 - provider");
+      console.log(`activeMode：${summary.provider.activeMode}`);
+      console.log(`providerCount：${summary.provider.providerCount}`);
+      console.log(`providerIds：${summary.provider.providerIds.join(", ") || "<none>"}`);
+      if (summary.provider.readError) {
+        console.log(`readError：${summary.provider.readError}`);
+      }
+      return;
+    case "memory":
+      console.log("Themis 诊断 - memory");
+      printFileStatuses(summary.memory.files);
+      return;
+    case "service":
+      console.log("Themis 诊断 - service");
+      console.log(`sqlite.path：${summary.service.sqlite.path}`);
+      console.log(`sqlite.status：${summary.service.sqlite.exists ? "ok" : "missing"}`);
+      return;
+    default:
+      return;
   }
 }
 
@@ -398,6 +475,9 @@ function printHelp(): void {
   console.log("- ./themis install      # 安装到用户目录，无需 sudo");
   console.log("- ./themis init");
   console.log("- ./themis status");
+  console.log("- ./themis check");
+  console.log("- ./themis doctor");
+  console.log("- ./themis doctor <context|auth|provider|memory|service>");
   console.log("- ./themis config list [--show-secrets]");
   console.log("- ./themis config set <KEY> <VALUE>");
   console.log("- ./themis config unset <KEY>");
@@ -415,6 +495,16 @@ function printHelp(): void {
   console.log("- ./themis skill sync <SKILL_NAME> [--force]");
   console.log("");
   console.log("如果希望像 codex/openclaw 一样直接输入 `themis`，建议执行 `./themis install`。");
+}
+
+function printFileStatuses(files: RuntimeDiagnosticFileStatus[]): void {
+  for (const file of files) {
+    console.log(`${file.path}：${file.status}`);
+  }
+}
+
+function countOk(files: RuntimeDiagnosticFileStatus[]): number {
+  return files.filter((file) => file.status === "ok").length;
 }
 
 function resolveConfigValue(

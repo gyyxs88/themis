@@ -542,6 +542,10 @@ export class CodexTaskRuntime {
     return this.runtimeStore;
   }
 
+  getWorkingDirectory(): string {
+    return this.workingDirectory;
+  }
+
   getIdentityLinkService(): IdentityLinkService {
     return this.identityLinkService;
   }
