@@ -577,18 +577,7 @@ function handleAuthWebRename(oldLabel: string, newLabel: string): void {
 
 async function readHiddenLinePair(firstPrompt: string, secondPrompt: string): Promise<string> {
   if (!input.isTTY || !output.isTTY) {
-    const text = await readInputText();
-    const [first = "", second = ""] = text.split(/\r?\n/);
-
-    if (!first.trim() || !second.trim()) {
-      throw new Error("口令不能为空。");
-    }
-
-    if (first !== second) {
-      throw new Error("两次输入的口令不一致。");
-    }
-
-    return first;
+    return parseNonTtyHiddenLinePair(await readInputText());
   }
 
   const first = await readHiddenLineFromTty(firstPrompt);
@@ -615,6 +604,25 @@ async function readInputText(): Promise<string> {
   return content;
 }
 
+function parseNonTtyHiddenLinePair(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const [first = "", second = "", ...rest] = lines;
+
+  if (!first.trim() || !second.trim()) {
+    throw new Error("口令不能为空。");
+  }
+
+  if (first !== second) {
+    throw new Error("两次输入的口令不一致。");
+  }
+
+  if (rest.some((line) => line.trim().length > 0)) {
+    throw new Error("stdin 只允许恰好两行口令输入，不能包含额外内容。");
+  }
+
+  return first;
+}
+
 async function readHiddenLineFromTty(prompt: string): Promise<string> {
   if (typeof input.setRawMode !== "function") {
     throw new Error("当前终端不支持隐藏输入。");
@@ -638,24 +646,37 @@ async function readHiddenLineFromTty(prompt: string): Promise<string> {
   try {
     return await new Promise<string>((resolve, reject) => {
       let value = "";
+      let settled = false;
 
       const cleanup = (): void => {
         input.off("data", onData);
         input.off("error", onError);
+        input.off("end", onEnd);
+        input.off("close", onClose);
       };
 
       const finish = (result: string): void => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
         cleanup();
         restoreRawMode();
         output.write("\n");
         resolve(result);
       };
 
-      const fail = (error: Error): void => {
+      const fail = (message: string, error?: Error): void => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
         cleanup();
         restoreRawMode();
         output.write("\n");
-        reject(error);
+        reject(error ?? new Error(message));
       };
 
       const onData = (chunk: Buffer | string): void => {
@@ -668,7 +689,12 @@ async function readHiddenLineFromTty(prompt: string): Promise<string> {
           }
 
           if (char === "\u0003") {
-            fail(new Error("输入已取消。"));
+            fail("输入已取消：收到中断信号。");
+            return;
+          }
+
+          if (char === "\u0004") {
+            fail("输入已取消：收到 EOF。");
             return;
           }
 
@@ -682,11 +708,21 @@ async function readHiddenLineFromTty(prompt: string): Promise<string> {
       };
 
       const onError = (error: Error): void => {
-        fail(error);
+        fail("输入已取消：读取失败。", error);
+      };
+
+      const onEnd = (): void => {
+        fail("输入已取消：收到 EOF。");
+      };
+
+      const onClose = (): void => {
+        fail("输入已取消：输入流已关闭。");
       };
 
       input.on("data", onData);
       input.once("error", onError);
+      input.once("end", onEnd);
+      input.once("close", onClose);
     });
   } finally {
     restoreRawMode();

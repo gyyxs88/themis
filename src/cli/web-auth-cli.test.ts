@@ -81,3 +81,33 @@ test("themis auth web 最小闭环", () => {
     rmSync(workspace, { recursive: true, force: true });
   }
 });
+
+test("themis auth web add 两次输入不一致会报错", () => {
+  const workspace = createWorkspace();
+
+  try {
+    const result = runCli(["auth", "web", "add", "alpha"], workspace, "alpha-secret\nbeta-secret\n");
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /两次输入的口令不一致/);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("themis auth web add 额外第三行非空内容会报错", () => {
+  const workspace = createWorkspace();
+
+  try {
+    const result = runCli(
+      ["auth", "web", "add", "alpha"],
+      workspace,
+      "alpha-secret\nalpha-secret\nextra-secret\n",
+    );
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /额外|多余|stdin/);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
