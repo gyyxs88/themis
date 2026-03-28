@@ -71,8 +71,10 @@ test("/api/tasks/stream 会按 ack -> event* -> result -> done 顺序返回 NDJS
 
     (runtime as CodexTaskRuntime & {
       runTask: CodexTaskRuntime["runTask"];
-    }).runTask = async (request, hooks) => {
-      await hooks.onEvent?.({
+    }).runTask = async (request, hooks = {}) => {
+      const { onEvent } = hooks;
+
+      await onEvent?.({
         eventId: "event-stream-1",
         taskId: request.taskId ?? "task-stream-1",
         requestId: request.requestId,
@@ -214,22 +216,25 @@ test("handleTaskStream 在 close 后会中止任务并停止继续写流", async
       request.emit("close");
     });
   });
-  let abortReason: Error | null = null;
+  let abortMessage: string | null = null;
 
   try {
     (runtime as CodexTaskRuntime & {
       runTask: CodexTaskRuntime["runTask"];
-    }).runTask = async (taskRequest, hooks) => {
+    }).runTask = async (taskRequest, hooks = {}) => {
+      const { onEvent, signal } = hooks;
+      assert.ok(signal);
+
       const aborted = new Promise<void>((resolve) => {
-        hooks.signal.addEventListener("abort", () => {
-          abortReason = hooks.signal.reason instanceof Error
-            ? hooks.signal.reason
-            : new Error(String(hooks.signal.reason));
+        signal.addEventListener("abort", () => {
+          abortMessage = signal.reason instanceof Error
+            ? signal.reason.message
+            : String(signal.reason);
           resolve();
         }, { once: true });
       });
 
-      await hooks.onEvent?.({
+      await onEvent?.({
         eventId: "event-disconnect-1",
         taskId: taskRequest.taskId ?? "task-stream-disconnect",
         requestId: taskRequest.requestId,
@@ -258,7 +263,7 @@ test("handleTaskStream 在 close 后会中止任务并停止继续写流", async
       5_000,
     );
 
-    assert.equal(abortReason?.message, "CLIENT_DISCONNECTED");
+    assert.equal(abortMessage, "CLIENT_DISCONNECTED");
 
     const lines = parseNdjson(response.lines.join(""));
     assert.deepEqual(lines.map((line) => line.kind), ["ack", "event"]);
