@@ -152,6 +152,23 @@ export interface TaskRequest {
   createdAt: string;
 }
 
+export interface TaskActionDescriptor {
+  actionId: string;
+  actionType: "approval" | "user-input";
+  prompt: string;
+  choices?: string[];
+  inputSchema?: Record<string, unknown>;
+  expiresAt?: string;
+}
+
+export interface TaskActionSubmitRequest {
+  taskId: string;
+  requestId: string;
+  actionId: string;
+  decision?: string;
+  inputText?: string;
+}
+
 export interface TaskEvent {
   eventId: string;
   taskId: string;

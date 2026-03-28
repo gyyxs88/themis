@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
+import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import type { RuntimeEngine, TaskRuntimeFacade } from "../types/index.js";
@@ -44,6 +45,7 @@ import {
   handleSessionSettingsRead,
   handleSessionSettingsWrite,
 } from "./http-session-handlers.js";
+import { handleTaskActionSubmit } from "./http-task-actions.js";
 import { handleTaskRun, handleTaskStream } from "./http-task-handlers.js";
 import {
   handleThirdPartyCapabilityWriteback,
@@ -68,6 +70,7 @@ export interface ThemisHttpServerOptions {
   authRuntime?: CodexAuthRuntime;
   taskTimeoutMs?: number;
   createMcpInspector?: CreateMcpInspector;
+  actionBridge?: AppServerActionBridge;
 }
 
 export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): Server {
@@ -90,6 +93,7 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
   const runtimeStore = runtime.getRuntimeStore();
   const webAccessService = new WebAccessService({ registry: runtimeStore });
   const taskTimeoutMs = options.taskTimeoutMs ?? resolveTaskTimeoutMs();
+  const actionBridge = options.actionBridge ?? new AppServerActionBridge();
 
   return createServer(async (request, response) => {
     try {
@@ -221,6 +225,10 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/tasks/stream") {
         return handleTaskStream(request, response, runtime, runtimeRegistry, authRuntime, taskTimeoutMs);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/tasks/actions") {
+        return handleTaskActionSubmit(request, response, actionBridge);
       }
 
       if (request.method === "POST" && url.pathname === "/api/sessions/fork-context") {
