@@ -112,6 +112,10 @@ export class CodexAuthRuntime {
       .map(normalizeAuthAccountSummary);
   }
 
+  getRuntimeStore(): SqliteCodexSessionRegistry {
+    return this.registry;
+  }
+
   getActiveAccount(): CodexAuthAccountSummary | null {
     ensureAuthAccountBootstrap(this.workingDirectory, this.registry);
     const record = this.registry

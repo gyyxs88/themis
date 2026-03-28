@@ -7,6 +7,7 @@ import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { resolveCodexAuthFilePath, resolveDefaultCodexHome } from "../core/auth-accounts.js";
 import { PrincipalSkillsService } from "../core/principal-skills-service.js";
+import { WebAccessService } from "../core/web-access.js";
 import { readOpenAICompatibleProviderConfigs } from "../core/openai-compatible-provider.js";
 import {
   escapeEnvValue,
@@ -74,11 +75,14 @@ async function main(args: string[]): Promise<void> {
     case "config":
       handleConfig(subcommand, rest);
       return;
+    case "auth":
+      await handleAuth(subcommand, rest);
+      return;
     case "skill":
       await handleSkill(subcommand, rest);
       return;
     default:
-      throw new Error(`不支持的命令：${command}。可用命令：init / status / config / skill / help。`);
+      throw new Error(`不支持的命令：${command}。可用命令：init / status / config / auth / skill / help。`);
   }
 }
 
@@ -250,6 +254,53 @@ function handleConfig(subcommand: string | undefined, args: string[]): void {
   }
 }
 
+async function handleAuth(subcommand: string | undefined, args: string[]): Promise<void> {
+  switch (subcommand) {
+    case "web":
+      await handleAuthWeb(args);
+      return;
+    default:
+      throw new Error("auth 子命令仅支持 web。");
+  }
+}
+
+async function handleAuthWeb(args: string[]): Promise<void> {
+  const [action, ...rest] = args;
+
+  switch (action) {
+    case "list":
+      if (rest.length > 0) {
+        throw new Error("用法：themis auth web list");
+      }
+
+      handleAuthWebList();
+      return;
+    case "add":
+      if (rest.length !== 1) {
+        throw new Error("用法：themis auth web add <label>");
+      }
+
+      await handleAuthWebAdd(rest[0]!);
+      return;
+    case "remove":
+      if (rest.length !== 1) {
+        throw new Error("用法：themis auth web remove <label>");
+      }
+
+      handleAuthWebRemove(rest[0]!);
+      return;
+    case "rename":
+      if (rest.length !== 2) {
+        throw new Error("用法：themis auth web rename <old-label> <new-label>");
+      }
+
+      handleAuthWebRename(rest[0]!, rest[1]!);
+      return;
+    default:
+      throw new Error("auth web 子命令仅支持 list / add / remove / rename。");
+  }
+}
+
 function handleConfigList(args: string[]): void {
   const showSecrets = args.includes("--show-secrets");
   const envFiles = readProjectEnvFiles(cwd);
@@ -350,6 +401,10 @@ function printHelp(): void {
   console.log("- ./themis config list [--show-secrets]");
   console.log("- ./themis config set <KEY> <VALUE>");
   console.log("- ./themis config unset <KEY>");
+  console.log("- ./themis auth web list");
+  console.log("- ./themis auth web add <label>");
+  console.log("- ./themis auth web remove <label>");
+  console.log("- ./themis auth web rename <old-label> <new-label>");
   console.log("- ./themis skill list");
   console.log("- ./themis skill curated list");
   console.log("- ./themis skill install local <ABSOLUTE_PATH>");
@@ -447,6 +502,231 @@ function normalizeCliAbsolutePath(value: string): string {
 function setProjectEnvFileContent(filePath: string, content: string): void {
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, content, "utf8");
+}
+
+function createCliWebAccessService(): WebAccessService {
+  return new WebAccessService({
+    registry: new SqliteCodexSessionRegistry({
+      databaseFile: cliDatabasePath,
+    }),
+  });
+}
+
+function handleAuthWebList(): void {
+  const service = createCliWebAccessService();
+  const tokens = service.listTokens();
+
+  console.log("Themis Web 访问口令");
+  console.log("");
+
+  if (tokens.length === 0) {
+    console.log("暂无 Web 访问口令。");
+    return;
+  }
+
+  for (const token of tokens) {
+    console.log(`- label：${token.label}`);
+    console.log(`  状态：${token.revokedAt ? "revoked" : "active"}`);
+    console.log(`  最近使用：${token.lastUsedAt ?? "未使用"}`);
+    console.log("");
+  }
+}
+
+async function handleAuthWebAdd(label: string): Promise<void> {
+  const service = createCliWebAccessService();
+  const secret = await readHiddenLinePair(`请输入 ${label} 的 Web 口令：`, "请再次输入 Web 口令：");
+  const created = service.createToken({
+    label,
+    secret,
+    remoteIp: "cli",
+  });
+
+  console.log(`已添加 Web 访问口令：${created.label}`);
+  console.log(`- tokenId：${created.tokenId}`);
+}
+
+function handleAuthWebRemove(label: string): void {
+  const service = createCliWebAccessService();
+  const revoked = service.revokeTokenByLabel({
+    label,
+    remoteIp: "cli",
+  });
+
+  console.log(`已移除 Web 访问口令：${revoked.label}`);
+  console.log(`- tokenId：${revoked.tokenId}`);
+  console.log(`- 状态：${revoked.revokedAt ? "revoked" : "active"}`);
+}
+
+function handleAuthWebRename(oldLabel: string, newLabel: string): void {
+  const service = createCliWebAccessService();
+  const token = service.listTokens().find((item) => item.label === oldLabel && !item.revokedAt);
+
+  if (!token) {
+    throw new Error(`未找到处于 active 状态的 Web 访问口令：${oldLabel}`);
+  }
+
+  const renamed = service.renameToken({
+    tokenId: token.tokenId,
+    label: newLabel,
+    remoteIp: "cli",
+  });
+
+  console.log(`已重命名 Web 访问口令：${oldLabel} -> ${renamed.label}`);
+  console.log(`- tokenId：${renamed.tokenId}`);
+}
+
+async function readHiddenLinePair(firstPrompt: string, secondPrompt: string): Promise<string> {
+  if (!input.isTTY || !output.isTTY) {
+    return parseNonTtyHiddenLinePair(await readInputText());
+  }
+
+  const first = await readHiddenLineFromTty(firstPrompt);
+  const second = await readHiddenLineFromTty(secondPrompt);
+
+  if (!first.trim() || !second.trim()) {
+    throw new Error("口令不能为空。");
+  }
+
+  if (first !== second) {
+    throw new Error("两次输入的口令不一致。");
+  }
+
+  return first;
+}
+
+async function readInputText(): Promise<string> {
+  let content = "";
+
+  for await (const chunk of input) {
+    content += chunk.toString();
+  }
+
+  return content;
+}
+
+function parseNonTtyHiddenLinePair(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const [first = "", second = "", ...rest] = lines;
+
+  if (!first.trim() || !second.trim()) {
+    throw new Error("口令不能为空。");
+  }
+
+  if (first !== second) {
+    throw new Error("两次输入的口令不一致。");
+  }
+
+  if (rest.some((line) => line.trim().length > 0)) {
+    throw new Error("stdin 只允许恰好两行口令输入，不能包含额外内容。");
+  }
+
+  return first;
+}
+
+async function readHiddenLineFromTty(prompt: string): Promise<string> {
+  if (typeof input.setRawMode !== "function") {
+    throw new Error("当前终端不支持隐藏输入。");
+  }
+
+  const wasRaw = input.isRaw === true;
+  const restoreRawMode = (): void => {
+    if (!wasRaw && input.isTTY) {
+      input.setRawMode(false);
+    }
+  };
+
+  input.resume();
+
+  if (!wasRaw) {
+    input.setRawMode(true);
+  }
+
+  output.write(prompt);
+
+  try {
+    return await new Promise<string>((resolve, reject) => {
+      let value = "";
+      let settled = false;
+
+      const cleanup = (): void => {
+        input.off("data", onData);
+        input.off("error", onError);
+        input.off("end", onEnd);
+        input.off("close", onClose);
+      };
+
+      const finish = (result: string): void => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        cleanup();
+        restoreRawMode();
+        output.write("\n");
+        resolve(result);
+      };
+
+      const fail = (message: string, error?: Error): void => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        cleanup();
+        restoreRawMode();
+        output.write("\n");
+        reject(error ?? new Error(message));
+      };
+
+      const onData = (chunk: Buffer | string): void => {
+        const text = chunk.toString("utf8");
+
+        for (const char of text) {
+          if (char === "\r" || char === "\n") {
+            finish(value);
+            return;
+          }
+
+          if (char === "\u0003") {
+            fail("输入已取消：收到中断信号。");
+            return;
+          }
+
+          if (char === "\u0004") {
+            fail("输入已取消：收到 EOF。");
+            return;
+          }
+
+          if (char === "\u007f" || char === "\b") {
+            value = value.slice(0, -1);
+            continue;
+          }
+
+          value += char;
+        }
+      };
+
+      const onError = (error: Error): void => {
+        fail("输入已取消：读取失败。", error);
+      };
+
+      const onEnd = (): void => {
+        fail("输入已取消：收到 EOF。");
+      };
+
+      const onClose = (): void => {
+        fail("输入已取消：输入流已关闭。");
+      };
+
+      input.on("data", onData);
+      input.once("error", onError);
+      input.once("end", onEnd);
+      input.once("close", onClose);
+    });
+  } finally {
+    restoreRawMode();
+  }
 }
 
 function createCliSkillRegistry(): SqliteCodexSessionRegistry {

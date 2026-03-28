@@ -28,7 +28,7 @@ import type {
   TaskResult,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 10;
+const DATABASE_SCHEMA_VERSION = 11;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -36,6 +36,38 @@ export interface StoredCodexSessionRecord {
   createdAt: string;
   updatedAt: string;
   activeTaskId?: string;
+}
+
+export interface StoredWebAccessTokenRecord {
+  tokenId: string;
+  label: string;
+  tokenHash: string;
+  createdAt: string;
+  updatedAt: string;
+  lastUsedAt?: string;
+  revokedAt?: string;
+}
+
+export interface StoredWebSessionRecord {
+  sessionId: string;
+  tokenId: string;
+  createdAt: string;
+  updatedAt: string;
+  lastSeenAt: string;
+  expiresAt: string;
+  revokedAt?: string;
+}
+
+export interface StoredWebAuditEventRecord {
+  eventId: string;
+  eventType: string;
+  createdAt: string;
+  remoteIp?: string;
+  tokenId?: string;
+  tokenLabel?: string;
+  sessionId?: string;
+  summary?: string;
+  payloadJson?: string;
 }
 
 export interface StoredTaskTurnRecord {
@@ -272,6 +304,38 @@ interface SessionRow {
   created_at: string;
   updated_at: string;
   active_task_id: string | null;
+}
+
+interface WebAccessTokenRow {
+  token_id: string;
+  label: string;
+  token_hash: string;
+  created_at: string;
+  updated_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+interface WebSessionRow {
+  session_id: string;
+  token_id: string;
+  created_at: string;
+  updated_at: string;
+  last_seen_at: string;
+  expires_at: string;
+  revoked_at: string | null;
+}
+
+interface WebAuditEventRow {
+  event_id: string;
+  event_type: string;
+  created_at: string;
+  remote_ip: string | null;
+  token_id: string | null;
+  token_label: string | null;
+  session_id: string | null;
+  summary: string | null;
+  payload_json: string | null;
 }
 
 interface SessionTaskSettingsRow {
@@ -606,6 +670,377 @@ export class SqliteCodexSessionRegistry {
       .run(normalized);
 
     return result.changes > 0;
+  }
+
+  listWebAccessTokens(): StoredWebAccessTokenRecord[] {
+    const rows = this.db
+      .prepare(
+        `
+          SELECT token_id, label, token_hash, created_at, updated_at, last_used_at, revoked_at
+          FROM themis_web_access_tokens
+          ORDER BY revoked_at IS NULL DESC, updated_at DESC, label ASC, token_id ASC
+        `,
+      )
+      .all() as WebAccessTokenRow[];
+
+    return rows.map(mapWebAccessTokenRow);
+  }
+
+  listActiveWebAccessTokens(): StoredWebAccessTokenRecord[] {
+    const rows = this.db
+      .prepare(
+        `
+          SELECT token_id, label, token_hash, created_at, updated_at, last_used_at, revoked_at
+          FROM themis_web_access_tokens
+          WHERE revoked_at IS NULL
+          ORDER BY updated_at DESC, label ASC, token_id ASC
+        `,
+      )
+      .all() as WebAccessTokenRow[];
+
+    return rows.map(mapWebAccessTokenRow);
+  }
+
+  getWebAccessTokenByLabel(label: string): StoredWebAccessTokenRecord | null {
+    const normalized = label.trim();
+
+    if (!normalized) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT token_id, label, token_hash, created_at, updated_at, last_used_at, revoked_at
+          FROM themis_web_access_tokens
+          WHERE label = ?
+          ORDER BY revoked_at IS NULL DESC, updated_at DESC, token_id ASC
+          LIMIT 1
+        `,
+      )
+      .get(normalized) as WebAccessTokenRow | undefined;
+
+    return row ? mapWebAccessTokenRow(row) : null;
+  }
+
+  getWebAccessTokenById(tokenId: string): StoredWebAccessTokenRecord | null {
+    const normalized = tokenId.trim();
+
+    if (!normalized) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT token_id, label, token_hash, created_at, updated_at, last_used_at, revoked_at
+          FROM themis_web_access_tokens
+          WHERE token_id = ?
+        `,
+      )
+      .get(normalized) as WebAccessTokenRow | undefined;
+
+    return row ? mapWebAccessTokenRow(row) : null;
+  }
+
+  saveWebAccessToken(record: StoredWebAccessTokenRecord): void {
+    const tokenId = record.tokenId.trim();
+    const label = record.label.trim();
+    const tokenHash = record.tokenHash.trim();
+
+    if (!tokenId || !label || !tokenHash) {
+      throw new Error("Web access token record is incomplete.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_web_access_tokens (
+            token_id,
+            label,
+            token_hash,
+            created_at,
+            updated_at,
+            last_used_at,
+            revoked_at
+          ) VALUES (
+            @token_id,
+            @label,
+            @token_hash,
+            @created_at,
+            @updated_at,
+            @last_used_at,
+            @revoked_at
+          )
+          ON CONFLICT(token_id) DO UPDATE SET
+            label = excluded.label,
+            token_hash = excluded.token_hash,
+            created_at = excluded.created_at,
+            updated_at = excluded.updated_at,
+            last_used_at = excluded.last_used_at,
+            revoked_at = excluded.revoked_at
+        `,
+      )
+      .run({
+        token_id: tokenId,
+        label,
+        token_hash: tokenHash,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+        last_used_at: record.lastUsedAt ?? null,
+        revoked_at: record.revokedAt ?? null,
+      });
+  }
+
+  renameWebAccessToken(tokenId: string, label: string, updatedAt: string): boolean {
+    const normalizedTokenId = tokenId.trim();
+    const normalizedLabel = label.trim();
+
+    if (!normalizedTokenId || !normalizedLabel) {
+      return false;
+    }
+
+    const result = this.db
+      .prepare(
+        `
+          UPDATE themis_web_access_tokens
+          SET label = ?, updated_at = ?
+          WHERE token_id = ?
+        `,
+      )
+      .run(normalizedLabel, updatedAt, normalizedTokenId);
+
+    return result.changes > 0;
+  }
+
+  touchWebAccessToken(tokenId: string, lastUsedAt: string, updatedAt: string): boolean {
+    const normalizedTokenId = tokenId.trim();
+
+    if (!normalizedTokenId) {
+      return false;
+    }
+
+    const result = this.db
+      .prepare(
+        `
+          UPDATE themis_web_access_tokens
+          SET last_used_at = ?, updated_at = ?
+          WHERE token_id = ?
+        `,
+      )
+      .run(lastUsedAt, updatedAt, normalizedTokenId);
+
+    return result.changes > 0;
+  }
+
+  revokeWebAccessToken(tokenId: string, revokedAt: string, updatedAt: string): boolean {
+    const normalizedTokenId = tokenId.trim();
+
+    if (!normalizedTokenId) {
+      return false;
+    }
+
+    const result = this.db
+      .prepare(
+        `
+          UPDATE themis_web_access_tokens
+          SET revoked_at = ?, updated_at = ?
+          WHERE token_id = ?
+        `,
+      )
+      .run(revokedAt, updatedAt, normalizedTokenId);
+
+    return result.changes > 0;
+  }
+
+  getWebSession(sessionId: string): StoredWebSessionRecord | null {
+    const normalized = sessionId.trim();
+
+    if (!normalized) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT session_id, token_id, created_at, updated_at, last_seen_at, expires_at, revoked_at
+          FROM themis_web_sessions
+          WHERE session_id = ?
+        `,
+      )
+      .get(normalized) as WebSessionRow | undefined;
+
+    return row ? mapWebSessionRow(row) : null;
+  }
+
+  saveWebSession(record: StoredWebSessionRecord): void {
+    const sessionId = record.sessionId.trim();
+    const tokenId = record.tokenId.trim();
+
+    if (!sessionId || !tokenId) {
+      throw new Error("Web session record is incomplete.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_web_sessions (
+            session_id,
+            token_id,
+            created_at,
+            updated_at,
+            last_seen_at,
+            expires_at,
+            revoked_at
+          ) VALUES (
+            @session_id,
+            @token_id,
+            @created_at,
+            @updated_at,
+            @last_seen_at,
+            @expires_at,
+            @revoked_at
+          )
+          ON CONFLICT(session_id) DO UPDATE SET
+            token_id = excluded.token_id,
+            created_at = excluded.created_at,
+            updated_at = excluded.updated_at,
+            last_seen_at = excluded.last_seen_at,
+            expires_at = excluded.expires_at,
+            revoked_at = excluded.revoked_at
+        `,
+      )
+      .run({
+        session_id: sessionId,
+        token_id: tokenId,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+        last_seen_at: record.lastSeenAt,
+        expires_at: record.expiresAt,
+        revoked_at: record.revokedAt ?? null,
+      });
+  }
+
+  touchWebSession(sessionId: string, lastSeenAt: string, updatedAt: string): boolean {
+    const normalizedSessionId = sessionId.trim();
+
+    if (!normalizedSessionId) {
+      return false;
+    }
+
+    const result = this.db
+      .prepare(
+        `
+          UPDATE themis_web_sessions
+          SET last_seen_at = ?, updated_at = ?
+          WHERE session_id = ?
+        `,
+      )
+      .run(lastSeenAt, updatedAt, normalizedSessionId);
+
+    return result.changes > 0;
+  }
+
+  revokeWebSession(sessionId: string, revokedAt: string, updatedAt: string): boolean {
+    const normalizedSessionId = sessionId.trim();
+
+    if (!normalizedSessionId) {
+      return false;
+    }
+
+    const result = this.db
+      .prepare(
+        `
+          UPDATE themis_web_sessions
+          SET revoked_at = ?, updated_at = ?
+          WHERE session_id = ?
+        `,
+      )
+      .run(revokedAt, updatedAt, normalizedSessionId);
+
+    return result.changes > 0;
+  }
+
+  revokeWebSessionsByTokenId(tokenId: string, revokedAt: string, updatedAt: string): number {
+    const normalizedTokenId = tokenId.trim();
+
+    if (!normalizedTokenId) {
+      return 0;
+    }
+
+    const result = this.db
+      .prepare(
+        `
+          UPDATE themis_web_sessions
+          SET revoked_at = ?, updated_at = ?
+          WHERE token_id = ?
+            AND revoked_at IS NULL
+        `,
+      )
+      .run(revokedAt, updatedAt, normalizedTokenId);
+
+    return result.changes;
+  }
+
+  listWebAuditEvents(): StoredWebAuditEventRecord[] {
+    const rows = this.db
+      .prepare(
+        `
+          SELECT event_id, event_type, created_at, remote_ip, token_id, token_label, session_id, summary, payload_json
+          FROM themis_web_audit_events
+          ORDER BY created_at DESC, event_id DESC
+        `,
+      )
+      .all() as WebAuditEventRow[];
+
+    return rows.map(mapWebAuditEventRow);
+  }
+
+  appendWebAuditEvent(record: StoredWebAuditEventRecord): void {
+    const eventId = record.eventId.trim();
+    const eventType = record.eventType.trim();
+
+    if (!eventId || !eventType) {
+      throw new Error("Web audit event record is incomplete.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_web_audit_events (
+            event_id,
+            event_type,
+            created_at,
+            remote_ip,
+            token_id,
+            token_label,
+            session_id,
+            summary,
+            payload_json
+          ) VALUES (
+            @event_id,
+            @event_type,
+            @created_at,
+            @remote_ip,
+            @token_id,
+            @token_label,
+            @session_id,
+            @summary,
+            @payload_json
+          )
+        `,
+      )
+      .run({
+        event_id: eventId,
+        event_type: eventType,
+        created_at: record.createdAt,
+        remote_ip: record.remoteIp ?? null,
+        token_id: record.tokenId ?? null,
+        token_label: record.tokenLabel ?? null,
+        session_id: record.sessionId ?? null,
+        summary: record.summary ?? null,
+        payload_json: record.payloadJson ?? null,
+      });
   }
 
   listAuthAccounts(): StoredAuthAccountRecord[] {
@@ -3045,6 +3480,63 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_session_settings_updated_at_idx
       ON themis_session_settings(updated_at DESC);
 
+      CREATE TABLE IF NOT EXISTS themis_web_access_tokens (
+        token_id TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        token_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_used_at TEXT,
+        revoked_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_web_access_tokens_label_idx
+      ON themis_web_access_tokens(label, updated_at DESC);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS themis_web_access_tokens_active_label_idx
+      ON themis_web_access_tokens(label)
+      WHERE revoked_at IS NULL;
+
+      CREATE INDEX IF NOT EXISTS themis_web_access_tokens_active_idx
+      ON themis_web_access_tokens(revoked_at, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS themis_web_sessions (
+        session_id TEXT PRIMARY KEY,
+        token_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        revoked_at TEXT,
+        FOREIGN KEY (token_id) REFERENCES themis_web_access_tokens(token_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_web_sessions_token_idx
+      ON themis_web_sessions(token_id, updated_at DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_web_sessions_expires_idx
+      ON themis_web_sessions(expires_at ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_web_sessions_revoked_idx
+      ON themis_web_sessions(revoked_at, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS themis_web_audit_events (
+        event_id TEXT PRIMARY KEY,
+        event_type TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        remote_ip TEXT,
+        token_id TEXT,
+        token_label TEXT,
+        session_id TEXT,
+        summary TEXT,
+        payload_json TEXT,
+        FOREIGN KEY (token_id) REFERENCES themis_web_access_tokens(token_id) ON DELETE SET NULL,
+        FOREIGN KEY (session_id) REFERENCES themis_web_sessions(session_id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_web_audit_events_created_idx
+      ON themis_web_audit_events(created_at DESC);
+
       CREATE TABLE IF NOT EXISTS themis_auth_accounts (
         account_id TEXT PRIMARY KEY,
         label TEXT NOT NULL,
@@ -3207,6 +3699,63 @@ export class SqliteCodexSessionRegistry {
           REFERENCES themis_principal_skills(principal_id, skill_name)
           ON DELETE CASCADE
       );
+
+      CREATE TABLE IF NOT EXISTS themis_web_access_tokens (
+        token_id TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        token_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_used_at TEXT,
+        revoked_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_web_access_tokens_label_idx
+      ON themis_web_access_tokens(label, updated_at DESC);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS themis_web_access_tokens_active_label_idx
+      ON themis_web_access_tokens(label)
+      WHERE revoked_at IS NULL;
+
+      CREATE INDEX IF NOT EXISTS themis_web_access_tokens_active_idx
+      ON themis_web_access_tokens(revoked_at, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS themis_web_sessions (
+        session_id TEXT PRIMARY KEY,
+        token_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        revoked_at TEXT,
+        FOREIGN KEY (token_id) REFERENCES themis_web_access_tokens(token_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_web_sessions_token_idx
+      ON themis_web_sessions(token_id, updated_at DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_web_sessions_expires_idx
+      ON themis_web_sessions(expires_at ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_web_sessions_revoked_idx
+      ON themis_web_sessions(revoked_at, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS themis_web_audit_events (
+        event_id TEXT PRIMARY KEY,
+        event_type TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        remote_ip TEXT,
+        token_id TEXT,
+        token_label TEXT,
+        session_id TEXT,
+        summary TEXT,
+        payload_json TEXT,
+        FOREIGN KEY (token_id) REFERENCES themis_web_access_tokens(token_id) ON DELETE SET NULL,
+        FOREIGN KEY (session_id) REFERENCES themis_web_sessions(session_id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_web_audit_events_created_idx
+      ON themis_web_audit_events(created_at DESC);
     `);
 
     const authAccountColumns = database
@@ -3230,6 +3779,25 @@ export class SqliteCodexSessionRegistry {
       database.exec(`
         ALTER TABLE themis_third_party_providers
         ADD COLUMN endpoint_candidates_json TEXT NOT NULL DEFAULT '[]';
+      `);
+    }
+
+    const webAuditColumns = database
+      .prepare(`PRAGMA table_info(themis_web_audit_events)`)
+      .all() as Array<{ name: string }>;
+    const webAuditColumnNames = new Set(webAuditColumns.map((column) => column.name));
+
+    if (!webAuditColumnNames.has("remote_ip")) {
+      database.exec(`
+        ALTER TABLE themis_web_audit_events
+        ADD COLUMN remote_ip TEXT;
+      `);
+    }
+
+    if (!webAuditColumnNames.has("summary")) {
+      database.exec(`
+        ALTER TABLE themis_web_audit_events
+        ADD COLUMN summary TEXT;
       `);
     }
 
@@ -3269,6 +3837,44 @@ function mapSessionRow(row: SessionRow): StoredCodexSessionRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(row.active_task_id ? { activeTaskId: row.active_task_id } : {}),
+  };
+}
+
+function mapWebAccessTokenRow(row: WebAccessTokenRow): StoredWebAccessTokenRecord {
+  return {
+    tokenId: row.token_id,
+    label: row.label,
+    tokenHash: row.token_hash,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.last_used_at ? { lastUsedAt: row.last_used_at } : {}),
+    ...(row.revoked_at ? { revokedAt: row.revoked_at } : {}),
+  };
+}
+
+function mapWebSessionRow(row: WebSessionRow): StoredWebSessionRecord {
+  return {
+    sessionId: row.session_id,
+    tokenId: row.token_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastSeenAt: row.last_seen_at,
+    expiresAt: row.expires_at,
+    ...(row.revoked_at ? { revokedAt: row.revoked_at } : {}),
+  };
+}
+
+function mapWebAuditEventRow(row: WebAuditEventRow): StoredWebAuditEventRecord {
+  return {
+    eventId: row.event_id,
+    eventType: row.event_type,
+    createdAt: row.created_at,
+    ...(row.remote_ip ? { remoteIp: row.remote_ip } : {}),
+    ...(row.token_id ? { tokenId: row.token_id } : {}),
+    ...(row.token_label ? { tokenLabel: row.token_label } : {}),
+    ...(row.session_id ? { sessionId: row.session_id } : {}),
+    ...(row.summary ? { summary: row.summary } : {}),
+    ...(row.payload_json ? { payloadJson: row.payload_json } : {}),
   };
 }
 

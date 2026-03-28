@@ -25,6 +25,15 @@ export function safeJsonParse(value) {
 
 export async function safeReadJson(response) {
   try {
+    if (
+      response.status === 401 &&
+      typeof window !== "undefined" &&
+      window.location?.assign &&
+      window.location.pathname !== "/login"
+    ) {
+      window.location.assign("/login");
+    }
+
     return await response.json();
   } catch {
     return null;
