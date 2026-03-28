@@ -62,7 +62,13 @@ async function withHttpServer(
 
 test("/api/tasks/actions 提交命中等待中的 action 时返回 ok", async () => {
   const actionBridge = new AppServerActionBridge();
-  const resolved: Array<{ actionId: string; payload: Record<string, unknown> }> = [];
+  const resolved: Array<{
+    taskId: string;
+    requestId: string;
+    actionId: string;
+    decision?: string;
+    inputText?: string;
+  }> = [];
 
   actionBridge.register({
     taskId: "task-1",
@@ -74,9 +80,9 @@ test("/api/tasks/actions 提交命中等待中的 action 时返回 ok", async ()
   });
 
   const originalResolve = actionBridge.resolve.bind(actionBridge);
-  actionBridge.resolve = (actionId, payload) => {
-    resolved.push({ actionId, payload });
-    originalResolve(actionId, payload);
+  actionBridge.resolve = (payload) => {
+    resolved.push(payload);
+    return originalResolve(payload);
   };
 
   await withHttpServer(
@@ -104,7 +110,12 @@ test("/api/tasks/actions 提交命中等待中的 action 时返回 ok", async ()
       assert.equal(response.status, 200);
       assert.deepEqual(await response.json(), { ok: true });
       assert.equal(resolved.length, 1);
-      assert.equal(resolved[0]?.actionId, "approval-1");
+      assert.deepEqual(resolved[0], {
+        taskId: "task-1",
+        requestId: "req-1",
+        actionId: "approval-1",
+        decision: "approve",
+      });
       assert.equal(actionBridge.find("approval-1"), null);
     },
   );
@@ -150,6 +161,92 @@ test("/api/tasks/actions 提交未命中的 action 时返回 404", async () => {
   );
 
   actionBridge.resolve = originalResolve;
+});
+
+test("/api/tasks/actions 在 taskId 或 requestId 不匹配时返回 404 且不会 resolve", async () => {
+  const actionBridge = new AppServerActionBridge();
+  let resolveCount = 0;
+
+  actionBridge.register({
+    taskId: "task-expected",
+    requestId: "req-expected",
+    actionId: "approval-shared",
+    actionType: "approval",
+    prompt: "Allow command?",
+    choices: ["approve", "deny"],
+  });
+
+  const originalResolve = actionBridge.resolve.bind(actionBridge);
+  actionBridge.resolve = (payload) => {
+    resolveCount += 1;
+    return originalResolve(payload);
+  };
+
+  await withHttpServer(
+    actionBridge,
+    async ({ baseUrl, runtimeStore }) => {
+      const authHeaders = await createAuthenticatedWebHeaders({
+        baseUrl,
+        runtimeStore,
+      });
+
+      const response = await fetch(`${baseUrl}/api/tasks/actions`, {
+        method: "POST",
+        headers: {
+          ...authHeaders,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          taskId: "task-other",
+          requestId: "req-expected",
+          actionId: "approval-shared",
+          decision: "approve",
+        }),
+      });
+
+      assert.equal(response.status, 404);
+      assert.deepEqual(await response.json(), {
+        error: {
+          code: "INVALID_REQUEST",
+          message: "未找到匹配的等待中 action。",
+        },
+      });
+    },
+  );
+
+  assert.equal(resolveCount, 0);
+  assert.equal(actionBridge.find("approval-shared")?.taskId, "task-expected");
+});
+
+test("/api/tasks/actions 遇到非法 JSON 时返回 400 INVALID_REQUEST", async () => {
+  const actionBridge = new AppServerActionBridge();
+
+  await withHttpServer(
+    actionBridge,
+    async ({ baseUrl, runtimeStore }) => {
+      const authHeaders = await createAuthenticatedWebHeaders({
+        baseUrl,
+        runtimeStore,
+      });
+
+      const response = await fetch(`${baseUrl}/api/tasks/actions`, {
+        method: "POST",
+        headers: {
+          ...authHeaders,
+          "Content-Type": "application/json",
+        },
+        body: "{\"taskId\":",
+      });
+
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          code: "INVALID_REQUEST",
+          message: "请求体不是合法的 JSON。",
+        },
+      });
+    },
+  );
 });
 
 function listenServer(server: Server): Promise<Server> {

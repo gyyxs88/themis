@@ -9,8 +9,25 @@ export async function handleTaskActionSubmit(
   response: ServerResponse,
   actionBridge: AppServerActionBridge,
 ): Promise<void> {
-  const payload = (await readJsonBody(request)) as TaskActionSubmitRequest;
-  const action = actionBridge.find(payload.actionId);
+  let payload: TaskActionSubmitRequest;
+
+  try {
+    payload = (await readJsonBody(request)) as TaskActionSubmitRequest;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      writeJson(response, 400, {
+        error: {
+          code: "INVALID_REQUEST",
+          message: "请求体不是合法的 JSON。",
+        },
+      });
+      return;
+    }
+
+    throw error;
+  }
+
+  const action = actionBridge.findBySubmission(payload.taskId, payload.requestId, payload.actionId);
 
   if (!action) {
     writeJson(response, 404, {
@@ -22,6 +39,15 @@ export async function handleTaskActionSubmit(
     return;
   }
 
-  actionBridge.resolve(payload.actionId, payload as unknown as Record<string, unknown>);
+  if (!actionBridge.resolve(payload)) {
+    writeJson(response, 404, {
+      error: {
+        code: "INVALID_REQUEST",
+        message: "未找到匹配的等待中 action。",
+      },
+    });
+    return;
+  }
+
   writeJson(response, 200, { ok: true });
 }

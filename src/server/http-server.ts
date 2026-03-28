@@ -228,7 +228,7 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
       }
 
       if (request.method === "POST" && url.pathname === "/api/tasks/actions") {
-        return handleTaskActionSubmit(request, response, actionBridge);
+        return await handleTaskActionSubmit(request, response, actionBridge);
       }
 
       if (request.method === "POST" && url.pathname === "/api/sessions/fork-context") {
