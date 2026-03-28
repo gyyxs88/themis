@@ -68,8 +68,7 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 
 - 更完整的自动化测试覆盖；当前只有 `src/core/*.test.ts` 这类基础单元测试，`router`、`session store`、`fork`、`history API` 和 Web stream 主链路仍缺覆盖。
 - Markdown memory 的运行时自动读写服务。
-- LAN Web UI 的审计日志。
-- 更完整的 Operator CLI；当前已提供项目级 `init / status / config / skill` 入口，但更完整的运维命令树仍未完成。
+- 更完整的配置 / 运维 CLI；当前已提供项目级 `init / status / config / skill` 入口，但更完整的运维命令树仍未完成。
 
 ## 本地运行
 
