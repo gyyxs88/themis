@@ -77,14 +77,14 @@ test("buildForkContextFromThread 只提取 Themis turn，并附着 assistant 回
   }
 });
 
-test("buildForkContextFromThread 在 transcript 超预算时会裁剪", async () => {
-  const root = mkdtempSync(join(tmpdir(), "themis-fork-truncated-"));
+test("buildForkContextFromThread 在 transcript 超字符预算时会裁剪", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-fork-char-truncated-"));
   const nested = join(root, "2026", "03");
   mkdirSync(nested, { recursive: true });
 
   const lines: string[] = [];
-  for (let index = 0; index < 30; index += 1) {
-    lines.push(responseItem("user", themisPrompt(`目标 ${index}`, `上下文 ${index} ${"x".repeat(1200)}`)));
+  for (let index = 0; index < 3; index += 1) {
+    lines.push(responseItem("user", themisPrompt(`目标 ${index}`, `上下文 ${index} ${"x".repeat(13000)}`)));
     lines.push(responseItem("assistant", `回复 ${index} ${"y".repeat(400)}`));
   }
 
@@ -96,9 +96,38 @@ test("buildForkContextFromThread 在 transcript 超预算时会裁剪", async ()
     });
 
     assert.ok(result);
+    assert.equal(result?.totalTurns, 3);
+    assert.equal(Boolean(result?.truncated), true);
+    assert.ok((result?.includedTurns ?? 0) < 3);
+    assert.equal(result?.includedTurns, 1);
+    assert.match(result?.historyContext ?? "", /Older \d+ turns were omitted/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("buildForkContextFromThread 在 transcript 超 turn 上限时会裁剪", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-fork-turn-truncated-"));
+  const nested = join(root, "2026", "03");
+  mkdirSync(nested, { recursive: true });
+
+  const lines: string[] = [];
+  for (let index = 0; index < 30; index += 1) {
+    lines.push(responseItem("user", themisPrompt(`目标 ${index}`, `上下文 ${index}`)));
+    lines.push(responseItem("assistant", `回复 ${index}`));
+  }
+
+  writeFileSync(join(nested, "session-thread-789.jsonl"), lines.join("\n"), "utf8");
+
+  try {
+    const result = await buildForkContextFromThread("thread-789", {
+      sessionRoot: root,
+    });
+
+    assert.ok(result);
     assert.equal(result?.totalTurns, 30);
     assert.equal(Boolean(result?.truncated), true);
-    assert.ok((result?.includedTurns ?? 0) < 30);
+    assert.equal(result?.includedTurns, 24);
     assert.match(result?.historyContext ?? "", /Older \d+ turns were omitted/);
   } finally {
     rmSync(root, { recursive: true, force: true });
