@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -371,6 +371,131 @@ test("runTask 在 context build 阶段收到 abort 会尽快取消且不进入 a
   }
 });
 
+test("runTask 成功时会写 memory updates、发 task.memory_updated，并落到 execution workspace", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-memory-success-"));
+  const controlDirectory = join(root, "control");
+  const sessionWorkspace = join(root, "session-workspace");
+  mkdirSync(controlDirectory);
+  mkdirSync(sessionWorkspace);
+  mkdirSync(join(controlDirectory, "memory", "architecture"), { recursive: true });
+  mkdirSync(join(sessionWorkspace, "memory", "architecture"), { recursive: true });
+  writeRuntimeFile(controlDirectory, "AGENTS.md", "control-rule");
+  writeRuntimeFile(controlDirectory, "README.md", "# control");
+  writeRuntimeFile(controlDirectory, "memory/architecture/overview.md", "# control architecture");
+  writeRuntimeFile(sessionWorkspace, "AGENTS.md", "session-rule");
+  writeRuntimeFile(sessionWorkspace, "README.md", "# session");
+  writeRuntimeFile(sessionWorkspace, "memory/architecture/overview.md", "# session architecture");
+
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  runtimeStore.saveSessionTaskSettings({
+    sessionId: "session-runtime-memory-1",
+    settings: {
+      workspacePath: sessionWorkspace,
+    },
+    createdAt: "2026-03-28T00:00:00.000Z",
+    updatedAt: "2026-03-28T00:00:00.000Z",
+  });
+
+  const capturedThreadOptions: ThreadOptions[] = [];
+  const sessionStore = createSessionStoreDouble(runtimeStore, capturedThreadOptions);
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+    sessionStore,
+  });
+
+  try {
+    const events: TaskEvent[] = [];
+    const result = await runtime.runTask(createRequest({
+      requestId: "req-runtime-memory-1",
+      taskId: "task-runtime-memory-1",
+      goal: "实现 memory runtime 集成",
+      user: {
+        userId: "",
+        displayName: "User",
+      },
+      channelContext: {
+        sessionId: "session-runtime-memory-1",
+      },
+    }), {
+      onEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    assert.equal(result.status, "completed");
+    assert.ok((result.memoryUpdates?.length ?? 0) > 0);
+    const memoryEvents = events.filter((event) => event.type === "task.memory_updated");
+    assert.ok(memoryEvents.length >= 1);
+    assert.ok(memoryEvents.some((event) => Array.isArray(event.payload?.updates)));
+
+    const sessionDone = writeFileSyncAndRead(sessionWorkspace, "memory/tasks/done.md");
+    assert.match(sessionDone, /task-runtime-memory-1/);
+    assert.match(sessionDone, /实现 memory runtime 集成|done/);
+    const controlDone = writeFileSyncAndRead(controlDirectory, "memory/tasks/done.md", true);
+    assert.equal(controlDone.includes("task-runtime-memory-1"), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("memory 写回失败时任务仍 completed，并发 task.memory_updated failed 事件", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-memory-failed-"));
+  const controlDirectory = join(root, "control");
+  mkdirSync(controlDirectory);
+  mkdirSync(join(controlDirectory, "memory", "architecture"), { recursive: true });
+  writeRuntimeFile(controlDirectory, "AGENTS.md", "rule");
+  writeRuntimeFile(controlDirectory, "README.md", "# control");
+  writeRuntimeFile(controlDirectory, "memory/architecture/overview.md", "# architecture");
+
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const capturedThreadOptions: ThreadOptions[] = [];
+  const sessionStore = createSessionStoreDouble(runtimeStore, capturedThreadOptions);
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+    sessionStore,
+    createMemoryService: () => ({
+      recordTaskStart: () => [],
+      recordTaskCompletion: () => {
+        throw new Error("memory completion failed");
+      },
+    }) as never,
+  });
+
+  try {
+    const events: TaskEvent[] = [];
+    const result = await runtime.runTask(createRequest({
+      requestId: "req-runtime-memory-failed",
+      taskId: "task-runtime-memory-failed",
+      user: {
+        userId: "",
+        displayName: "User",
+      },
+      channelContext: {
+        sessionId: "session-runtime-memory-failed",
+      },
+    }), {
+      onEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    assert.equal(result.status, "completed");
+    const failedEvent = events.find(
+      (event) => event.type === "task.memory_updated" && event.status === "failed",
+    );
+    assert.ok(failedEvent);
+    assert.equal(failedEvent?.payload?.errorCode, "MEMORY_UPDATE_FAILED");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function createSessionStoreDouble(
   runtimeStore: SqliteCodexSessionRegistry,
   capturedThreadOptions: ThreadOptions[],
@@ -419,4 +544,16 @@ function writeRuntimeFile(root: string, path: string, content: string): void {
   const absolutePath = join(root, path);
   mkdirSync(dirname(absolutePath), { recursive: true });
   writeFileSync(absolutePath, `${content}\n`, "utf8");
+}
+
+function writeFileSyncAndRead(root: string, path: string, allowMissing = false): string {
+  const absolutePath = join(root, path);
+  try {
+    return readFileSync(absolutePath, "utf8");
+  } catch (error) {
+    if (allowMissing) {
+      return "";
+    }
+    throw error;
+  }
 }

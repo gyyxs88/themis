@@ -26,6 +26,7 @@ import { ConversationService } from "./conversation-service.js";
 import { IdentityLinkService } from "./identity-link-service.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
 import { buildBootstrapPrompt, buildTaskPrompt } from "./prompt.js";
+import { MemoryService } from "../memory/memory-service.js";
 import { validateWorkspacePath } from "./session-workspace.js";
 import {
   applyThemisGlobalDefaultsToRuntimeCatalog,
@@ -65,6 +66,7 @@ export interface CodexTaskRuntimeOptions {
   providerConfig?: OpenAICompatibleProviderConfig | null;
   principalSkillsService?: PrincipalSkillsService;
   createContextBuilder?: (workingDirectory: string) => ContextBuilder;
+  createMemoryService?: (workingDirectory: string) => MemoryService;
 }
 
 interface ResolvedRuntimeTarget {
@@ -94,6 +96,7 @@ export class CodexTaskRuntime {
   private readonly principalPersonaService: PrincipalPersonaService;
   private readonly principalSkillsService: PrincipalSkillsService;
   private readonly createContextBuilder: (workingDirectory: string) => ContextBuilder;
+  private readonly createMemoryService: (workingDirectory: string) => MemoryService;
   private providerConfigs: OpenAICompatibleProviderConfig[];
   private readonly authClients = new Map<string, Codex>();
   private readonly authSessionStores = new Map<string, CodexThreadSessionStore>();
@@ -115,6 +118,9 @@ export class CodexTaskRuntime {
       registry: this.runtimeStore,
     });
     this.createContextBuilder = options.createContextBuilder ?? ((workingDirectory) => new ContextBuilder({
+      workingDirectory,
+    }));
+    this.createMemoryService = options.createMemoryService ?? ((workingDirectory) => new MemoryService({
       workingDirectory,
     }));
     this.providerConfigs = options.providerConfigs
@@ -171,6 +177,8 @@ export class CodexTaskRuntime {
       throwIfAborted(signal);
       const executionWorkingDirectory = this.resolveExecutionWorkingDirectory(request);
       throwIfAborted(signal);
+      const memoryEnabled = request.options?.memoryMode !== "off";
+      const memoryService = memoryEnabled ? this.createMemoryService(executionWorkingDirectory) : null;
       const taskContext = await this.buildTaskContext(executionWorkingDirectory, {
         request,
         principalId,
@@ -193,6 +201,41 @@ export class CodexTaskRuntime {
         ),
       );
       throwIfAborted(signal);
+
+      if (memoryService) {
+        try {
+          const startUpdates = memoryService.recordTaskStart({
+            request,
+            taskId,
+            ...(principalId ? { principalId } : {}),
+            ...(resolvedRequest.conversationId ? { conversationId: resolvedRequest.conversationId } : {}),
+          });
+          await emit(
+            createTaskEvent(
+              taskId,
+              request.requestId,
+              "task.memory_updated",
+              "running",
+              "Memory updated at task start.",
+              { updates: startUpdates },
+            ),
+          );
+        } catch (error) {
+          await emit(
+            createTaskEvent(
+              taskId,
+              request.requestId,
+              "task.memory_updated",
+              "failed",
+              toErrorMessage(error),
+              {
+                updates: [],
+                errorCode: "MEMORY_UPDATE_FAILED",
+              },
+            ),
+          );
+        }
+      }
 
       const target = this.resolveRuntimeTarget(request, hooks.allowUnsupportedThirdPartyModel === true);
       throwIfAborted(signal);
@@ -272,7 +315,8 @@ export class CodexTaskRuntime {
       const summary = summarizeResponse(output);
       const touched = [...touchedFiles];
       const resolvedThreadId = thread.id ?? sessionLease.threadId ?? undefined;
-      const result: TaskResult = {
+      let completionMemoryUpdates: TaskResult["memoryUpdates"] = [];
+      const baseResult: TaskResult = {
         taskId,
         requestId: request.requestId,
         status: "completed",
@@ -287,6 +331,49 @@ export class CodexTaskRuntime {
           onboardingIntercept,
         ),
         completedAt: new Date().toISOString(),
+      };
+
+      if (memoryService) {
+        try {
+          completionMemoryUpdates = memoryService.recordTaskCompletion({
+            request,
+            result: baseResult,
+            taskId,
+            ...(principalId ? { principalId } : {}),
+            ...(resolvedRequest.conversationId ? { conversationId: resolvedRequest.conversationId } : {}),
+            verified: true,
+          });
+          await emit(
+            createTaskEvent(
+              taskId,
+              request.requestId,
+              "task.memory_updated",
+              "running",
+              "Memory updated at task completion.",
+              { updates: completionMemoryUpdates },
+            ),
+          );
+        } catch (error) {
+          completionMemoryUpdates = [];
+          await emit(
+            createTaskEvent(
+              taskId,
+              request.requestId,
+              "task.memory_updated",
+              "failed",
+              toErrorMessage(error),
+              {
+                updates: [],
+                errorCode: "MEMORY_UPDATE_FAILED",
+              },
+            ),
+          );
+        }
+      }
+
+      const result: TaskResult = {
+        ...baseResult,
+        ...(completionMemoryUpdates.length ? { memoryUpdates: completionMemoryUpdates } : {}),
       };
 
       const finalizedResult = await finalizeTaskResult(request, result, hooks.finalizeResult);
