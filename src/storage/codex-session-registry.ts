@@ -62,9 +62,11 @@ export interface StoredWebAuditEventRecord {
   eventId: string;
   eventType: string;
   createdAt: string;
+  remoteIp?: string;
   tokenId?: string;
   tokenLabel?: string;
   sessionId?: string;
+  summary?: string;
   payloadJson?: string;
 }
 
@@ -328,9 +330,11 @@ interface WebAuditEventRow {
   event_id: string;
   event_type: string;
   created_at: string;
+  remote_ip: string | null;
   token_id: string | null;
   token_label: string | null;
   session_id: string | null;
+  summary: string | null;
   payload_json: string | null;
 }
 
@@ -978,6 +982,20 @@ export class SqliteCodexSessionRegistry {
     return result.changes;
   }
 
+  listWebAuditEvents(): StoredWebAuditEventRecord[] {
+    const rows = this.db
+      .prepare(
+        `
+          SELECT event_id, event_type, created_at, remote_ip, token_id, token_label, session_id, summary, payload_json
+          FROM themis_web_audit_events
+          ORDER BY created_at DESC, event_id DESC
+        `,
+      )
+      .all() as WebAuditEventRow[];
+
+    return rows.map(mapWebAuditEventRow);
+  }
+
   appendWebAuditEvent(record: StoredWebAuditEventRecord): void {
     const eventId = record.eventId.trim();
     const eventType = record.eventType.trim();
@@ -993,17 +1011,21 @@ export class SqliteCodexSessionRegistry {
             event_id,
             event_type,
             created_at,
+            remote_ip,
             token_id,
             token_label,
             session_id,
+            summary,
             payload_json
           ) VALUES (
             @event_id,
             @event_type,
             @created_at,
+            @remote_ip,
             @token_id,
             @token_label,
             @session_id,
+            @summary,
             @payload_json
           )
         `,
@@ -1012,9 +1034,11 @@ export class SqliteCodexSessionRegistry {
         event_id: eventId,
         event_type: eventType,
         created_at: record.createdAt,
+        remote_ip: record.remoteIp ?? null,
         token_id: record.tokenId ?? null,
         token_label: record.tokenLabel ?? null,
         session_id: record.sessionId ?? null,
+        summary: record.summary ?? null,
         payload_json: record.payloadJson ?? null,
       });
   }
@@ -3469,6 +3493,10 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_web_access_tokens_label_idx
       ON themis_web_access_tokens(label, updated_at DESC);
 
+      CREATE UNIQUE INDEX IF NOT EXISTS themis_web_access_tokens_active_label_idx
+      ON themis_web_access_tokens(label)
+      WHERE revoked_at IS NULL;
+
       CREATE INDEX IF NOT EXISTS themis_web_access_tokens_active_idx
       ON themis_web_access_tokens(revoked_at, updated_at DESC);
 
@@ -3496,9 +3524,11 @@ export class SqliteCodexSessionRegistry {
         event_id TEXT PRIMARY KEY,
         event_type TEXT NOT NULL,
         created_at TEXT NOT NULL,
+        remote_ip TEXT,
         token_id TEXT,
         token_label TEXT,
         session_id TEXT,
+        summary TEXT,
         payload_json TEXT,
         FOREIGN KEY (token_id) REFERENCES themis_web_access_tokens(token_id) ON DELETE SET NULL,
         FOREIGN KEY (session_id) REFERENCES themis_web_sessions(session_id) ON DELETE SET NULL
@@ -3683,6 +3713,10 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_web_access_tokens_label_idx
       ON themis_web_access_tokens(label, updated_at DESC);
 
+      CREATE UNIQUE INDEX IF NOT EXISTS themis_web_access_tokens_active_label_idx
+      ON themis_web_access_tokens(label)
+      WHERE revoked_at IS NULL;
+
       CREATE INDEX IF NOT EXISTS themis_web_access_tokens_active_idx
       ON themis_web_access_tokens(revoked_at, updated_at DESC);
 
@@ -3710,9 +3744,11 @@ export class SqliteCodexSessionRegistry {
         event_id TEXT PRIMARY KEY,
         event_type TEXT NOT NULL,
         created_at TEXT NOT NULL,
+        remote_ip TEXT,
         token_id TEXT,
         token_label TEXT,
         session_id TEXT,
+        summary TEXT,
         payload_json TEXT,
         FOREIGN KEY (token_id) REFERENCES themis_web_access_tokens(token_id) ON DELETE SET NULL,
         FOREIGN KEY (session_id) REFERENCES themis_web_sessions(session_id) ON DELETE SET NULL
@@ -3743,6 +3779,25 @@ export class SqliteCodexSessionRegistry {
       database.exec(`
         ALTER TABLE themis_third_party_providers
         ADD COLUMN endpoint_candidates_json TEXT NOT NULL DEFAULT '[]';
+      `);
+    }
+
+    const webAuditColumns = database
+      .prepare(`PRAGMA table_info(themis_web_audit_events)`)
+      .all() as Array<{ name: string }>;
+    const webAuditColumnNames = new Set(webAuditColumns.map((column) => column.name));
+
+    if (!webAuditColumnNames.has("remote_ip")) {
+      database.exec(`
+        ALTER TABLE themis_web_audit_events
+        ADD COLUMN remote_ip TEXT;
+      `);
+    }
+
+    if (!webAuditColumnNames.has("summary")) {
+      database.exec(`
+        ALTER TABLE themis_web_audit_events
+        ADD COLUMN summary TEXT;
       `);
     }
 
@@ -3814,9 +3869,11 @@ function mapWebAuditEventRow(row: WebAuditEventRow): StoredWebAuditEventRecord {
     eventId: row.event_id,
     eventType: row.event_type,
     createdAt: row.created_at,
+    ...(row.remote_ip ? { remoteIp: row.remote_ip } : {}),
     ...(row.token_id ? { tokenId: row.token_id } : {}),
     ...(row.token_label ? { tokenLabel: row.token_label } : {}),
     ...(row.session_id ? { sessionId: row.session_id } : {}),
+    ...(row.summary ? { summary: row.summary } : {}),
     ...(row.payload_json ? { payloadJson: row.payload_json } : {}),
   };
 }

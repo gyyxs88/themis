@@ -22,6 +22,12 @@ export interface WebAccessSessionSummary {
   createdAt: string;
   lastSeenAt: string;
   expiresAt: string;
+  token: WebAccessSessionTokenSummary;
+}
+
+export interface WebAccessSessionTokenSummary {
+  tokenId: string;
+  label: string;
 }
 
 export type WebAccessSessionReadFailureReason =
@@ -48,11 +54,28 @@ export interface WebAccessServiceOptions {
 export interface CreateWebAccessTokenInput {
   label: string;
   secret: string;
+  remoteIp?: string;
+}
+
+export interface RenameWebAccessTokenInput {
+  tokenId: string;
+  label: string;
+  remoteIp?: string;
+}
+
+export interface RevokeWebAccessTokenInput {
+  label: string;
+  remoteIp?: string;
 }
 
 export interface AuthenticateWebAccessInput {
-  label: string;
   secret: string;
+  remoteIp?: string;
+}
+
+export interface RevokeWebSessionInput {
+  sessionId: string;
+  remoteIp?: string;
 }
 
 export interface RecordDeniedAccessInput {
@@ -60,6 +83,7 @@ export interface RecordDeniedAccessInput {
   sessionId?: string;
   tokenLabel?: string;
   tokenId?: string;
+  remoteIp?: string;
   details?: Record<string, unknown>;
 }
 
@@ -92,7 +116,7 @@ export class WebAccessService {
       throw new Error("Web access token secret is required.");
     }
 
-    if (this.registry.getWebAccessTokenByLabel(label)) {
+    if (this.getActiveTokenByLabel(label)) {
       throw new Error(`Web access token label ${label} already exists.`);
     }
 
@@ -105,13 +129,35 @@ export class WebAccessService {
       updatedAt: now,
     };
 
-    this.registry.saveWebAccessToken(record);
+    try {
+      this.registry.saveWebAccessToken(record);
+    } catch (error) {
+      if (isActiveWebAccessTokenLabelConflictError(error)) {
+        throw new Error(`Web access token label ${label} already exists.`);
+      }
+
+      throw error;
+    }
+
+    this.appendAudit(
+      "web_access.token_created",
+      `新增 Web 口令 ${label}`,
+      {
+        label,
+        tokenId: record.tokenId,
+      },
+      {
+        tokenId: record.tokenId,
+        tokenLabel: label,
+        ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
+      },
+    );
     return this.toTokenSummary(record);
   }
 
-  renameToken(tokenId: string, label: string): WebAccessTokenSummary {
-    const normalizedTokenId = tokenId.trim();
-    const normalizedLabel = label.trim();
+  renameToken(input: RenameWebAccessTokenInput): WebAccessTokenSummary {
+    const normalizedTokenId = input.tokenId.trim();
+    const normalizedLabel = input.label.trim();
 
     if (!normalizedTokenId) {
       throw new Error("Web access token id is required.");
@@ -127,33 +173,57 @@ export class WebAccessService {
       throw new Error(`Web access token ${normalizedTokenId} not found.`);
     }
 
-    const conflict = this.registry
-      .listWebAccessTokens()
-      .find((record) => record.label === normalizedLabel && record.tokenId !== normalizedTokenId);
+    const conflict = this.getActiveTokenByLabel(normalizedLabel);
 
-    if (conflict) {
+    if (conflict && conflict.tokenId !== normalizedTokenId) {
       throw new Error(`Web access token label ${normalizedLabel} already exists.`);
     }
 
     const now = this.now();
-    this.registry.renameWebAccessToken(normalizedTokenId, normalizedLabel, now);
+    const previousLabel = existing.label;
+
+    try {
+      this.registry.renameWebAccessToken(normalizedTokenId, normalizedLabel, now);
+    } catch (error) {
+      if (isActiveWebAccessTokenLabelConflictError(error)) {
+        throw new Error(`Web access token label ${normalizedLabel} already exists.`);
+      }
+
+      throw error;
+    }
+
     const updated = this.registry.getWebAccessTokenById(normalizedTokenId);
 
     if (!updated) {
       throw new Error(`Web access token ${normalizedTokenId} not found after rename.`);
     }
 
+    this.appendAudit(
+      "web_access.token_renamed",
+      `重命名 Web 口令 ${previousLabel} -> ${normalizedLabel}`,
+      {
+        tokenId: normalizedTokenId,
+        previousLabel,
+        label: normalizedLabel,
+      },
+      {
+        tokenId: normalizedTokenId,
+        tokenLabel: normalizedLabel,
+        ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
+      },
+    );
+
     return this.toTokenSummary(updated);
   }
 
-  revokeTokenByLabel(label: string): WebAccessTokenSummary {
-    const normalizedLabel = label.trim();
+  revokeTokenByLabel(input: RevokeWebAccessTokenInput): WebAccessTokenSummary {
+    const normalizedLabel = input.label.trim();
 
     if (!normalizedLabel) {
       throw new Error("Web access token label is required.");
     }
 
-    const token = this.registry.getWebAccessTokenByLabel(normalizedLabel);
+    const token = this.getActiveTokenByLabel(normalizedLabel) ?? this.registry.getWebAccessTokenByLabel(normalizedLabel);
 
     if (!token) {
       throw new Error(`Web access token ${normalizedLabel} not found.`);
@@ -169,27 +239,30 @@ export class WebAccessService {
 
     this.appendAudit(
       "web_access.token_revoked",
+      `删除 Web 口令 ${token.label}`,
       {
         tokenId: token.tokenId,
-        tokenLabel: token.label,
+        label: token.label,
         revokedAt: now,
       },
       {
         tokenId: token.tokenId,
         tokenLabel: token.label,
+        ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
       },
     );
     this.appendAudit(
       "web_access.sessions_revoked_by_token",
+      `撤销 Web 口令关联会话 ${revokedSessionCount} 个`,
       {
         tokenId: token.tokenId,
-        tokenLabel: token.label,
         revokedAt: now,
         revokedSessionCount,
       },
       {
         tokenId: token.tokenId,
         tokenLabel: token.label,
+        ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
       },
     );
 
@@ -203,39 +276,36 @@ export class WebAccessService {
   }
 
   authenticate(input: AuthenticateWebAccessInput): WebAccessAuthenticationResult {
-    const label = input.label.trim();
     const secret = input.secret;
 
-    if (!label || secret.length === 0) {
-      const attemptedTokenLabel = label || input.label;
+    if (secret.length === 0) {
       this.appendAudit(
         "web_access.login_failed",
+        "Web 登录失败",
         {
-          tokenLabel: attemptedTokenLabel,
           reason: "INVALID_CREDENTIALS",
         },
-        {
-          ...(attemptedTokenLabel ? { tokenLabel: attemptedTokenLabel } : {}),
-        },
-      );
+      {
+        ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
+      },
+    );
       return { ok: false, reason: "INVALID_CREDENTIALS" };
     }
 
-    const token = this.registry.getWebAccessTokenByLabel(label);
+    const token = this.registry
+      .listActiveWebAccessTokens()
+      .find((record) => verifyWebAccessSecret(secret, record.tokenHash));
 
-    if (!token || token.revokedAt || !verifyWebAccessSecret(secret, token.tokenHash)) {
-      const tokenId = token?.tokenId;
+    if (!token) {
       this.appendAudit(
         "web_access.login_failed",
+        "Web 登录失败",
         {
-          tokenLabel: label,
-          ...(tokenId ? { tokenId } : {}),
           reason: "INVALID_CREDENTIALS",
         },
-        {
-          tokenLabel: label,
-          ...(tokenId ? { tokenId } : {}),
-        },
+      {
+        ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
+      },
       );
       return { ok: false, reason: "INVALID_CREDENTIALS" };
     }
@@ -253,9 +323,25 @@ export class WebAccessService {
     this.registry.saveWebSession(session);
     this.registry.touchWebAccessToken(token.tokenId, now, now);
 
+    this.appendAudit(
+      "web_access.login_succeeded",
+      "Web 登录成功",
+      {
+        tokenId: token.tokenId,
+        tokenLabel: token.label,
+        sessionId: session.sessionId,
+      },
+      {
+        tokenId: token.tokenId,
+        tokenLabel: token.label,
+        sessionId: session.sessionId,
+        ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
+      },
+    );
+
     return {
       ok: true,
-      session: this.toSessionSummary(session),
+      session: this.toSessionSummary(session, token),
     };
   }
 
@@ -289,7 +375,7 @@ export class WebAccessService {
     const now = this.now();
 
     if (Date.parse(session.expiresAt) <= Date.parse(now)) {
-      this.revokeSession(normalizedSessionId);
+      this.revokeSession({ sessionId: normalizedSessionId });
       return { ok: false, reason: "SESSION_EXPIRED" };
     }
 
@@ -303,12 +389,16 @@ export class WebAccessService {
         createdAt: session.createdAt,
         lastSeenAt: now,
         expiresAt: session.expiresAt,
+        token: {
+          tokenId: token.tokenId,
+          label: token.label,
+        },
       },
     };
   }
 
-  revokeSession(sessionId: string): void {
-    const normalizedSessionId = sessionId.trim();
+  revokeSession(input: RevokeWebSessionInput): void {
+    const normalizedSessionId = input.sessionId.trim();
 
     if (!normalizedSessionId) {
       return;
@@ -325,6 +415,7 @@ export class WebAccessService {
     const tokenLabel = this.registry.getWebAccessTokenById(session.tokenId)?.label;
     this.appendAudit(
       "web_access.session_revoked",
+      "主动登出",
       {
         sessionId: normalizedSessionId,
         tokenId: session.tokenId,
@@ -335,6 +426,7 @@ export class WebAccessService {
         sessionId: normalizedSessionId,
         tokenId: session.tokenId,
         ...(tokenLabel ? { tokenLabel } : {}),
+        ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
       },
     );
   }
@@ -346,6 +438,7 @@ export class WebAccessService {
 
     this.appendAudit(
       "web_access.access_denied",
+      "Web 访问被拒绝",
       {
         reason: input.reason,
         ...(sessionId ? { sessionId } : {}),
@@ -357,23 +450,28 @@ export class WebAccessService {
         ...(sessionId ? { sessionId } : {}),
         ...(tokenId ? { tokenId } : {}),
         ...(tokenLabel ? { tokenLabel } : {}),
+        ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
       },
     );
   }
 
   private appendAudit(
     eventType: string,
+    summary: string,
     payload: Record<string, unknown>,
     context: {
       tokenId?: string;
       tokenLabel?: string;
       sessionId?: string;
+      remoteIp?: string;
     } = {},
   ): void {
     this.registry.appendWebAuditEvent({
       eventId: randomUUID(),
       eventType,
       createdAt: this.now(),
+      summary,
+      ...(context.remoteIp ? { remoteIp: context.remoteIp } : {}),
       ...(context.tokenId ? { tokenId: context.tokenId } : {}),
       ...(context.tokenLabel ? { tokenLabel: context.tokenLabel } : {}),
       ...(context.sessionId ? { sessionId: context.sessionId } : {}),
@@ -392,14 +490,34 @@ export class WebAccessService {
     };
   }
 
-  private toSessionSummary(record: StoredWebSessionRecord): WebAccessSessionSummary {
+  private toSessionSummary(record: StoredWebSessionRecord, token: StoredWebAccessTokenRecord): WebAccessSessionSummary {
     return {
       sessionId: record.sessionId,
       tokenId: record.tokenId,
       createdAt: record.createdAt,
       lastSeenAt: record.lastSeenAt,
       expiresAt: record.expiresAt,
+      token: {
+        tokenId: token.tokenId,
+        label: token.label,
+      },
     };
+  }
+
+  private getActiveTokenByLabel(label: string): StoredWebAccessTokenRecord | null {
+    const normalized = label.trim();
+
+    if (!normalized) {
+      return null;
+    }
+
+    const token = this.registry.getWebAccessTokenByLabel(normalized);
+
+    if (!token || token.revokedAt) {
+      return null;
+    }
+
+    return token;
   }
 }
 
@@ -424,4 +542,13 @@ function verifyWebAccessSecret(secret: string, storedHash: string): boolean {
   }
 
   return timingSafeEqual(expected, actual);
+}
+
+function isActiveWebAccessTokenLabelConflictError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const code = (error as { code?: string }).code;
+  return typeof code === "string" && code.startsWith("SQLITE_CONSTRAINT");
 }
