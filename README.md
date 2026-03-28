@@ -67,10 +67,10 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 
 ## 当前未落地能力
 
-- 更完整的自动化测试覆盖；当前只有 `src/core/*.test.ts` 这类基础单元测试，`router`、`session store`、`fork`、`history API` 和 Web stream 主链路仍缺覆盖。
+- 上下文构建器，把 `README.md`、`AGENTS.md`、`memory/`、`docs/memory/`、会话历史和任务输入收敛成稳定的任务上下文包。
 - Markdown memory 的运行时自动读写服务。
-- 更完整的配置 / 运维 CLI；当前已提供项目级 `init / status / config / skill` 入口，但认证状态检查、第三方 provider 诊断、服务健康检查和排障辅助等命令树仍未完成。CLI 不负责实际任务执行，任务入口仍然聚焦在 Web / 飞书渠道。
-- 更完整的配置 / 运维 CLI；当前已提供项目级 `init / status / config / auth / skill` 入口，但认证状态检查、第三方 provider 诊断、服务健康检查和排障辅助等命令树仍未完成。CLI 不负责实际任务执行，任务入口仍然聚焦在 Web / 飞书渠道。
+- 更完整的自动化测试覆盖；当前已覆盖 Web modules、CLI、Feishu、server、core 的基础用例，但 `context builder`、`memory service`、`session store`、`fork`、`history API` 和 Web stream 主链路仍需继续补齐。
+- 更完整的配置 / 运维 CLI 与 MCP 可见性；当前已提供项目级 `init / status / config / auth / skill` 入口，但认证诊断、context / memory 健康检查、MCP 状态与基础排障仍未完成。CLI 不负责实际任务执行，任务入口仍然聚焦在 Web / 飞书渠道。
 
 ## 本地运行
 
