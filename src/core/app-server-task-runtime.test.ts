@@ -278,6 +278,74 @@ test("AppServerTaskRuntime 遇到 SDK 旧会话 threadId 时会降级 startThrea
   }
 });
 
+test("AppServerTaskRuntime 遇到没有 engine 标记的 legacy session 时会降级 startThread", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-legacy-new",
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    fixture.runtimeStore.saveSession({
+      sessionId: "web-session-legacy-1",
+      threadId: "thread-legacy-old-1",
+      createdAt: "2026-03-28T12:00:00.000Z",
+      updatedAt: "2026-03-28T12:00:00.000Z",
+    });
+
+    fixture.runtimeStore.upsertTurnFromRequest({
+      requestId: "req-legacy-old-1",
+      taskId: "task-legacy-old-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "legacy turn",
+      channelContext: { sessionId: "web-session-legacy-1" },
+      createdAt: "2026-03-28T11:59:00.000Z",
+    }, "task-legacy-old-1");
+    fixture.runtimeStore.completeTaskTurn({
+      request: {
+        requestId: "req-legacy-old-1",
+        taskId: "task-legacy-old-1",
+        sourceChannel: "web",
+        user: { userId: "webui" },
+        goal: "legacy turn",
+        channelContext: { sessionId: "web-session-legacy-1" },
+        createdAt: "2026-03-28T11:59:00.000Z",
+      },
+      result: {
+        taskId: "task-legacy-old-1",
+        requestId: "req-legacy-old-1",
+        status: "completed",
+        summary: "legacy result",
+        structuredOutput: {
+          session: {
+            sessionId: "web-session-legacy-1",
+            threadId: "thread-legacy-old-1",
+          },
+        },
+        completedAt: "2026-03-28T11:59:30.000Z",
+      },
+      sessionMode: "resumed",
+      threadId: "thread-legacy-old-1",
+    });
+
+    const result = await fixture.runtime.runTask({
+      requestId: "req-app-legacy-1",
+      taskId: "task-app-legacy-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "legacy fallback",
+      channelContext: { channelSessionKey: "web-session-legacy-1" },
+      createdAt: "2026-03-28T12:00:00.000Z",
+    });
+
+    assert.equal(state.resumed.length, 0);
+    assert.equal(state.started.length, 1);
+    assert.equal(readSessionPayload(result).threadId, "thread-app-legacy-new");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("AppServerTaskRuntime 会按顺序等待异步 onEvent，再进入 finalizeResult 和返回结果", async () => {
   const progressGate = createDeferred();
   let progressStarted!: () => void;
@@ -407,6 +475,36 @@ test("AppServerTaskRuntime 在 onEvent 阻塞时也会响应外部 abort", { tim
         }
       },
     }), /EVENT_QUEUE_ABORT/);
+
+    assert.equal(state.closed, 1);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 的 timeoutMs 会打断 event queue 阻塞", { timeout: 400 }, async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startTurn: async () => ({ turnId: "turn-app-event-timeout" }),
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    await assert.rejects(async () => await fixture.runtime.runTask({
+      requestId: "req-app-timeout-event-1",
+      taskId: "task-app-timeout-event-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "event queue timeout",
+      channelContext: { channelSessionKey: "web-session-timeout-event-1" },
+      createdAt: "2026-03-28T12:00:00.000Z",
+    }, {
+      timeoutMs: 20,
+      onEvent: async (event) => {
+        if (event.type === "task.received") {
+          await new Promise<void>(() => {});
+        }
+      },
+    }), /TASK_TIMEOUT:/);
 
     assert.equal(state.closed, 1);
   } finally {
