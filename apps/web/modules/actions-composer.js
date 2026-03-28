@@ -26,19 +26,41 @@ export function createComposerActions(app, streamActions) {
     });
 
     dom.cancelButton.addEventListener("click", () => {
+      const turn = store.getActiveTurn();
+
+      if (turn?.state === "waiting") {
+        const activeThread = store.getActiveThread();
+
+        store.appendStep(
+          turn,
+          "等待中的 action 不能直接取消",
+          "请先提交这个 action，或者切回对应会话后再处理。",
+          "warning",
+        );
+
+        if (activeThread) {
+          store.setTransientStatus(activeThread.id, "当前等待中的 action 不能直接取消，请先提交或切回对应会话。");
+        }
+
+        store.touchThread(app.runtime.activeRunRef?.threadId ?? activeThread?.id ?? "");
+        store.saveState();
+        app.renderer.renderAll(true);
+        return;
+      }
+
       if (!app.runtime.activeRequestController || !app.runtime.activeRunRef) {
         return;
       }
 
       app.runtime.activeRequestController.abort();
-      const turn = store.getTurn(app.runtime.activeRunRef.threadId, app.runtime.activeRunRef.turnId);
+      const runningTurn = store.getTurn(app.runtime.activeRunRef.threadId, app.runtime.activeRunRef.turnId);
 
-      if (!turn) {
+      if (!runningTurn) {
         return;
       }
 
-      store.appendStep(turn, "已请求取消", "浏览器已发出取消信号，服务端会停止对应任务。");
-      turn.state = "cancelled";
+      store.appendStep(runningTurn, "已请求取消", "浏览器已发出取消信号，服务端会停止对应任务。");
+      runningTurn.state = "cancelled";
       store.touchThread(app.runtime.activeRunRef.threadId);
       store.saveState();
       app.renderer.renderAll(true);
@@ -72,7 +94,13 @@ export function createComposerActions(app, streamActions) {
 
     const currentTurn = store.getActiveTurn();
 
-    if (currentTurn?.state === "waiting" && currentTurn.pendingAction?.actionType === "approval") {
+    if (currentTurn?.state === "waiting" && currentTurn.pendingAction) {
+      if (app.runtime.activeRunRef?.threadId !== thread.id) {
+        store.setTransientStatus(thread.id, "当前会话不是等待中的 action 所在会话，请切回对应会话再提交。");
+        app.renderer.renderAll();
+        return;
+      }
+
       await submitWaitingAction(thread, currentTurn);
       return;
     }
@@ -254,9 +282,16 @@ export function createComposerActions(app, streamActions) {
   }
 
   async function submitWaitingAction(thread, turn) {
-    const decision = mergeDraftContent(thread.draftGoal, thread.draftContext).trim();
+    const actionType = turn.pendingAction?.actionType;
+    const actionInput = mergeDraftContent(thread.draftGoal, thread.draftContext).trim();
 
-    if (!decision) {
+    if (!actionType) {
+      store.setTransientStatus(thread.id, "当前等待中的 action 已失效，请刷新后重试。");
+      app.renderer.renderAll();
+      return;
+    }
+
+    if (!actionInput) {
       if (store.getActiveThread()?.id === thread.id) {
         dom.goalInput.focus();
       }
@@ -264,7 +299,15 @@ export function createComposerActions(app, streamActions) {
     }
 
     try {
-      await actionInteraction.submitApproval(turn, decision);
+      if (actionType === "approval") {
+        await actionInteraction.submitApproval(turn, actionInput);
+      } else if (actionType === "user-input") {
+        await actionInteraction.submitUserInput(turn, actionInput);
+      } else {
+        store.setTransientStatus(thread.id, `暂不支持等待中的 action 类型：${actionType}`);
+        app.renderer.renderAll();
+        return;
+      }
     } catch (error) {
       store.setTransientStatus(thread.id, error?.message ?? "提交 action 失败");
       app.renderer.renderAll();
