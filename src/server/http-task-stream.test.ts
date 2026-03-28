@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
+import { handleTaskStream } from "./http-task-handlers.js";
 import { createThemisHttpServer } from "./http-server.js";
 import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
 
@@ -189,6 +192,88 @@ test("/api/tasks/stream 在认证前置失败时不会发 ack，但会发 adapte
   });
 });
 
+test("handleTaskStream 在 close 后会中止任务并停止继续写流", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-http-task-stream-disconnect-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: root,
+    runtimeStore,
+  });
+  const authRuntime = createAuthRuntime({
+    authenticated: false,
+    requiresOpenaiAuth: false,
+  });
+  const request = createTaskStreamRequest({
+    goal: "请检查断连流程",
+    sessionId: "session-task-stream-disconnect",
+  });
+  const response = createTaskStreamResponse(() => {
+    queueMicrotask(() => {
+      request.emit("close");
+    });
+  });
+  let abortReason: Error | null = null;
+
+  try {
+    (runtime as CodexTaskRuntime & {
+      runTask: CodexTaskRuntime["runTask"];
+    }).runTask = async (taskRequest, hooks) => {
+      const aborted = new Promise<void>((resolve) => {
+        hooks.signal.addEventListener("abort", () => {
+          abortReason = hooks.signal.reason instanceof Error
+            ? hooks.signal.reason
+            : new Error(String(hooks.signal.reason));
+          resolve();
+        }, { once: true });
+      });
+
+      await hooks.onEvent?.({
+        eventId: "event-disconnect-1",
+        taskId: taskRequest.taskId ?? "task-stream-disconnect",
+        requestId: taskRequest.requestId,
+        type: "task.started",
+        status: "running",
+        message: "任务已开始",
+        timestamp: "2026-03-28T09:00:00.000Z",
+      });
+
+      await aborted;
+
+      return {
+        taskId: taskRequest.taskId ?? "task-stream-disconnect",
+        requestId: taskRequest.requestId,
+        status: "cancelled",
+        summary: "任务已取消",
+        completedAt: "2026-03-28T09:00:01.000Z",
+      };
+    };
+
+    await handleTaskStream(
+      request as unknown as import("node:http").IncomingMessage,
+      response as unknown as import("node:http").ServerResponse,
+      runtime,
+      authRuntime,
+      5_000,
+    );
+
+    assert.equal(abortReason?.message, "CLIENT_DISCONNECTED");
+
+    const lines = parseNdjson(response.lines.join(""));
+    assert.deepEqual(lines.map((line) => line.kind), ["ack", "event"]);
+    assert.equal(lines.some((line) => line.kind === "result"), false);
+    assert.equal(lines.some((line) => line.kind === "done"), false);
+    assert.equal(lines.some((line) => line.kind === "fatal"), false);
+
+    const cancelled = runtimeStore.listWebAuditEvents().find((event) => event.eventType === "web_access.task_cancelled");
+    assert.ok(cancelled);
+    assert.equal(cancelled?.remoteIp, "127.0.0.1");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function parseNdjson(body: string): Array<{ kind?: string; title?: string; result?: unknown }> {
   return body
     .split("\n")
@@ -205,6 +290,51 @@ function createAuthRuntime(snapshot: {
     readSnapshot: async () => snapshot,
     readThirdPartyProviderProfile: () => null,
   } as unknown as CodexAuthRuntime;
+}
+
+function createTaskStreamRequest(payload: Record<string, unknown>): PassThrough {
+  const request = new PassThrough();
+  request.end(`${JSON.stringify(payload)}\n`);
+  (request as PassThrough & {
+    socket: { remoteAddress?: string };
+  }).socket = {
+    remoteAddress: "127.0.0.1",
+  };
+
+  return request;
+}
+
+function createTaskStreamResponse(onFirstWrite: () => void): TaskStreamResponseStub {
+  return new TaskStreamResponseStub(onFirstWrite);
+}
+
+class TaskStreamResponseStub extends EventEmitter {
+  statusCode = 0;
+  destroyed = false;
+  writableEnded = false;
+  readonly lines: string[] = [];
+  private wroteFirstChunk = false;
+
+  constructor(private readonly onFirstWrite: () => void) {
+    super();
+  }
+
+  setHeader(_name: string, _value: string | number | readonly string[]): void {}
+
+  write(chunk: unknown): boolean {
+    this.lines.push(String(chunk));
+
+    if (!this.wroteFirstChunk) {
+      this.wroteFirstChunk = true;
+      this.onFirstWrite();
+    }
+
+    return true;
+  }
+
+  end(): void {
+    this.writableEnded = true;
+  }
 }
 
 function listenServer(server: Server): Promise<Server> {
