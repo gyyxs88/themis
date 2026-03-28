@@ -7,12 +7,14 @@ import test from "node:test";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createThemisHttpServer } from "./http-server.js";
+import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
 
 interface TestServerContext {
   server: Server;
   baseUrl: string;
   root: string;
   runtimeStore: SqliteCodexSessionRegistry;
+  authHeaders: Record<string, string>;
 }
 
 async function withHttpServer(
@@ -35,6 +37,10 @@ async function withHttpServer(
   }
 
   const baseUrl = `http://127.0.0.1:${address.port}`;
+  const authHeaders = await createAuthenticatedWebHeaders({
+    baseUrl,
+    runtimeStore,
+  });
 
   try {
     await run({
@@ -42,6 +48,7 @@ async function withHttpServer(
       baseUrl,
       root,
       runtimeStore,
+      authHeaders,
     });
   } finally {
     await closeServer(listeningServer);
@@ -50,13 +57,14 @@ async function withHttpServer(
 }
 
 test("PUT /api/sessions/:id/settings 会保存合法 workspacePath", async () => {
-  await withHttpServer(async ({ baseUrl, root }) => {
+  await withHttpServer(async ({ baseUrl, root, authHeaders }) => {
     const workspace = join(root, "workspace");
     mkdirSync(workspace);
 
     const response = await fetch(`${baseUrl}/api/sessions/session-http-1/settings`, {
       method: "PUT",
       headers: {
+        ...authHeaders,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -80,10 +88,11 @@ test("PUT /api/sessions/:id/settings 会保存合法 workspacePath", async () =>
 });
 
 test("PUT /api/sessions/:id/settings 会拒绝相对路径 workspacePath", async () => {
-  await withHttpServer(async ({ baseUrl }) => {
+  await withHttpServer(async ({ baseUrl, authHeaders }) => {
     const response = await fetch(`${baseUrl}/api/sessions/session-http-2/settings`, {
       method: "PUT",
       headers: {
+        ...authHeaders,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -107,13 +116,14 @@ test("PUT /api/sessions/:id/settings 会拒绝相对路径 workspacePath", async
 });
 
 test("PUT /api/sessions/:id/settings 在冻结会话改成非法路径时返回冻结错误", async () => {
-  await withHttpServer(async ({ baseUrl, root, runtimeStore }) => {
+  await withHttpServer(async ({ baseUrl, root, runtimeStore, authHeaders }) => {
     const workspace = join(root, "workspace");
     mkdirSync(workspace);
 
     const saveResponse = await fetch(`${baseUrl}/api/sessions/session-http-frozen/settings`, {
       method: "PUT",
       headers: {
+        ...authHeaders,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -140,6 +150,7 @@ test("PUT /api/sessions/:id/settings 在冻结会话改成非法路径时返回�
     const response = await fetch(`${baseUrl}/api/sessions/session-http-frozen/settings`, {
       method: "PUT",
       headers: {
+        ...authHeaders,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -163,13 +174,14 @@ test("PUT /api/sessions/:id/settings 在冻结会话改成非法路径时返回�
 });
 
 test("PUT /api/sessions/:id/settings 支持用空白 workspacePath 删除该字段", async () => {
-  await withHttpServer(async ({ baseUrl, root, runtimeStore }) => {
+  await withHttpServer(async ({ baseUrl, root, runtimeStore, authHeaders }) => {
     const workspace = join(root, "workspace");
     mkdirSync(workspace);
 
     const saveResponse = await fetch(`${baseUrl}/api/sessions/session-http-clear-workspace/settings`, {
       method: "PUT",
       headers: {
+        ...authHeaders,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -184,6 +196,7 @@ test("PUT /api/sessions/:id/settings 支持用空白 workspacePath 删除该字�
     const clearResponse = await fetch(`${baseUrl}/api/sessions/session-http-clear-workspace/settings`, {
       method: "PUT",
       headers: {
+        ...authHeaders,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -209,10 +222,11 @@ test("PUT /api/sessions/:id/settings 支持用空白 workspacePath 删除该字�
 });
 
 test("PUT /api/sessions/:id/settings 支持用 null 删除 networkAccessEnabled", async () => {
-  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+  await withHttpServer(async ({ baseUrl, runtimeStore, authHeaders }) => {
     const saveResponse = await fetch(`${baseUrl}/api/sessions/session-http-clear-network/settings`, {
       method: "PUT",
       headers: {
+        ...authHeaders,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -227,6 +241,7 @@ test("PUT /api/sessions/:id/settings 支持用 null 删除 networkAccessEnabled"
     const clearResponse = await fetch(`${baseUrl}/api/sessions/session-http-clear-network/settings`, {
       method: "PUT",
       headers: {
+        ...authHeaders,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
