@@ -106,6 +106,39 @@ test("respondToServerRequest 和 rejectServerRequest 会写出 JSON-RPC 回包",
   ]);
 });
 
+test("numeric id 的普通 response 会 resolve pending 且不触发通知或反向请求处理器", () => {
+  const { session } = createSessionStub();
+  const seenNotifications: string[] = [];
+  const seenServerRequests: string[] = [];
+  let resolvedValue: unknown = null;
+
+  session.onNotification((notification: { method: string }) => {
+    seenNotifications.push(notification.method);
+  });
+  session.onServerRequest((request: { method: string }) => {
+    seenServerRequests.push(request.method);
+  });
+  session.pending.set(1, {
+    resolve: (value: unknown) => {
+      resolvedValue = value;
+    },
+    reject: () => {},
+  });
+
+  session.handleOutputLine(JSON.stringify({
+    id: 1,
+    result: {
+      ok: true,
+    },
+  }));
+
+  assert.deepEqual(resolvedValue, {
+    ok: true,
+  });
+  assert.deepEqual(seenNotifications, []);
+  assert.deepEqual(seenServerRequests, []);
+});
+
 test("startThread 和 startTurn 在缺少返回标识时会抛明确错误", async () => {
   const { session } = createSessionStub();
   session.request = async () => ({});
@@ -120,5 +153,17 @@ test("startThread 和 startTurn 在缺少返回标识时会抛明确错误", asy
   await assert.rejects(
     session.startTurn("thread-1", "hello"),
     /turn\/start did not return a turnId/,
+  );
+});
+
+test("resumeThread 在缺少 threadId 时会抛明确错误", async () => {
+  const { session } = createSessionStub();
+  session.request = async () => ({});
+
+  await assert.rejects(
+    session.resumeThread("thread-1", {
+      cwd: process.cwd(),
+    }),
+    /thread\/resume did not return a threadId/,
   );
 });

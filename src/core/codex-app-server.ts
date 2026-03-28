@@ -196,7 +196,6 @@ interface PendingRequest<TResult> {
 }
 
 interface CodexAppServerSessionOptions {
-  onNotification?: (notification: CodexAppServerNotification) => void;
   env?: Record<string, string>;
   configOverrides?: CodexCliConfigOverrides;
 }
@@ -309,9 +308,6 @@ export class CodexAppServerSession {
   private closed = false;
 
   constructor(cwd: string, options: CodexAppServerSessionOptions = {}) {
-    if (options.onNotification) {
-      this.notificationHandlers.add(options.onNotification);
-    }
     this.child = spawn(resolveCodexBinary(), [...buildCodexCliConfigArgs(options.configOverrides), "app-server"], {
       cwd,
       ...(options.env ? { env: options.env } : {}),
