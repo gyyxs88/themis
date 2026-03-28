@@ -210,16 +210,13 @@ function formatTaskContext(taskContext?: ContextBuildResult | null): string | nu
         "Task context blocks:",
         ...taskContext.blocks.flatMap((block, index) => [
           `--- block ${index + 1} ---`,
-          "```yaml",
           `kind: ${block.kind}`,
           `title: ${block.title}`,
           `source: ${block.sourcePath}`,
           `priority: ${block.priority}`,
           `truncated: ${String(block.truncated)}`,
-          "```",
-          "```markdown",
-          block.text,
-          "```",
+          "content:",
+          ...prefixBlockLines(block.text, "| "),
         ]),
       ].join("\n"),
     );
@@ -239,6 +236,10 @@ function formatTaskContext(taskContext?: ContextBuildResult | null): string | nu
   }
 
   return sections.join("\n\n");
+}
+
+function prefixBlockLines(text: string, prefix: string): string[] {
+  return text.split("\n").map((line) => `${prefix}${line}`);
 }
 
 function formatPersonaDraft(profile: PrincipalPersonaProfileData): string {

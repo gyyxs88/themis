@@ -243,7 +243,7 @@ test("runTask 会在 task.started 前发出单次 task.context_built，并把结
   mkdirSync(controlDirectory);
   mkdirSync(join(controlDirectory, "memory", "architecture"), { recursive: true });
   writeRuntimeFile(controlDirectory, "AGENTS.md", "始终使用中文回复。");
-  writeRuntimeFile(controlDirectory, "README.md", "# Demo");
+  writeRuntimeFile(controlDirectory, "README.md", "# Demo\n\n```ts\nconst provider = true;\n```");
   writeRuntimeFile(controlDirectory, "memory/architecture/overview.md", "# 架构");
   mkdirSync(join(controlDirectory, "docs", "memory", "2026", "03"), { recursive: true });
   writeRuntimeFile(controlDirectory, "docs/memory/2026/03/provider-search.md", "# Provider Search\n\nsearch tool 约束");
@@ -301,6 +301,8 @@ test("runTask 会在 task.started 前发出单次 task.context_built，并把结
     assert.match(capturedPrompts[0] ?? "", /kind: repoRules/);
     assert.match(capturedPrompts[0] ?? "", /source: AGENTS\.md/);
     assert.match(capturedPrompts[0] ?? "", /title: Repository rules/);
+    assert.match(capturedPrompts[0] ?? "", /\| ```ts/);
+    assert.match(capturedPrompts[0] ?? "", /Response guidance:/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
