@@ -104,3 +104,49 @@ test("recordTaskCompletion 会更新 active、迁移 in-progress，并在 verifi
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("recordTaskTerminal 会把 active 改成 failed/cancelled 并清理 in-progress", () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-memory-service-terminal-"));
+
+  try {
+    mkdirSync(join(root, "memory", "tasks"), { recursive: true });
+    writeFileSync(
+      join(root, "memory", "tasks", "in-progress.md"),
+      "# 进行中\n\n## 当前工作\n\n- [task-memory-1] 实现 memory service\n",
+      "utf8",
+    );
+    const service = new MemoryService({ workingDirectory: root });
+    const request = createRequest();
+
+    const failedUpdates = service.recordTaskTerminal({
+      request,
+      taskId: request.taskId ?? "task-memory-1",
+      conversationId: "session-memory-1",
+      terminalStatus: "failed",
+      summary: "任务执行失败",
+    });
+
+    const activeAfterFailed = readFileSync(join(root, "memory", "sessions", "active.md"), "utf8");
+    const inProgressAfterFailed = readFileSync(join(root, "memory", "tasks", "in-progress.md"), "utf8");
+    assert.ok(failedUpdates.length >= 1);
+    assert.match(activeAfterFailed, /状态：failed/);
+    assert.doesNotMatch(inProgressAfterFailed, /task-memory-1/);
+
+    service.recordTaskStart({
+      request,
+      taskId: request.taskId ?? "task-memory-1",
+      conversationId: "session-memory-1",
+    });
+    service.recordTaskTerminal({
+      request,
+      taskId: request.taskId ?? "task-memory-1",
+      conversationId: "session-memory-1",
+      terminalStatus: "cancelled",
+      summary: "任务已取消",
+    });
+    const activeAfterCancelled = readFileSync(join(root, "memory", "sessions", "active.md"), "utf8");
+    assert.match(activeAfterCancelled, /状态：cancelled/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

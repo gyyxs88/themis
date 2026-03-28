@@ -22,6 +22,15 @@ interface RecordTaskCompletionInput {
   verified: boolean;
 }
 
+interface RecordTaskTerminalInput {
+  request: TaskRequest;
+  taskId: string;
+  principalId?: string;
+  conversationId?: string;
+  terminalStatus: "failed" | "cancelled";
+  summary: string;
+}
+
 const DEFAULT_IN_PROGRESS_HEADER = "# 进行中\n\n## 当前工作\n\n";
 const DEFAULT_DONE_HEADER = "# 已完成\n\n## 当前已完成模块\n\n";
 
@@ -108,6 +117,41 @@ export class MemoryService {
       updates.push({
         kind: "task",
         target: donePath,
+        action: "updated",
+      });
+    }
+
+    return updates;
+  }
+
+  recordTaskTerminal(input: RecordTaskTerminalInput): MemoryUpdate[] {
+    const updates: MemoryUpdate[] = [];
+    const activePath = "memory/sessions/active.md";
+    const inProgressPath = "memory/tasks/in-progress.md";
+    const sessionId = input.conversationId ?? input.request.channelContext.sessionId ?? "";
+    const activeContent = [
+      "# 当前会话",
+      "",
+      `- 会话：${sessionId || "<unknown>"}`,
+      `- 最近任务：${input.taskId}`,
+      `- 摘要：${input.summary}`,
+      `- 状态：${input.terminalStatus}`,
+      "",
+    ].join("\n");
+    writeRelativeFile(this.workingDirectory, activePath, activeContent);
+    updates.push({
+      kind: "session",
+      target: activePath,
+      action: "updated",
+    });
+
+    const inProgressContent = readRelativeFile(this.workingDirectory, inProgressPath, DEFAULT_IN_PROGRESS_HEADER);
+    const nextInProgress = removeInProgressTask(inProgressContent, input.taskId);
+    if (nextInProgress !== inProgressContent) {
+      writeRelativeFile(this.workingDirectory, inProgressPath, nextInProgress);
+      updates.push({
+        kind: "task",
+        target: inProgressPath,
         action: "updated",
       });
     }

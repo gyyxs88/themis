@@ -498,6 +498,97 @@ test("memory 写回失败时任务仍 completed，并发 task.memory_updated fai
   }
 });
 
+test("start 已写回后任务普通失败，不会残留 running active 与 in-progress", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-memory-terminal-failed-"));
+  const controlDirectory = join(root, "control");
+  mkdirSync(controlDirectory);
+  mkdirSync(join(controlDirectory, "memory", "architecture"), { recursive: true });
+  writeRuntimeFile(controlDirectory, "AGENTS.md", "rule");
+  writeRuntimeFile(controlDirectory, "README.md", "# control");
+  writeRuntimeFile(controlDirectory, "memory/architecture/overview.md", "# architecture");
+
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+    sessionStore: createFailingSessionStoreDouble(runtimeStore),
+  });
+
+  try {
+    await assert.rejects(
+      async () => runtime.runTask(createRequest({
+        requestId: "req-runtime-memory-terminal-failed",
+        taskId: "task-runtime-memory-terminal-failed",
+        goal: "故意失败任务",
+        channelContext: {
+          sessionId: "session-runtime-memory-terminal-failed",
+        },
+      })),
+      /模拟失败/,
+    );
+
+    const active = writeFileSyncAndRead(controlDirectory, "memory/sessions/active.md");
+    const inProgress = writeFileSyncAndRead(controlDirectory, "memory/tasks/in-progress.md", true);
+    assert.match(active, /状态：failed/);
+    assert.doesNotMatch(active, /状态：running/);
+    assert.doesNotMatch(inProgress, /task-runtime-memory-terminal-failed/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("主任务收口前失败不会提前写入 completed memory", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-memory-no-early-completion-"));
+  const controlDirectory = join(root, "control");
+  mkdirSync(controlDirectory);
+  mkdirSync(join(controlDirectory, "memory", "architecture"), { recursive: true });
+  writeRuntimeFile(controlDirectory, "AGENTS.md", "rule");
+  writeRuntimeFile(controlDirectory, "README.md", "# control");
+  writeRuntimeFile(controlDirectory, "memory/architecture/overview.md", "# architecture");
+
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+    sessionStore: createSessionStoreDouble(runtimeStore, []),
+  });
+
+  try {
+    await assert.rejects(
+      async () => runtime.runTask(createRequest({
+        requestId: "req-runtime-memory-no-early-completion",
+        taskId: "task-runtime-memory-no-early-completion",
+        goal: "测试收口失败",
+        user: {
+          userId: "",
+          displayName: "User",
+        },
+        channelContext: {
+          sessionId: "session-runtime-memory-no-early-completion",
+        },
+      }), {
+        onEvent: (event) => {
+          if (event.type === "task.completed") {
+            throw new Error("force completion hook failure");
+          }
+        },
+      }),
+      /force completion hook failure/,
+    );
+
+    const done = writeFileSyncAndRead(controlDirectory, "memory/tasks/done.md", true);
+    const active = writeFileSyncAndRead(controlDirectory, "memory/sessions/active.md");
+    assert.doesNotMatch(done, /task-runtime-memory-no-early-completion/);
+    assert.doesNotMatch(active, /状态：completed/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function createSessionStoreDouble(
   runtimeStore: SqliteCodexSessionRegistry,
   capturedThreadOptions: ThreadOptions[],
@@ -539,6 +630,29 @@ function createSessionStoreDouble(
         release: async () => {},
       };
     },
+  } as unknown as CodexThreadSessionStore;
+}
+
+function createFailingSessionStoreDouble(runtimeStore: SqliteCodexSessionRegistry): CodexThreadSessionStore {
+  return {
+    getSessionRegistry: () => runtimeStore,
+    resolveThreadId: async () => null,
+    acquire: async (_request: TaskRequest) => ({
+      sessionId: _request.channelContext.sessionId,
+      threadId: "thread-failed",
+      sessionMode: "created",
+      thread: {
+        id: "thread-failed",
+        runStreamed: async () => ({
+          events: (async function* () {
+            yield { type: "thread.started", thread_id: "thread-failed" };
+            yield { type: "turn.started" };
+            yield { type: "turn.failed", error: { message: "模拟失败" } };
+          })(),
+        }),
+      } as never,
+      release: async () => {},
+    }),
   } as unknown as CodexThreadSessionStore;
 }
 
