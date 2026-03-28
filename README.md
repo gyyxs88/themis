@@ -13,7 +13,7 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 - Web 端已支持 Codex 认证、设备码登录、多账号自动建槽与管理、会话级手动切号、历史加载、会话分叉、第三方兼容接入、首次对话长期画像建档、principal 级长期人格配置和运行参数设置。
 - LAN Web 页面和受保护 API 现在要求 owner 访问口令登录；登录后由服务端 session 配合 `HttpOnly` cookie 维持 30 天，会话失效后需要重新登录。
 - 删除命名访问口令后，关联的 Web 会话会在下一次请求时立即失效。
-- 项目级 CLI 已提供可直接执行的 `themis` 入口；无参数进入交互模式，也支持 `init / status / config / skill` 子命令。
+- 项目级 CLI 已提供可直接执行的 `themis` 入口；无参数进入交互模式，也支持 `init / status / config / auth / skill` 子命令。
 
 ## 目录说明
 
@@ -68,7 +68,7 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 
 - 更完整的自动化测试覆盖；当前只有 `src/core/*.test.ts` 这类基础单元测试，`router`、`session store`、`fork`、`history API` 和 Web stream 主链路仍缺覆盖。
 - Markdown memory 的运行时自动读写服务。
-- 更完整的配置 / 运维 CLI；当前已提供项目级 `init / status / config / skill` 入口，但更完整的运维命令树仍未完成。
+- 更完整的配置 / 运维 CLI；当前已提供项目级 `init / status / config / auth / skill` 入口，但认证状态检查、第三方 provider 诊断、服务健康检查和排障辅助等命令树仍未完成。CLI 不负责实际任务执行，任务入口仍然聚焦在 Web / 飞书渠道。
 
 ## 本地运行
 
