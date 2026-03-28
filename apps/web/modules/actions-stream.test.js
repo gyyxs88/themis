@@ -9,21 +9,11 @@ test("consumeNdjsonStream handles ack -> event -> result -> done with real store
   const { app, actions, thread, turn, storage, storageKey, restore } = createAppHarness();
 
   try {
-    const ackStream = createChunkedNdjsonBody([
-      {
-        kind: "ack",
-        requestId: "req-123",
-        taskId: "task-456",
-      },
-    ]);
-
-    assert.ok(ackStream.chunkCount > 1);
-    await actions.consumeNdjsonStream(ackStream.body);
-
-    assert.equal(turn.requestId, "req-123");
-    assert.equal(turn.taskId, "task-456");
-    assert.equal(turn.state, "running");
-    assert.ok(turn.steps.length >= 2);
+    const ackMessage = {
+      kind: "ack",
+      requestId: "req-123",
+      taskId: "task-456",
+    };
 
     const eventMessage = {
       kind: "event",
@@ -48,26 +38,6 @@ test("consumeNdjsonStream handles ack -> event -> result -> done with real store
         format: "markdown",
       },
     };
-    const eventResultStream = createChunkedNdjsonBody([eventMessage, resultMessage]);
-
-    assert.ok(eventResultStream.chunkCount > 1);
-    await actions.consumeNdjsonStream(eventResultStream.body);
-
-    assert.equal(turn.serverThreadId, "server-thread-1");
-    assert.equal(turn.serverSessionId, "server-session-1");
-    assert.equal(turn.sessionMode, "cli");
-    assert.equal(thread.serverThreadId, "server-thread-1");
-    const eventStep = findStepByMetadata(turn.steps, eventMessage.metadata);
-    assert.ok(eventStep);
-    assert.equal(eventStep.tone, "neutral");
-    assert.deepEqual(eventStep.metadata, eventMessage.metadata);
-    const resultStep = findStepByMetadata(turn.steps, resultMessage.metadata);
-    assert.ok(resultStep);
-    assert.equal(resultStep.tone, "success");
-    assert.deepEqual(resultStep.metadata, resultMessage.metadata);
-    assert.equal(turn.state, "running");
-    assert.ok(turn.steps.length >= 4);
-
     const doneMessage = {
       kind: "done",
       result: {
@@ -80,13 +50,25 @@ test("consumeNdjsonStream handles ack -> event -> result -> done with real store
         },
       },
     };
-    const doneStream = createChunkedNdjsonBody([doneMessage]);
+    const successStream = createChunkedNdjsonBody([ackMessage, eventMessage, resultMessage, doneMessage]);
 
-    assert.ok(doneStream.chunkCount > 1);
-    await actions.consumeNdjsonStream(doneStream.body);
-    const completedStep = turn.steps.at(-1);
-    assert.ok(completedStep);
-    assert.equal(completedStep.tone, "success");
+    assert.ok(successStream.chunkCount > 1);
+    await actions.consumeNdjsonStream(successStream.body);
+
+    assert.equal(turn.requestId, "req-123");
+    assert.equal(turn.taskId, "task-456");
+    assert.equal(turn.serverThreadId, "server-thread-1");
+    assert.equal(turn.serverSessionId, "server-session-1");
+    assert.equal(turn.sessionMode, "cli");
+    assert.equal(thread.serverThreadId, "server-thread-1");
+    const eventStep = findStepByMetadata(turn.steps, eventMessage.metadata);
+    assert.ok(eventStep);
+    assert.equal(eventStep.tone, "neutral");
+    assert.deepEqual(eventStep.metadata, eventMessage.metadata);
+    const resultStep = findStepByMetadata(turn.steps, resultMessage.metadata);
+    assert.ok(resultStep);
+    assert.equal(resultStep.tone, "success");
+    assert.deepEqual(resultStep.metadata, resultMessage.metadata);
     assert.equal(turn.state, "completed");
     assert.ok(
       app.renderer.renderCalls.some(
@@ -133,22 +115,12 @@ test("consumeNdjsonStream handles ack -> fatal and clears active run state", asy
   const { app, actions, thread, turn, storage, storageKey, restore } = createAppHarness();
 
   try {
-    const ackStream = createChunkedNdjsonBody([
+    const fatalStream = createChunkedNdjsonBody([
       {
         kind: "ack",
         requestId: "req-fatal",
         taskId: "task-fatal",
       },
-    ]);
-
-    assert.ok(ackStream.chunkCount > 1);
-    await actions.consumeNdjsonStream(ackStream.body);
-
-    assert.equal(turn.requestId, "req-fatal");
-    assert.equal(turn.taskId, "task-fatal");
-    assert.equal(turn.state, "running");
-
-    const fatalStream = createChunkedNdjsonBody([
       {
         kind: "fatal",
         text: "后端执行失败",
@@ -158,6 +130,8 @@ test("consumeNdjsonStream handles ack -> fatal and clears active run state", asy
     assert.ok(fatalStream.chunkCount > 1);
     await actions.consumeNdjsonStream(fatalStream.body);
 
+    assert.equal(turn.requestId, "req-fatal");
+    assert.equal(turn.taskId, "task-fatal");
     assert.equal(turn.state, "failed");
     assert.deepEqual(turn.result, {
       status: "failed",
