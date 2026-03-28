@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import { WebAccessService } from "../core/web-access.js";
 import { serveWebAsset } from "./http-assets.js";
 import {
   handleAuthAccountCreate,
@@ -29,6 +30,7 @@ import {
   handleSkillsSync,
 } from "./http-skills.js";
 import { writeJson } from "./http-responses.js";
+import { maybeHandleWebAccessRoute, requireWebAccess } from "./http-web-access.js";
 import {
   handleSessionForkContext,
   handleSessionSettingsRead,
@@ -69,12 +71,21 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
     },
   });
   const runtimeStore = runtime.getRuntimeStore();
+  const webAccessService = new WebAccessService({ registry: runtimeStore });
   const taskTimeoutMs = options.taskTimeoutMs ?? resolveTaskTimeoutMs();
 
   return createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
       const isHeadRequest = request.method === "HEAD";
+
+      if (await maybeHandleWebAccessRoute(request, response, webAccessService)) {
+        return;
+      }
+
+      if (!requireWebAccess(request, response, webAccessService)) {
+        return;
+      }
 
       if ((request.method === "GET" || isHeadRequest) && url.pathname === "/api/health") {
         return writeJson(response, 200, {
