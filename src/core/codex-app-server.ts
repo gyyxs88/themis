@@ -145,6 +145,20 @@ export interface CodexAppServerNotification {
   params?: unknown;
 }
 
+export interface AppServerThreadStartParams {
+  cwd: string;
+  model?: string;
+  approvalPolicy?: string;
+  sandbox?: string;
+  webSearchMode?: string;
+}
+
+export interface AppServerReverseRequest {
+  id: string | number;
+  method: string;
+  params?: unknown;
+}
+
 interface AppServerModelListResponse {
   data?: unknown;
 }
@@ -166,6 +180,14 @@ interface AppServerAccountReadResponse {
 interface AppServerAccountRateLimitsResponse {
   rateLimits?: unknown;
   rateLimitsByLimitId?: unknown;
+}
+
+interface AppServerThreadResponse {
+  threadId?: unknown;
+}
+
+interface AppServerTurnResponse {
+  turnId?: unknown;
 }
 
 interface PendingRequest<TResult> {
@@ -281,12 +303,15 @@ export class CodexAppServerSession {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<number, PendingRequest<unknown>>();
   private readonly stderrChunks: string[] = [];
-  private readonly onNotification?: CodexAppServerSessionOptions["onNotification"];
+  private readonly notificationHandlers = new Set<(notification: CodexAppServerNotification) => void>();
+  private readonly serverRequestHandlers = new Set<(request: AppServerReverseRequest) => void>();
   private nextId = 1;
   private closed = false;
 
   constructor(cwd: string, options: CodexAppServerSessionOptions = {}) {
-    this.onNotification = options.onNotification;
+    if (options.onNotification) {
+      this.notificationHandlers.add(options.onNotification);
+    }
     this.child = spawn(resolveCodexBinary(), [...buildCodexCliConfigArgs(options.configOverrides), "app-server"], {
       cwd,
       ...(options.env ? { env: options.env } : {}),
@@ -369,6 +394,51 @@ export class CodexAppServerSession {
     });
   }
 
+  onNotification(handler: (notification: CodexAppServerNotification) => void): void {
+    this.notificationHandlers.add(handler);
+  }
+
+  onServerRequest(handler: (request: AppServerReverseRequest) => void): void {
+    this.serverRequestHandlers.add(handler);
+  }
+
+  async startThread(params: AppServerThreadStartParams): Promise<{ threadId: string }> {
+    const response = await this.request<AppServerThreadResponse>("thread/start", params);
+
+    return {
+      threadId: requireText(response.threadId, "codex app-server thread/start did not return a threadId."),
+    };
+  }
+
+  async resumeThread(threadId: string, params: AppServerThreadStartParams): Promise<{ threadId: string }> {
+    const response = await this.request<AppServerThreadResponse>("thread/resume", {
+      ...params,
+      threadId,
+    });
+
+    return {
+      threadId: requireText(response.threadId, "codex app-server thread/resume did not return a threadId."),
+    };
+  }
+
+  async startTurn(threadId: string, prompt: string): Promise<{ turnId: string }> {
+    const response = await this.request<AppServerTurnResponse>("turn/start", {
+      threadId,
+      prompt,
+    });
+
+    return {
+      turnId: requireText(response.turnId, "codex app-server turn/start did not return a turnId."),
+    };
+  }
+
+  async interruptTurn(threadId: string, turnId: string): Promise<void> {
+    await this.request("turn/interrupt", {
+      threadId,
+      turnId,
+    });
+  }
+
   async close(): Promise<void> {
     if (this.closed) {
       return;
@@ -402,37 +472,51 @@ export class CodexAppServerSession {
       return;
     }
 
-    let parsed: JsonRpcResponse<unknown>;
+    let parsed: Record<string, unknown>;
 
     try {
-      parsed = JSON.parse(trimmed) as JsonRpcResponse<unknown>;
+      parsed = JSON.parse(trimmed) as Record<string, unknown>;
     } catch {
       return;
     }
 
-    if (typeof parsed.id !== "number") {
-      const method = isRecord(parsed) ? normalizeOptionalText(parsed.method) : null;
+    const method = normalizeOptionalText(parsed.method);
+    const hasResult = Object.prototype.hasOwnProperty.call(parsed, "result");
+    const hasError = Object.prototype.hasOwnProperty.call(parsed, "error");
+    const id = parsed.id;
 
+    if (method && !hasResult && !hasError && (typeof id === "string" || typeof id === "number")) {
+      this.emitServerRequest({
+        id,
+        method,
+        ...(Object.prototype.hasOwnProperty.call(parsed, "params") ? { params: parsed.params } : {}),
+      });
+      return;
+    }
+
+    if (typeof id !== "number") {
       if (method) {
-        this.onNotification?.({
+        this.emitNotification({
           method,
-          ...(isRecord(parsed) && "params" in parsed ? { params: parsed.params } : {}),
+          ...(Object.prototype.hasOwnProperty.call(parsed, "params") ? { params: parsed.params } : {}),
         });
       }
 
       return;
     }
 
-    const pending = this.pending.get(parsed.id);
+    const requestId = id;
+    const pending = this.pending.get(requestId);
 
     if (!pending) {
       return;
     }
 
-    this.pending.delete(parsed.id);
+    this.pending.delete(requestId);
 
     if ("error" in parsed) {
-      const message = parsed.error?.message?.trim() || `codex app-server request failed: ${parsed.id}`;
+      const message = isRecord(parsed.error) && normalizeOptionalText(parsed.error.message)
+        || `codex app-server request failed: ${requestId}`;
       pending.reject(new Error(message));
       return;
     }
@@ -444,6 +528,18 @@ export class CodexAppServerSession {
     for (const [id, pending] of this.pending) {
       this.pending.delete(id);
       pending.reject(error);
+    }
+  }
+
+  private emitNotification(notification: CodexAppServerNotification): void {
+    for (const handler of this.notificationHandlers) {
+      handler(notification);
+    }
+  }
+
+  private emitServerRequest(request: AppServerReverseRequest): void {
+    for (const handler of this.serverRequestHandlers) {
+      handler(request);
     }
   }
 }
@@ -767,6 +863,16 @@ function normalizeAuthRateLimitCredits(value: unknown): CodexAuthRateLimitCredit
     unlimited: unlimited ?? false,
     balance,
   };
+}
+
+function requireText(value: unknown, errorMessage: string): string {
+  const text = normalizeOptionalText(value);
+
+  if (!text) {
+    throw new Error(errorMessage);
+  }
+
+  return text;
 }
 
 function normalizeBoolean(value: unknown): boolean | null {
