@@ -591,28 +591,18 @@ async function readHiddenLinePair(firstPrompt: string, secondPrompt: string): Pr
     return first;
   }
 
-  const rl = createInterface({
-    input,
-    output,
-  });
+  const first = await readHiddenLineFromTty(firstPrompt);
+  const second = await readHiddenLineFromTty(secondPrompt);
 
-  try {
-    (rl as typeof rl & { _writeToOutput?: (string: string) => void })._writeToOutput = () => {};
-    const first = await rl.question(firstPrompt);
-    const second = await rl.question(secondPrompt);
-
-    if (!first.trim() || !second.trim()) {
-      throw new Error("口令不能为空。");
-    }
-
-    if (first !== second) {
-      throw new Error("两次输入的口令不一致。");
-    }
-
-    return first;
-  } finally {
-    rl.close();
+  if (!first.trim() || !second.trim()) {
+    throw new Error("口令不能为空。");
   }
+
+  if (first !== second) {
+    throw new Error("两次输入的口令不一致。");
+  }
+
+  return first;
 }
 
 async function readInputText(): Promise<string> {
@@ -623,6 +613,84 @@ async function readInputText(): Promise<string> {
   }
 
   return content;
+}
+
+async function readHiddenLineFromTty(prompt: string): Promise<string> {
+  if (typeof input.setRawMode !== "function") {
+    throw new Error("当前终端不支持隐藏输入。");
+  }
+
+  const wasRaw = input.isRaw === true;
+  const restoreRawMode = (): void => {
+    if (!wasRaw && input.isTTY) {
+      input.setRawMode(false);
+    }
+  };
+
+  input.resume();
+
+  if (!wasRaw) {
+    input.setRawMode(true);
+  }
+
+  output.write(prompt);
+
+  try {
+    return await new Promise<string>((resolve, reject) => {
+      let value = "";
+
+      const cleanup = (): void => {
+        input.off("data", onData);
+        input.off("error", onError);
+      };
+
+      const finish = (result: string): void => {
+        cleanup();
+        restoreRawMode();
+        output.write("\n");
+        resolve(result);
+      };
+
+      const fail = (error: Error): void => {
+        cleanup();
+        restoreRawMode();
+        output.write("\n");
+        reject(error);
+      };
+
+      const onData = (chunk: Buffer | string): void => {
+        const text = chunk.toString("utf8");
+
+        for (const char of text) {
+          if (char === "\r" || char === "\n") {
+            finish(value);
+            return;
+          }
+
+          if (char === "\u0003") {
+            fail(new Error("输入已取消。"));
+            return;
+          }
+
+          if (char === "\u007f" || char === "\b") {
+            value = value.slice(0, -1);
+            continue;
+          }
+
+          value += char;
+        }
+      };
+
+      const onError = (error: Error): void => {
+        fail(error);
+      };
+
+      input.on("data", onData);
+      input.once("error", onError);
+    });
+  } finally {
+    restoreRawMode();
+  }
 }
 
 function createCliSkillRegistry(): SqliteCodexSessionRegistry {
