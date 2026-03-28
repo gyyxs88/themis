@@ -512,6 +512,45 @@ test("AppServerTaskRuntime 的 timeoutMs 会打断 event queue 阻塞", { timeou
   }
 });
 
+test("AppServerTaskRuntime 的 timeoutMs 会打断 notification event queue 阻塞", { timeout: 400 }, async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startTurn: async (sessionState) => {
+      sessionState.notificationHandler?.({
+        method: "item/agentMessage/delta",
+        params: {
+          itemId: "item-app-timeout-notification",
+          delta: "progress from notification",
+        },
+      });
+      return { turnId: "turn-app-notification-timeout" };
+    },
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    await assert.rejects(async () => await fixture.runtime.runTask({
+      requestId: "req-app-timeout-notification-1",
+      taskId: "task-app-timeout-notification-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "notification queue timeout",
+      channelContext: { channelSessionKey: "web-session-timeout-notification-1" },
+      createdAt: "2026-03-28T12:00:00.000Z",
+    }, {
+      timeoutMs: 20,
+      onEvent: async (event) => {
+        if (event.type === "task.progress" && event.payload?.itemId === "item-app-timeout-notification") {
+          await new Promise<void>(() => {});
+        }
+      },
+    }), /TASK_TIMEOUT:/);
+
+    assert.equal(state.closed, 1);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("AppServerTaskRuntime 在执行失败时也会关闭 session", async () => {
   const { state, sessionFactory } = createSessionFactory({
     startTurn: async () => {
