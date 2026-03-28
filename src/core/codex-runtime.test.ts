@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import type { ThreadOptions } from "@openai/codex-sdk";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
-import type { TaskRequest } from "../types/index.js";
+import type { TaskEvent, TaskRequest } from "../types/index.js";
 import { CodexTaskRuntime } from "./codex-runtime.js";
 import type { CodexThreadSessionStore } from "./codex-session-store.js";
 import type { OpenAICompatibleProviderConfig } from "./openai-compatible-provider.js";
@@ -225,9 +225,73 @@ test("runTask 在会话工作区失效时会报错", async () => {
   }
 });
 
+test("runTask 会在 task.started 前发出单次 task.context_built，并把结构化上下文注入 prompt", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-context-builder-"));
+  const controlDirectory = join(root, "control");
+  mkdirSync(controlDirectory);
+  mkdirSync(join(controlDirectory, "memory", "architecture"), { recursive: true });
+  writeRuntimeFile(controlDirectory, "AGENTS.md", "始终使用中文回复。");
+  writeRuntimeFile(controlDirectory, "README.md", "# Demo");
+  writeRuntimeFile(controlDirectory, "memory/architecture/overview.md", "# 架构");
+  mkdirSync(join(controlDirectory, "docs", "memory", "2026", "03"), { recursive: true });
+  writeRuntimeFile(controlDirectory, "docs/memory/2026/03/provider-search.md", "# Provider Search\n\nsearch tool 约束");
+
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const capturedThreadOptions: ThreadOptions[] = [];
+  const capturedPrompts: string[] = [];
+  const sessionStore = createSessionStoreDouble(runtimeStore, capturedThreadOptions, capturedPrompts);
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+    sessionStore,
+  });
+
+  try {
+    const events: TaskEvent[] = [];
+    await runtime.runTask(createRequest({
+      requestId: "req-runtime-context-1",
+      taskId: "task-runtime-context-1",
+      goal: "请检查 provider search 支持",
+      user: {
+        userId: "",
+        displayName: "User",
+      },
+      channelContext: {
+        sessionId: "session-runtime-context-1",
+      },
+    }), {
+      onEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    const contextBuiltEvents = events.filter((event) => event.type === "task.context_built");
+    assert.equal(contextBuiltEvents.length, 1);
+    assert.equal(contextBuiltEvents[0]?.payload?.blockCount, 4);
+    assert.equal(typeof contextBuiltEvents[0]?.payload?.warningCount, "number");
+    assert.ok(Array.isArray(contextBuiltEvents[0]?.payload?.sourceStats));
+
+    const contextBuiltIndex = events.findIndex((event) => event.type === "task.context_built");
+    const startedIndex = events.findIndex((event) => event.type === "task.started");
+    assert.ok(contextBuiltIndex >= 0);
+    assert.ok(startedIndex >= 0);
+    assert.equal(contextBuiltIndex < startedIndex, true);
+
+    assert.equal(capturedPrompts.length, 1);
+    assert.match(capturedPrompts[0] ?? "", /Task context blocks:/);
+    assert.match(capturedPrompts[0] ?? "", /kind=repoRules/);
+    assert.match(capturedPrompts[0] ?? "", /source=AGENTS\.md/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function createSessionStoreDouble(
   runtimeStore: SqliteCodexSessionRegistry,
   capturedThreadOptions: ThreadOptions[],
+  capturedPrompts: string[] = [],
 ): CodexThreadSessionStore {
   return {
     getSessionRegistry: () => runtimeStore,
@@ -241,24 +305,33 @@ function createSessionStoreDouble(
         sessionMode: "created",
         thread: {
           id: "thread-1",
-          runStreamed: async () => ({
-            events: (async function* () {
-              yield { type: "thread.started", thread_id: "thread-1" };
-              yield { type: "turn.started" };
-              yield {
-                type: "item.completed",
-                item: {
-                  type: "agent_message",
-                  id: "item-1",
-                  text: "done",
-                },
-              };
-              yield { type: "turn.completed", usage: {} };
-            })(),
-          }),
+          runStreamed: async (prompt: string) => {
+            capturedPrompts.push(prompt);
+            return {
+              events: (async function* () {
+                yield { type: "thread.started", thread_id: "thread-1" };
+                yield { type: "turn.started" };
+                yield {
+                  type: "item.completed",
+                  item: {
+                    type: "agent_message",
+                    id: "item-1",
+                    text: "done",
+                  },
+                };
+                yield { type: "turn.completed", usage: {} };
+              })(),
+            };
+          },
         } as never,
         release: async () => {},
       };
     },
   } as unknown as CodexThreadSessionStore;
+}
+
+function writeRuntimeFile(root: string, path: string, content: string): void {
+  const absolutePath = join(root, path);
+  mkdirSync(dirname(absolutePath), { recursive: true });
+  writeFileSync(absolutePath, `${content}\n`, "utf8");
 }

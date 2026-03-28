@@ -45,6 +45,7 @@ import {
   type CodexSessionLease,
   type CodexSessionMode,
 } from "./codex-session-store.js";
+import { ContextBuilder } from "../context/context-builder.js";
 import { SqliteCodexSessionRegistry, type StoredAuthAccountRecord } from "../storage/index.js";
 import type { PrincipalTaskSettings, TaskAccessMode, TaskEvent, TaskRequest, TaskResult } from "../types/index.js";
 import {
@@ -63,6 +64,7 @@ export interface CodexTaskRuntimeOptions {
   providerConfigs?: OpenAICompatibleProviderConfig[] | null;
   providerConfig?: OpenAICompatibleProviderConfig | null;
   principalSkillsService?: PrincipalSkillsService;
+  contextBuilder?: ContextBuilder;
 }
 
 interface ResolvedRuntimeTarget {
@@ -91,6 +93,7 @@ export class CodexTaskRuntime {
   private readonly conversationService: ConversationService;
   private readonly principalPersonaService: PrincipalPersonaService;
   private readonly principalSkillsService: PrincipalSkillsService;
+  private readonly contextBuilder: ContextBuilder | null;
   private providerConfigs: OpenAICompatibleProviderConfig[];
   private readonly authClients = new Map<string, Codex>();
   private readonly authSessionStores = new Map<string, CodexThreadSessionStore>();
@@ -111,6 +114,7 @@ export class CodexTaskRuntime {
       workingDirectory: this.workingDirectory,
       registry: this.runtimeStore,
     });
+    this.contextBuilder = options.contextBuilder ?? null;
     this.providerConfigs = options.providerConfigs
       ?? (options.providerConfig
         ? [options.providerConfig]
@@ -164,6 +168,11 @@ export class CodexTaskRuntime {
 
       const target = this.resolveRuntimeTarget(request, hooks.allowUnsupportedThirdPartyModel === true);
       const executionWorkingDirectory = this.resolveExecutionWorkingDirectory(request);
+      const taskContext = await this.buildTaskContext(executionWorkingDirectory, {
+        request,
+        principalId,
+        conversationId: resolvedRequest.conversationId,
+      });
       const threadOptions = buildThreadOptions(
         request,
         executionWorkingDirectory,
@@ -177,14 +186,31 @@ export class CodexTaskRuntime {
       const prompt = onboardingIntercept
         ? buildBootstrapPrompt(request, onboardingIntercept, {
           personalizedProfileContext,
+          taskContext,
         })
         : buildTaskPrompt(request, {
           personalizedProfileContext,
+          taskContext,
         });
       const touchedFiles = new Set<string>();
       let finalResponse = "";
 
       throwIfAborted(signal);
+
+      await emit(
+        createTaskEvent(
+          taskId,
+          request.requestId,
+          "task.context_built",
+          "running",
+          "Task context built.",
+          {
+            blockCount: taskContext.blocks.length,
+            warningCount: taskContext.warnings.length,
+            sourceStats: taskContext.sourceStats,
+          },
+        ),
+      );
 
       await emit(
         createTaskEvent(
@@ -466,6 +492,25 @@ export class CodexTaskRuntime {
     } catch {
       throw new Error(SESSION_WORKSPACE_UNAVAILABLE_ERROR);
     }
+  }
+
+  private async buildTaskContext(
+    executionWorkingDirectory: string,
+    input: {
+      request: TaskRequest;
+      principalId: string | undefined;
+      conversationId: string | undefined;
+    },
+  ) {
+    const builder = this.contextBuilder ?? new ContextBuilder({
+      workingDirectory: executionWorkingDirectory,
+    });
+
+    return builder.build({
+      request: input.request,
+      ...(input.principalId ? { principalId: input.principalId } : {}),
+      ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+    });
   }
 
   private async resolveThreadIdForFork(sessionId: string): Promise<string | null> {
@@ -951,7 +996,7 @@ function translateThreadEvent(taskId: string, requestId: string, event: ThreadEv
         threadId: event.thread_id,
       });
     case "turn.started":
-      return createTaskEvent(taskId, requestId, "task.context_built", "running", "Prompt sent to Codex.");
+      return null;
     case "item.started":
     case "item.updated":
     case "item.completed":

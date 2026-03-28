@@ -1,13 +1,16 @@
 import type { PrincipalPersonaProfileData, TaskAttachment, TaskRequest } from "../types/index.js";
+import type { ContextBuildResult } from "../types/context.js";
 import { buildAssistantStylePromptBlock } from "./assistant-style.js";
 import type { PrincipalPersonaOnboardingInterceptResult } from "./principal-persona-service.js";
 
 export interface BuildTaskPromptOptions {
   personalizedProfileContext?: string | null;
+  taskContext?: ContextBuildResult | null;
 }
 
 export function buildTaskPrompt(request: TaskRequest, options: BuildTaskPromptOptions = {}): string {
   const personalizedProfileContext = normalizePromptSection(options.personalizedProfileContext);
+  const taskContextSection = normalizePromptSection(formatTaskContext(options.taskContext));
   const sections = [buildAssistantStylePromptBlock(request)];
 
   if (personalizedProfileContext) {
@@ -38,6 +41,10 @@ export function buildTaskPrompt(request: TaskRequest, options: BuildTaskPromptOp
     sections.push(`Attachments:\n${formatAttachments(request.attachments)}`);
   }
 
+  if (taskContextSection) {
+    sections.push(taskContextSection);
+  }
+
   sections.push(
     [
       "Response guidance:",
@@ -60,6 +67,7 @@ export function buildBootstrapPrompt(
 ): string {
   const isFeishu = request.sourceChannel === "feishu";
   const personalizedProfileContext = normalizePromptSection(options.personalizedProfileContext);
+  const taskContextSection = normalizePromptSection(formatTaskContext(options.taskContext));
   const requesterName = request.user.displayName?.trim() || request.user.userId;
   const currentQuestionPrompt = normalizePromptSection(onboarding.questionPrompt);
   const draftSummary = formatPersonaDraft(onboarding.profile ?? onboarding.draft);
@@ -143,6 +151,10 @@ export function buildBootstrapPrompt(
     sections.push(`Additional context:\n${request.inputText}`);
   }
 
+  if (taskContextSection) {
+    sections.push(taskContextSection);
+  }
+
   sections.push(
     [
       "Response guidance:",
@@ -183,6 +195,41 @@ function resolveBootstrapProgressLabel(onboarding: PrincipalPersonaOnboardingInt
   }
 
   return `in_progress (${onboarding.stepIndex + 1}/${onboarding.totalSteps})`;
+}
+
+function formatTaskContext(taskContext?: ContextBuildResult | null): string | null {
+  if (!taskContext) {
+    return null;
+  }
+
+  const sections: string[] = [];
+
+  if (taskContext.blocks.length) {
+    sections.push(
+      [
+        "Task context blocks:",
+        ...taskContext.blocks.map((block) => [
+          `- kind=${block.kind}; priority=${block.priority}; source=${block.sourcePath}; truncated=${String(block.truncated)}`,
+          block.text,
+        ].join("\n")),
+      ].join("\n"),
+    );
+  }
+
+  if (taskContext.warnings.length) {
+    sections.push(
+      [
+        "Task context warnings:",
+        ...taskContext.warnings.map((warning) => `- [${warning.code}] ${warning.sourceId}: ${warning.message}`),
+      ].join("\n"),
+    );
+  }
+
+  if (!sections.length) {
+    return null;
+  }
+
+  return sections.join("\n\n");
 }
 
 function formatPersonaDraft(profile: PrincipalPersonaProfileData): string {
