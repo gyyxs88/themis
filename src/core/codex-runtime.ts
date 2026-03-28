@@ -26,6 +26,7 @@ import { ConversationService } from "./conversation-service.js";
 import { IdentityLinkService } from "./identity-link-service.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
 import { buildBootstrapPrompt, buildTaskPrompt } from "./prompt.js";
+import { MemoryService } from "../memory/memory-service.js";
 import { validateWorkspacePath } from "./session-workspace.js";
 import {
   applyThemisGlobalDefaultsToRuntimeCatalog,
@@ -45,6 +46,7 @@ import {
   type CodexSessionLease,
   type CodexSessionMode,
 } from "./codex-session-store.js";
+import { ContextBuilder } from "../context/context-builder.js";
 import { SqliteCodexSessionRegistry, type StoredAuthAccountRecord } from "../storage/index.js";
 import type { PrincipalTaskSettings, TaskAccessMode, TaskEvent, TaskRequest, TaskResult } from "../types/index.js";
 import {
@@ -63,6 +65,8 @@ export interface CodexTaskRuntimeOptions {
   providerConfigs?: OpenAICompatibleProviderConfig[] | null;
   providerConfig?: OpenAICompatibleProviderConfig | null;
   principalSkillsService?: PrincipalSkillsService;
+  createContextBuilder?: (workingDirectory: string) => ContextBuilder;
+  createMemoryService?: (workingDirectory: string) => MemoryService;
 }
 
 interface ResolvedRuntimeTarget {
@@ -91,6 +95,8 @@ export class CodexTaskRuntime {
   private readonly conversationService: ConversationService;
   private readonly principalPersonaService: PrincipalPersonaService;
   private readonly principalSkillsService: PrincipalSkillsService;
+  private readonly createContextBuilder: (workingDirectory: string) => ContextBuilder;
+  private readonly createMemoryService: (workingDirectory: string) => MemoryService;
   private providerConfigs: OpenAICompatibleProviderConfig[];
   private readonly authClients = new Map<string, Codex>();
   private readonly authSessionStores = new Map<string, CodexThreadSessionStore>();
@@ -111,6 +117,12 @@ export class CodexTaskRuntime {
       workingDirectory: this.workingDirectory,
       registry: this.runtimeStore,
     });
+    this.createContextBuilder = options.createContextBuilder ?? ((workingDirectory) => new ContextBuilder({
+      workingDirectory,
+    }));
+    this.createMemoryService = options.createMemoryService ?? ((workingDirectory) => new MemoryService({
+      workingDirectory,
+    }));
     this.providerConfigs = options.providerConfigs
       ?? (options.providerConfig
         ? [options.providerConfig]
@@ -157,13 +169,43 @@ export class CodexTaskRuntime {
     const { signal, cleanup } = createExecutionSignal(hooks.signal, hooks.timeoutMs);
     let sessionLease: CodexSessionLease | null = null;
     let failureMessage: string | null = null;
+    const memoryEnabled = request.options?.memoryMode !== "off";
+    let memoryService: MemoryService | null = null;
+    let memoryStartRecorded = false;
 
     try {
       this.runtimeStore.upsertTurnFromRequest(request, taskId);
       await emit(createTaskEvent(taskId, request.requestId, "task.received", "queued", "Themis accepted the web request."));
 
-      const target = this.resolveRuntimeTarget(request, hooks.allowUnsupportedThirdPartyModel === true);
+      throwIfAborted(signal);
       const executionWorkingDirectory = this.resolveExecutionWorkingDirectory(request);
+      throwIfAborted(signal);
+      memoryService = memoryEnabled ? this.createMemoryService(executionWorkingDirectory) : null;
+      const taskContext = await this.buildTaskContext(executionWorkingDirectory, {
+        request,
+        principalId,
+        conversationId: resolvedRequest.conversationId,
+        signal,
+      });
+      throwIfAborted(signal);
+      await emit(
+        createTaskEvent(
+          taskId,
+          request.requestId,
+          "task.context_built",
+          "running",
+          "Task context built.",
+          {
+            blockCount: taskContext.blocks.length,
+            warningCount: taskContext.warnings.length,
+            sourceStats: taskContext.sourceStats,
+          },
+        ),
+      );
+      throwIfAborted(signal);
+
+      const target = this.resolveRuntimeTarget(request, hooks.allowUnsupportedThirdPartyModel === true);
+      throwIfAborted(signal);
       const threadOptions = buildThreadOptions(
         request,
         executionWorkingDirectory,
@@ -172,19 +214,20 @@ export class CodexTaskRuntime {
         target.providerConfig,
       );
       sessionLease = await target.sessionStore.acquire(request, threadOptions);
+      throwIfAborted(signal);
       const thread = sessionLease.thread;
       const personalizedProfileContext = this.principalPersonaService.buildPromptContext(principalId);
       const prompt = onboardingIntercept
         ? buildBootstrapPrompt(request, onboardingIntercept, {
           personalizedProfileContext,
+          taskContext,
         })
         : buildTaskPrompt(request, {
           personalizedProfileContext,
+          taskContext,
         });
       const touchedFiles = new Set<string>();
       let finalResponse = "";
-
-      throwIfAborted(signal);
 
       await emit(
         createTaskEvent(
@@ -196,6 +239,44 @@ export class CodexTaskRuntime {
           createSessionPayload(sessionLease, target),
         ),
       );
+
+      if (memoryService) {
+        try {
+          const startUpdates = memoryService.recordTaskStart({
+            request,
+            taskId,
+            ...(principalId ? { principalId } : {}),
+            ...(resolvedRequest.conversationId ? { conversationId: resolvedRequest.conversationId } : {}),
+          });
+          memoryStartRecorded = true;
+          if (startUpdates.length > 0) {
+            await emit(
+              createTaskEvent(
+                taskId,
+                request.requestId,
+                "task.memory_updated",
+                "running",
+                "Memory updated at task start.",
+                { updates: startUpdates },
+              ),
+            );
+          }
+        } catch (error) {
+          await emit(
+            createTaskEvent(
+              taskId,
+              request.requestId,
+              "task.memory_updated",
+              "failed",
+              toErrorMessage(error),
+              {
+                updates: [],
+                errorCode: "MEMORY_UPDATE_FAILED",
+              },
+            ),
+          );
+        }
+      }
 
       await emit(
         createTaskEvent(
@@ -239,7 +320,7 @@ export class CodexTaskRuntime {
       const summary = summarizeResponse(output);
       const touched = [...touchedFiles];
       const resolvedThreadId = thread.id ?? sessionLease.threadId ?? undefined;
-      const result: TaskResult = {
+      const baseResult: TaskResult = {
         taskId,
         requestId: request.requestId,
         status: "completed",
@@ -255,8 +336,7 @@ export class CodexTaskRuntime {
         ),
         completedAt: new Date().toISOString(),
       };
-
-      const finalizedResult = await finalizeTaskResult(request, result, hooks.finalizeResult);
+      const finalizedResult = await finalizeTaskResult(request, baseResult, hooks.finalizeResult);
 
       this.runtimeStore.completeTaskTurn({
         request,
@@ -276,10 +356,94 @@ export class CodexTaskRuntime {
         ),
       );
 
-      return finalizedResult;
+      let completionMemoryUpdates: TaskResult["memoryUpdates"] = [];
+      if (memoryService && memoryStartRecorded) {
+        try {
+          completionMemoryUpdates = memoryService.recordTaskCompletion({
+            request,
+            result: finalizedResult,
+            taskId,
+            ...(principalId ? { principalId } : {}),
+            ...(resolvedRequest.conversationId ? { conversationId: resolvedRequest.conversationId } : {}),
+            verified: true,
+          });
+          if (completionMemoryUpdates.length > 0) {
+            await emit(
+              createTaskEvent(
+                taskId,
+                request.requestId,
+                "task.memory_updated",
+                "completed",
+                "Memory updated at task completion.",
+                { updates: completionMemoryUpdates },
+              ),
+            );
+          }
+        } catch (error) {
+          completionMemoryUpdates = [];
+          await emit(
+            createTaskEvent(
+              taskId,
+              request.requestId,
+              "task.memory_updated",
+              "failed",
+              toErrorMessage(error),
+              {
+                updates: [],
+                errorCode: "MEMORY_UPDATE_FAILED",
+              },
+            ),
+          );
+        }
+      }
+
+      return completionMemoryUpdates.length
+        ? {
+          ...finalizedResult,
+          memoryUpdates: completionMemoryUpdates,
+        }
+        : finalizedResult;
     } catch (error) {
       if (isAbortLikeError(error) || signal.aborted) {
         const message = describeAbort(signal);
+        if (memoryService && memoryStartRecorded) {
+          try {
+            const updates = memoryService.recordTaskTerminal({
+              request,
+              taskId,
+              ...(principalId ? { principalId } : {}),
+              ...(resolvedRequest.conversationId ? { conversationId: resolvedRequest.conversationId } : {}),
+              terminalStatus: "cancelled",
+              summary: message,
+            });
+            if (updates.length > 0) {
+              await emit(
+                createTaskEvent(
+                  taskId,
+                  request.requestId,
+                  "task.memory_updated",
+                  "cancelled",
+                  "Memory updated after task cancelled.",
+                  { updates },
+                ),
+              );
+            }
+          } catch (memoryError) {
+            await emit(
+              createTaskEvent(
+                taskId,
+                request.requestId,
+                "task.memory_updated",
+                "failed",
+                toErrorMessage(memoryError),
+                {
+                  updates: [],
+                  errorCode: "MEMORY_UPDATE_FAILED",
+                },
+              ),
+            );
+          }
+        }
         const result: TaskResult = {
           taskId,
           requestId: request.requestId,
@@ -298,14 +462,55 @@ export class CodexTaskRuntime {
         return result;
       }
 
+      const taskFailure = resolveTaskFailure(error, failureMessage);
+      const failureSummary = toErrorMessage(taskFailure);
+      if (memoryService && memoryStartRecorded) {
+        try {
+          const updates = memoryService.recordTaskTerminal({
+            request,
+            taskId,
+            ...(principalId ? { principalId } : {}),
+            ...(resolvedRequest.conversationId ? { conversationId: resolvedRequest.conversationId } : {}),
+            terminalStatus: "failed",
+            summary: failureSummary,
+          });
+          if (updates.length > 0) {
+            await emit(
+              createTaskEvent(
+                taskId,
+                request.requestId,
+                "task.memory_updated",
+                "failed",
+                "Memory updated after task failed.",
+                { updates },
+              ),
+            );
+          }
+        } catch (memoryError) {
+          await emit(
+            createTaskEvent(
+              taskId,
+              request.requestId,
+              "task.memory_updated",
+              "failed",
+              toErrorMessage(memoryError),
+              {
+                updates: [],
+                errorCode: "MEMORY_UPDATE_FAILED",
+              },
+            ),
+          );
+        }
+      }
+
       this.runtimeStore.failTaskTurn({
         request,
         taskId,
-        message: toErrorMessage(resolveTaskFailure(error, failureMessage)),
+        message: failureSummary,
         ...resolveSessionPersistence(sessionLease),
       });
 
-      throw resolveTaskFailure(error, failureMessage);
+      throw taskFailure;
     } finally {
       await sessionLease?.release(sessionLease.thread.id ?? sessionLease.threadId ?? null);
       cleanup();
@@ -335,6 +540,10 @@ export class CodexTaskRuntime {
 
   getRuntimeStore(): SqliteCodexSessionRegistry {
     return this.runtimeStore;
+  }
+
+  getWorkingDirectory(): string {
+    return this.workingDirectory;
   }
 
   getIdentityLinkService(): IdentityLinkService {
@@ -466,6 +675,25 @@ export class CodexTaskRuntime {
     } catch {
       throw new Error(SESSION_WORKSPACE_UNAVAILABLE_ERROR);
     }
+  }
+
+  private async buildTaskContext(
+    executionWorkingDirectory: string,
+    input: {
+      request: TaskRequest;
+      principalId: string | undefined;
+      conversationId: string | undefined;
+      signal: AbortSignal;
+    },
+  ) {
+    const builder = this.createContextBuilder(executionWorkingDirectory);
+
+    return builder.build({
+      request: input.request,
+      ...(input.principalId ? { principalId: input.principalId } : {}),
+      ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+      signal: input.signal,
+    });
   }
 
   private async resolveThreadIdForFork(sessionId: string): Promise<string | null> {
@@ -951,7 +1179,7 @@ function translateThreadEvent(taskId: string, requestId: string, event: ThreadEv
         threadId: event.thread_id,
       });
     case "turn.started":
-      return createTaskEvent(taskId, requestId, "task.context_built", "running", "Prompt sent to Codex.");
+      return null;
     case "item.started":
     case "item.updated":
     case "item.completed":

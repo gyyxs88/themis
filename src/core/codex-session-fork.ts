@@ -23,14 +23,24 @@ interface ParsedSessionTurn {
   assistantText?: string;
 }
 
-export async function buildForkContextFromThread(threadId: string): Promise<CodexForkContext | null> {
+interface BuildForkContextOptions {
+  sessionRoot?: string;
+}
+
+export async function buildForkContextFromThread(
+  threadId: string,
+  options: BuildForkContextOptions = {},
+): Promise<CodexForkContext | null> {
   const normalizedThreadId = threadId.trim();
 
   if (!normalizedThreadId) {
     return null;
   }
 
-  const sessionFile = await findThreadSessionFile(normalizedThreadId);
+  const sessionFile = await findThreadSessionFile(
+    normalizedThreadId,
+    options.sessionRoot ?? CODEX_SESSION_ROOT,
+  );
 
   if (!sessionFile) {
     return null;
@@ -55,8 +65,8 @@ export async function buildForkContextFromThread(threadId: string): Promise<Code
   };
 }
 
-async function findThreadSessionFile(threadId: string): Promise<string | null> {
-  return walkForThreadFile(CODEX_SESSION_ROOT, threadId, 0);
+async function findThreadSessionFile(threadId: string, sessionRoot: string): Promise<string | null> {
+  return walkForThreadFile(sessionRoot, threadId, 0);
 }
 
 async function walkForThreadFile(directory: string, threadId: string, depth: number): Promise<string | null> {

@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import type { ThreadOptions } from "@openai/codex-sdk";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
-import type { TaskRequest } from "../types/index.js";
+import type { TaskEvent, TaskRequest } from "../types/index.js";
 import { CodexTaskRuntime } from "./codex-runtime.js";
 import type { CodexThreadSessionStore } from "./codex-session-store.js";
 import type { OpenAICompatibleProviderConfig } from "./openai-compatible-provider.js";
+import type { ContextBuildResult } from "../types/context.js";
 
 function createProviderConfig(): OpenAICompatibleProviderConfig {
   return {
@@ -134,6 +135,14 @@ test("runTask 会优先使用会话绑定的工作区", async () => {
   const sessionWorkspace = join(root, "session-workspace");
   mkdirSync(controlDirectory);
   mkdirSync(sessionWorkspace);
+  mkdirSync(join(controlDirectory, "memory", "architecture"), { recursive: true });
+  mkdirSync(join(sessionWorkspace, "memory", "architecture"), { recursive: true });
+  writeRuntimeFile(controlDirectory, "AGENTS.md", "control-rule");
+  writeRuntimeFile(controlDirectory, "README.md", "# control");
+  writeRuntimeFile(controlDirectory, "memory/architecture/overview.md", "# control architecture");
+  writeRuntimeFile(sessionWorkspace, "AGENTS.md", "session-rule");
+  writeRuntimeFile(sessionWorkspace, "README.md", "# session");
+  writeRuntimeFile(sessionWorkspace, "memory/architecture/overview.md", "# session architecture");
 
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
@@ -149,7 +158,8 @@ test("runTask 会优先使用会话绑定的工作区", async () => {
   });
 
   const capturedThreadOptions: ThreadOptions[] = [];
-  const sessionStore = createSessionStoreDouble(runtimeStore, capturedThreadOptions);
+  const capturedPrompts: string[] = [];
+  const sessionStore = createSessionStoreDouble(runtimeStore, capturedThreadOptions, capturedPrompts);
   const runtime = new CodexTaskRuntime({
     workingDirectory: controlDirectory,
     runtimeStore,
@@ -171,6 +181,8 @@ test("runTask 会优先使用会话绑定的工作区", async () => {
 
     assert.equal(capturedThreadOptions.length, 1);
     assert.equal(capturedThreadOptions[0]?.workingDirectory, sessionWorkspace);
+    assert.match(capturedPrompts[0] ?? "", /session-rule/);
+    assert.doesNotMatch(capturedPrompts[0] ?? "", /control-rule/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -225,14 +237,369 @@ test("runTask 在会话工作区失效时会报错", async () => {
   }
 });
 
+test("runTask 会在 task.started 前发出单次 task.context_built，并把结构化上下文注入 prompt", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-context-builder-"));
+  const controlDirectory = join(root, "control");
+  mkdirSync(controlDirectory);
+  mkdirSync(join(controlDirectory, "memory", "architecture"), { recursive: true });
+  writeRuntimeFile(controlDirectory, "AGENTS.md", "始终使用中文回复。");
+  writeRuntimeFile(controlDirectory, "README.md", "# Demo\n\n```ts\nconst provider = true;\n```");
+  writeRuntimeFile(controlDirectory, "memory/architecture/overview.md", "# 架构");
+  mkdirSync(join(controlDirectory, "docs", "memory", "2026", "03"), { recursive: true });
+  writeRuntimeFile(controlDirectory, "docs/memory/2026/03/provider-search.md", "# Provider Search\n\nsearch tool 约束");
+
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const capturedThreadOptions: ThreadOptions[] = [];
+  const capturedPrompts: string[] = [];
+  const lifecycleMarkers: string[] = [];
+  const sessionStore = createSessionStoreDouble(runtimeStore, capturedThreadOptions, capturedPrompts, lifecycleMarkers);
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+    sessionStore,
+  });
+
+  try {
+    const events: TaskEvent[] = [];
+    await runtime.runTask(createRequest({
+      requestId: "req-runtime-context-1",
+      taskId: "task-runtime-context-1",
+      goal: "请检查 provider search 支持",
+      user: {
+        userId: "",
+        displayName: "User",
+      },
+      channelContext: {
+        sessionId: "session-runtime-context-1",
+      },
+    }), {
+      onEvent: (event) => {
+        if (event.type === "task.context_built") {
+          lifecycleMarkers.push("context_built_event");
+        }
+        events.push(event);
+      },
+    });
+
+    const contextBuiltEvents = events.filter((event) => event.type === "task.context_built");
+    assert.equal(contextBuiltEvents.length, 1);
+    assert.equal(contextBuiltEvents[0]?.payload?.blockCount, 4);
+    assert.equal(typeof contextBuiltEvents[0]?.payload?.warningCount, "number");
+    assert.ok(Array.isArray(contextBuiltEvents[0]?.payload?.sourceStats));
+
+    const contextBuiltIndex = events.findIndex((event) => event.type === "task.context_built");
+    const startedIndex = events.findIndex((event) => event.type === "task.started");
+    assert.ok(contextBuiltIndex >= 0);
+    assert.ok(startedIndex >= 0);
+    assert.equal(contextBuiltIndex < startedIndex, true);
+    assert.equal(lifecycleMarkers.indexOf("context_built_event") < lifecycleMarkers.indexOf("acquire_called"), true);
+
+    assert.equal(capturedPrompts.length, 1);
+    assert.match(capturedPrompts[0] ?? "", /Task context blocks:/);
+    assert.match(capturedPrompts[0] ?? "", /kind: repoRules/);
+    assert.match(capturedPrompts[0] ?? "", /source: AGENTS\.md/);
+    assert.match(capturedPrompts[0] ?? "", /title: Repository rules/);
+    assert.match(capturedPrompts[0] ?? "", /\| ```ts/);
+    assert.match(capturedPrompts[0] ?? "", /Response guidance:/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runTask 在 context build 阶段收到 abort 会尽快取消且不进入 acquire", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-context-abort-"));
+  const controlDirectory = join(root, "control");
+  mkdirSync(controlDirectory);
+  writeRuntimeFile(controlDirectory, "README.md", "# control");
+
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  let acquireCalled = false;
+  const sessionStore: CodexThreadSessionStore = {
+    getSessionRegistry: () => runtimeStore,
+    resolveThreadId: async () => null,
+    acquire: async () => {
+      acquireCalled = true;
+      throw new Error("acquire should not be called");
+    },
+  } as unknown as CodexThreadSessionStore;
+
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+    sessionStore,
+    createContextBuilder: () => ({
+      build: async (input: { signal?: AbortSignal }): Promise<ContextBuildResult> => {
+        while (!input.signal?.aborted) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+
+        const abortError = new Error("aborted during context build");
+        abortError.name = "AbortError";
+        throw abortError;
+      },
+    }) as never,
+  });
+
+  const abortController = new AbortController();
+  setTimeout(() => {
+    abortController.abort(new Error("manual abort"));
+  }, 10);
+
+  try {
+    const result = await runtime.runTask(createRequest({
+      requestId: "req-runtime-context-abort",
+      taskId: "task-runtime-context-abort",
+      user: {
+        userId: "",
+        displayName: "User",
+      },
+      channelContext: {
+        sessionId: "session-runtime-context-abort",
+      },
+    }), {
+      signal: abortController.signal,
+    });
+
+    assert.equal(result.status, "cancelled");
+    assert.equal(acquireCalled, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runTask 成功时会写 memory updates、发 task.memory_updated，并落到 execution workspace", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-memory-success-"));
+  const controlDirectory = join(root, "control");
+  const sessionWorkspace = join(root, "session-workspace");
+  mkdirSync(controlDirectory);
+  mkdirSync(sessionWorkspace);
+  mkdirSync(join(controlDirectory, "memory", "architecture"), { recursive: true });
+  mkdirSync(join(sessionWorkspace, "memory", "architecture"), { recursive: true });
+  writeRuntimeFile(controlDirectory, "AGENTS.md", "control-rule");
+  writeRuntimeFile(controlDirectory, "README.md", "# control");
+  writeRuntimeFile(controlDirectory, "memory/architecture/overview.md", "# control architecture");
+  writeRuntimeFile(sessionWorkspace, "AGENTS.md", "session-rule");
+  writeRuntimeFile(sessionWorkspace, "README.md", "# session");
+  writeRuntimeFile(sessionWorkspace, "memory/architecture/overview.md", "# session architecture");
+
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  runtimeStore.saveSessionTaskSettings({
+    sessionId: "session-runtime-memory-1",
+    settings: {
+      workspacePath: sessionWorkspace,
+    },
+    createdAt: "2026-03-28T00:00:00.000Z",
+    updatedAt: "2026-03-28T00:00:00.000Z",
+  });
+
+  const capturedThreadOptions: ThreadOptions[] = [];
+  const sessionStore = createSessionStoreDouble(runtimeStore, capturedThreadOptions);
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+    sessionStore,
+  });
+
+  try {
+    const events: TaskEvent[] = [];
+    const result = await runtime.runTask(createRequest({
+      requestId: "req-runtime-memory-1",
+      taskId: "task-runtime-memory-1",
+      goal: "实现 memory runtime 集成",
+      user: {
+        userId: "",
+        displayName: "User",
+      },
+      channelContext: {
+        sessionId: "session-runtime-memory-1",
+      },
+    }), {
+      onEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    assert.equal(result.status, "completed");
+    assert.ok((result.memoryUpdates?.length ?? 0) > 0);
+    const memoryEvents = events.filter((event) => event.type === "task.memory_updated");
+    assert.ok(memoryEvents.length >= 2);
+    assert.ok(memoryEvents.some((event) => event.status === "running"));
+    assert.ok(memoryEvents.some((event) => event.status === "completed"));
+    assert.ok(memoryEvents.some((event) => Array.isArray(event.payload?.updates)));
+
+    const sessionDone = writeFileSyncAndRead(sessionWorkspace, "memory/tasks/done.md");
+    assert.match(sessionDone, /task-runtime-memory-1/);
+    assert.match(sessionDone, /实现 memory runtime 集成|done/);
+    const controlDone = writeFileSyncAndRead(controlDirectory, "memory/tasks/done.md", true);
+    assert.equal(controlDone.includes("task-runtime-memory-1"), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("memory 写回失败时任务仍 completed，并发 task.memory_updated failed 事件", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-memory-failed-"));
+  const controlDirectory = join(root, "control");
+  mkdirSync(controlDirectory);
+  mkdirSync(join(controlDirectory, "memory", "architecture"), { recursive: true });
+  writeRuntimeFile(controlDirectory, "AGENTS.md", "rule");
+  writeRuntimeFile(controlDirectory, "README.md", "# control");
+  writeRuntimeFile(controlDirectory, "memory/architecture/overview.md", "# architecture");
+
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const capturedThreadOptions: ThreadOptions[] = [];
+  const sessionStore = createSessionStoreDouble(runtimeStore, capturedThreadOptions);
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+    sessionStore,
+    createMemoryService: () => ({
+      recordTaskStart: () => [],
+      recordTaskCompletion: () => {
+        throw new Error("memory completion failed");
+      },
+    }) as never,
+  });
+
+  try {
+    const events: TaskEvent[] = [];
+    const result = await runtime.runTask(createRequest({
+      requestId: "req-runtime-memory-failed",
+      taskId: "task-runtime-memory-failed",
+      user: {
+        userId: "",
+        displayName: "User",
+      },
+      channelContext: {
+        sessionId: "session-runtime-memory-failed",
+      },
+    }), {
+      onEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    assert.equal(result.status, "completed");
+    const failedEvent = events.find(
+      (event) => event.type === "task.memory_updated" && event.status === "failed",
+    );
+    assert.ok(failedEvent);
+    assert.equal(failedEvent?.payload?.errorCode, "MEMORY_UPDATE_FAILED");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("start 已写回后任务普通失败，不会残留 running active 与 in-progress", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-memory-terminal-failed-"));
+  const controlDirectory = join(root, "control");
+  mkdirSync(controlDirectory);
+  mkdirSync(join(controlDirectory, "memory", "architecture"), { recursive: true });
+  writeRuntimeFile(controlDirectory, "AGENTS.md", "rule");
+  writeRuntimeFile(controlDirectory, "README.md", "# control");
+  writeRuntimeFile(controlDirectory, "memory/architecture/overview.md", "# architecture");
+
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+    sessionStore: createFailingSessionStoreDouble(runtimeStore),
+  });
+
+  try {
+    await assert.rejects(
+      async () => runtime.runTask(createRequest({
+        requestId: "req-runtime-memory-terminal-failed",
+        taskId: "task-runtime-memory-terminal-failed",
+        goal: "故意失败任务",
+        channelContext: {
+          sessionId: "session-runtime-memory-terminal-failed",
+        },
+      })),
+      /模拟失败/,
+    );
+
+    const active = writeFileSyncAndRead(controlDirectory, "memory/sessions/active.md");
+    const inProgress = writeFileSyncAndRead(controlDirectory, "memory/tasks/in-progress.md", true);
+    assert.match(active, /状态：failed/);
+    assert.doesNotMatch(active, /状态：running/);
+    assert.doesNotMatch(inProgress, /task-runtime-memory-terminal-failed/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("主任务收口前失败不会提前写入 completed memory", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-memory-no-early-completion-"));
+  const controlDirectory = join(root, "control");
+  mkdirSync(controlDirectory);
+  mkdirSync(join(controlDirectory, "memory", "architecture"), { recursive: true });
+  writeRuntimeFile(controlDirectory, "AGENTS.md", "rule");
+  writeRuntimeFile(controlDirectory, "README.md", "# control");
+  writeRuntimeFile(controlDirectory, "memory/architecture/overview.md", "# architecture");
+
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+    sessionStore: createSessionStoreDouble(runtimeStore, []),
+  });
+
+  try {
+    await assert.rejects(
+      async () => runtime.runTask(createRequest({
+        requestId: "req-runtime-memory-no-early-completion",
+        taskId: "task-runtime-memory-no-early-completion",
+        goal: "测试收口失败",
+        user: {
+          userId: "",
+          displayName: "User",
+        },
+        channelContext: {
+          sessionId: "session-runtime-memory-no-early-completion",
+        },
+      }), {
+        onEvent: (event) => {
+          if (event.type === "task.completed") {
+            throw new Error("force completion hook failure");
+          }
+        },
+      }),
+      /force completion hook failure/,
+    );
+
+    const done = writeFileSyncAndRead(controlDirectory, "memory/tasks/done.md", true);
+    const active = writeFileSyncAndRead(controlDirectory, "memory/sessions/active.md");
+    assert.doesNotMatch(done, /task-runtime-memory-no-early-completion/);
+    assert.doesNotMatch(active, /状态：completed/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function createSessionStoreDouble(
   runtimeStore: SqliteCodexSessionRegistry,
   capturedThreadOptions: ThreadOptions[],
+  capturedPrompts: string[] = [],
+  lifecycleMarkers: string[] = [],
 ): CodexThreadSessionStore {
   return {
     getSessionRegistry: () => runtimeStore,
     resolveThreadId: async () => null,
     acquire: async (_request: TaskRequest, threadOptions: ThreadOptions) => {
+      lifecycleMarkers.push("acquire_called");
       capturedThreadOptions.push(threadOptions);
 
       return {
@@ -241,24 +608,68 @@ function createSessionStoreDouble(
         sessionMode: "created",
         thread: {
           id: "thread-1",
-          runStreamed: async () => ({
-            events: (async function* () {
-              yield { type: "thread.started", thread_id: "thread-1" };
-              yield { type: "turn.started" };
-              yield {
-                type: "item.completed",
-                item: {
-                  type: "agent_message",
-                  id: "item-1",
-                  text: "done",
-                },
-              };
-              yield { type: "turn.completed", usage: {} };
-            })(),
-          }),
+          runStreamed: async (prompt: string) => {
+            capturedPrompts.push(prompt);
+            return {
+              events: (async function* () {
+                yield { type: "thread.started", thread_id: "thread-1" };
+                yield { type: "turn.started" };
+                yield {
+                  type: "item.completed",
+                  item: {
+                    type: "agent_message",
+                    id: "item-1",
+                    text: "done",
+                  },
+                };
+                yield { type: "turn.completed", usage: {} };
+              })(),
+            };
+          },
         } as never,
         release: async () => {},
       };
     },
   } as unknown as CodexThreadSessionStore;
+}
+
+function createFailingSessionStoreDouble(runtimeStore: SqliteCodexSessionRegistry): CodexThreadSessionStore {
+  return {
+    getSessionRegistry: () => runtimeStore,
+    resolveThreadId: async () => null,
+    acquire: async (_request: TaskRequest) => ({
+      sessionId: _request.channelContext.sessionId,
+      threadId: "thread-failed",
+      sessionMode: "created",
+      thread: {
+        id: "thread-failed",
+        runStreamed: async () => ({
+          events: (async function* () {
+            yield { type: "thread.started", thread_id: "thread-failed" };
+            yield { type: "turn.started" };
+            yield { type: "turn.failed", error: { message: "模拟失败" } };
+          })(),
+        }),
+      } as never,
+      release: async () => {},
+    }),
+  } as unknown as CodexThreadSessionStore;
+}
+
+function writeRuntimeFile(root: string, path: string, content: string): void {
+  const absolutePath = join(root, path);
+  mkdirSync(dirname(absolutePath), { recursive: true });
+  writeFileSync(absolutePath, `${content}\n`, "utf8");
+}
+
+function writeFileSyncAndRead(root: string, path: string, allowMissing = false): string {
+  const absolutePath = join(root, path);
+  try {
+    return readFileSync(absolutePath, "utf8");
+  } catch (error) {
+    if (allowMissing) {
+      return "";
+    }
+    throw error;
+  }
 }

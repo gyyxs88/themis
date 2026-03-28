@@ -23,6 +23,13 @@ import {
 } from "./http-identity.js";
 import { handleRuntimeConfig } from "./http-runtime-config.js";
 import {
+  handleDiagnostics,
+  handleDiagnosticsMcp,
+  handleDiagnosticsMcpProbe,
+  handleDiagnosticsMcpReload,
+  type CreateMcpInspector,
+} from "./http-diagnostics.js";
+import {
   handleSkillsCuratedCatalog,
   handleSkillsInstall,
   handleSkillsList,
@@ -53,11 +60,13 @@ export interface ThemisHttpServerOptions {
   runtime?: CodexTaskRuntime;
   authRuntime?: CodexAuthRuntime;
   taskTimeoutMs?: number;
+  createMcpInspector?: CreateMcpInspector;
 }
 
 export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): Server {
   const runtime = options.runtime ?? new CodexTaskRuntime();
   const authRuntime = options.authRuntime ?? new CodexAuthRuntime({
+    workingDirectory: runtime.getWorkingDirectory(),
     registry: runtime.getRuntimeStore(),
     onManagedAccountReady: async (account) => {
       try {
@@ -96,6 +105,22 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if ((request.method === "GET" || isHeadRequest) && url.pathname === "/api/runtime/config") {
         return handleRuntimeConfig(response, runtime, isHeadRequest);
+      }
+
+      if ((request.method === "GET" || isHeadRequest) && url.pathname === "/api/diagnostics") {
+        return handleDiagnostics(response, runtime, authRuntime, options.createMcpInspector, isHeadRequest);
+      }
+
+      if ((request.method === "GET" || isHeadRequest) && url.pathname === "/api/diagnostics/mcp") {
+        return handleDiagnosticsMcp(response, runtime, authRuntime, options.createMcpInspector, isHeadRequest);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/diagnostics/mcp/probe") {
+        return handleDiagnosticsMcpProbe(response, runtime, options.createMcpInspector);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/diagnostics/mcp/reload") {
+        return handleDiagnosticsMcpReload(response, runtime, options.createMcpInspector);
       }
 
       if (request.method === "POST" && url.pathname === "/api/runtime/third-party/probe") {
