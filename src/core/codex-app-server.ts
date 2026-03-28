@@ -371,35 +371,35 @@ export class CodexAppServerSession {
     const id = this.nextId;
     this.nextId += 1;
 
-    const payload = JSON.stringify({
-      method,
-      id,
-      params,
-    });
-
     return await new Promise<TResult>((resolve, reject) => {
       this.pending.set(id, {
         resolve: resolve as PendingRequest<unknown>["resolve"],
         reject,
       });
 
-      this.child.stdin.write(`${payload}\n`, "utf8", (error) => {
-        if (!error) {
-          return;
-        }
-
+      void this.writeJsonRpcMessage({
+        method,
+        id,
+        params,
+      }).catch((error) => {
         this.pending.delete(id);
         reject(error instanceof Error ? error : new Error(String(error)));
       });
     });
   }
 
-  onNotification(handler: (notification: CodexAppServerNotification) => void): void {
+  onNotification(handler: (notification: CodexAppServerNotification) => void): () => void {
     this.notificationHandlers.add(handler);
+    return () => {
+      this.notificationHandlers.delete(handler);
+    };
   }
 
-  onServerRequest(handler: (request: AppServerReverseRequest) => void): void {
+  onServerRequest(handler: (request: AppServerReverseRequest) => void): () => void {
     this.serverRequestHandlers.add(handler);
+    return () => {
+      this.serverRequestHandlers.delete(handler);
+    };
   }
 
   async startThread(params: AppServerThreadStartParams): Promise<{ threadId: string }> {
@@ -436,6 +436,23 @@ export class CodexAppServerSession {
     await this.request("turn/interrupt", {
       threadId,
       turnId,
+    });
+  }
+
+  async respondToServerRequest(id: string | number, result: unknown): Promise<void> {
+    await this.writeJsonRpcMessage({
+      id,
+      result: result ?? null,
+    });
+  }
+
+  async rejectServerRequest(id: string | number, error: Error): Promise<void> {
+    await this.writeJsonRpcMessage({
+      id,
+      error: {
+        code: -32000,
+        message: normalizeOptionalText(error.message) ?? String(error),
+      },
     });
   }
 
@@ -541,6 +558,25 @@ export class CodexAppServerSession {
     for (const handler of this.serverRequestHandlers) {
       handler(request);
     }
+  }
+
+  private async writeJsonRpcMessage(message: Record<string, unknown>): Promise<void> {
+    if (this.closed) {
+      throw new Error("codex app-server is not available.");
+    }
+
+    const payload = JSON.stringify(message);
+
+    await new Promise<void>((resolve, reject) => {
+      this.child.stdin.write(`${payload}\n`, "utf8", (error) => {
+        if (!error) {
+          resolve();
+          return;
+        }
+
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
   }
 }
 

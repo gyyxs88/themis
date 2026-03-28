@@ -8,6 +8,12 @@ export function translateAppServerNotification(
 ): TaskEvent | null {
   if (notification.method === "item/agentMessage/delta") {
     const params = (notification.params ?? {}) as Record<string, unknown>;
+    const itemText = typeof params.text === "string"
+      ? params.text
+      : typeof params.delta === "string"
+        ? params.delta
+        : "";
+    const message = itemText || "Codex produced an assistant message.";
 
     return {
       eventId: `${taskId}-agent-${String(params.itemId ?? "unknown")}`,
@@ -15,11 +21,11 @@ export function translateAppServerNotification(
       requestId,
       type: "task.progress",
       status: "running",
-      message: typeof params.text === "string" ? params.text : "Codex produced an assistant message.",
+      message,
       payload: {
         itemType: "agent_message",
         itemId: params.itemId ?? null,
-        itemText: params.text ?? params.delta ?? "",
+        itemText,
       },
       timestamp: new Date().toISOString(),
     };
