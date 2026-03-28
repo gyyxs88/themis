@@ -184,6 +184,56 @@ test("authenticate 失败会返回失败 reason 并写登录失败审计", () =>
   }
 });
 
+test("删除口令后关联 session 立即失效", () => {
+  const { workingDirectory, service } = createService(() => NOW);
+
+  try {
+    const created = service.createToken({
+      label: "owner",
+      secret: "correct horse battery staple",
+    });
+
+    const authenticated = service.authenticate({
+      secret: "correct horse battery staple",
+    });
+
+    assert.equal(authenticated.ok, true);
+    if (!authenticated.ok) {
+      throw new Error("expected authentication to succeed");
+    }
+
+    const initialRead = service.readSession(authenticated.session.sessionId);
+    assert.equal(initialRead.ok, true);
+    if (!initialRead.ok) {
+      throw new Error("expected session to be readable");
+    }
+
+    assert.equal(initialRead.session.token.label, "owner");
+
+    service.revokeTokenByLabel({
+      label: "owner",
+    });
+
+    assert.deepEqual(service.readSession(authenticated.session.sessionId), {
+      ok: false,
+      reason: "SESSION_REVOKED",
+    });
+
+    const tokens = service.listTokens();
+    assert.equal(tokens.length, 1);
+    const token = tokens[0];
+    if (!token) {
+      throw new Error("expected one token");
+    }
+
+    assert.equal(token.label, "owner");
+    assert.ok(token.revokedAt);
+    assert.equal(token.tokenId, created.tokenId);
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
 test("吊销后可用同名 label 重建新 token", () => {
   const { workingDirectory, registry, service } = createService(() => NOW);
 
