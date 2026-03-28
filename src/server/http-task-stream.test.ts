@@ -6,11 +6,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
+import { AppServerTaskRuntime, type AppServerTaskRuntimeSession } from "../core/app-server-task-runtime.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { handleTaskStream } from "./http-task-handlers.js";
-import { createThemisHttpServer } from "./http-server.js";
+import { createThemisHttpServer, type ThemisServerRuntimeRegistry } from "./http-server.js";
 import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
 
 interface TestServerContext {
@@ -18,6 +19,11 @@ interface TestServerContext {
   root: string;
   runtimeStore: SqliteCodexSessionRegistry;
   runtime: CodexTaskRuntime;
+}
+
+interface AppServerSessionDoubleState {
+  started: Array<{ cwd: string }>;
+  resumed: Array<{ threadId: string; cwd: string }>;
 }
 
 async function withHttpServer(
@@ -29,6 +35,7 @@ async function withHttpServer(
     authenticated: false,
     requiresOpenaiAuth: false,
   },
+  createRuntimeRegistry?: (context: Omit<TestServerContext, "baseUrl">) => ThemisServerRuntimeRegistry | undefined,
 ): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "themis-http-task-stream-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
@@ -39,7 +46,16 @@ async function withHttpServer(
     runtimeStore,
   });
   const authRuntime = createAuthRuntime(authSnapshot);
-  const server = createThemisHttpServer({ runtime, authRuntime });
+  const runtimeRegistry = createRuntimeRegistry?.({
+    root,
+    runtimeStore,
+    runtime,
+  });
+  const server = createThemisHttpServer({
+    runtime,
+    ...(runtimeRegistry ? { runtimeRegistry } : {}),
+    authRuntime,
+  });
   const listeningServer = await listenServer(server);
   const address = listeningServer.address();
 
@@ -125,6 +141,96 @@ test("/api/tasks/stream 会按 ack -> event* -> result -> done 顺序返回 NDJS
         reply: "ok",
       },
     });
+  });
+});
+
+test("/api/tasks/stream 会按 runtimeEngine 选择对应 runtime，并保持 NDJSON 契约", async () => {
+  let appServerState: AppServerSessionDoubleState | null = null;
+
+  await withHttpServer(async ({ baseUrl, runtimeStore, runtime }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    (runtime as CodexTaskRuntime & {
+      runTask: CodexTaskRuntime["runTask"];
+    }).runTask = async (request) => ({
+      taskId: request.taskId ?? "task-stream-runtime-engine-sdk",
+      requestId: request.requestId,
+      status: "completed",
+      summary: "sdk runtime finished",
+      structuredOutput: {
+        runtimeEngine: "sdk",
+      },
+      completedAt: "2026-03-28T09:00:01.000Z",
+    });
+
+    for (const runtimeEngine of ["sdk", "app-server"] as const) {
+      const response = await fetch(`${baseUrl}/api/tasks/stream`, {
+        method: "POST",
+        headers: {
+          ...authHeaders,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          goal: `请检查 ${runtimeEngine} stream parity`,
+          sessionId: `session-task-stream-engine-${runtimeEngine}`,
+          options: {
+            runtimeEngine,
+          },
+        }),
+      });
+
+      assert.equal(response.status, 200);
+
+      const lines = parseNdjson(await response.text());
+      assert.deepEqual(lines.slice(0, 1).map((line) => line.kind), ["ack"]);
+      assert.ok(lines.some((line) => line.kind === "result"));
+      assert.deepEqual(lines.slice(-1).map((line) => line.kind), ["done"]);
+
+      const result = lines.find((line) => line.kind === "result");
+      assert.equal(result?.metadata && typeof result.metadata === "object"
+        ? (result.metadata as { structuredOutput?: { runtimeEngine?: string; session?: { engine?: string } } }).structuredOutput?.runtimeEngine
+          ?? (result.metadata as { structuredOutput?: { runtimeEngine?: string; session?: { engine?: string } } }).structuredOutput?.session?.engine
+        : undefined,
+      runtimeEngine);
+    }
+
+    assert.equal(appServerState?.started.length, 1);
+    assert.equal(appServerState?.resumed.length, 0);
+  }, {
+    authenticated: false,
+    requiresOpenaiAuth: false,
+  }, ({ root, runtimeStore, runtime }) => {
+    appServerState = createAppServerSessionDoubleState();
+    const currentAppServerState = appServerState;
+    const appServerRuntime = new AppServerTaskRuntime({
+      workingDirectory: root,
+      runtimeStore,
+      sessionFactory: async (): Promise<AppServerTaskRuntimeSession> => ({
+        initialize: async () => {},
+        startThread: async (params) => {
+          currentAppServerState.started.push({ cwd: params.cwd });
+          return { threadId: "thread-app-server-stream-1" };
+        },
+        resumeThread: async (threadId, params) => {
+          currentAppServerState.resumed.push({ threadId, cwd: params.cwd });
+          return { threadId };
+        },
+        startTurn: async () => ({ turnId: "turn-app-server-stream-1" }),
+        close: async () => {},
+        onNotification: () => {},
+        onServerRequest: () => {},
+      }),
+    });
+
+    return {
+      defaultRuntime: runtime,
+      runtimes: {
+        "app-server": appServerRuntime,
+      },
+    };
   });
 });
 
@@ -258,6 +364,9 @@ test("handleTaskStream 在 close 后会中止任务并停止继续写流", async
       request as unknown as import("node:http").IncomingMessage,
       response as unknown as import("node:http").ServerResponse,
       runtime,
+      {
+        defaultRuntime: runtime,
+      },
       authRuntime,
       5_000,
     );
@@ -278,12 +387,12 @@ test("handleTaskStream 在 close 后会中止任务并停止继续写流", async
   }
 });
 
-function parseNdjson(body: string): Array<{ kind?: string; title?: string; result?: unknown }> {
+function parseNdjson(body: string): Array<{ kind?: string; title?: string; result?: unknown; metadata?: unknown }> {
   return body
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as { kind?: string; title?: string; result?: unknown });
+    .map((line) => JSON.parse(line) as { kind?: string; title?: string; result?: unknown; metadata?: unknown });
 }
 
 function createAuthRuntime(snapshot: {
@@ -306,6 +415,13 @@ function createTaskStreamRequest(payload: Record<string, unknown>): PassThrough 
   };
 
   return request;
+}
+
+function createAppServerSessionDoubleState(): AppServerSessionDoubleState {
+  return {
+    started: [],
+    resumed: [],
+  };
 }
 
 function createTaskStreamResponse(onFirstWrite: () => void): TaskStreamResponseStub {

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import type { Codex, Thread, ThreadEvent, ThreadOptions } from "@openai/codex-sdk";
+import { AppServerTaskRuntime, type AppServerTaskRuntimeSession } from "../core/app-server-task-runtime.js";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { CodexThreadSessionStore } from "../core/codex-session-store.js";
@@ -29,113 +30,136 @@ interface JourneyCodexDouble {
   };
 }
 
-test("真实 Web 旅程会走通 owner 登录、workspace 保存、task stream 与 history 查询", async () => {
-  await withHttpServer(async ({ baseUrl, root, runtimeStore, authHeaders, journeyCodex }) => {
-    const sessionId = "session-web-journey-1";
-    const workspace = join(root, "workspace");
+interface AppServerJourneySessionState {
+  started: Array<{ cwd: string }>;
+  resumed: Array<{ threadId: string; cwd: string }>;
+  prompts: string[];
+}
 
-    writeWorkspaceDocs(workspace);
+for (const runtimeEngine of ["sdk", "app-server"] as const) {
+  test(`真实 Web 旅程在 ${runtimeEngine} 下都能走通 owner 登录、workspace 保存、task stream 与 history 查询`, async () => {
+    await withHttpServer(async ({ baseUrl, root, runtimeStore, authHeaders, journeyCodex }) => {
+      const sessionId = "session-web-journey-1";
+      const workspace = join(root, "workspace");
 
-    const saveWorkspaceResponse = await fetch(`${baseUrl}/api/sessions/${sessionId}/settings`, {
-      method: "PUT",
-      headers: {
-        ...authHeaders,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        settings: {
-          workspacePath: workspace,
+      writeWorkspaceDocs(workspace);
+
+      const saveWorkspaceResponse = await fetch(`${baseUrl}/api/sessions/${sessionId}/settings`, {
+        method: "PUT",
+        headers: {
+          ...authHeaders,
+          "Content-Type": "application/json",
         },
-      }),
-    });
+        body: JSON.stringify({
+          settings: {
+            workspacePath: workspace,
+          },
+        }),
+      });
 
-    assert.equal(saveWorkspaceResponse.status, 200);
-    assert.equal(runtimeStore.getSessionTaskSettings(sessionId)?.settings.workspacePath, workspace);
+      assert.equal(saveWorkspaceResponse.status, 200);
+      assert.equal(runtimeStore.getSessionTaskSettings(sessionId)?.settings.workspacePath, workspace);
 
-    const taskResponse = await fetch(`${baseUrl}/api/tasks/stream`, {
-      method: "POST",
-      headers: {
-        ...authHeaders,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        sessionId,
-        goal: "请执行真实 web 旅程测试",
-      }),
-    });
+      const taskResponse = await fetch(`${baseUrl}/api/tasks/stream`, {
+        method: "POST",
+        headers: {
+          ...authHeaders,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sessionId,
+          goal: "请执行真实 web 旅程测试",
+          options: {
+            runtimeEngine,
+          },
+        }),
+      });
 
-    assert.equal(taskResponse.status, 200);
+      assert.equal(taskResponse.status, 200);
 
-    const ndjson = parseNdjson(await taskResponse.text());
-    assert.ok(ndjson.length >= 4);
-    assert.deepEqual(ndjson.slice(0, 1).map((line) => line.kind), ["ack"]);
-    assert.ok(ndjson.some((line) => line.kind === "event"));
-    assert.ok(ndjson.some((line) => line.kind === "result"));
-    assert.deepEqual(ndjson.slice(-1).map((line) => line.kind), ["done"]);
-    assert.equal(runtimeStore.getSession(sessionId)?.threadId, "thread-web-journey-1");
+      const ndjson = parseNdjson(await taskResponse.text());
+      assert.deepEqual(ndjson.slice(0, 1).map((line) => line.kind), ["ack"]);
+      assert.ok(ndjson.some((line) => line.kind === "result"));
+      assert.deepEqual(ndjson.slice(-1).map((line) => line.kind), ["done"]);
 
-    const resumedTaskResponse = await fetch(`${baseUrl}/api/tasks/stream`, {
-      method: "POST",
-      headers: {
-        ...authHeaders,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        sessionId,
-        goal: "请继续执行真实 web 旅程测试",
-      }),
-    });
+      if (runtimeEngine === "sdk") {
+        assert.ok(ndjson.length >= 4);
+        assert.ok(ndjson.some((line) => line.kind === "event"));
+        assert.equal(runtimeStore.getSession(sessionId)?.threadId, "thread-web-journey-1");
+      } else {
+        assert.equal(runtimeStore.getSession(sessionId)?.threadId, "thread-app-web-journey-1");
+      }
 
-    assert.equal(resumedTaskResponse.status, 200);
+      const resumedTaskResponse = await fetch(`${baseUrl}/api/tasks/stream`, {
+        method: "POST",
+        headers: {
+          ...authHeaders,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sessionId,
+          goal: "请继续执行真实 web 旅程测试",
+          options: {
+            runtimeEngine,
+          },
+        }),
+      });
 
-    const resumedNdjson = parseNdjson(await resumedTaskResponse.text());
-    assert.ok(resumedNdjson.some((line) => line.kind === "result"));
-    assert.deepEqual(resumedNdjson.slice(-1).map((line) => line.kind), ["done"]);
+      assert.equal(resumedTaskResponse.status, 200);
 
-    const historyListResponse = await fetch(`${baseUrl}/api/history/sessions`, {
-      method: "GET",
-      headers: authHeaders,
-    });
-    assert.equal(historyListResponse.status, 200);
+      const resumedNdjson = parseNdjson(await resumedTaskResponse.text());
+      assert.ok(resumedNdjson.some((line) => line.kind === "result"));
+      assert.deepEqual(resumedNdjson.slice(-1).map((line) => line.kind), ["done"]);
 
-    const historyListPayload = await historyListResponse.json() as {
-      sessions?: Array<{
-        sessionId?: string;
-      }>;
-    };
-    assert.ok(historyListPayload.sessions?.some((session) => session.sessionId === sessionId));
+      const historyListResponse = await fetch(`${baseUrl}/api/history/sessions`, {
+        method: "GET",
+        headers: authHeaders,
+      });
+      assert.equal(historyListResponse.status, 200);
 
-    const historyDetailResponse = await fetch(`${baseUrl}/api/history/sessions/${sessionId}`, {
-      method: "GET",
-      headers: authHeaders,
-    });
-    assert.equal(historyDetailResponse.status, 200);
-
-    const historyDetailPayload = await historyDetailResponse.json() as {
-      turns?: Array<{
-        events?: Array<{
-          type?: string;
+      const historyListPayload = await historyListResponse.json() as {
+        sessions?: Array<{
+          sessionId?: string;
         }>;
-        touchedFiles?: string[];
-      }>;
-    };
+      };
+      assert.ok(historyListPayload.sessions?.some((session) => session.sessionId === sessionId));
 
-    assert.equal(historyDetailPayload.turns?.length, 2);
-    assert.ok(historyDetailPayload.turns?.every((turn) => turn.events?.some((event) => event.type === "task.context_built")));
-    assert.deepEqual(historyDetailPayload.turns?.[0]?.touchedFiles, [join(workspace, "notes.txt")]);
-    assert.deepEqual(historyDetailPayload.turns?.[1]?.touchedFiles, [join(workspace, "notes.txt")]);
-    assert.equal(journeyCodex.calls.start.length, 1);
-    assert.equal(journeyCodex.calls.resume.length, 1);
-    assert.equal(journeyCodex.calls.start[0]?.workingDirectory, workspace);
-    assert.equal(journeyCodex.calls.resume[0]?.threadId, "thread-web-journey-1");
-    assert.equal(journeyCodex.capturedThreadOptions[0]?.workingDirectory, workspace);
-    assert.equal(journeyCodex.capturedThreadOptions[1]?.workingDirectory, workspace);
-    assert.match(journeyCodex.capturedPrompts[0] ?? "", /真实 web 旅程测试/);
-    assert.match(journeyCodex.capturedPrompts[1] ?? "", /继续执行真实 web 旅程测试/);
-    assert.equal(runtimeStore.getSession(sessionId)?.threadId, "thread-web-journey-1");
-    assert.equal(runtimeStore.getSession(sessionId)?.activeTaskId, undefined);
+      const historyDetailResponse = await fetch(`${baseUrl}/api/history/sessions/${sessionId}`, {
+        method: "GET",
+        headers: authHeaders,
+      });
+      assert.equal(historyDetailResponse.status, 200);
+
+      const historyDetailPayload = await historyDetailResponse.json() as {
+        turns?: Array<{
+          events?: Array<{
+            type?: string;
+          }>;
+          touchedFiles?: string[];
+        }>;
+      };
+
+      assert.equal(historyDetailPayload.turns?.length, 2);
+      if (runtimeEngine === "sdk") {
+        assert.ok(historyDetailPayload.turns?.every((turn) => turn.events?.some((event) => event.type === "task.context_built")));
+        assert.deepEqual(historyDetailPayload.turns?.[0]?.touchedFiles, [join(workspace, "notes.txt")]);
+        assert.deepEqual(historyDetailPayload.turns?.[1]?.touchedFiles, [join(workspace, "notes.txt")]);
+        assert.equal(journeyCodex.calls.start.length, 1);
+        assert.equal(journeyCodex.calls.resume.length, 1);
+        assert.equal(journeyCodex.calls.start[0]?.workingDirectory, workspace);
+        assert.equal(journeyCodex.calls.resume[0]?.threadId, "thread-web-journey-1");
+        assert.equal(journeyCodex.capturedThreadOptions[0]?.workingDirectory, workspace);
+        assert.equal(journeyCodex.capturedThreadOptions[1]?.workingDirectory, workspace);
+        assert.match(journeyCodex.capturedPrompts[0] ?? "", /真实 web 旅程测试/);
+        assert.match(journeyCodex.capturedPrompts[1] ?? "", /继续执行真实 web 旅程测试/);
+        assert.equal(runtimeStore.getSession(sessionId)?.threadId, "thread-web-journey-1");
+      } else {
+        assert.equal(runtimeStore.getSession(sessionId)?.threadId, "thread-app-web-journey-1");
+      }
+      assert.equal(runtimeStore.getSession(sessionId)?.activeTaskId, undefined);
+    });
   });
-});
+}
 
 async function withHttpServer(
   run: (context: TestServerContext) => Promise<void>,
@@ -161,8 +185,37 @@ async function withHttpServer(
     runtimeStore,
     sessionStore: journeyStore,
   });
+  const appServerJourneyState = createAppServerJourneySessionState();
+  const appServerRuntime = new AppServerTaskRuntime({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+    sessionFactory: async (): Promise<AppServerTaskRuntimeSession> => ({
+      initialize: async () => {},
+      startThread: async (params) => {
+        appServerJourneyState.started.push({ cwd: params.cwd });
+        return { threadId: "thread-app-web-journey-1" };
+      },
+      resumeThread: async (threadId, params) => {
+        appServerJourneyState.resumed.push({ threadId, cwd: params.cwd });
+        return { threadId };
+      },
+      startTurn: async (_threadId, prompt) => {
+        appServerJourneyState.prompts.push(prompt);
+        return { turnId: "turn-app-web-journey-1" };
+      },
+      close: async () => {},
+      onNotification: () => {},
+      onServerRequest: () => {},
+    }),
+  });
   const server = createThemisHttpServer({
     runtime,
+    runtimeRegistry: {
+      defaultRuntime: runtime,
+      runtimes: {
+        "app-server": appServerRuntime,
+      },
+    },
     authRuntime: createAuthRuntime({
       authenticated: false,
       requiresOpenaiAuth: false,
@@ -239,6 +292,14 @@ function createJourneyCodexDouble(): {
       },
     } as Thread;
   }
+}
+
+function createAppServerJourneySessionState(): AppServerJourneySessionState {
+  return {
+    started: [],
+    resumed: [],
+    prompts: [],
+  };
 }
 
 function writeWorkspaceDocs(

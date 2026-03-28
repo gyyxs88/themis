@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import type { RuntimeEngine, TaskRuntimeFacade } from "../types/index.js";
 import { WebAccessService } from "../core/web-access.js";
 import { serveWebAsset } from "./http-assets.js";
 import {
@@ -54,10 +55,16 @@ import {
 
 const DEFAULT_PRIVATE_ASSISTANT_PRINCIPAL_ID = "principal-local-owner";
 
+export interface ThemisServerRuntimeRegistry {
+  defaultRuntime: TaskRuntimeFacade;
+  runtimes?: Partial<Record<RuntimeEngine, TaskRuntimeFacade>>;
+}
+
 export interface ThemisHttpServerOptions {
   host?: string;
   port?: number;
   runtime?: CodexTaskRuntime;
+  runtimeRegistry?: ThemisServerRuntimeRegistry;
   authRuntime?: CodexAuthRuntime;
   taskTimeoutMs?: number;
   createMcpInspector?: CreateMcpInspector;
@@ -65,6 +72,9 @@ export interface ThemisHttpServerOptions {
 
 export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): Server {
   const runtime = options.runtime ?? new CodexTaskRuntime();
+  const runtimeRegistry = options.runtimeRegistry ?? {
+    defaultRuntime: runtime,
+  };
   const authRuntime = options.authRuntime ?? new CodexAuthRuntime({
     workingDirectory: runtime.getWorkingDirectory(),
     registry: runtime.getRuntimeStore(),
@@ -208,11 +218,11 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
       }
 
       if (request.method === "POST" && url.pathname === "/api/tasks/run") {
-        return handleTaskRun(request, response, runtime, authRuntime, taskTimeoutMs);
+        return handleTaskRun(request, response, runtime, runtimeRegistry, authRuntime, taskTimeoutMs);
       }
 
       if (request.method === "POST" && url.pathname === "/api/tasks/stream") {
-        return handleTaskStream(request, response, runtime, authRuntime, taskTimeoutMs);
+        return handleTaskStream(request, response, runtime, runtimeRegistry, authRuntime, taskTimeoutMs);
       }
 
       if (request.method === "POST" && url.pathname === "/api/sessions/fork-context") {

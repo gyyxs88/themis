@@ -4,7 +4,7 @@ import { WebAdapter, type WebDeliveryMessage, type WebTaskPayload } from "../cha
 import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { appendTaskReplyQuotaFooter } from "../core/task-reply-quota.js";
-import type { TaskRequest, TaskResult } from "../types/index.js";
+import { resolveTaskRuntime, type TaskRequest, type TaskResult, type TaskRuntimeRegistry } from "../types/index.js";
 import { appendWebAuditEvent, resolveRemoteIp } from "./http-audit.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
@@ -14,6 +14,7 @@ export async function handleTaskStream(
   request: IncomingMessage,
   response: ServerResponse,
   runtime: CodexTaskRuntime,
+  runtimeRegistry: TaskRuntimeRegistry,
   authRuntime: CodexAuthRuntime,
   taskTimeoutMs: number,
 ): Promise<void> {
@@ -67,7 +68,8 @@ export async function handleTaskStream(
       text: "Themis accepted the stream request.",
     });
 
-    const result = await runtime.runTask(normalizedRequest, {
+    const selectedRuntime = resolveTaskRuntime(runtimeRegistry, normalizedRequest.options?.runtimeEngine);
+    const result = await selectedRuntime.runTask(normalizedRequest, {
       signal: abortController.signal,
       timeoutMs: taskTimeoutMs,
       finalizeResult: (request, taskResult) => appendTaskReplyQuotaFooter(authRuntime, request, taskResult),
@@ -126,6 +128,7 @@ export async function handleTaskRun(
   request: IncomingMessage,
   response: ServerResponse,
   runtime: CodexTaskRuntime,
+  runtimeRegistry: TaskRuntimeRegistry,
   authRuntime: CodexAuthRuntime,
   taskTimeoutMs: number,
 ): Promise<void> {
@@ -152,7 +155,8 @@ export async function handleTaskRun(
 
     recordTaskAcceptedAudit(runtime, request, normalizedRequest, "/api/tasks/run");
 
-    const result = await runtime.runTask(normalizedRequest, {
+    const selectedRuntime = resolveTaskRuntime(runtimeRegistry, normalizedRequest.options?.runtimeEngine);
+    const result = await selectedRuntime.runTask(normalizedRequest, {
       timeoutMs: taskTimeoutMs,
       finalizeResult: (request, taskResult) => appendTaskReplyQuotaFooter(authRuntime, request, taskResult),
       onEvent: async (event) => {
