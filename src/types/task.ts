@@ -100,6 +100,7 @@ export interface TaskOptions {
   assistantMbti?: string;
   styleNotes?: string;
   assistantSoul?: string;
+  runtimeEngine?: "sdk" | "app-server";
   authAccountId?: string;
   model?: string;
   reasoning?: ReasoningLevel;
