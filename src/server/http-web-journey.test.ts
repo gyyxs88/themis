@@ -224,7 +224,7 @@ function createJourneyCodexDouble(): {
       capturedPrompts,
     },
   };
-  
+
   function createJourneyThread(threadOptions: ThreadOptions): Thread {
     return {
       id: "thread-web-journey-1",

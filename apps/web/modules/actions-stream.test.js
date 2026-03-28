@@ -111,16 +111,24 @@ test("consumeNdjsonStream handles ack -> event -> result -> done with real store
   }
 });
 
-test("consumeNdjsonStream handles ack -> fatal and clears active run state", async () => {
+test("consumeNdjsonStream handles ack -> error -> fatal and clears active run state", async () => {
   const { app, actions, thread, turn, storage, storageKey, restore } = createAppHarness();
 
   try {
+    const errorMessage = {
+      kind: "error",
+      text: "后端先返回错误事件",
+      metadata: {
+        phase: "stderr",
+      },
+    };
     const fatalStream = createChunkedNdjsonBody([
       {
         kind: "ack",
         requestId: "req-fatal",
         taskId: "task-fatal",
       },
+      errorMessage,
       {
         kind: "fatal",
         text: "后端执行失败",
@@ -137,7 +145,13 @@ test("consumeNdjsonStream handles ack -> fatal and clears active run state", asy
       status: "failed",
       summary: "后端执行失败",
     });
-    const fatalStep = turn.steps.find((step) => step.tone === "error");
+    const errorStep = findStepByMetadata(turn.steps, errorMessage.metadata);
+    assert.ok(errorStep);
+    assert.equal(errorStep.tone, "error");
+    assert.equal(errorStep.text, "后端先返回错误事件");
+    const fatalStep = turn.steps.find(
+      (step) => step.tone === "error" && step.text === "后端执行失败",
+    );
     assert.ok(fatalStep);
     assert.ok(
       app.renderer.renderCalls.some(
