@@ -49,22 +49,11 @@ test("consumeNdjsonStream handles ack -> event -> result -> done with real store
         format: "markdown",
       },
     };
-    const doneMessage = {
-      kind: "done",
-      result: {
-        status: "completed",
-        summary: "任务已完成",
-        output: "最终答案",
-        touchedFiles: ["apps/web/modules/actions-stream.js"],
-        structuredOutput: {
-          artifact: "report.md",
-        },
-      },
-    };
-    const successStream = createChunkedNdjsonBody([eventMessage, resultMessage, doneMessage]);
+    const eventResultStream = createChunkedNdjsonBody([eventMessage, resultMessage]);
 
-    assert.ok(successStream.chunkCount > 1);
-    await actions.consumeNdjsonStream(successStream.body);
+    assert.ok(eventResultStream.chunkCount > 1);
+    await actions.consumeNdjsonStream(eventResultStream.body);
+    const renderCallsBeforeDone = app.renderer.renderCalls.length;
 
     assert.equal(turn.serverThreadId, "server-thread-1");
     assert.equal(turn.serverSessionId, "server-session-1");
@@ -78,11 +67,29 @@ test("consumeNdjsonStream handles ack -> event -> result -> done with real store
     assert.equal(turn.steps[3].text, "阶段性结果");
     assert.equal(turn.steps[3].tone, "success");
     assert.deepEqual(turn.steps[3].metadata, resultMessage.metadata);
+    assert.equal(turn.state, "running");
+
+    const doneMessage = {
+      kind: "done",
+      result: {
+        status: "completed",
+        summary: "任务已完成",
+        output: "最终答案",
+        touchedFiles: ["apps/web/modules/actions-stream.js"],
+        structuredOutput: {
+          artifact: "report.md",
+        },
+      },
+    };
+    const doneStream = createChunkedNdjsonBody([doneMessage]);
+
+    assert.ok(doneStream.chunkCount > 1);
+    await actions.consumeNdjsonStream(doneStream.body);
     assert.equal(turn.steps[4].title, "任务完成");
     assert.equal(turn.steps[4].text, "任务已完成");
     assert.equal(turn.steps[4].tone, "success");
     assert.equal(turn.state, "completed");
-    assert.ok(app.renderer.renderCalls.length > renderCallsAfterAck);
+    assert.ok(app.renderer.renderCalls.length > renderCallsBeforeDone);
     assert.deepEqual(turn.result, {
       status: "completed",
       summary: "任务已完成",
