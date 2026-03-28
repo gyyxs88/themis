@@ -4,12 +4,11 @@ import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import type { ThreadEvent, ThreadOptions } from "@openai/codex-sdk";
+import type { Codex, Thread, ThreadEvent, ThreadOptions } from "@openai/codex-sdk";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
-import type { CodexThreadSessionStore } from "../core/codex-session-store.js";
+import { CodexThreadSessionStore } from "../core/codex-session-store.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
-import type { TaskRequest } from "../types/index.js";
 import { createThemisHttpServer } from "./http-server.js";
 import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
 
@@ -18,16 +17,20 @@ interface TestServerContext {
   root: string;
   runtimeStore: SqliteCodexSessionRegistry;
   authHeaders: Record<string, string>;
-  journeyStore: JourneySessionStore;
+  journeyCodex: JourneyCodexDouble;
 }
 
-interface JourneySessionStore extends CodexThreadSessionStore {
+interface JourneyCodexDouble {
   capturedThreadOptions: ThreadOptions[];
   capturedPrompts: string[];
+  calls: {
+    start: ThreadOptions[];
+    resume: Array<{ threadId: string; options: ThreadOptions }>;
+  };
 }
 
 test("真实 Web 旅程会走通 owner 登录、workspace 保存、task stream 与 history 查询", async () => {
-  await withHttpServer(async ({ baseUrl, root, runtimeStore, authHeaders, journeyStore }) => {
+  await withHttpServer(async ({ baseUrl, root, runtimeStore, authHeaders, journeyCodex }) => {
     const sessionId = "session-web-journey-1";
     const workspace = join(root, "workspace");
 
@@ -69,6 +72,25 @@ test("真实 Web 旅程会走通 owner 登录、workspace 保存、task stream �
     assert.ok(ndjson.some((line) => line.kind === "event"));
     assert.ok(ndjson.some((line) => line.kind === "result"));
     assert.deepEqual(ndjson.slice(-1).map((line) => line.kind), ["done"]);
+    assert.equal(runtimeStore.getSession(sessionId)?.threadId, "thread-web-journey-1");
+
+    const resumedTaskResponse = await fetch(`${baseUrl}/api/tasks/stream`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sessionId,
+        goal: "请继续执行真实 web 旅程测试",
+      }),
+    });
+
+    assert.equal(resumedTaskResponse.status, 200);
+
+    const resumedNdjson = parseNdjson(await resumedTaskResponse.text());
+    assert.ok(resumedNdjson.some((line) => line.kind === "result"));
+    assert.deepEqual(resumedNdjson.slice(-1).map((line) => line.kind), ["done"]);
 
     const historyListResponse = await fetch(`${baseUrl}/api/history/sessions`, {
       method: "GET",
@@ -98,11 +120,19 @@ test("真实 Web 旅程会走通 owner 登录、workspace 保存、task stream �
       }>;
     };
 
-    assert.ok(historyDetailPayload.turns?.[0]);
-    assert.ok(historyDetailPayload.turns?.[0]?.events?.some((event) => event.type === "task.context_built"));
+    assert.equal(historyDetailPayload.turns?.length, 2);
+    assert.ok(historyDetailPayload.turns?.every((turn) => turn.events?.some((event) => event.type === "task.context_built")));
     assert.deepEqual(historyDetailPayload.turns?.[0]?.touchedFiles, [join(workspace, "notes.txt")]);
-    assert.equal(journeyStore.capturedThreadOptions[0]?.workingDirectory, workspace);
-    assert.match(journeyStore.capturedPrompts[0] ?? "", /真实 web 旅程测试/);
+    assert.deepEqual(historyDetailPayload.turns?.[1]?.touchedFiles, [join(workspace, "notes.txt")]);
+    assert.equal(journeyCodex.calls.start.length, 1);
+    assert.equal(journeyCodex.calls.resume.length, 1);
+    assert.equal(journeyCodex.calls.resume[0]?.threadId, "thread-web-journey-1");
+    assert.equal(journeyCodex.capturedThreadOptions[0]?.workingDirectory, workspace);
+    assert.equal(journeyCodex.capturedThreadOptions[1]?.workingDirectory, workspace);
+    assert.match(journeyCodex.capturedPrompts[0] ?? "", /真实 web 旅程测试/);
+    assert.match(journeyCodex.capturedPrompts[1] ?? "", /继续执行真实 web 旅程测试/);
+    assert.equal(runtimeStore.getSession(sessionId)?.threadId, "thread-web-journey-1");
+    assert.equal(runtimeStore.getSession(sessionId)?.activeTaskId, undefined);
   });
 });
 
@@ -120,7 +150,11 @@ async function withHttpServer(
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const journeyStore = createJourneySessionStore(runtimeStore);
+  const { codex, journeyCodex } = createJourneyCodexDouble();
+  const journeyStore = new CodexThreadSessionStore({
+    codex,
+    sessionRegistry: runtimeStore,
+  });
   const runtime = new CodexTaskRuntime({
     workingDirectory: controlDirectory,
     runtimeStore,
@@ -152,7 +186,7 @@ async function withHttpServer(
       root,
       runtimeStore,
       authHeaders,
-      journeyStore,
+      journeyCodex,
     });
   } finally {
     await closeServer(listeningServer);
@@ -160,37 +194,50 @@ async function withHttpServer(
   }
 }
 
-function createJourneySessionStore(runtimeStore: SqliteCodexSessionRegistry): JourneySessionStore {
+function createJourneyCodexDouble(): {
+  codex: Codex;
+  journeyCodex: JourneyCodexDouble;
+} {
   const capturedThreadOptions: ThreadOptions[] = [];
   const capturedPrompts: string[] = [];
+  const calls = {
+    start: [] as ThreadOptions[],
+    resume: [] as Array<{ threadId: string; options: ThreadOptions }>,
+  };
 
   return {
-    capturedThreadOptions,
-    capturedPrompts,
-    getSessionRegistry: () => runtimeStore,
-    resolveThreadId: async () => null,
-    acquire: async (request: TaskRequest, threadOptions: ThreadOptions) => {
-      capturedThreadOptions.push(threadOptions);
-
-      return {
-        sessionId: request.channelContext.sessionId,
-        threadId: "thread-web-journey-1",
-        sessionMode: "created",
-        thread: {
-          id: "thread-web-journey-1",
-          runStreamed: async (prompt: string) => {
-            capturedPrompts.push(prompt);
-            const workspace = String(threadOptions.workingDirectory ?? "");
-
-            return {
-              events: createThreadEvents(workspace),
-            };
-          },
-        } as never,
-        release: async () => {},
-      };
+    codex: {
+      startThread(options: ThreadOptions) {
+        calls.start.push(options);
+        capturedThreadOptions.push(options);
+        return createJourneyThread(options);
+      },
+      resumeThread(threadId: string, options: ThreadOptions) {
+        calls.resume.push({ threadId, options });
+        capturedThreadOptions.push(options);
+        return createJourneyThread(options);
+      },
+    } as Codex,
+    journeyCodex: {
+      calls,
+      capturedThreadOptions,
+      capturedPrompts,
     },
-  } as unknown as JourneySessionStore;
+  };
+  
+  function createJourneyThread(threadOptions: ThreadOptions): Thread {
+    return {
+      id: "thread-web-journey-1",
+      runStreamed: async (prompt: string) => {
+        capturedPrompts.push(prompt);
+        const workspace = String(threadOptions.workingDirectory ?? "");
+
+        return {
+          events: createThreadEvents(workspace),
+        };
+      },
+    } as Thread;
+  }
 }
 
 function writeWorkspaceDocs(
