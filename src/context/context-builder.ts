@@ -70,20 +70,15 @@ const SOURCE_CANDIDATES: SourceCandidate[] = [
 export class ContextBuilder {
   private readonly workingDirectory: string;
 
-  private readonly runtimeStore: SqliteCodexSessionRegistry;
-
   private readonly maxDocsMemoryFiles: number;
 
   constructor(options: ContextBuilderOptions) {
     this.workingDirectory = options.workingDirectory;
-    this.runtimeStore = options.runtimeStore;
     this.maxDocsMemoryFiles = options.maxDocsMemoryFiles ?? 3;
+    assertRuntimeStore(options.runtimeStore);
   }
 
   async build(input: ContextBuildInput): Promise<ContextBuildResult> {
-    void input;
-    void this.runtimeStore;
-
     const blocks: ContextBlock[] = [];
     const warnings: ContextBuildWarning[] = [];
     const sourceStats: ContextSourceStat[] = [];
@@ -155,7 +150,14 @@ export class ContextBuilder {
       });
     }
 
-    for (const filePath of pickRelevantMemoryFiles(this.workingDirectory, input.request.goal, this.maxDocsMemoryFiles)) {
+    for (const filePath of pickRelevantMemoryFiles({
+      root: this.workingDirectory,
+      goal: input.request.goal,
+      inputText: input.request.inputText,
+      limit: this.maxDocsMemoryFiles,
+      warnings,
+      sourceStats,
+    })) {
       let text: string;
       try {
         text = readFileSync(filePath, "utf8").trim();
@@ -218,36 +220,166 @@ export class ContextBuilder {
   }
 }
 
-function pickRelevantMemoryFiles(root: string, goal: string, limit: number): string[] {
+interface PickRelevantMemoryFilesInput {
+  root: string;
+  goal: string;
+  inputText: string | undefined;
+  limit: number;
+  warnings: ContextBuildWarning[];
+  sourceStats: ContextSourceStat[];
+}
+
+function pickRelevantMemoryFiles(input: PickRelevantMemoryFilesInput): string[] {
+  const docsFiles = collectMarkdownFilesUnderDocsMemory(input.root, input.warnings, input.sourceStats);
+  if (docsFiles.length === 0) {
+    return [];
+  }
+
+  const keywordTokens = extractKeywords(input.goal, input.inputText);
+  const matched: string[] = [];
+
+  for (const filePath of docsFiles) {
+    let text = "";
+    try {
+      text = readFileSync(filePath, "utf8").toLowerCase();
+    } catch {
+      continue;
+    }
+    const sourcePath = relative(input.root, filePath).toLowerCase();
+    const haystack = `${sourcePath}\n${text}`;
+    const isRelated = keywordTokens.length === 0
+      ? true
+      : keywordTokens.some((token) => haystack.includes(token));
+    if (isRelated) {
+      matched.push(filePath);
+    }
+  }
+
+  return matched.slice(0, input.limit);
+}
+
+function collectMarkdownFilesUnderDocsMemory(
+  root: string,
+  warnings: ContextBuildWarning[],
+  sourceStats: ContextSourceStat[],
+): string[] {
   const docsRoot = join(root, "docs", "memory");
   if (!existsSync(docsRoot)) {
     return [];
   }
 
-  const keywordTokens = goal.toLowerCase().split(/\s+/).filter((token) => token.length > 1);
-  const result: string[] = [];
+  try {
+    if (!statSync(docsRoot).isDirectory()) {
+      warnings.push({
+        code: "SOURCE_UNREADABLE",
+        sourceId: "docs/memory",
+        message: "docs/memory 不是目录，无法遍历。",
+        fatal: false,
+      });
+      sourceStats.push({
+        sourceId: "docs/memory",
+        included: false,
+        includedChars: 0,
+        truncated: false,
+        reason: "unreadable",
+      });
+      return [];
+    }
+  } catch {
+    warnings.push({
+      code: "SOURCE_UNREADABLE",
+      sourceId: "docs/memory",
+      message: "docs/memory 无法访问。",
+      fatal: false,
+    });
+    sourceStats.push({
+      sourceId: "docs/memory",
+      included: false,
+      includedChars: 0,
+      truncated: false,
+      reason: "unreadable",
+    });
+    return [];
+  }
 
-  collectMarkdownFiles(docsRoot, result);
-
-  return result
-    .filter((filePath) => {
-      const normalized = filePath.toLowerCase();
-      return keywordTokens.some((token) => normalized.includes(token))
-        || normalized.includes("provider");
-    })
-    .slice(0, limit);
+  const output: string[] = [];
+  collectMarkdownFiles(root, docsRoot, output, warnings, sourceStats);
+  output.sort((left, right) => left.localeCompare(right));
+  return output;
 }
 
-function collectMarkdownFiles(dirPath: string, output: string[]): void {
-  for (const entry of readdirSync(dirPath)) {
+function collectMarkdownFiles(
+  root: string,
+  dirPath: string,
+  output: string[],
+  warnings: ContextBuildWarning[],
+  sourceStats: ContextSourceStat[],
+): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(dirPath);
+  } catch {
+    const sourceId = relative(root, dirPath);
+    warnings.push({
+      code: "SOURCE_UNREADABLE",
+      sourceId,
+      message: `${sourceId} 无法读取目录内容。`,
+      fatal: false,
+    });
+    sourceStats.push({
+      sourceId,
+      included: false,
+      includedChars: 0,
+      truncated: false,
+      reason: "unreadable",
+    });
+    return;
+  }
+
+  for (const entry of entries) {
     const absolutePath = join(dirPath, entry);
-    const stat = statSync(absolutePath);
+    let stat;
+    try {
+      stat = statSync(absolutePath);
+    } catch {
+      const sourceId = relative(root, absolutePath);
+      warnings.push({
+        code: "SOURCE_UNREADABLE",
+        sourceId,
+        message: `${sourceId} 无法读取文件信息。`,
+        fatal: false,
+      });
+      sourceStats.push({
+        sourceId,
+        included: false,
+        includedChars: 0,
+        truncated: false,
+        reason: "unreadable",
+      });
+      continue;
+    }
+
     if (stat.isDirectory()) {
-      collectMarkdownFiles(absolutePath, output);
+      collectMarkdownFiles(root, absolutePath, output, warnings, sourceStats);
       continue;
     }
     if (stat.isFile() && absolutePath.endsWith(".md")) {
       output.push(absolutePath);
     }
+  }
+}
+
+function extractKeywords(goal: string, inputText?: string): string[] {
+  const raw = `${goal} ${inputText ?? ""}`.toLowerCase();
+  const tokens = raw
+    .split(/[^a-z0-9\u4e00-\u9fff]+/u)
+    .filter((token) => token.length >= 2);
+
+  return [...new Set(tokens)];
+}
+
+function assertRuntimeStore(runtimeStore: SqliteCodexSessionRegistry): void {
+  if (!runtimeStore || typeof runtimeStore !== "object") {
+    throw new TypeError("runtimeStore 必须是有效的 SqliteCodexSessionRegistry。");
   }
 }
