@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { resolveCodexAuthFilePath, resolveDefaultCodexHome } from "../core/auth-accounts.js";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
 import { readOpenAICompatibleProviderConfigs } from "../core/openai-compatible-provider.js";
+import { McpInspector, type McpInspectorListResult } from "../mcp/mcp-inspector.js";
 import type { SqliteCodexSessionRegistry } from "../storage/index.js";
 
 export interface RuntimeDiagnosticFileStatus {
@@ -38,6 +39,9 @@ export interface RuntimeDiagnosticsSummary {
       exists: boolean;
     };
   };
+  mcp: McpInspectorListResult & {
+    readError?: string;
+  };
 }
 
 export interface RuntimeDiagnosticsServiceOptions {
@@ -45,6 +49,7 @@ export interface RuntimeDiagnosticsServiceOptions {
   runtimeStore?: SqliteCodexSessionRegistry | null;
   authRuntime?: CodexAuthRuntime | null;
   sqliteFilePath?: string;
+  mcpInspector?: Pick<McpInspector, "list" | "probe" | "reload"> | null;
 }
 
 const CONTEXT_FILES = [
@@ -66,12 +71,16 @@ export class RuntimeDiagnosticsService {
   private readonly runtimeStore: SqliteCodexSessionRegistry | null;
   private readonly authRuntime: CodexAuthRuntime | null;
   private readonly sqliteFilePath: string;
+  private readonly mcpInspector: Pick<McpInspector, "list" | "probe" | "reload"> | null;
 
   constructor(options: RuntimeDiagnosticsServiceOptions) {
     this.workingDirectory = options.workingDirectory;
     this.runtimeStore = options.runtimeStore ?? null;
     this.authRuntime = options.authRuntime ?? null;
     this.sqliteFilePath = options.sqliteFilePath ?? join(this.workingDirectory, "infra/local/themis.db");
+    this.mcpInspector = options.mcpInspector ?? new McpInspector({
+      workingDirectory: this.workingDirectory,
+    });
   }
 
   async readSummary(): Promise<RuntimeDiagnosticsSummary> {
@@ -101,6 +110,8 @@ export class RuntimeDiagnosticsService {
     } catch (error) {
       providerReadError = toErrorMessage(error);
     }
+
+    const mcpSummary = await this.readMcpSummary();
 
     return {
       generatedAt: new Date().toISOString(),
@@ -132,7 +143,25 @@ export class RuntimeDiagnosticsService {
           exists: existsSync(this.sqliteFilePath),
         },
       },
+      mcp: mcpSummary,
     };
+  }
+
+  private async readMcpSummary(): Promise<RuntimeDiagnosticsSummary["mcp"]> {
+    if (!this.mcpInspector) {
+      return {
+        servers: [],
+      };
+    }
+
+    try {
+      return await this.mcpInspector.list();
+    } catch (error) {
+      return {
+        servers: [],
+        readError: toErrorMessage(error),
+      };
+    }
   }
 }
 

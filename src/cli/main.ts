@@ -7,6 +7,7 @@ import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { resolveCodexAuthFilePath, resolveDefaultCodexHome } from "../core/auth-accounts.js";
 import { RuntimeDiagnosticsService, type RuntimeDiagnosticFileStatus } from "../diagnostics/runtime-diagnostics.js";
+import { McpInspector } from "../mcp/mcp-inspector.js";
 import { PrincipalSkillsService } from "../core/principal-skills-service.js";
 import { WebAccessService } from "../core/web-access.js";
 import { readOpenAICompatibleProviderConfigs } from "../core/openai-compatible-provider.js";
@@ -244,12 +245,12 @@ async function handleStatus(): Promise<void> {
 async function handleDoctor(subcommand: string | undefined, args: string[]): Promise<void> {
   const sections = [subcommand, ...args].filter((item): item is string => Boolean(item && item.trim()));
   if (sections.length > 1) {
-    throw new Error("用法：themis doctor [context|auth|provider|memory|service]");
+    throw new Error("用法：themis doctor [context|auth|provider|memory|service|mcp]");
   }
 
   const selected = sections[0]?.trim().toLowerCase();
-  if (selected && !["context", "auth", "provider", "memory", "service"].includes(selected)) {
-    throw new Error("doctor 子命令仅支持 context / auth / provider / memory / service。");
+  if (selected && !["context", "auth", "provider", "memory", "service", "mcp"].includes(selected)) {
+    throw new Error("doctor 子命令仅支持 context / auth / provider / memory / service / mcp。");
   }
 
   const dbPath = resolve(cwd, "infra/local/themis.db");
@@ -260,6 +261,9 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
     workingDirectory: cwd,
     runtimeStore,
     sqliteFilePath: dbPath,
+    mcpInspector: new McpInspector({
+      workingDirectory: cwd,
+    }),
   });
   const summary = await diagnostics.readSummary();
 
@@ -272,6 +276,7 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
     console.log(`- context：${countOk(summary.context.files)}/${summary.context.files.length} ok`);
     console.log(`- memory：${countOk(summary.memory.files)}/${summary.memory.files.length} ok`);
     console.log(`- service/sqlite：${summary.service.sqlite.exists ? "ok" : "missing"} (${summary.service.sqlite.path})`);
+    console.log(`- mcp：${summary.mcp.servers.length} 个 server${summary.mcp.readError ? `（读取失败：${summary.mcp.readError}）` : ""}`);
     return;
   }
 
@@ -309,6 +314,16 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
       console.log("Themis 诊断 - service");
       console.log(`sqlite.path：${summary.service.sqlite.path}`);
       console.log(`sqlite.status：${summary.service.sqlite.exists ? "ok" : "missing"}`);
+      return;
+    case "mcp":
+      console.log("Themis 诊断 - mcp");
+      console.log(`serverCount：${summary.mcp.servers.length}`);
+      for (const server of summary.mcp.servers) {
+        console.log(`${server.name}(${server.id})：${server.status}`);
+      }
+      if (summary.mcp.readError) {
+        console.log(`readError：${summary.mcp.readError}`);
+      }
       return;
     default:
       return;
@@ -477,7 +492,7 @@ function printHelp(): void {
   console.log("- ./themis status");
   console.log("- ./themis check");
   console.log("- ./themis doctor");
-  console.log("- ./themis doctor <context|auth|provider|memory|service>");
+  console.log("- ./themis doctor <context|auth|provider|memory|service|mcp>");
   console.log("- ./themis config list [--show-secrets]");
   console.log("- ./themis config set <KEY> <VALUE>");
   console.log("- ./themis config unset <KEY>");

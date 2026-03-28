@@ -50,6 +50,19 @@ test("themis doctor context 会输出 README/AGENTS 状态", () => {
   }
 });
 
+test("themis doctor mcp 会输出 mcp server 摘要", () => {
+  const workspace = mkdtempSync(join(tmpdir(), "themis-doctor-cli-mcp-"));
+
+  try {
+    const result = runCli(["doctor", "mcp"], workspace);
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /Themis 诊断 - mcp/);
+    assert.match(result.stdout, /serverCount：\d+/);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 function join(...parts: string[]): string {
   return resolve(...parts);
 }

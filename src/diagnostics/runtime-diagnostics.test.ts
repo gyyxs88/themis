@@ -24,6 +24,9 @@ test("RuntimeDiagnosticsService.readSummary 返回 auth/provider/context/memory/
     const service = new RuntimeDiagnosticsService({
       workingDirectory: root,
       runtimeStore,
+      mcpInspector: {
+        list: async () => ({ servers: [] }),
+      } as never,
     });
     const summary = await service.readSummary();
 
@@ -34,9 +37,44 @@ test("RuntimeDiagnosticsService.readSummary 返回 auth/provider/context/memory/
     assert.ok(summary.context);
     assert.ok(summary.memory);
     assert.ok(summary.service);
+    assert.ok(summary.mcp);
+    assert.ok(Array.isArray(summary.mcp.servers));
     assert.equal(summary.context.files.some((item) => item.path === "README.md" && item.status === "ok"), true);
     assert.equal(summary.context.files.some((item) => item.path === "AGENTS.md" && item.status === "missing"), true);
     assert.equal(summary.provider.activeMode === "auth" || summary.provider.activeMode === "third-party", true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("RuntimeDiagnosticsService 会接入 mcp inspector 输出", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-diagnostics-mcp-"));
+
+  try {
+    const service = new RuntimeDiagnosticsService({
+      workingDirectory: root,
+      runtimeStore: null,
+      mcpInspector: {
+        list: async () => ({
+          servers: [
+            {
+              id: "context7",
+              name: "Context 7",
+              status: "healthy",
+            },
+          ],
+        }),
+      } as never,
+    });
+    const summary = await service.readSummary();
+
+    assert.deepEqual(summary.mcp.servers, [
+      {
+        id: "context7",
+        name: "Context 7",
+        status: "healthy",
+      },
+    ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -58,6 +96,9 @@ test("RuntimeDiagnosticsService 在无 SQLite 时也能识别环境变量 provid
     const service = new RuntimeDiagnosticsService({
       workingDirectory: root,
       runtimeStore: null,
+      mcpInspector: {
+        list: async () => ({ servers: [] }),
+      } as never,
     });
     const summary = await service.readSummary();
 
@@ -88,6 +129,9 @@ test("RuntimeDiagnosticsService 在传入 authRuntime 时优先以当前模式�
     const service = new RuntimeDiagnosticsService({
       workingDirectory: root,
       runtimeStore: null,
+      mcpInspector: {
+        list: async () => ({ servers: [] }),
+      } as never,
       authRuntime: {
         readSnapshot: async () => ({
           authenticated: false,
