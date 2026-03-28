@@ -113,7 +113,9 @@ export class RuntimeDiagnosticsService {
         ...(snapshotError ? { snapshotError } : {}),
       },
       provider: {
-        activeMode: activeProviderProfile || providerCount > 0 ? "third-party" : "auth",
+        activeMode: this.authRuntime
+          ? (activeProviderProfile ? "third-party" : "auth")
+          : (providerCount > 0 ? "third-party" : "auth"),
         providerCount,
         providerIds,
         ...(providerReadError ? { readError: providerReadError } : {}),

@@ -72,6 +72,42 @@ test("RuntimeDiagnosticsService 在无 SQLite 时也能识别环境变量 provid
   }
 });
 
+test("RuntimeDiagnosticsService 在传入 authRuntime 时优先以当前模式判断 activeMode", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-diagnostics-auth-mode-"));
+  const previousEnv = {
+    baseUrl: process.env.THEMIS_OPENAI_COMPAT_BASE_URL,
+    apiKey: process.env.THEMIS_OPENAI_COMPAT_API_KEY,
+    model: process.env.THEMIS_OPENAI_COMPAT_MODEL,
+  };
+
+  try {
+    process.env.THEMIS_OPENAI_COMPAT_BASE_URL = "https://example.com/v1";
+    process.env.THEMIS_OPENAI_COMPAT_API_KEY = "sk-test";
+    process.env.THEMIS_OPENAI_COMPAT_MODEL = "gpt-5.4";
+
+    const service = new RuntimeDiagnosticsService({
+      workingDirectory: root,
+      runtimeStore: null,
+      authRuntime: {
+        readSnapshot: async () => ({
+          authenticated: false,
+          requiresOpenaiAuth: false,
+        }),
+        readThirdPartyProviderProfile: () => null,
+      } as never,
+    });
+    const summary = await service.readSummary();
+
+    assert.equal(summary.provider.providerCount, 1);
+    assert.equal(summary.provider.activeMode, "auth");
+  } finally {
+    restoreEnv("THEMIS_OPENAI_COMPAT_BASE_URL", previousEnv.baseUrl);
+    restoreEnv("THEMIS_OPENAI_COMPAT_API_KEY", previousEnv.apiKey);
+    restoreEnv("THEMIS_OPENAI_COMPAT_MODEL", previousEnv.model);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function restoreEnv(key: string, value: string | undefined): void {
   if (typeof value === "string") {
     process.env[key] = value;
