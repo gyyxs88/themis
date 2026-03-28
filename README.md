@@ -17,6 +17,7 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 - 项目级 CLI 已提供可直接执行的 `themis` 入口；无参数进入交互模式，也支持 `init / status / doctor / config / auth / skill` 子命令。
 - 统一 diagnostics 视图已落地：CLI `themis doctor` 和 HTTP `GET /api/diagnostics` / `GET /api/diagnostics/mcp` / `POST /api/diagnostics/mcp/probe` / `POST /api/diagnostics/mcp/reload` 共享同一套运行时诊断数据源。
 - 运行时上下文构建器与 Markdown memory service 已接入任务主链路，任务开始/收口阶段会更新 `memory/sessions/active.md` 与 `memory/tasks/*`。
+- `session store`、`fork transcript` 与 `history API` 的自动化测试已经补齐，后续重点缺口收敛到 `router` 与 `Web stream` 主链路。
 
 ## 目录说明
 
@@ -69,7 +70,7 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 
 ## 当前未落地能力
 
-- 更完整的自动化测试覆盖；当前已覆盖 Web modules、CLI、Feishu、server、core 的基础用例，但 `context builder`、`memory service`、`session store`、`fork`、`history API` 和 Web stream 主链路仍需继续补齐。
+- 更完整的自动化测试覆盖；当前已覆盖 Web modules、CLI、Feishu、server、core 的基础用例，`session store`、`fork transcript` 与 `history API` 这轮已补齐，后续重点收敛到 `router` 与 `Web stream` 主链路。
 - 更完整的配置 / 运维与排障能力；当前已提供项目级 `init / status / doctor / config / auth / skill` 与 MCP 基础检查入口，但更细粒度的历史查询、端到端链路巡检和自动化修复仍未完成。CLI 不负责实际任务执行，任务入口仍然聚焦在 Web / 飞书渠道。
 
 ## 本地运行
