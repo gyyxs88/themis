@@ -188,6 +188,52 @@ test("consumeNdjsonStream handles ack -> error -> fatal and clears active run st
   }
 });
 
+test("consumeNdjsonStream handles task.action_required and marks the turn as waiting", async () => {
+  const { app, actions, thread, turn, storage, storageKey, restore } = createAppHarness();
+
+  try {
+    const actionMessage = {
+      kind: "event",
+      title: "task.action_required",
+      text: "请确认是否继续。",
+      metadata: {
+        action: {
+          actionId: "approval-1",
+          actionType: "approval",
+          prompt: "Allow command?",
+          choices: ["approve", "deny"],
+        },
+        phase: "waiting",
+      },
+    };
+
+    await actions.consumeNdjsonStream(createChunkedNdjsonBody([{
+      kind: "ack",
+      requestId: "req-waiting",
+      taskId: "task-waiting",
+    }, actionMessage]).body);
+
+    assert.equal(turn.state, "waiting");
+    assert.deepEqual(turn.pendingAction, actionMessage.metadata.action);
+    const waitingStep = findStepByMetadata(turn.steps, actionMessage.metadata);
+    assert.ok(waitingStep);
+    assert.equal(waitingStep.title, "等待处理");
+    assert.equal(waitingStep.text, "请确认是否继续。");
+    assert.equal(app.store.threadStatus(thread), "waiting");
+    assert.equal(app.runtime.activeRunRef?.turnId, turn.id);
+    assert.ok(app.runtime.activeRequestController);
+
+    const persisted = JSON.parse(storage.getItem(storageKey));
+    const persistedThread = persisted.threads.find((entry) => entry.id === thread.id);
+    const persistedTurn = persistedThread.turns.find((entry) => entry.id === turn.id);
+
+    assert.equal(persistedTurn.state, "waiting");
+    assert.deepEqual(persistedTurn.pendingAction, actionMessage.metadata.action);
+  } finally {
+    restore();
+  }
+});
+
 function createAppHarness() {
   const storageKey = "themis-actions-stream-test";
   const storage = createLocalStorageMock();

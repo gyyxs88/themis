@@ -63,6 +63,7 @@ export function createStoreModelHelpers() {
       ...(options ? { options } : {}),
       requestId: null,
       taskId: null,
+      pendingAction: null,
       serverThreadId: null,
       serverSessionId: null,
       sessionMode: null,
@@ -128,6 +129,7 @@ export function createStoreModelHelpers() {
       options: normalizeTurnOptions(turn.options),
       requestId: typeof turn.requestId === "string" ? turn.requestId : null,
       taskId: typeof turn.taskId === "string" ? turn.taskId : null,
+      pendingAction: normalizePendingAction(turn.pendingAction),
       serverThreadId: typeof turn.serverThreadId === "string" ? turn.serverThreadId : null,
       serverSessionId: typeof turn.serverSessionId === "string" ? turn.serverSessionId : null,
       sessionMode: typeof turn.sessionMode === "string" ? turn.sessionMode : null,
@@ -240,6 +242,26 @@ export function createStoreModelHelpers() {
       ...(result.structuredOutput && typeof result.structuredOutput === "object"
         ? { structuredOutput: result.structuredOutput }
         : {}),
+    };
+  }
+
+  function normalizePendingAction(value) {
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+
+    const actionId = typeof value.actionId === "string" ? value.actionId : "";
+    const actionType = typeof value.actionType === "string" ? value.actionType : "";
+
+    if (!actionId || !actionType) {
+      return null;
+    }
+
+    return {
+      actionId,
+      actionType,
+      ...(typeof value.prompt === "string" ? { prompt: value.prompt } : {}),
+      ...(Array.isArray(value.choices) ? { choices: value.choices.filter((choice) => typeof choice === "string") } : {}),
     };
   }
 

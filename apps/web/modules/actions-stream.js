@@ -89,6 +89,14 @@ export function createStreamActions(app) {
   function handleDeliveryMessage(thread, turn, message) {
     if (message.kind === "event") {
       store.applyRuntimeMetadata(thread, turn, message.metadata);
+
+      if (message.title === "task.action_required") {
+        turn.state = "waiting";
+        turn.pendingAction = message.metadata?.action ?? null;
+        store.appendStep(turn, "等待处理", message.text, "warning", message.metadata);
+        return;
+      }
+
       const handledAssistantMessage = syncAssistantMessage(turn, message);
 
       if (!handledAssistantMessage) {
@@ -97,16 +105,19 @@ export function createStreamActions(app) {
       }
 
       if (message.title === "task.failed") {
+        turn.pendingAction = null;
         turn.state = "failed";
         return;
       }
 
       if (message.title === "task.cancelled") {
+        turn.pendingAction = null;
         turn.state = "cancelled";
         return;
       }
 
       if (message.title === "task.completed") {
+        turn.pendingAction = null;
         turn.state = "completed";
         return;
       }
@@ -159,6 +170,7 @@ export function createStreamActions(app) {
 
   function finalizeTurn(thread, turn, result) {
     store.applyRuntimeMetadata(thread, turn, result.structuredOutput);
+    turn.pendingAction = null;
     turn.state = result.status ?? "completed";
     turn.result = {
       status: result.status ?? "completed",
@@ -174,6 +186,7 @@ export function createStreamActions(app) {
   }
 
   function finalizeTurnCancelled(turn, summary) {
+    turn.pendingAction = null;
     turn.state = "cancelled";
     turn.result = {
       status: "cancelled",
@@ -183,6 +196,7 @@ export function createStreamActions(app) {
   }
 
   function finalizeTurnError(turn, message) {
+    turn.pendingAction = null;
     turn.state = "failed";
     turn.result = {
       status: "failed",

@@ -1,5 +1,10 @@
+import { createActionInteraction } from "./actions-interaction.js";
+
 export function createComposerActions(app, streamActions) {
   const { dom, store } = app;
+  const actionInteraction = createActionInteraction({
+    submitAction: submitActionRequest,
+  });
   app.runtime.resumeInterruptedSubmit = () => {
     void resumeInterruptedSubmit();
   };
@@ -62,6 +67,13 @@ export function createComposerActions(app, streamActions) {
     const thread = store.getActiveThread();
 
     if (!thread || app.runtime.sessionControlBusy) {
+      return;
+    }
+
+    const currentTurn = store.getActiveTurn();
+
+    if (currentTurn?.state === "waiting" && currentTurn.pendingAction?.actionType === "approval") {
+      await submitWaitingAction(thread, currentTurn);
       return;
     }
 
@@ -239,6 +251,51 @@ export function createComposerActions(app, streamActions) {
     } catch (error) {
       finalizeSubmitError(thread, error);
     }
+  }
+
+  async function submitWaitingAction(thread, turn) {
+    const decision = mergeDraftContent(thread.draftGoal, thread.draftContext).trim();
+
+    if (!decision) {
+      if (store.getActiveThread()?.id === thread.id) {
+        dom.goalInput.focus();
+      }
+      return;
+    }
+
+    try {
+      await actionInteraction.submitApproval(turn, decision);
+    } catch (error) {
+      store.setTransientStatus(thread.id, error?.message ?? "提交 action 失败");
+      app.renderer.renderAll();
+      return;
+    }
+
+    thread.draftGoal = "";
+    thread.draftContext = "";
+    dom.goalInput.value = "";
+    app.utils.autoResizeTextarea(dom.goalInput);
+    store.syncThreadStoredState(thread, turn);
+    store.touchThread(thread.id);
+    store.saveState();
+    app.renderer.renderAll(shouldScrollThread(thread.id));
+  }
+
+  async function submitActionRequest(payload) {
+    const response = await fetch("/api/tasks/actions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const data = await app.utils.safeReadJson(response);
+      throw new Error(data?.error?.message ?? "提交 action 失败");
+    }
+
+    return response.json();
   }
 
   function finalizeSubmitError(thread, error) {
