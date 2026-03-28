@@ -428,7 +428,9 @@ test("runTask 成功时会写 memory updates、发 task.memory_updated，并落�
     assert.equal(result.status, "completed");
     assert.ok((result.memoryUpdates?.length ?? 0) > 0);
     const memoryEvents = events.filter((event) => event.type === "task.memory_updated");
-    assert.ok(memoryEvents.length >= 1);
+    assert.ok(memoryEvents.length >= 2);
+    assert.ok(memoryEvents.some((event) => event.status === "running"));
+    assert.ok(memoryEvents.some((event) => event.status === "completed"));
     assert.ok(memoryEvents.some((event) => Array.isArray(event.payload?.updates)));
 
     const sessionDone = writeFileSyncAndRead(sessionWorkspace, "memory/tasks/done.md");

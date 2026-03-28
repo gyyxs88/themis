@@ -348,7 +348,7 @@ export class CodexTaskRuntime {
               taskId,
               request.requestId,
               "task.memory_updated",
-              "running",
+              "completed",
               "Memory updated at task completion.",
               { updates: completionMemoryUpdates },
             ),
