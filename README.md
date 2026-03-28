@@ -27,7 +27,7 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 - `docs/memory/YYYY/MM/`：已验证、可长期复用的专题记忆。
 - `memory/`：共享项目工作台，存放项目概览、架构现状、任务状态、决策记录和当前会话。
 - `infra/`：本地数据库、生成配置和环境相关文件。
-- `src/**/*.test.ts`：当前基础自动化测试，主要覆盖 `auth`、`runtime`、第三方 provider 配置等核心约束。
+- `src/**/*.test.ts`：当前基础自动化测试，已覆盖 Web modules、CLI、Feishu、server、core、context、memory、diagnostics 与 mcp；剩余重点缺口收敛到 `router` 与 `Web stream` 主链路。
 - `temp/`：临时脚本和一次性辅助文件。
 
 ## 文档与记忆分层
