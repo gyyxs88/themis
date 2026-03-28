@@ -187,20 +187,27 @@ test("publishError 会按 sourceChannel 寻址并补写 task route", async () =>
   const web = createAdapter("web", {
     canHandle: (input) => (input as { kind?: string }).kind === "web",
   });
+  const feishu = createAdapter("feishu", {
+    canHandle: (input) => (input as { kind?: string }).kind === "feishu",
+  });
   router.registerAdapter(web);
+  router.registerAdapter(feishu);
 
   const request = createRequest("web", {
     requestId: "req-error-route",
     taskId: "task-error-route",
-    sourceChannel: "web",
+    sourceChannel: "feishu",
   });
 
   await router.publishError(createError(), request);
   await router.publishEvent(createEvent("missing-request", "task-error-route"));
 
-  assert.equal(web.calls.errors.length, 1);
-  assert.equal(web.calls.events.length, 1);
-  assert.equal(web.calls.errors[0]?.request.requestId, "req-error-route");
+  assert.equal(web.calls.errors.length, 0);
+  assert.equal(web.calls.events.length, 0);
+  assert.equal(feishu.calls.errors.length, 1);
+  assert.equal(feishu.calls.events.length, 1);
+  assert.equal(feishu.calls.errors[0]?.request.requestId, "req-error-route");
+  assert.equal(feishu.calls.events[0]?.requestId, "missing-request");
 });
 
 test("router 会在无路由和缺少 adapter 时抛明确错误", async () => {
