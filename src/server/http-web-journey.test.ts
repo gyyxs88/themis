@@ -19,6 +19,7 @@ interface TestServerContext {
   runtimeStore: SqliteCodexSessionRegistry;
   authHeaders: Record<string, string>;
   journeyCodex: JourneyCodexDouble;
+  appServerJourneyState: AppServerJourneySessionState;
 }
 
 interface JourneyCodexDouble {
@@ -38,7 +39,7 @@ interface AppServerJourneySessionState {
 
 for (const runtimeEngine of ["sdk", "app-server"] as const) {
   test(`真实 Web 旅程在 ${runtimeEngine} 下都能走通 owner 登录、workspace 保存、task stream 与 history 查询`, async () => {
-    await withHttpServer(async ({ baseUrl, root, runtimeStore, authHeaders, journeyCodex }) => {
+    await withHttpServer(async ({ baseUrl, root, runtimeStore, authHeaders, journeyCodex, appServerJourneyState }) => {
       const sessionId = "session-web-journey-1";
       const workspace = join(root, "workspace");
 
@@ -154,6 +155,13 @@ for (const runtimeEngine of ["sdk", "app-server"] as const) {
         assert.match(journeyCodex.capturedPrompts[1] ?? "", /继续执行真实 web 旅程测试/);
         assert.equal(runtimeStore.getSession(sessionId)?.threadId, "thread-web-journey-1");
       } else {
+        assert.equal(appServerJourneyState.started.length, 1);
+        assert.equal(appServerJourneyState.resumed.length, 1);
+        assert.equal(appServerJourneyState.started[0]?.cwd, workspace);
+        assert.equal(appServerJourneyState.resumed[0]?.threadId, "thread-app-web-journey-1");
+        assert.equal(appServerJourneyState.resumed[0]?.cwd, workspace);
+        assert.match(appServerJourneyState.prompts[0] ?? "", /真实 web 旅程测试/);
+        assert.match(appServerJourneyState.prompts[1] ?? "", /继续执行真实 web 旅程测试/);
         assert.equal(runtimeStore.getSession(sessionId)?.threadId, "thread-app-web-journey-1");
       }
       assert.equal(runtimeStore.getSession(sessionId)?.activeTaskId, undefined);
@@ -241,6 +249,7 @@ async function withHttpServer(
       runtimeStore,
       authHeaders,
       journeyCodex,
+      appServerJourneyState,
     });
   } finally {
     await closeServer(listeningServer);

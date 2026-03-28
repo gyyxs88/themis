@@ -4,7 +4,8 @@ import { WebAdapter, type WebDeliveryMessage, type WebTaskPayload } from "../cha
 import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { appendTaskReplyQuotaFooter } from "../core/task-reply-quota.js";
-import { resolveTaskRuntime, type TaskRequest, type TaskResult, type TaskRuntimeRegistry } from "../types/index.js";
+import { parseRuntimeEngine, type TaskRequest, type TaskResult, type TaskRuntimeFacade, type TaskRuntimeRegistry } from "../types/index.js";
+import type { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { appendWebAuditEvent, resolveRemoteIp } from "./http-audit.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
@@ -58,7 +59,8 @@ export async function handleTaskStream(
 
     await ensureAuthAvailable(authRuntime, normalizedRequest);
 
-    recordTaskAcceptedAudit(runtime, request, normalizedRequest, "/api/tasks/stream");
+    const selectedRuntime = resolveTaskRuntimeForHttpRequest(runtimeRegistry, normalizedRequest);
+    recordTaskAcceptedAudit(selectedRuntime, request, normalizedRequest, "/api/tasks/stream");
 
     writeNdjson(response, {
       kind: "ack",
@@ -68,7 +70,6 @@ export async function handleTaskStream(
       text: "Themis accepted the stream request.",
     });
 
-    const selectedRuntime = resolveTaskRuntime(runtimeRegistry, normalizedRequest.options?.runtimeEngine);
     const result = await selectedRuntime.runTask(normalizedRequest, {
       signal: abortController.signal,
       timeoutMs: taskTimeoutMs,
@@ -79,7 +80,7 @@ export async function handleTaskStream(
     });
 
     if (result.status === "cancelled") {
-      recordTaskCancelledAudit(runtime, request, normalizedRequest, result, "/api/tasks/stream");
+      recordTaskCancelledAudit(selectedRuntime, request, normalizedRequest, result, "/api/tasks/stream");
     }
 
     await router.publishResult(result);
@@ -102,7 +103,7 @@ export async function handleTaskStream(
     streamCompleted = true;
     response.end();
   } catch (error) {
-    const taskError = createTaskError(error, Boolean(normalizedRequest));
+    const taskError = resolveTaskHandlerError(error, Boolean(normalizedRequest));
 
     if (normalizedRequest) {
       await router.publishError(taskError, normalizedRequest);
@@ -153,9 +154,9 @@ export async function handleTaskRun(
 
     await ensureAuthAvailable(authRuntime, normalizedRequest);
 
-    recordTaskAcceptedAudit(runtime, request, normalizedRequest, "/api/tasks/run");
+    const selectedRuntime = resolveTaskRuntimeForHttpRequest(runtimeRegistry, normalizedRequest);
+    recordTaskAcceptedAudit(selectedRuntime, request, normalizedRequest, "/api/tasks/run");
 
-    const selectedRuntime = resolveTaskRuntime(runtimeRegistry, normalizedRequest.options?.runtimeEngine);
     const result = await selectedRuntime.runTask(normalizedRequest, {
       timeoutMs: taskTimeoutMs,
       finalizeResult: (request, taskResult) => appendTaskReplyQuotaFooter(authRuntime, request, taskResult),
@@ -165,7 +166,7 @@ export async function handleTaskRun(
     });
 
     if (result.status === "cancelled") {
-      recordTaskCancelledAudit(runtime, request, normalizedRequest, result, "/api/tasks/run");
+      recordTaskCancelledAudit(selectedRuntime, request, normalizedRequest, result, "/api/tasks/run");
     }
 
     await router.publishResult(result);
@@ -183,13 +184,13 @@ export async function handleTaskRun(
       },
     });
   } catch (error) {
-    const taskError = createTaskError(error, Boolean(normalizedRequest));
+    const taskError = resolveTaskHandlerError(error, Boolean(normalizedRequest));
 
     if (normalizedRequest) {
       await router.publishError(taskError, normalizedRequest);
     }
 
-    writeJson(response, resolveErrorStatusCode(error, Boolean(normalizedRequest)), {
+    writeJson(response, resolveTaskHandlerErrorStatusCode(error, Boolean(normalizedRequest)), {
       error: taskError,
       ...(normalizedRequest ? { requestId: normalizedRequest.requestId } : {}),
       ...(deliveries.length ? { deliveries } : {}),
@@ -221,7 +222,7 @@ async function ensureAuthAvailable(authRuntime: CodexAuthRuntime, request: TaskR
 }
 
 function recordTaskAcceptedAudit(
-  runtime: CodexTaskRuntime,
+  runtime: TaskRuntimeFacade,
   request: IncomingMessage,
   taskRequest: TaskRequest,
   route: "/api/tasks/run" | "/api/tasks/stream",
@@ -229,7 +230,7 @@ function recordTaskAcceptedAudit(
   const remoteIp = resolveRemoteIp(request);
 
   appendWebAuditEvent(
-    runtime.getRuntimeStore(),
+    resolveRuntimeStore(runtime),
     "web_access.task_accepted",
     "Web 任务已接受",
     {
@@ -248,7 +249,7 @@ function recordTaskAcceptedAudit(
 }
 
 function recordTaskCancelledAudit(
-  runtime: CodexTaskRuntime,
+  runtime: TaskRuntimeFacade,
   request: IncomingMessage,
   taskRequest: TaskRequest,
   result: Pick<TaskResult, "taskId" | "requestId" | "status" | "summary">,
@@ -257,7 +258,7 @@ function recordTaskCancelledAudit(
   const remoteIp = resolveRemoteIp(request);
 
   appendWebAuditEvent(
-    runtime.getRuntimeStore(),
+    resolveRuntimeStore(runtime),
     "web_access.task_cancelled",
     "Web 任务已取消",
     {
@@ -276,3 +277,65 @@ function recordTaskCancelledAudit(
     },
   );
 }
+
+function resolveTaskRuntimeForHttpRequest(
+  runtimeRegistry: TaskRuntimeRegistry,
+  request: TaskRequest,
+): TaskRuntimeFacade {
+  const requestedValue = readRequestedRuntimeEngine(request);
+
+  if (requestedValue === undefined) {
+    return runtimeRegistry.defaultRuntime;
+  }
+
+  const parsedEngine = parseRuntimeEngine(requestedValue);
+
+  if (!parsedEngine) {
+    throw new InvalidTaskRuntimeSelectionError(`Invalid runtimeEngine: ${String(requestedValue)}`);
+  }
+
+  const selectedRuntime = runtimeRegistry.runtimes?.[parsedEngine];
+
+  if (!selectedRuntime) {
+    throw new InvalidTaskRuntimeSelectionError(`Requested runtimeEngine is not enabled: ${parsedEngine}`);
+  }
+
+  return selectedRuntime;
+}
+
+function readRequestedRuntimeEngine(request: TaskRequest): string | undefined {
+  const options = request.options as { runtimeEngine?: unknown } | undefined;
+
+  if (!options || !("runtimeEngine" in options)) {
+    return undefined;
+  }
+
+  return typeof options.runtimeEngine === "string"
+    ? options.runtimeEngine
+    : String(options.runtimeEngine);
+}
+
+function resolveTaskHandlerError(error: unknown, hasNormalizedRequest: boolean) {
+  if (error instanceof InvalidTaskRuntimeSelectionError) {
+    return {
+      code: "INVALID_REQUEST" as const,
+      message: error.message,
+    };
+  }
+
+  return createTaskError(error, hasNormalizedRequest);
+}
+
+function resolveTaskHandlerErrorStatusCode(error: unknown, hasNormalizedRequest: boolean): number {
+  if (error instanceof InvalidTaskRuntimeSelectionError) {
+    return 400;
+  }
+
+  return resolveErrorStatusCode(error, hasNormalizedRequest);
+}
+
+function resolveRuntimeStore(runtime: TaskRuntimeFacade): SqliteCodexSessionRegistry {
+  return runtime.getRuntimeStore() as SqliteCodexSessionRegistry;
+}
+
+class InvalidTaskRuntimeSelectionError extends Error {}

@@ -72,9 +72,7 @@ export interface ThemisHttpServerOptions {
 
 export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): Server {
   const runtime = options.runtime ?? new CodexTaskRuntime();
-  const runtimeRegistry = options.runtimeRegistry ?? {
-    defaultRuntime: runtime,
-  };
+  const runtimeRegistry = normalizeRuntimeRegistry(runtime, options.runtimeRegistry);
   const authRuntime = options.authRuntime ?? new CodexAuthRuntime({
     workingDirectory: runtime.getWorkingDirectory(),
     registry: runtime.getRuntimeStore(),
@@ -286,6 +284,32 @@ export function resolveListenAddresses(host: string, port: number): string[] {
   }
 
   return [...addresses];
+}
+
+function normalizeRuntimeRegistry(
+  runtime: CodexTaskRuntime,
+  runtimeRegistry: ThemisServerRuntimeRegistry | undefined,
+): ThemisServerRuntimeRegistry {
+  const normalizedRegistry: ThemisServerRuntimeRegistry = {
+    defaultRuntime: runtime,
+    runtimes: {
+      sdk: runtime,
+      ...(runtimeRegistry?.runtimes ?? {}),
+    },
+  };
+  const baseStore = runtime.getRuntimeStore();
+
+  for (const [engine, registeredRuntime] of Object.entries(normalizedRegistry.runtimes ?? {})) {
+    if (!registeredRuntime) {
+      continue;
+    }
+
+    if (registeredRuntime.getRuntimeStore() !== baseStore) {
+      throw new Error(`Task runtime store mismatch for engine "${engine}": all runtimes must share the base runtime store.`);
+    }
+  }
+
+  return normalizedRegistry;
 }
 
 function resolveTaskTimeoutMs(): number {

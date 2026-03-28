@@ -234,6 +234,98 @@ test("/api/tasks/stream 会按 runtimeEngine 选择对应 runtime，并保持 ND
   });
 });
 
+test("/api/tasks/stream 显式请求未注册的 app-server runtime 时会 fail-fast，不会静默回退到 sdk", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore, runtime }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+    let sdkRunCount = 0;
+
+    (runtime as CodexTaskRuntime & {
+      runTask: CodexTaskRuntime["runTask"];
+    }).runTask = async (request) => {
+      sdkRunCount += 1;
+      return {
+        taskId: request.taskId ?? "task-stream-missing-runtime",
+        requestId: request.requestId,
+        status: "completed",
+        summary: "should not run",
+        completedAt: "2026-03-28T09:00:01.000Z",
+      };
+    };
+
+    const response = await fetch(`${baseUrl}/api/tasks/stream`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请检查未注册 runtime fail-fast",
+        sessionId: "session-task-stream-missing-runtime",
+        options: {
+          runtimeEngine: "app-server",
+        },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+
+    const lines = parseNdjson(await response.text());
+    assert.deepEqual(lines.map((line) => line.kind), ["error", "fatal"]);
+    assert.equal(lines[0]?.title, "INVALID_REQUEST");
+    assert.match(String(lines[0]?.text ?? ""), /app-server|runtime/i);
+    assert.equal(sdkRunCount, 0);
+  });
+});
+
+test("/api/tasks/stream 显式传非法 runtimeEngine 时会返回 INVALID_REQUEST", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore, runtime }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+    let sdkRunCount = 0;
+
+    (runtime as CodexTaskRuntime & {
+      runTask: CodexTaskRuntime["runTask"];
+    }).runTask = async (request) => {
+      sdkRunCount += 1;
+      return {
+        taskId: request.taskId ?? "task-stream-invalid-runtime",
+        requestId: request.requestId,
+        status: "completed",
+        summary: "should not run",
+        completedAt: "2026-03-28T09:00:01.000Z",
+      };
+    };
+
+    const response = await fetch(`${baseUrl}/api/tasks/stream`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请检查非法 runtimeEngine",
+        sessionId: "session-task-stream-invalid-runtime",
+        options: {
+          runtimeEngine: "bogus-engine",
+        },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+
+    const lines = parseNdjson(await response.text());
+    assert.deepEqual(lines.map((line) => line.kind), ["error", "fatal"]);
+    assert.equal(lines[0]?.title, "INVALID_REQUEST");
+    assert.match(String(lines[0]?.text ?? ""), /runtimeEngine|bogus-engine/i);
+    assert.equal(sdkRunCount, 0);
+  });
+});
+
 test("/api/tasks/stream 在 runtime.runTask() 抛错时会先 ack，再 error，最后 fatal，并正常结束", async () => {
   await withHttpServer(async ({ baseUrl, runtimeStore, runtime }) => {
     const authHeaders = await createAuthenticatedWebHeaders({
@@ -387,12 +479,12 @@ test("handleTaskStream 在 close 后会中止任务并停止继续写流", async
   }
 });
 
-function parseNdjson(body: string): Array<{ kind?: string; title?: string; result?: unknown; metadata?: unknown }> {
+function parseNdjson(body: string): Array<{ kind?: string; title?: string; text?: unknown; result?: unknown; metadata?: unknown }> {
   return body
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as { kind?: string; title?: string; result?: unknown; metadata?: unknown });
+    .map((line) => JSON.parse(line) as { kind?: string; title?: string; text?: unknown; result?: unknown; metadata?: unknown });
 }
 
 function createAuthRuntime(snapshot: {
