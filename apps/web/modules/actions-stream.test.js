@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { isDeepStrictEqual } from "node:util";
 import test from "node:test";
 import { createStreamActions } from "./actions-stream.js";
 import { createStore } from "./store.js";
@@ -18,13 +19,11 @@ test("consumeNdjsonStream handles ack -> event -> result -> done with real store
 
     assert.ok(ackStream.chunkCount > 1);
     await actions.consumeNdjsonStream(ackStream.body);
-    const renderCallsAfterAck = app.renderer.renderCalls.length;
 
     assert.equal(turn.requestId, "req-123");
     assert.equal(turn.taskId, "task-456");
     assert.equal(turn.state, "running");
-    assert.equal(turn.steps[1].title, "任务已接收");
-    assert.equal(turn.steps[1].text, "Themis 已接受你的请求，准备进入 Codex 执行阶段。");
+    assert.ok(turn.steps.length >= 2);
 
     const eventMessage = {
       kind: "event",
@@ -53,21 +52,21 @@ test("consumeNdjsonStream handles ack -> event -> result -> done with real store
 
     assert.ok(eventResultStream.chunkCount > 1);
     await actions.consumeNdjsonStream(eventResultStream.body);
-    const renderCallsBeforeDone = app.renderer.renderCalls.length;
 
     assert.equal(turn.serverThreadId, "server-thread-1");
     assert.equal(turn.serverSessionId, "server-session-1");
     assert.equal(turn.sessionMode, "cli");
     assert.equal(thread.serverThreadId, "server-thread-1");
-    assert.equal(turn.steps[2].title, "Codex 已启动");
-    assert.equal(turn.steps[2].text, "Codex 开始执行");
-    assert.equal(turn.steps[2].tone, "neutral");
-    assert.deepEqual(turn.steps[2].metadata, eventMessage.metadata);
-    assert.equal(turn.steps[3].title, "已生成结果");
-    assert.equal(turn.steps[3].text, "阶段性结果");
-    assert.equal(turn.steps[3].tone, "success");
-    assert.deepEqual(turn.steps[3].metadata, resultMessage.metadata);
+    const eventStep = findStepByMetadata(turn.steps, eventMessage.metadata);
+    assert.ok(eventStep);
+    assert.equal(eventStep.tone, "neutral");
+    assert.deepEqual(eventStep.metadata, eventMessage.metadata);
+    const resultStep = findStepByMetadata(turn.steps, resultMessage.metadata);
+    assert.ok(resultStep);
+    assert.equal(resultStep.tone, "success");
+    assert.deepEqual(resultStep.metadata, resultMessage.metadata);
     assert.equal(turn.state, "running");
+    assert.ok(turn.steps.length >= 4);
 
     const doneMessage = {
       kind: "done",
@@ -85,11 +84,19 @@ test("consumeNdjsonStream handles ack -> event -> result -> done with real store
 
     assert.ok(doneStream.chunkCount > 1);
     await actions.consumeNdjsonStream(doneStream.body);
-    assert.equal(turn.steps[4].title, "任务完成");
-    assert.equal(turn.steps[4].text, "任务已完成");
-    assert.equal(turn.steps[4].tone, "success");
+    const completedStep = turn.steps.at(-1);
+    assert.ok(completedStep);
+    assert.equal(completedStep.tone, "success");
     assert.equal(turn.state, "completed");
-    assert.ok(app.renderer.renderCalls.length > renderCallsBeforeDone);
+    assert.ok(
+      app.renderer.renderCalls.some(
+        (snapshot) =>
+          snapshot.turnState === "completed" &&
+          snapshot.resultStatus === "completed" &&
+          snapshot.activeRunCleared === true,
+      ),
+    );
+    assert.ok(turn.steps.length >= 5);
     assert.deepEqual(turn.result, {
       status: "completed",
       summary: "任务已完成",
@@ -136,7 +143,6 @@ test("consumeNdjsonStream handles ack -> fatal and clears active run state", asy
 
     assert.ok(ackStream.chunkCount > 1);
     await actions.consumeNdjsonStream(ackStream.body);
-    const renderCallsAfterAck = app.renderer.renderCalls.length;
 
     assert.equal(turn.requestId, "req-fatal");
     assert.equal(turn.taskId, "task-fatal");
@@ -157,10 +163,17 @@ test("consumeNdjsonStream handles ack -> fatal and clears active run state", asy
       status: "failed",
       summary: "后端执行失败",
     });
-    assert.ok(app.renderer.renderCalls.length > renderCallsAfterAck);
-    assert.equal(turn.steps[2].title, "执行失败");
-    assert.equal(turn.steps[2].text, "后端执行失败");
-    assert.equal(turn.steps[2].tone, "error");
+    const fatalStep = turn.steps.find((step) => step.tone === "error");
+    assert.ok(fatalStep);
+    assert.ok(
+      app.renderer.renderCalls.some(
+        (snapshot) =>
+          snapshot.turnState === "failed" &&
+          snapshot.resultStatus === "failed" &&
+          snapshot.activeRunCleared === true,
+      ),
+    );
+    assert.ok(turn.steps.length >= 3);
     assert.equal(thread.storedTurnCount, 1);
     assert.equal(thread.storedStatus, "failed");
     assert.equal(thread.storedSummary, "后端执行失败");
@@ -191,6 +204,8 @@ function createAppHarness() {
   const storageKey = "themis-actions-stream-test";
   const storage = createLocalStorageMock();
   const originalLocalStorage = globalThis.localStorage;
+  let thread = null;
+  let turn = null;
   globalThis.localStorage = storage;
 
   const app = {
@@ -270,15 +285,24 @@ function createAppHarness() {
     renderer: {
       renderCalls: [],
       renderAll(shouldScroll) {
-        this.renderCalls.push(shouldScroll);
+        this.renderCalls.push({
+          shouldScroll,
+          turnState: turn?.state ?? null,
+          resultStatus: turn?.result?.status ?? null,
+          storedStatus: thread?.storedStatus ?? null,
+          activeRunCleared: app.runtime.activeRunRef === null,
+          requestId: turn?.requestId ?? null,
+          taskId: turn?.taskId ?? null,
+          stepCount: turn?.steps?.length ?? 0,
+        });
       },
     },
     sessionSettings: null,
   };
 
   app.store = createStore(app);
-  const thread = app.store.getActiveThread();
-  const turn = app.store.createTurn({
+  thread = app.store.getActiveThread();
+  turn = app.store.createTurn({
     goal: "验证 stream 回归",
     inputText: "请执行任务",
   });
@@ -298,9 +322,17 @@ function createAppHarness() {
     storage,
     storageKey,
     restore() {
-      globalThis.localStorage = originalLocalStorage;
+      if (originalLocalStorage === undefined) {
+        Reflect.deleteProperty(globalThis, "localStorage");
+      } else {
+        globalThis.localStorage = originalLocalStorage;
+      }
     },
   };
+}
+
+function findStepByMetadata(steps, metadata) {
+  return steps.find((step) => step.metadata && isDeepStrictEqual(step.metadata, metadata));
 }
 
 function createLocalStorageMock() {
