@@ -39,6 +39,7 @@ export interface ContextBuildInput {
   request: TaskRequest;
   principalId?: string;
   conversationId?: string;
+  signal?: AbortSignal;
 }
 
 export interface ContextBuildResult {

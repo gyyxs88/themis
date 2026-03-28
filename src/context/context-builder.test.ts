@@ -121,3 +121,36 @@ test("ContextBuilder 在 docs/memory 遍历失败时降级为 warning 而不是�
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("ContextBuilder 在扫描过程中响应 abort signal", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-context-builder-abort-"));
+
+  try {
+    writeFileSync(join(root, "README.md"), "# Demo\n\n当前重点是 context builder。\n", "utf8");
+    writeFileSync(join(root, "AGENTS.md"), "始终使用中文回复。\n", "utf8");
+    mkdirSync(join(root, "memory", "architecture"), { recursive: true });
+    writeFileSync(join(root, "memory", "architecture", "overview.md"), "# 架构\n\n当前运行依赖 Codex thread。\n", "utf8");
+    mkdirSync(join(root, "docs", "memory", "2026", "03"), { recursive: true });
+    for (let index = 0; index < 200; index += 1) {
+      writeFileSync(
+        join(root, "docs", "memory", "2026", "03", `note-${String(index).padStart(3, "0")}-provider-search.md`),
+        "# note\nprovider search",
+        "utf8",
+      );
+    }
+
+    const builder = new ContextBuilder({
+      workingDirectory: root,
+    });
+    const abortController = new AbortController();
+    const buildPromise = builder.build({
+      request: createRequest(root),
+      signal: abortController.signal,
+    });
+    abortController.abort(new Error("manual abort"));
+
+    await assert.rejects(async () => buildPromise, /abort/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

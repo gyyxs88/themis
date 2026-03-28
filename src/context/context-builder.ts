@@ -76,11 +76,13 @@ export class ContextBuilder {
   }
 
   async build(input: ContextBuildInput): Promise<ContextBuildResult> {
+    const signal = input.signal;
     const blocks: ContextBlock[] = [];
     const warnings: ContextBuildWarning[] = [];
     const sourceStats: ContextSourceStat[] = [];
 
     for (const candidate of SOURCE_CANDIDATES) {
+      await checkpointAbort(signal);
       const filePath = join(this.workingDirectory, candidate.path);
       if (!existsSync(filePath)) {
         warnings.push({
@@ -147,14 +149,16 @@ export class ContextBuilder {
       });
     }
 
-    for (const filePath of pickRelevantMemoryFiles({
+    for (const filePath of await pickRelevantMemoryFiles({
       root: this.workingDirectory,
       goal: input.request.goal,
       inputText: input.request.inputText,
       limit: this.maxDocsMemoryFiles,
       warnings,
       sourceStats,
+      signal,
     })) {
+      await checkpointAbort(signal);
       let text: string;
       try {
         text = readFileSync(filePath, "utf8").trim();
@@ -198,6 +202,7 @@ export class ContextBuilder {
       });
     }
 
+    await checkpointAbort(signal);
     if (!existsSync(join(this.workingDirectory, "memory", "sessions", "active.md"))) {
       warnings.push({
         code: "SOURCE_MISSING",
@@ -224,10 +229,16 @@ interface PickRelevantMemoryFilesInput {
   limit: number;
   warnings: ContextBuildWarning[];
   sourceStats: ContextSourceStat[];
+  signal: AbortSignal | undefined;
 }
 
-function pickRelevantMemoryFiles(input: PickRelevantMemoryFilesInput): string[] {
-  const docsFiles = collectMarkdownFilesUnderDocsMemory(input.root, input.warnings, input.sourceStats);
+async function pickRelevantMemoryFiles(input: PickRelevantMemoryFilesInput): Promise<string[]> {
+  const docsFiles = await collectMarkdownFilesUnderDocsMemory(
+    input.root,
+    input.warnings,
+    input.sourceStats,
+    input.signal,
+  );
   if (docsFiles.length === 0) {
     return [];
   }
@@ -236,6 +247,7 @@ function pickRelevantMemoryFiles(input: PickRelevantMemoryFilesInput): string[] 
   const matched: string[] = [];
 
   for (const filePath of docsFiles) {
+    await checkpointAbort(input.signal);
     let text = "";
     try {
       text = readFileSync(filePath, "utf8").toLowerCase();
@@ -259,7 +271,18 @@ function collectMarkdownFilesUnderDocsMemory(
   root: string,
   warnings: ContextBuildWarning[],
   sourceStats: ContextSourceStat[],
-): string[] {
+  signal: AbortSignal | undefined,
+): Promise<string[]> {
+  return collectMarkdownFilesUnderDocsMemoryImpl(root, warnings, sourceStats, signal);
+}
+
+async function collectMarkdownFilesUnderDocsMemoryImpl(
+  root: string,
+  warnings: ContextBuildWarning[],
+  sourceStats: ContextSourceStat[],
+  signal: AbortSignal | undefined,
+): Promise<string[]> {
+  await checkpointAbort(signal);
   const docsRoot = join(root, "docs", "memory");
   if (!existsSync(docsRoot)) {
     return [];
@@ -300,18 +323,20 @@ function collectMarkdownFilesUnderDocsMemory(
   }
 
   const output: string[] = [];
-  collectMarkdownFiles(root, docsRoot, output, warnings, sourceStats);
+  await collectMarkdownFiles(root, docsRoot, output, warnings, sourceStats, signal);
   output.sort((left, right) => left.localeCompare(right));
   return output;
 }
 
-function collectMarkdownFiles(
+async function collectMarkdownFiles(
   root: string,
   dirPath: string,
   output: string[],
   warnings: ContextBuildWarning[],
   sourceStats: ContextSourceStat[],
-): void {
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  await checkpointAbort(signal);
   let entries: string[];
   try {
     entries = readdirSync(dirPath);
@@ -334,6 +359,7 @@ function collectMarkdownFiles(
   }
 
   for (const entry of entries) {
+    await checkpointAbort(signal);
     const absolutePath = join(dirPath, entry);
     let stat;
     try {
@@ -357,7 +383,7 @@ function collectMarkdownFiles(
     }
 
     if (stat.isDirectory()) {
-      collectMarkdownFiles(root, absolutePath, output, warnings, sourceStats);
+      await collectMarkdownFiles(root, absolutePath, output, warnings, sourceStats, signal);
       continue;
     }
     if (stat.isFile() && absolutePath.endsWith(".md")) {
@@ -373,4 +399,24 @@ function extractKeywords(goal: string, inputText?: string): string[] {
     .filter((token) => token.length >= 2);
 
   return [...new Set(tokens)];
+}
+
+async function checkpointAbort(signal: AbortSignal | undefined): Promise<void> {
+  throwIfAborted(signal);
+  await Promise.resolve();
+  throwIfAborted(signal);
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) {
+    return;
+  }
+
+  if (signal.reason instanceof Error) {
+    throw signal.reason;
+  }
+
+  const abortError = new Error(typeof signal.reason === "string" ? signal.reason : "Context build aborted.");
+  abortError.name = "AbortError";
+  throw abortError;
 }

@@ -64,7 +64,7 @@ export interface CodexTaskRuntimeOptions {
   providerConfigs?: OpenAICompatibleProviderConfig[] | null;
   providerConfig?: OpenAICompatibleProviderConfig | null;
   principalSkillsService?: PrincipalSkillsService;
-  contextBuilder?: ContextBuilder;
+  createContextBuilder?: (workingDirectory: string) => ContextBuilder;
 }
 
 interface ResolvedRuntimeTarget {
@@ -93,7 +93,7 @@ export class CodexTaskRuntime {
   private readonly conversationService: ConversationService;
   private readonly principalPersonaService: PrincipalPersonaService;
   private readonly principalSkillsService: PrincipalSkillsService;
-  private readonly contextBuilder: ContextBuilder | null;
+  private readonly createContextBuilder: (workingDirectory: string) => ContextBuilder;
   private providerConfigs: OpenAICompatibleProviderConfig[];
   private readonly authClients = new Map<string, Codex>();
   private readonly authSessionStores = new Map<string, CodexThreadSessionStore>();
@@ -114,7 +114,9 @@ export class CodexTaskRuntime {
       workingDirectory: this.workingDirectory,
       registry: this.runtimeStore,
     });
-    this.contextBuilder = options.contextBuilder ?? null;
+    this.createContextBuilder = options.createContextBuilder ?? ((workingDirectory) => new ContextBuilder({
+      workingDirectory,
+    }));
     this.providerConfigs = options.providerConfigs
       ?? (options.providerConfig
         ? [options.providerConfig]
@@ -166,37 +168,16 @@ export class CodexTaskRuntime {
       this.runtimeStore.upsertTurnFromRequest(request, taskId);
       await emit(createTaskEvent(taskId, request.requestId, "task.received", "queued", "Themis accepted the web request."));
 
-      const target = this.resolveRuntimeTarget(request, hooks.allowUnsupportedThirdPartyModel === true);
+      throwIfAborted(signal);
       const executionWorkingDirectory = this.resolveExecutionWorkingDirectory(request);
+      throwIfAborted(signal);
       const taskContext = await this.buildTaskContext(executionWorkingDirectory, {
         request,
         principalId,
         conversationId: resolvedRequest.conversationId,
+        signal,
       });
-      const threadOptions = buildThreadOptions(
-        request,
-        executionWorkingDirectory,
-        this.skipGitRepoCheck,
-        target.accessMode,
-        target.providerConfig,
-      );
-      sessionLease = await target.sessionStore.acquire(request, threadOptions);
-      const thread = sessionLease.thread;
-      const personalizedProfileContext = this.principalPersonaService.buildPromptContext(principalId);
-      const prompt = onboardingIntercept
-        ? buildBootstrapPrompt(request, onboardingIntercept, {
-          personalizedProfileContext,
-          taskContext,
-        })
-        : buildTaskPrompt(request, {
-          personalizedProfileContext,
-          taskContext,
-        });
-      const touchedFiles = new Set<string>();
-      let finalResponse = "";
-
       throwIfAborted(signal);
-
       await emit(
         createTaskEvent(
           taskId,
@@ -211,6 +192,32 @@ export class CodexTaskRuntime {
           },
         ),
       );
+      throwIfAborted(signal);
+
+      const target = this.resolveRuntimeTarget(request, hooks.allowUnsupportedThirdPartyModel === true);
+      throwIfAborted(signal);
+      const threadOptions = buildThreadOptions(
+        request,
+        executionWorkingDirectory,
+        this.skipGitRepoCheck,
+        target.accessMode,
+        target.providerConfig,
+      );
+      sessionLease = await target.sessionStore.acquire(request, threadOptions);
+      throwIfAborted(signal);
+      const thread = sessionLease.thread;
+      const personalizedProfileContext = this.principalPersonaService.buildPromptContext(principalId);
+      const prompt = onboardingIntercept
+        ? buildBootstrapPrompt(request, onboardingIntercept, {
+          personalizedProfileContext,
+          taskContext,
+        })
+        : buildTaskPrompt(request, {
+          personalizedProfileContext,
+          taskContext,
+        });
+      const touchedFiles = new Set<string>();
+      let finalResponse = "";
 
       await emit(
         createTaskEvent(
@@ -500,16 +507,16 @@ export class CodexTaskRuntime {
       request: TaskRequest;
       principalId: string | undefined;
       conversationId: string | undefined;
+      signal: AbortSignal;
     },
   ) {
-    const builder = this.contextBuilder ?? new ContextBuilder({
-      workingDirectory: executionWorkingDirectory,
-    });
+    const builder = this.createContextBuilder(executionWorkingDirectory);
 
     return builder.build({
       request: input.request,
       ...(input.principalId ? { principalId: input.principalId } : {}),
       ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+      signal: input.signal,
     });
   }
 

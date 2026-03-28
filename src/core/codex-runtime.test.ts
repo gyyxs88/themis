@@ -9,6 +9,7 @@ import type { TaskEvent, TaskRequest } from "../types/index.js";
 import { CodexTaskRuntime } from "./codex-runtime.js";
 import type { CodexThreadSessionStore } from "./codex-session-store.js";
 import type { OpenAICompatibleProviderConfig } from "./openai-compatible-provider.js";
+import type { ContextBuildResult } from "../types/context.js";
 
 function createProviderConfig(): OpenAICompatibleProviderConfig {
   return {
@@ -134,6 +135,14 @@ test("runTask 会优先使用会话绑定的工作区", async () => {
   const sessionWorkspace = join(root, "session-workspace");
   mkdirSync(controlDirectory);
   mkdirSync(sessionWorkspace);
+  mkdirSync(join(controlDirectory, "memory", "architecture"), { recursive: true });
+  mkdirSync(join(sessionWorkspace, "memory", "architecture"), { recursive: true });
+  writeRuntimeFile(controlDirectory, "AGENTS.md", "control-rule");
+  writeRuntimeFile(controlDirectory, "README.md", "# control");
+  writeRuntimeFile(controlDirectory, "memory/architecture/overview.md", "# control architecture");
+  writeRuntimeFile(sessionWorkspace, "AGENTS.md", "session-rule");
+  writeRuntimeFile(sessionWorkspace, "README.md", "# session");
+  writeRuntimeFile(sessionWorkspace, "memory/architecture/overview.md", "# session architecture");
 
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
@@ -149,7 +158,8 @@ test("runTask 会优先使用会话绑定的工作区", async () => {
   });
 
   const capturedThreadOptions: ThreadOptions[] = [];
-  const sessionStore = createSessionStoreDouble(runtimeStore, capturedThreadOptions);
+  const capturedPrompts: string[] = [];
+  const sessionStore = createSessionStoreDouble(runtimeStore, capturedThreadOptions, capturedPrompts);
   const runtime = new CodexTaskRuntime({
     workingDirectory: controlDirectory,
     runtimeStore,
@@ -171,6 +181,8 @@ test("runTask 会优先使用会话绑定的工作区", async () => {
 
     assert.equal(capturedThreadOptions.length, 1);
     assert.equal(capturedThreadOptions[0]?.workingDirectory, sessionWorkspace);
+    assert.match(capturedPrompts[0] ?? "", /session-rule/);
+    assert.doesNotMatch(capturedPrompts[0] ?? "", /control-rule/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -241,7 +253,8 @@ test("runTask 会在 task.started 前发出单次 task.context_built，并把结
   });
   const capturedThreadOptions: ThreadOptions[] = [];
   const capturedPrompts: string[] = [];
-  const sessionStore = createSessionStoreDouble(runtimeStore, capturedThreadOptions, capturedPrompts);
+  const lifecycleMarkers: string[] = [];
+  const sessionStore = createSessionStoreDouble(runtimeStore, capturedThreadOptions, capturedPrompts, lifecycleMarkers);
   const runtime = new CodexTaskRuntime({
     workingDirectory: controlDirectory,
     runtimeStore,
@@ -263,6 +276,9 @@ test("runTask 会在 task.started 前发出单次 task.context_built，并把结
       },
     }), {
       onEvent: (event) => {
+        if (event.type === "task.context_built") {
+          lifecycleMarkers.push("context_built_event");
+        }
         events.push(event);
       },
     });
@@ -278,11 +294,76 @@ test("runTask 会在 task.started 前发出单次 task.context_built，并把结
     assert.ok(contextBuiltIndex >= 0);
     assert.ok(startedIndex >= 0);
     assert.equal(contextBuiltIndex < startedIndex, true);
+    assert.equal(lifecycleMarkers.indexOf("context_built_event") < lifecycleMarkers.indexOf("acquire_called"), true);
 
     assert.equal(capturedPrompts.length, 1);
     assert.match(capturedPrompts[0] ?? "", /Task context blocks:/);
-    assert.match(capturedPrompts[0] ?? "", /kind=repoRules/);
-    assert.match(capturedPrompts[0] ?? "", /source=AGENTS\.md/);
+    assert.match(capturedPrompts[0] ?? "", /kind: repoRules/);
+    assert.match(capturedPrompts[0] ?? "", /source: AGENTS\.md/);
+    assert.match(capturedPrompts[0] ?? "", /title: Repository rules/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runTask 在 context build 阶段收到 abort 会尽快取消且不进入 acquire", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-context-abort-"));
+  const controlDirectory = join(root, "control");
+  mkdirSync(controlDirectory);
+  writeRuntimeFile(controlDirectory, "README.md", "# control");
+
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  let acquireCalled = false;
+  const sessionStore: CodexThreadSessionStore = {
+    getSessionRegistry: () => runtimeStore,
+    resolveThreadId: async () => null,
+    acquire: async () => {
+      acquireCalled = true;
+      throw new Error("acquire should not be called");
+    },
+  } as unknown as CodexThreadSessionStore;
+
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+    sessionStore,
+    createContextBuilder: () => ({
+      build: async (input: { signal?: AbortSignal }): Promise<ContextBuildResult> => {
+        while (!input.signal?.aborted) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+
+        const abortError = new Error("aborted during context build");
+        abortError.name = "AbortError";
+        throw abortError;
+      },
+    }) as never,
+  });
+
+  const abortController = new AbortController();
+  setTimeout(() => {
+    abortController.abort(new Error("manual abort"));
+  }, 10);
+
+  try {
+    const result = await runtime.runTask(createRequest({
+      requestId: "req-runtime-context-abort",
+      taskId: "task-runtime-context-abort",
+      user: {
+        userId: "",
+        displayName: "User",
+      },
+      channelContext: {
+        sessionId: "session-runtime-context-abort",
+      },
+    }), {
+      signal: abortController.signal,
+    });
+
+    assert.equal(result.status, "cancelled");
+    assert.equal(acquireCalled, false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -292,11 +373,13 @@ function createSessionStoreDouble(
   runtimeStore: SqliteCodexSessionRegistry,
   capturedThreadOptions: ThreadOptions[],
   capturedPrompts: string[] = [],
+  lifecycleMarkers: string[] = [],
 ): CodexThreadSessionStore {
   return {
     getSessionRegistry: () => runtimeStore,
     resolveThreadId: async () => null,
     acquire: async (_request: TaskRequest, threadOptions: ThreadOptions) => {
+      lifecycleMarkers.push("acquire_called");
       capturedThreadOptions.push(threadOptions);
 
       return {

@@ -208,10 +208,19 @@ function formatTaskContext(taskContext?: ContextBuildResult | null): string | nu
     sections.push(
       [
         "Task context blocks:",
-        ...taskContext.blocks.map((block) => [
-          `- kind=${block.kind}; priority=${block.priority}; source=${block.sourcePath}; truncated=${String(block.truncated)}`,
+        ...taskContext.blocks.flatMap((block, index) => [
+          `--- block ${index + 1} ---`,
+          "```yaml",
+          `kind: ${block.kind}`,
+          `title: ${block.title}`,
+          `source: ${block.sourcePath}`,
+          `priority: ${block.priority}`,
+          `truncated: ${String(block.truncated)}`,
+          "```",
+          "```markdown",
           block.text,
-        ].join("\n")),
+          "```",
+        ]),
       ].join("\n"),
     );
   }
