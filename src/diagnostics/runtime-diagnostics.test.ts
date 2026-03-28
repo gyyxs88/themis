@@ -41,3 +41,42 @@ test("RuntimeDiagnosticsService.readSummary 返回 auth/provider/context/memory/
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("RuntimeDiagnosticsService 在无 SQLite 时也能识别环境变量 provider", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-diagnostics-env-provider-"));
+  const previousEnv = {
+    baseUrl: process.env.THEMIS_OPENAI_COMPAT_BASE_URL,
+    apiKey: process.env.THEMIS_OPENAI_COMPAT_API_KEY,
+    model: process.env.THEMIS_OPENAI_COMPAT_MODEL,
+  };
+
+  try {
+    process.env.THEMIS_OPENAI_COMPAT_BASE_URL = "https://example.com/v1";
+    process.env.THEMIS_OPENAI_COMPAT_API_KEY = "sk-test";
+    process.env.THEMIS_OPENAI_COMPAT_MODEL = "gpt-5.4";
+
+    const service = new RuntimeDiagnosticsService({
+      workingDirectory: root,
+      runtimeStore: null,
+    });
+    const summary = await service.readSummary();
+
+    assert.equal(summary.provider.providerCount, 1);
+    assert.deepEqual(summary.provider.providerIds, ["themis_openai_compatible"]);
+    assert.equal(summary.provider.activeMode, "third-party");
+  } finally {
+    restoreEnv("THEMIS_OPENAI_COMPAT_BASE_URL", previousEnv.baseUrl);
+    restoreEnv("THEMIS_OPENAI_COMPAT_API_KEY", previousEnv.apiKey);
+    restoreEnv("THEMIS_OPENAI_COMPAT_MODEL", previousEnv.model);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (typeof value === "string") {
+    process.env[key] = value;
+    return;
+  }
+
+  delete process.env[key];
+}

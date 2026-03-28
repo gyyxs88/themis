@@ -11,6 +11,11 @@ import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
 
 test("GET /api/diagnostics 会返回结构化 summary", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-http-diagnostics-"));
+  const previousEnv = {
+    baseUrl: process.env.THEMIS_OPENAI_COMPAT_BASE_URL,
+    apiKey: process.env.THEMIS_OPENAI_COMPAT_API_KEY,
+    model: process.env.THEMIS_OPENAI_COMPAT_MODEL,
+  };
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
@@ -29,6 +34,9 @@ test("GET /api/diagnostics 会返回结构化 summary", async () => {
   const baseUrl = `http://127.0.0.1:${address.port}`;
 
   try {
+    process.env.THEMIS_OPENAI_COMPAT_BASE_URL = "https://example.com/v1";
+    process.env.THEMIS_OPENAI_COMPAT_API_KEY = "sk-test";
+    process.env.THEMIS_OPENAI_COMPAT_MODEL = "gpt-5.4";
     const headers = await createAuthenticatedWebHeaders({
       baseUrl,
       runtimeStore,
@@ -41,8 +49,12 @@ test("GET /api/diagnostics 会返回结构化 summary", async () => {
     assert.equal(response.status, 200);
     const payload = await response.json() as {
       summary?: {
+        workingDirectory?: string;
         auth?: unknown;
-        provider?: unknown;
+        provider?: {
+          activeMode?: string;
+          providerCount?: number;
+        };
         context?: unknown;
         memory?: unknown;
         service?: unknown;
@@ -54,7 +66,13 @@ test("GET /api/diagnostics 会返回结构化 summary", async () => {
     assert.ok(payload.summary?.context);
     assert.ok(payload.summary?.memory);
     assert.ok(payload.summary?.service);
+    assert.equal(payload.summary?.workingDirectory, root);
+    assert.equal(payload.summary?.provider?.activeMode, "third-party");
+    assert.equal(payload.summary?.provider?.providerCount, 1);
   } finally {
+    restoreEnv("THEMIS_OPENAI_COMPAT_BASE_URL", previousEnv.baseUrl);
+    restoreEnv("THEMIS_OPENAI_COMPAT_API_KEY", previousEnv.apiKey);
+    restoreEnv("THEMIS_OPENAI_COMPAT_MODEL", previousEnv.model);
     await closeServer(listeningServer);
     rmSync(root, { recursive: true, force: true });
   }
@@ -81,4 +99,13 @@ function closeServer(server: Server): Promise<void> {
       resolve();
     });
   });
+}
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (typeof value === "string") {
+    process.env[key] = value;
+    return;
+  }
+
+  delete process.env[key];
 }

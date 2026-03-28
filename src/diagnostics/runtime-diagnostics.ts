@@ -94,14 +94,12 @@ export class RuntimeDiagnosticsService {
     let providerIds: string[] = [];
     let providerReadError: string | undefined;
     const activeProviderProfile = this.authRuntime?.readThirdPartyProviderProfile() ?? null;
-    if (this.runtimeStore) {
-      try {
-        const configs = readOpenAICompatibleProviderConfigs(this.workingDirectory, this.runtimeStore);
-        providerCount = configs.length;
-        providerIds = configs.map((config) => config.id);
-      } catch (error) {
-        providerReadError = toErrorMessage(error);
-      }
+    try {
+      const configs = readOpenAICompatibleProviderConfigs(this.workingDirectory, this.runtimeStore ?? undefined);
+      providerCount = configs.length;
+      providerIds = configs.map((config) => config.id);
+    } catch (error) {
+      providerReadError = toErrorMessage(error);
     }
 
     return {
@@ -115,7 +113,7 @@ export class RuntimeDiagnosticsService {
         ...(snapshotError ? { snapshotError } : {}),
       },
       provider: {
-        activeMode: activeProviderProfile ? "third-party" : "auth",
+        activeMode: activeProviderProfile || providerCount > 0 ? "third-party" : "auth",
         providerCount,
         providerIds,
         ...(providerReadError ? { readError: providerReadError } : {}),

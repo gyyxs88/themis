@@ -59,6 +59,7 @@ export interface ThemisHttpServerOptions {
 export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): Server {
   const runtime = options.runtime ?? new CodexTaskRuntime();
   const authRuntime = options.authRuntime ?? new CodexAuthRuntime({
+    workingDirectory: runtime.getWorkingDirectory(),
     registry: runtime.getRuntimeStore(),
     onManagedAccountReady: async (account) => {
       try {
