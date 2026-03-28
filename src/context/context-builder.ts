@@ -1,6 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import type { SqliteCodexSessionRegistry } from "../storage/index.js";
 import type {
   ContextBlock,
   ContextBuildInput,
@@ -11,7 +10,6 @@ import type {
 
 interface ContextBuilderOptions {
   workingDirectory: string;
-  runtimeStore: SqliteCodexSessionRegistry;
   maxDocsMemoryFiles?: number;
 }
 
@@ -75,7 +73,6 @@ export class ContextBuilder {
   constructor(options: ContextBuilderOptions) {
     this.workingDirectory = options.workingDirectory;
     this.maxDocsMemoryFiles = options.maxDocsMemoryFiles ?? 3;
-    assertRuntimeStore(options.runtimeStore);
   }
 
   async build(input: ContextBuildInput): Promise<ContextBuildResult> {
@@ -376,10 +373,4 @@ function extractKeywords(goal: string, inputText?: string): string[] {
     .filter((token) => token.length >= 2);
 
   return [...new Set(tokens)];
-}
-
-function assertRuntimeStore(runtimeStore: SqliteCodexSessionRegistry): void {
-  if (!runtimeStore || typeof runtimeStore !== "object") {
-    throw new TypeError("runtimeStore 必须是有效的 SqliteCodexSessionRegistry。");
-  }
 }

@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { ContextBuilder } from "./context-builder.js";
-import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import type { TaskRequest } from "../types/task.js";
 
 function createRequest(root: string): TaskRequest {
@@ -38,12 +37,8 @@ test("ContextBuilder 会按优先级读取 README、AGENTS、memory 和 docs/mem
     writeFileSync(join(root, "memory", "architecture", "overview.md"), "# 架构\n\n当前运行依赖 Codex thread。\n", "utf8");
     writeFileSync(join(root, "docs", "memory", "2026", "03", "provider-search.md"), "# Provider Search\n\nOpenRouter 需要显式声明 search tool。\n", "utf8");
 
-    const runtimeStore = new SqliteCodexSessionRegistry({
-      databaseFile: join(root, "infra/local/themis.db"),
-    });
     const builder = new ContextBuilder({
       workingDirectory: root,
-      runtimeStore,
     });
 
     const result = await builder.build({
@@ -79,12 +74,8 @@ test("ContextBuilder 只选择相关 docs/memory 文档并受 maxDocsMemoryFiles
     writeFileSync(join(root, "docs", "memory", "2026", "03", "tooling-notes.md"), "# Notes\n\n这里记录 search 的集成细节。\n", "utf8");
     writeFileSync(join(root, "docs", "memory", "2026", "03", "unrelated-topic.md"), "# Topic\n\n这里只谈前端主题。\n", "utf8");
 
-    const runtimeStore = new SqliteCodexSessionRegistry({
-      databaseFile: join(root, "infra/local/themis.db"),
-    });
     const builder = new ContextBuilder({
       workingDirectory: root,
-      runtimeStore,
       maxDocsMemoryFiles: 1,
     });
 
@@ -114,12 +105,8 @@ test("ContextBuilder 在 docs/memory 遍历失败时降级为 warning 而不是�
     mkdirSync(join(root, "docs"), { recursive: true });
     writeFileSync(join(root, "docs", "memory"), "not-a-directory", "utf8");
 
-    const runtimeStore = new SqliteCodexSessionRegistry({
-      databaseFile: join(root, "infra/local/themis.db"),
-    });
     const builder = new ContextBuilder({
       workingDirectory: root,
-      runtimeStore,
     });
 
     const result = await builder.build({
