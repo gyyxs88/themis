@@ -41,6 +41,7 @@ export function createStoreModelHelpers() {
       storedSummary: "",
       storedStatus: null,
       historyHydrated: true,
+      historyNeedsRehydrate: false,
       turns: [],
     };
   }
@@ -64,6 +65,7 @@ export function createStoreModelHelpers() {
       requestId: null,
       taskId: null,
       pendingAction: null,
+      submittedPendingActionId: null,
       serverThreadId: null,
       serverSessionId: null,
       sessionMode: null,
@@ -112,6 +114,7 @@ export function createStoreModelHelpers() {
       storedSummary: typeof thread.storedSummary === "string" ? thread.storedSummary : "",
       storedStatus: typeof thread.storedStatus === "string" ? thread.storedStatus : null,
       historyHydrated: typeof thread.historyHydrated === "boolean" ? thread.historyHydrated : true,
+      historyNeedsRehydrate: typeof thread.historyNeedsRehydrate === "boolean" ? thread.historyNeedsRehydrate : false,
       turns: Array.isArray(thread.turns) ? thread.turns.map(normalizeTurn).filter(Boolean) : [],
     };
   }
@@ -130,6 +133,7 @@ export function createStoreModelHelpers() {
       requestId: typeof turn.requestId === "string" ? turn.requestId : null,
       taskId: typeof turn.taskId === "string" ? turn.taskId : null,
       pendingAction: normalizePendingAction(turn.pendingAction),
+      submittedPendingActionId: typeof turn.submittedPendingActionId === "string" ? turn.submittedPendingActionId : null,
       serverThreadId: typeof turn.serverThreadId === "string" ? turn.serverThreadId : null,
       serverSessionId: typeof turn.serverSessionId === "string" ? turn.serverSessionId : null,
       sessionMode: typeof turn.sessionMode === "string" ? turn.sessionMode : null,

@@ -110,6 +110,137 @@ test("repairInterruptedTurns 会把刷新后残留的 waiting action turn 标记
   assert.equal(saveCount, 1);
 });
 
+test("repairInterruptedTurns 不会把带后端标识的 waiting action turn 直接打成 cancelled，而是标记为待同步", () => {
+  const state = {
+    threads: [
+      {
+        id: "thread-server-waiting",
+        updatedAt: "2026-03-29T00:00:00.000Z",
+        historyNeedsRehydrate: false,
+        turns: [
+          {
+            id: "turn-server-waiting",
+            state: "waiting",
+            requestId: "req-server-1",
+            taskId: "task-server-1",
+            serverThreadId: "server-thread-1",
+            pendingAction: {
+              actionId: "action-server-1",
+              actionType: "approval",
+              prompt: "是否继续执行",
+            },
+            steps: [],
+            result: null,
+          },
+        ],
+      },
+    ],
+  };
+  let saveCount = 0;
+  const helpers = createStoreHelpers({
+    app: createAppHarness(),
+    getState: () => state,
+    saveState() {
+      saveCount += 1;
+    },
+  });
+
+  helpers.repairInterruptedTurns();
+
+  const thread = state.threads[0];
+  const turn = thread.turns[0];
+  assert.equal(thread.historyNeedsRehydrate, true);
+  assert.equal(turn.state, "waiting");
+  assert.equal(turn.pendingAction, null);
+  assert.equal(turn.result, null);
+  assert.match(turn.steps.at(-1)?.text ?? "", /同步服务端状态/);
+  assert.equal(saveCount, 1);
+});
+
+test("repairInterruptedTurns 不会把仍在等待服务端后续收口的 running turn 提前打成 cancelled", () => {
+  const state = {
+    threads: [
+      {
+        id: "thread-2",
+        updatedAt: "2026-03-29T00:00:00.000Z",
+        historyNeedsRehydrate: true,
+        turns: [
+          {
+            id: "turn-2",
+            state: "running",
+            pendingAction: null,
+            submittedPendingActionId: "action-2",
+            steps: [],
+            result: null,
+          },
+        ],
+      },
+    ],
+  };
+  let saveCount = 0;
+  const helpers = createStoreHelpers({
+    app: createAppHarness(),
+    getState: () => state,
+    saveState() {
+      saveCount += 1;
+    },
+  });
+
+  helpers.repairInterruptedTurns();
+
+  const turn = state.threads[0].turns[0];
+  assert.equal(turn.state, "running");
+  assert.equal(turn.pendingAction, null);
+  assert.equal(turn.submittedPendingActionId, "action-2");
+  assert.equal(turn.result, null);
+  assert.deepEqual(turn.steps, []);
+  assert.equal(saveCount, 1);
+});
+
+test("repairInterruptedTurns 不会把带后端标识的 running turn 直接打成 cancelled，而是标记为待同步", () => {
+  const state = {
+    threads: [
+      {
+        id: "thread-server-running",
+        updatedAt: "2026-03-29T00:00:00.000Z",
+        historyNeedsRehydrate: false,
+        turns: [
+          {
+            id: "turn-server-running",
+            state: "running",
+            requestId: "req-server-2",
+            taskId: "task-server-2",
+            serverThreadId: "server-thread-2",
+            pendingAction: null,
+            submittedPendingActionId: null,
+            steps: [],
+            result: null,
+          },
+        ],
+      },
+    ],
+  };
+  let saveCount = 0;
+  const helpers = createStoreHelpers({
+    app: createAppHarness(),
+    getState: () => state,
+    saveState() {
+      saveCount += 1;
+    },
+  });
+
+  helpers.repairInterruptedTurns();
+
+  const thread = state.threads[0];
+  const turn = thread.turns[0];
+  assert.equal(thread.historyNeedsRehydrate, true);
+  assert.equal(turn.state, "running");
+  assert.equal(turn.pendingAction, null);
+  assert.equal(turn.result, null);
+  assert.match(turn.steps.at(-1)?.text ?? "", /同步服务端状态/);
+  assert.equal(saveCount, 1);
+});
+
 function createAppHarness(overrides = {}) {
   return {
     runtime: {

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import type { Codex, Thread, ThreadEvent, ThreadOptions } from "@openai/codex-sdk";
+import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import { AppServerTaskRuntime, type AppServerTaskRuntimeSession } from "../core/app-server-task-runtime.js";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
@@ -36,6 +37,10 @@ interface AppServerJourneySessionState {
   resumed: Array<{ threadId: string; cwd: string }>;
   prompts: string[];
   read: string[];
+  approvals: Array<{ id: string | number; method: string }>;
+  respondedApprovals: Array<{ id: string | number; result: unknown }>;
+  serverRequestHandler: ((request: { id: string | number; method: string; params?: unknown }) => void) | null;
+  resolveApproval: (() => void) | null;
 }
 
 for (const runtimeEngine of ["sdk", "app-server"] as const) {
@@ -181,8 +186,128 @@ for (const runtimeEngine of ["sdk", "app-server"] as const) {
   });
 }
 
+test("真实 Web 旅程在 app-server 下会走通 action_required -> /api/tasks/actions -> 收口", async () => {
+  await withHttpServer(async ({ baseUrl, root, runtimeStore, authHeaders, appServerJourneyState }) => {
+    const sessionId = "session-web-journey-action-1";
+    const workspace = join(root, "workspace-action");
+    seedCompletedWebOwnerPersona(runtimeStore);
+
+    writeWorkspaceDocs(workspace, {
+      readmeTitle: "workspace-action",
+    });
+
+    const saveWorkspaceResponse = await fetch(`${baseUrl}/api/sessions/${sessionId}/settings`, {
+      method: "PUT",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        settings: {
+          workspacePath: workspace,
+        },
+      }),
+    });
+
+    assert.equal(saveWorkspaceResponse.status, 200);
+
+    const streamResponse = await fetch(`${baseUrl}/api/tasks/stream`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sessionId,
+        goal: "请等待审批后继续执行",
+        options: {
+          runtimeEngine: "app-server",
+        },
+      }),
+    });
+
+    assert.equal(streamResponse.status, 200);
+    assert.ok(streamResponse.body);
+
+    const reader = createNdjsonStreamReader(streamResponse.body!);
+    const partialLines = await withTimeout(
+      reader.readUntil((lines) => lines.some((line) => line.kind === "event" && line.title === "task.action_required")),
+      "missing action_required",
+    );
+    const actionRequiredLine = partialLines.find(
+      (line) => line.kind === "event" && line.title === "task.action_required",
+    );
+
+    assert.ok(actionRequiredLine);
+    assert.deepEqual(partialLines.slice(0, 1).map((line) => line.kind), ["ack"]);
+    assert.equal(actionRequiredLine?.metadata?.actionId, "approval-web-1", JSON.stringify(actionRequiredLine));
+    assert.equal(actionRequiredLine?.metadata?.actionType, "approval", JSON.stringify(actionRequiredLine));
+    assert.match(String(actionRequiredLine?.text ?? ""), /审批|approve|Need approval/);
+
+    const actionSubmitResponse = await fetch(`${baseUrl}/api/tasks/actions`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        taskId: actionRequiredLine?.taskId,
+        requestId: actionRequiredLine?.requestId,
+        actionId: actionRequiredLine?.metadata?.actionId,
+        decision: "approve",
+      }),
+    });
+
+    assert.equal(actionSubmitResponse.status, 200);
+    assert.deepEqual(await actionSubmitResponse.json(), {
+      ok: true,
+    });
+
+    const remainingLines = await withTimeout(reader.readAll(), "stream did not finish after action submit");
+    const ndjson = [...partialLines, ...remainingLines];
+
+    assert.ok(ndjson.some((line) => line.kind === "result"));
+    assert.deepEqual(ndjson.slice(-1).map((line) => line.kind), ["done"]);
+    assert.deepEqual(appServerJourneyState.approvals, [{
+      id: "server-approval-web-1",
+      method: "item/commandExecution/requestApproval",
+    }]);
+    assert.deepEqual(appServerJourneyState.respondedApprovals, [{
+      id: "server-approval-web-1",
+      result: {
+        decision: "accept",
+      },
+    }]);
+
+    const historyDetailResponse = await fetch(`${baseUrl}/api/history/sessions/${sessionId}`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    assert.equal(historyDetailResponse.status, 200);
+
+    const historyDetailPayload = await historyDetailResponse.json() as {
+      turns?: Array<{
+        status?: string;
+        events?: Array<{
+          type?: string;
+        }>;
+      }>;
+    };
+
+    assert.equal(historyDetailPayload.turns?.length, 1);
+    assert.equal(historyDetailPayload.turns?.[0]?.status, "completed");
+    assert.ok(historyDetailPayload.turns?.[0]?.events?.some((event) => event.type === "task.action_required"));
+    assert.equal(runtimeStore.getSession(sessionId)?.threadId, "thread-app-web-journey-1");
+  }, {
+    appServerRequiresApproval: true,
+  });
+});
+
 async function withHttpServer(
   run: (context: TestServerContext) => Promise<void>,
+  options: {
+    appServerRequiresApproval?: boolean;
+  } = {},
 ): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "themis-http-web-journey-"));
   const controlDirectory = join(root, "control");
@@ -205,10 +330,12 @@ async function withHttpServer(
     runtimeStore,
     sessionStore: journeyStore,
   });
+  const actionBridge = new AppServerActionBridge();
   const appServerJourneyState = createAppServerJourneySessionState();
   const appServerRuntime = new AppServerTaskRuntime({
     workingDirectory: controlDirectory,
     runtimeStore,
+    actionBridge,
     sessionFactory: async (): Promise<AppServerTaskRuntimeSession> => ({
       initialize: async () => {},
       startThread: async (params) => {
@@ -234,11 +361,41 @@ async function withHttpServer(
       },
       startTurn: async (_threadId, prompt) => {
         appServerJourneyState.prompts.push(prompt);
+        if (options.appServerRequiresApproval) {
+          appServerJourneyState.approvals.push({
+            id: "server-approval-web-1",
+            method: "item/commandExecution/requestApproval",
+          });
+          const approvalResolved = new Promise<void>((resolve) => {
+            appServerJourneyState.resolveApproval = resolve;
+          });
+          appServerJourneyState.serverRequestHandler?.({
+            id: "server-approval-web-1",
+            method: "item/commandExecution/requestApproval",
+            params: {
+              threadId: "thread-app-web-journey-1",
+              turnId: "turn-app-web-journey-action-1",
+              itemId: "item-app-web-journey-approval-1",
+              approvalId: "approval-web-1",
+              command: "rm -rf tmp",
+              reason: "Need approval",
+            },
+          });
+          await approvalResolved;
+          appServerJourneyState.resolveApproval = null;
+        }
         return { turnId: "turn-app-web-journey-1" };
       },
       close: async () => {},
       onNotification: () => {},
-      onServerRequest: () => {},
+      onServerRequest: (handler) => {
+        appServerJourneyState.serverRequestHandler = handler;
+      },
+      respondToServerRequest: async (id, result) => {
+        appServerJourneyState.respondedApprovals.push({ id, result });
+        appServerJourneyState.resolveApproval?.();
+      },
+      rejectServerRequest: async () => {},
     }),
   });
   const server = createThemisHttpServer({
@@ -249,6 +406,7 @@ async function withHttpServer(
         "app-server": appServerRuntime,
       },
     },
+    actionBridge,
     authRuntime: createAuthRuntime({
       authenticated: false,
       requiresOpenaiAuth: false,
@@ -334,6 +492,10 @@ function createAppServerJourneySessionState(): AppServerJourneySessionState {
     resumed: [],
     prompts: [],
     read: [],
+    approvals: [],
+    respondedApprovals: [],
+    serverRequestHandler: null,
+    resolveApproval: null,
   };
 }
 
@@ -359,6 +521,86 @@ function parseNdjson(payload: string): Array<Record<string, unknown>> {
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
+function createNdjsonStreamReader(body: ReadableStream<Uint8Array>): {
+  readUntil: (
+    predicate: (lines: Array<Record<string, any>>) => boolean,
+  ) => Promise<Array<Record<string, any>>>;
+  readAll: () => Promise<Array<Record<string, any>>>;
+} {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const lines: Array<Record<string, any>> = [];
+
+  async function drainUntil(
+    predicate: (lines: Array<Record<string, any>>) => boolean,
+    stopAtEnd: boolean,
+  ): Promise<Array<Record<string, any>>> {
+    while (true) {
+      if (predicate(lines)) {
+        return [...lines];
+      }
+
+      const { value, done } = await reader.read();
+
+      if (done) {
+        const trailing = buffer.trim();
+
+        if (trailing) {
+          lines.push(JSON.parse(trailing) as Record<string, any>);
+          buffer = "";
+          if (predicate(lines)) {
+            return [...lines];
+          }
+        }
+
+        if (stopAtEnd) {
+          return [...lines];
+        }
+
+        throw new Error("NDJSON stream ended before predicate matched.");
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split("\n");
+      buffer = chunks.pop() ?? "";
+
+      for (const chunk of chunks) {
+        const trimmed = chunk.trim();
+
+        if (!trimmed) {
+          continue;
+        }
+
+        lines.push(JSON.parse(trimmed) as Record<string, any>);
+
+        if (predicate(lines)) {
+          return [...lines];
+        }
+      }
+    }
+  }
+
+  return {
+    readUntil: async (predicate) => await drainUntil(predicate, false),
+    readAll: async () => {
+      const consumedBefore = lines.length;
+      const all = await drainUntil(() => false, true);
+      return all.slice(consumedBefore);
+    },
+  };
+}
+
+async function withTimeout<T>(promise: Promise<T>, message: string, timeoutMs = 1000): Promise<T> {
+  return await Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      timer.unref?.();
+    }),
+  ]);
+}
+
 function listenServer(server: Server): Promise<Server> {
   return new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -366,6 +608,28 @@ function listenServer(server: Server): Promise<Server> {
       server.off("error", reject);
       resolve(server);
     });
+  });
+}
+
+function seedCompletedWebOwnerPersona(runtimeStore: SqliteCodexSessionRegistry): void {
+  const now = "2026-03-29T09:00:00.000Z";
+  runtimeStore.savePrincipal({
+    principalId: "principal-local-owner",
+    displayName: "test-owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+  runtimeStore.savePrincipalPersonaProfile({
+    principalId: "principal-local-owner",
+    profile: {
+      preferredAddress: "乐意",
+      workSummary: "负责 Themis 的设计与开发",
+      collaborationStyle: "先给结论，再逐步拆解关键取舍",
+      assistantLanguageStyle: "直接、清楚、不过度客套",
+    },
+    createdAt: now,
+    updatedAt: now,
+    completedAt: now,
   });
 }
 

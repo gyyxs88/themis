@@ -290,6 +290,27 @@ export function createStoreHelpers({ app, getState, saveState }) {
           continue;
         }
 
+        if (thread.historyNeedsRehydrate && typeof turn.submittedPendingActionId === "string" && turn.submittedPendingActionId) {
+          continue;
+        }
+
+        if (hasRecoverableServerState(thread, turn)) {
+          thread.serverHistoryAvailable = thread.serverHistoryAvailable || hasRecoverableServerState(thread, turn);
+          thread.historyNeedsRehydrate = true;
+          turn.pendingAction = null;
+
+          if (!hasRecoverySyncStep(turn)) {
+            turn.steps.push({
+              title: "等待服务端同步状态",
+              text: "浏览器刷新或会话关闭后，正在重新同步服务端状态，请稍候。",
+              tone: "warning",
+            });
+          }
+
+          thread.updatedAt = nowIso();
+          continue;
+        }
+
         turn.state = "cancelled";
         turn.pendingAction = null;
         turn.result = turn.result ?? {
@@ -306,6 +327,21 @@ export function createStoreHelpers({ app, getState, saveState }) {
     }
 
     saveState();
+  }
+
+  function hasRecoverableServerState(thread, turn) {
+    return Boolean(
+      thread?.serverHistoryAvailable
+      || thread?.serverThreadId
+      || turn?.serverThreadId
+      || turn?.requestId
+      || turn?.taskId,
+    );
+  }
+
+  function hasRecoverySyncStep(turn) {
+    const latestStep = Array.isArray(turn?.steps) ? turn.steps.at(-1) : null;
+    return latestStep?.title === "等待服务端同步状态";
   }
 
   function describeBootstrapLabel(thread) {
@@ -450,6 +486,7 @@ export function createStoreHelpers({ app, getState, saveState }) {
     thread.storedSummary = turn.result?.summary ?? turn.goal ?? thread.storedSummary;
     thread.serverHistoryAvailable = thread.serverHistoryAvailable || Boolean(turn.requestId || turn.taskId || thread.serverThreadId);
     thread.historyHydrated = true;
+    thread.historyNeedsRehydrate = thread.turns.some((candidate) => Boolean(candidate?.submittedPendingActionId));
   }
 
   function isDefaultThreadTitle(title) {

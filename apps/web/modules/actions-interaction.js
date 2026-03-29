@@ -39,15 +39,17 @@ export function createActionInteraction(options) {
       return { ok: false };
     }
 
+    const submittedPendingActionId = turn.pendingAction.actionId;
     await submitAction({
       taskId: turn.taskId,
       requestId: turn.requestId,
-      actionId: turn.pendingAction.actionId,
+      actionId: submittedPendingActionId,
       ...payload,
     });
 
     turn.pendingAction = null;
     turn.state = "running";
+    turn.submittedPendingActionId = submittedPendingActionId;
     return { ok: true };
   }
 

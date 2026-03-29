@@ -1,5 +1,7 @@
 import { formatEventTitle, resolveToneFromTitle } from "./copy.js";
 
+const UNEXPECTED_STREAM_END_MESSAGE = "流式连接已中断，任务未返回最终结果。请刷新后重试。";
+
 export function createStreamActions(app) {
   const { store } = app;
 
@@ -34,6 +36,23 @@ export function createStreamActions(app) {
 
     if (trailing) {
       handleStreamMessage(JSON.parse(trailing));
+    }
+
+    const turn = store.getActiveTurn();
+    const thread = app.runtime.activeRunRef ? store.getThreadById(app.runtime.activeRunRef.threadId) : null;
+
+    if (turn && thread && app.runtime.activeRunRef) {
+      if (isTerminalTurnState(turn.state)) {
+        finalizeTerminalTurnAfterUnexpectedEof(turn);
+      } else {
+        finalizeTurnError(turn, UNEXPECTED_STREAM_END_MESSAGE);
+      }
+      store.syncThreadStoredState(thread, turn);
+      store.clearActiveRun();
+      app.renderer.renderAll(shouldScrollRunningThread(thread.id));
+      if (app.runtime.pendingInterruptSubmit) {
+        app.runtime.resumeInterruptedSubmit?.();
+      }
     }
   }
 
@@ -93,6 +112,9 @@ export function createStreamActions(app) {
       if (message.title === "task.action_required") {
         turn.state = "waiting";
         turn.pendingAction = resolvePendingActionMetadata(message.metadata);
+        if (turn.pendingAction?.actionId !== turn.submittedPendingActionId) {
+          turn.submittedPendingActionId = null;
+        }
         store.appendStep(turn, "等待处理", message.text, "warning", message.metadata);
         return;
       }
@@ -106,18 +128,21 @@ export function createStreamActions(app) {
 
       if (message.title === "task.failed") {
         turn.pendingAction = null;
+        turn.submittedPendingActionId = null;
         turn.state = "failed";
         return;
       }
 
       if (message.title === "task.cancelled") {
         turn.pendingAction = null;
+        turn.submittedPendingActionId = null;
         turn.state = "cancelled";
         return;
       }
 
       if (message.title === "task.completed") {
         turn.pendingAction = null;
+        turn.submittedPendingActionId = null;
         turn.state = "completed";
         return;
       }
@@ -171,6 +196,7 @@ export function createStreamActions(app) {
   function finalizeTurn(thread, turn, result) {
     store.applyRuntimeMetadata(thread, turn, result.structuredOutput);
     turn.pendingAction = null;
+    turn.submittedPendingActionId = null;
     turn.state = result.status ?? "completed";
     turn.result = {
       status: result.status ?? "completed",
@@ -187,6 +213,7 @@ export function createStreamActions(app) {
 
   function finalizeTurnCancelled(turn, summary) {
     turn.pendingAction = null;
+    turn.submittedPendingActionId = null;
     turn.state = "cancelled";
     turn.result = {
       status: "cancelled",
@@ -197,12 +224,51 @@ export function createStreamActions(app) {
 
   function finalizeTurnError(turn, message) {
     turn.pendingAction = null;
+    turn.submittedPendingActionId = null;
     turn.state = "failed";
     turn.result = {
       status: "failed",
       summary: message,
     };
     store.appendStep(turn, "执行失败", message, "error");
+  }
+
+  function finalizeTerminalTurnAfterUnexpectedEof(turn) {
+    turn.pendingAction = null;
+    turn.submittedPendingActionId = null;
+
+    if (turn.result?.status === turn.state && turn.result?.summary) {
+      return;
+    }
+
+    turn.result = {
+      status: turn.state,
+      summary: resolveTerminalSummary(turn),
+    };
+  }
+
+  function resolveTerminalSummary(turn) {
+    const latestStepText = Array.isArray(turn?.steps)
+      ? [...turn.steps].reverse().find((step) => typeof step?.text === "string" && step.text.trim())?.text?.trim()
+      : "";
+
+    if (latestStepText) {
+      return latestStepText;
+    }
+
+    if (turn.state === "completed") {
+      return "任务已完成。";
+    }
+
+    if (turn.state === "cancelled") {
+      return "任务已取消。";
+    }
+
+    return "任务执行失败。";
+  }
+
+  function isTerminalTurnState(state) {
+    return state === "completed" || state === "failed" || state === "cancelled";
   }
 
   function shouldScrollRunningThread(threadId) {
