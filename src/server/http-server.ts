@@ -230,7 +230,7 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
       }
 
       if (request.method === "POST" && url.pathname === "/api/tasks/stream") {
-        return handleTaskStream(request, response, runtime, runtimeRegistry, authRuntime, taskTimeoutMs);
+        return handleTaskStream(request, response, runtime, runtimeRegistry, authRuntime, actionBridge, taskTimeoutMs);
       }
 
       if (request.method === "POST" && url.pathname === "/api/tasks/actions") {

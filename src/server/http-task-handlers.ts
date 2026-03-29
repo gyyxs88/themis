@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { InMemoryCommunicationRouter } from "../communication/router.js";
 import { WebAdapter, type WebDeliveryMessage, type WebTaskPayload } from "../channels/index.js";
+import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { appendTaskReplyQuotaFooter } from "../core/task-reply-quota.js";
@@ -17,6 +18,7 @@ export async function handleTaskStream(
   runtime: CodexTaskRuntime,
   runtimeRegistry: TaskRuntimeRegistry,
   authRuntime: CodexAuthRuntime,
+  actionBridge: AppServerActionBridge,
   taskTimeoutMs: number,
 ): Promise<void> {
   const payload = (await readJsonBody(request)) as WebTaskPayload;
@@ -24,11 +26,11 @@ export async function handleTaskStream(
   const abortController = new AbortController();
   let streamClosed = false;
   let streamCompleted = false;
-  let allowDetachedActionRecovery = false;
+  let detachedRecoveryActionId: string | null = null;
   const markClosed = (): void => {
     streamClosed = true;
 
-    if (!streamCompleted && !allowDetachedActionRecovery && !abortController.signal.aborted) {
+    if (!streamCompleted && !hasRecoverableDetachedAction(normalizedRequest, detachedRecoveryActionId, actionBridge) && !abortController.signal.aborted) {
       abortController.abort(new Error("CLIENT_DISCONNECTED"));
     }
   };
@@ -76,8 +78,8 @@ export async function handleTaskStream(
       timeoutMs: taskTimeoutMs,
       finalizeResult: (request, taskResult) => appendTaskReplyQuotaFooter(authRuntime, request, taskResult),
       onEvent: async (event) => {
-        if (event.type === "task.action_required") {
-          allowDetachedActionRecovery = true;
+        if (event.type === "task.action_required" && typeof event.payload?.actionId === "string") {
+          detachedRecoveryActionId = event.payload.actionId;
         }
 
         await router.publishEvent(event);
@@ -128,6 +130,18 @@ export async function handleTaskStream(
     request.off("close", markClosed);
     response.off("close", markClosed);
   }
+}
+
+function hasRecoverableDetachedAction(
+  request: TaskRequest | null,
+  actionId: string | null,
+  actionBridge: AppServerActionBridge,
+): boolean {
+  if (!request?.taskId || !actionId) {
+    return false;
+  }
+
+  return actionBridge.findBySubmission(request.taskId, request.requestId, actionId) !== null;
 }
 
 export async function handleTaskRun(

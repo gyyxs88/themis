@@ -622,6 +622,7 @@ test("handleTaskStream 在 close 后会中止任务并停止继续写流", async
         defaultRuntime: runtime,
       },
       authRuntime,
+      new AppServerActionBridge(),
       5_000,
     );
 
@@ -731,8 +732,10 @@ test("handleTaskStream 在 task.action_required 后 close 不会中止 waiting a
           type: "task.action_required",
           status: "waiting",
           message: "Need approval",
-          actionId: action.actionId,
-          actionType: action.actionType,
+          payload: {
+            actionId: action.actionId,
+            actionType: action.actionType,
+          },
           timestamp: "2026-03-29T09:00:00.000Z",
         });
 
@@ -759,6 +762,134 @@ test("handleTaskStream 在 task.action_required 后 close 不会中止 waiting a
       },
     };
   });
+});
+
+test("handleTaskStream 在 pending action resolve 后再次 close 会恢复 CLIENT_DISCONNECTED", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-http-task-stream-recovery-window-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: root,
+    runtimeStore,
+  });
+  const authRuntime = createAuthRuntime({
+    authenticated: false,
+    requiresOpenaiAuth: false,
+  });
+  const actionBridge = new AppServerActionBridge();
+  const request = createTaskStreamRequest({
+    goal: "请检查恢复窗口结束后再次断流",
+    sessionId: "session-task-stream-recovery-window",
+  });
+  const response = createTaskStreamResponse();
+  let abortMessage: string | null = null;
+  let capturedTaskId = "";
+  let capturedRequestId = "";
+  let resolveActionReady!: () => void;
+  const actionReady = new Promise<void>((resolve) => {
+    resolveActionReady = resolve;
+  });
+  let resolveSubmissionObserved!: () => void;
+  const submissionObserved = new Promise<void>((resolve) => {
+    resolveSubmissionObserved = resolve;
+  });
+  let releaseCompletion!: () => void;
+  const completionGate = new Promise<void>((resolve) => {
+    releaseCompletion = resolve;
+  });
+
+  try {
+    (runtime as CodexTaskRuntime & {
+      runTask: CodexTaskRuntime["runTask"];
+    }).runTask = async (taskRequest, hooks = {}) => {
+      const { onEvent, signal } = hooks;
+      assert.ok(signal);
+      capturedTaskId = taskRequest.taskId ?? "task-stream-recovery-window";
+      capturedRequestId = taskRequest.requestId;
+
+      signal.addEventListener("abort", () => {
+        abortMessage = signal.reason instanceof Error
+          ? signal.reason.message
+          : String(signal.reason);
+      }, { once: true });
+
+      const action = actionBridge.register({
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        actionId: "approval-window-1",
+        actionType: "approval",
+        prompt: "Need approval",
+      });
+      const submission = actionBridge.waitForSubmission(capturedTaskId, capturedRequestId, action.actionId);
+      assert.ok(submission);
+
+      await onEvent?.({
+        eventId: "event-recovery-window-1",
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        type: "task.action_required",
+        status: "waiting",
+        message: "Need approval",
+        payload: {
+          actionId: action.actionId,
+          actionType: action.actionType,
+        },
+        timestamp: "2026-03-29T09:00:00.000Z",
+      });
+      resolveActionReady();
+
+      await submission;
+      resolveSubmissionObserved();
+      await completionGate;
+
+      return {
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        status: signal.aborted ? "cancelled" : "completed",
+        summary: signal.aborted ? "任务已取消" : "任务已完成",
+        completedAt: "2026-03-29T09:00:02.000Z",
+      };
+    };
+
+    const streamPromise = handleTaskStream(
+      request as unknown as import("node:http").IncomingMessage,
+      response as unknown as import("node:http").ServerResponse,
+      runtime,
+      {
+        defaultRuntime: runtime,
+      },
+      authRuntime,
+      actionBridge,
+      5_000,
+    );
+
+    await actionReady;
+    assert.ok(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-window-1"));
+
+    response.emit("close");
+    assert.equal(abortMessage, null);
+
+    assert.equal(actionBridge.resolve({
+      taskId: capturedTaskId,
+      requestId: capturedRequestId,
+      actionId: "approval-window-1",
+      decision: "approve",
+    }), true);
+
+    await submissionObserved;
+    assert.equal(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-window-1"), null);
+
+    response.emit("close");
+    assert.equal(abortMessage, "CLIENT_DISCONNECTED");
+
+    releaseCompletion();
+    await streamPromise;
+
+    assert.equal(abortMessage, "CLIENT_DISCONNECTED");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 function parseNdjson(body: string): Array<{ kind?: string; title?: string; text?: unknown; result?: unknown; metadata?: unknown }> {
