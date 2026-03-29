@@ -257,9 +257,13 @@ test("initialize 恢复 waiting action 后，经过第二个 action 与再次刷
     assert.equal(restoreTurn.submittedPendingActionId, "input-restore");
     assert.equal(restoreThread.historyNeedsRehydrate, true);
     assert.equal(sharedRestoreState.restoreDoubleActionPhase, "first-action-running");
+    assert.equal(Number.isFinite(sharedRestoreState.restoreSecondStageDetailCount), true);
+    assert.equal(sharedRestoreState.restoreSecondStageDetailCount > 0, true);
   } finally {
     firstHarness.restore();
   }
+
+  const firstPhaseDetailCount = sharedRestoreState.restoreSecondStageDetailCount;
 
   const secondHarness = createActionsHarness({
     restoreScenario: "double-action-second-refresh",
@@ -289,6 +293,7 @@ test("initialize 恢复 waiting action 后，经过第二个 action 与再次刷
     assert.equal(restoreThread.historyNeedsRehydrate, false);
     assert.equal(app.runtime.restoredActionHydrationThreadId, null);
     assert.equal(sharedRestoreState.restoreDoubleActionPhase, "second-action-ready");
+    assert.equal(sharedRestoreState.restoreSecondStageDetailCount > firstPhaseDetailCount, true);
 
     dom.goalInput.value = "第二次恢复回复";
     dom.goalInput.listeners.input[0]();
@@ -399,6 +404,9 @@ function createActionsHarness(options = {}) {
   }
   if (!Number.isFinite(sharedRestoreState.restorePostSubmitDetailCount)) {
     sharedRestoreState.restorePostSubmitDetailCount = 0;
+  }
+  if (!Number.isFinite(sharedRestoreState.restoreSecondStageDetailCount)) {
+    sharedRestoreState.restoreSecondStageDetailCount = 0;
   }
   const originalLocalStorage = globalThis.localStorage;
   const originalFetch = globalThis.fetch;
@@ -839,6 +847,8 @@ function createActionsHarness(options = {}) {
 
       if (restoreScenario === "double-action-second-refresh") {
         if (!sharedRestoreState.restoreSecondActionSubmitted) {
+          sharedRestoreState.restoreSecondStageDetailCount += 1;
+
           if (sharedRestoreState.restoreDoubleActionPhase === "ready-for-second-refresh") {
             sharedRestoreState.restoreDoubleActionPhase = "second-action-ready";
             return jsonResponse({
