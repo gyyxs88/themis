@@ -272,7 +272,21 @@ test("initialize 恢复 waiting action 后，经过第二个 action 与再次刷
 
     actions.initialize();
 
-    await waitFor(() => getLatestTurn(app, restoreThread.id)?.pendingAction?.actionId === "input-restore-2", 1500);
+    await waitFor(() => {
+      const restoreTurn = getLatestTurn(app, restoreThread.id);
+      return restoreTurn?.pendingAction?.actionId === "input-restore-2"
+        && restoreTurn.state === "waiting"
+        && restoreTurn.submittedPendingActionId === null
+        && restoreThread.historyNeedsRehydrate === false
+        && app.runtime.restoredActionHydrationThreadId === null;
+    }, 1500);
+
+    const waitingRestoreTurn = getLatestTurn(app, restoreThread.id);
+
+    assert.equal(waitingRestoreTurn.state, "waiting");
+    assert.equal(waitingRestoreTurn.submittedPendingActionId, null);
+    assert.equal(restoreThread.historyNeedsRehydrate, false);
+    assert.equal(app.runtime.restoredActionHydrationThreadId, null);
 
     dom.goalInput.value = "第二次恢复回复";
     dom.goalInput.listeners.input[0]();
