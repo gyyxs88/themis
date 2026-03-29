@@ -1,6 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
 import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
+import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import type { RuntimeEngine, TaskRuntimeFacade } from "../types/index.js";
@@ -75,7 +76,13 @@ export interface ThemisHttpServerOptions {
 
 export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): Server {
   const runtime = options.runtime ?? new CodexTaskRuntime();
-  const runtimeRegistry = normalizeRuntimeRegistry(runtime, options.runtimeRegistry);
+  const actionBridge = options.actionBridge ?? new AppServerActionBridge();
+  const defaultAppServerRuntime = new AppServerTaskRuntime({
+    workingDirectory: runtime.getWorkingDirectory(),
+    runtimeStore: runtime.getRuntimeStore(),
+    actionBridge,
+  });
+  const runtimeRegistry = normalizeRuntimeRegistry(runtime, defaultAppServerRuntime, options.runtimeRegistry);
   const authRuntime = options.authRuntime ?? new CodexAuthRuntime({
     workingDirectory: runtime.getWorkingDirectory(),
     registry: runtime.getRuntimeStore(),
@@ -93,7 +100,6 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
   const runtimeStore = runtime.getRuntimeStore();
   const webAccessService = new WebAccessService({ registry: runtimeStore });
   const taskTimeoutMs = options.taskTimeoutMs ?? resolveTaskTimeoutMs();
-  const actionBridge = options.actionBridge ?? new AppServerActionBridge();
 
   return createServer(async (request, response) => {
     try {
@@ -228,11 +234,11 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
       }
 
       if (request.method === "POST" && url.pathname === "/api/tasks/actions") {
-        return await handleTaskActionSubmit(request, response, actionBridge);
+        return await handleTaskActionSubmit(request, response, actionBridge, runtimeRegistry);
       }
 
       if (request.method === "POST" && url.pathname === "/api/sessions/fork-context") {
-        return handleSessionForkContext(request, response, runtime);
+        return handleSessionForkContext(request, response, runtimeRegistry);
       }
 
       if ((request.method === "GET" || isHeadRequest) && url.pathname.startsWith("/api/sessions/") && url.pathname.endsWith("/settings")) {
@@ -248,7 +254,7 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
       }
 
       if ((request.method === "GET" || isHeadRequest) && url.pathname.startsWith("/api/history/sessions/")) {
-        return handleHistorySessionDetail(url, response, runtimeStore, isHeadRequest);
+        return await handleHistorySessionDetail(url, response, runtimeStore, runtimeRegistry, isHeadRequest);
       }
 
       if (request.method === "GET" || isHeadRequest) {
@@ -296,16 +302,32 @@ export function resolveListenAddresses(host: string, port: number): string[] {
 
 function normalizeRuntimeRegistry(
   runtime: CodexTaskRuntime,
+  defaultAppServerRuntime: TaskRuntimeFacade,
   runtimeRegistry: ThemisServerRuntimeRegistry | undefined,
 ): ThemisServerRuntimeRegistry {
+  if (!runtimeRegistry) {
+    return {
+      defaultRuntime: defaultAppServerRuntime,
+      runtimes: {
+        sdk: runtime,
+        "app-server": defaultAppServerRuntime,
+      },
+    };
+  }
+
+  const defaultRuntime = runtimeRegistry.defaultRuntime;
   const normalizedRegistry: ThemisServerRuntimeRegistry = {
-    defaultRuntime: runtime,
+    defaultRuntime,
     runtimes: {
       sdk: runtime,
-      ...(runtimeRegistry?.runtimes ?? {}),
+      ...(runtimeRegistry.runtimes ?? {}),
     },
   };
   const baseStore = runtime.getRuntimeStore();
+
+  if (defaultRuntime.getRuntimeStore() !== baseStore) {
+    throw new Error("Task runtime store mismatch for default runtime: all runtimes must share the base runtime store.");
+  }
 
   for (const [engine, registeredRuntime] of Object.entries(normalizedRegistry.runtimes ?? {})) {
     if (!registeredRuntime) {

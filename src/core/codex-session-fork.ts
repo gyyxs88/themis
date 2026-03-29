@@ -1,6 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
+import type { RuntimeEngine, TaskRuntimeForkedThread } from "../types/index.js";
 
 const CODEX_SESSION_ROOT = resolve(homedir(), ".codex/sessions");
 const THEMIS_PROMPT_PREFIX = "You are running inside Themis";
@@ -16,6 +17,8 @@ export interface CodexForkContext {
   truncated: boolean;
 }
 
+export type PreferredForkContext = CodexForkContext | TaskRuntimeForkedThread;
+
 interface ParsedSessionTurn {
   rawUserText: string;
   goal?: string;
@@ -25,6 +28,13 @@ interface ParsedSessionTurn {
 
 interface BuildForkContextOptions {
   sessionRoot?: string;
+}
+
+export interface BuildPreferredForkContextOptions {
+  runtimeEngine?: RuntimeEngine | null;
+  sourceThreadId: string;
+  forkThread?: () => Promise<{ threadId: string } | TaskRuntimeForkedThread | null>;
+  replayFallback: () => Promise<CodexForkContext | null>;
 }
 
 export async function buildForkContextFromThread(
@@ -63,6 +73,35 @@ export async function buildForkContextFromThread(
     includedTurns: transcript.includedTurns,
     truncated: transcript.truncated,
   };
+}
+
+export async function buildPreferredForkContext(
+  options: BuildPreferredForkContextOptions,
+): Promise<PreferredForkContext | null> {
+  const sourceThreadId = options.sourceThreadId.trim();
+
+  if (!sourceThreadId) {
+    return null;
+  }
+
+  if (options.runtimeEngine === "app-server" && options.forkThread) {
+    try {
+      const forked = await options.forkThread();
+      const forkedThreadId = normalizeForkedThreadId(forked);
+
+      if (forkedThreadId) {
+        return {
+          strategy: "native-thread-fork",
+          sourceThreadId,
+          threadId: forkedThreadId,
+        };
+      }
+    } catch {
+      // 原生 fork 失败时回退 transcript replay。
+    }
+  }
+
+  return await options.replayFallback();
 }
 
 async function findThreadSessionFile(threadId: string, sessionRoot: string): Promise<string | null> {
@@ -319,4 +358,18 @@ function extractBlock(prompt: string, startMarker: string, endMarkers: string[])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function normalizeForkedThreadId(
+  forked: { threadId?: string } | TaskRuntimeForkedThread | null | undefined,
+): string | null {
+  if (!forked || typeof forked !== "object") {
+    return null;
+  }
+
+  const threadId = "threadId" in forked && typeof forked.threadId === "string"
+    ? forked.threadId.trim()
+    : "";
+
+  return threadId || null;
 }

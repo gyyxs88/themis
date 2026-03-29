@@ -197,12 +197,10 @@ test("consumeNdjsonStream handles task.action_required and marks the turn as wai
       title: "task.action_required",
       text: "请确认是否继续。",
       metadata: {
-        action: {
-          actionId: "approval-1",
-          actionType: "approval",
-          prompt: "Allow command?",
-          choices: ["approve", "deny"],
-        },
+        actionId: "approval-1",
+        actionType: "approval",
+        prompt: "Allow command?",
+        choices: ["approve", "deny"],
         phase: "waiting",
       },
     };
@@ -214,7 +212,12 @@ test("consumeNdjsonStream handles task.action_required and marks the turn as wai
     }, actionMessage]).body);
 
     assert.equal(turn.state, "waiting");
-    assert.deepEqual(turn.pendingAction, actionMessage.metadata.action);
+    assert.deepEqual(turn.pendingAction, {
+      actionId: "approval-1",
+      actionType: "approval",
+      prompt: "Allow command?",
+      choices: ["approve", "deny"],
+    });
     const waitingStep = findStepByMetadata(turn.steps, actionMessage.metadata);
     assert.ok(waitingStep);
     assert.equal(waitingStep.title, "等待处理");
@@ -228,7 +231,12 @@ test("consumeNdjsonStream handles task.action_required and marks the turn as wai
     const persistedTurn = persistedThread.turns.find((entry) => entry.id === turn.id);
 
     assert.equal(persistedTurn.state, "waiting");
-    assert.deepEqual(persistedTurn.pendingAction, actionMessage.metadata.action);
+    assert.deepEqual(persistedTurn.pendingAction, {
+      actionId: "approval-1",
+      actionType: "approval",
+      prompt: "Allow command?",
+      choices: ["approve", "deny"],
+    });
   } finally {
     restore();
   }

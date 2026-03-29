@@ -1,6 +1,8 @@
 import { FeishuChannelService } from "../channels/index.js";
 import { loadProjectEnv } from "../config/project-env.js";
+import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import { CodexAuthRuntime, CodexTaskRuntime } from "../core/index.js";
+import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { createThemisHttpServer, resolveListenAddresses } from "./http-server.js";
 
 const DEFAULT_PRIVATE_ASSISTANT_PRINCIPAL_ID = "principal-local-owner";
@@ -11,6 +13,26 @@ const host = process.env.THEMIS_HOST ?? "0.0.0.0";
 const port = Number.parseInt(process.env.THEMIS_PORT ?? "3100", 10);
 const taskTimeoutMs = Number.parseInt(process.env.THEMIS_TASK_TIMEOUT_MS ?? "300000", 10);
 const runtime = new CodexTaskRuntime();
+const actionBridge = new AppServerActionBridge();
+const appServerRuntime = new AppServerTaskRuntime({
+  workingDirectory: runtime.getWorkingDirectory(),
+  runtimeStore: runtime.getRuntimeStore(),
+  actionBridge,
+});
+const sharedRuntimes = {
+  sdk: runtime,
+  "app-server": appServerRuntime,
+};
+const feishuRuntimeRegistry = {
+  defaultRuntime: appServerRuntime,
+  runtimes: sharedRuntimes,
+};
+const httpRuntimeRegistry = {
+  defaultRuntime: appServerRuntime,
+  runtimes: {
+    ...sharedRuntimes,
+  },
+};
 const authRuntime = new CodexAuthRuntime({
   registry: runtime.getRuntimeStore(),
   onManagedAccountReady: async (account) => {
@@ -27,6 +49,8 @@ const authRuntime = new CodexAuthRuntime({
 });
 const feishuService = new FeishuChannelService({
   runtime,
+  runtimeRegistry: feishuRuntimeRegistry,
+  actionBridge,
   authRuntime,
   taskTimeoutMs,
 });
@@ -34,8 +58,10 @@ const server = createThemisHttpServer({
   host,
   port,
   runtime,
+  runtimeRegistry: httpRuntimeRegistry,
   authRuntime,
   taskTimeoutMs,
+  actionBridge,
 });
 
 server.listen(port, host, () => {

@@ -8,7 +8,7 @@ import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
-import { createThemisHttpServer } from "./http-server.js";
+import { createThemisHttpServer, type ThemisServerRuntimeRegistry } from "./http-server.js";
 import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
 
 interface TestServerContext {
@@ -19,6 +19,7 @@ interface TestServerContext {
 async function withHttpServer(
   actionBridge: AppServerActionBridge,
   run: (context: TestServerContext) => Promise<void>,
+  createRuntimeRegistry?: (context: TestServerContext) => ThemisServerRuntimeRegistry | undefined,
 ): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "themis-http-task-actions-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
@@ -35,8 +36,14 @@ async function withHttpServer(
     }),
     readThirdPartyProviderProfile: () => null,
   } as unknown as CodexAuthRuntime;
+  const context = {
+    baseUrl: "",
+    runtimeStore,
+  };
+  const runtimeRegistry = createRuntimeRegistry?.(context);
   const server = createThemisHttpServer({
     runtime,
+    ...(runtimeRegistry ? { runtimeRegistry } : {}),
     authRuntime,
     actionBridge,
   });
@@ -246,6 +253,485 @@ test("/api/tasks/actions 遇到非法 JSON 时返回 400 INVALID_REQUEST", async
         },
       });
     },
+  );
+});
+
+test("/api/tasks/actions 的 review 模式会按 session runtime 选择对应 runtime", async () => {
+  let reviewCalls = 0;
+
+  await withHttpServer(
+    new AppServerActionBridge(),
+    async ({ baseUrl, runtimeStore }) => {
+      runtimeStore.saveSession({
+        sessionId: "session-review-1",
+        threadId: "thread-review-1",
+        createdAt: "2026-03-29T12:00:00.000Z",
+        updatedAt: "2026-03-29T12:00:00.000Z",
+      });
+      runtimeStore.upsertTurnFromRequest({
+        requestId: "req-review-previous",
+        taskId: "task-review-previous",
+        sourceChannel: "web",
+        user: { userId: "webui" },
+        goal: "previous app-server turn",
+        channelContext: { sessionId: "session-review-1" },
+        createdAt: "2026-03-29T12:00:00.000Z",
+      }, "task-review-previous");
+      runtimeStore.completeTaskTurn({
+        request: {
+          requestId: "req-review-previous",
+          taskId: "task-review-previous",
+          sourceChannel: "web",
+          user: { userId: "webui" },
+          goal: "previous app-server turn",
+          channelContext: { sessionId: "session-review-1" },
+          createdAt: "2026-03-29T12:00:00.000Z",
+        },
+        result: {
+          taskId: "task-review-previous",
+          requestId: "req-review-previous",
+          status: "completed",
+          summary: "ok",
+          structuredOutput: {
+            session: {
+              sessionId: "session-review-1",
+              threadId: "thread-review-1",
+              engine: "app-server",
+            },
+          },
+          completedAt: "2026-03-29T12:01:00.000Z",
+        },
+        sessionMode: "resumed",
+        threadId: "thread-review-1",
+      });
+
+      const authHeaders = await createAuthenticatedWebHeaders({
+        baseUrl,
+        runtimeStore,
+      });
+
+      const response = await fetch(`${baseUrl}/api/tasks/actions`, {
+        method: "POST",
+        headers: {
+          ...authHeaders,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          mode: "review",
+          sessionId: "session-review-1",
+          instructions: "please review current diff",
+        }),
+      });
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), {
+        ok: true,
+        reviewThreadId: "thread-review-1-review",
+        turnId: "turn-review-1",
+      });
+      assert.equal(reviewCalls, 1);
+    },
+    ({ runtimeStore }) => ({
+      defaultRuntime: {
+        runTask: async () => {
+          throw new Error("default runtime should not be used");
+        },
+        getRuntimeStore: () => runtimeStore,
+        getIdentityLinkService: () => ({}),
+        getPrincipalSkillsService: () => ({}),
+      },
+      runtimes: {
+        "app-server": {
+          runTask: async () => {
+            throw new Error("runTask should not be used");
+          },
+          startReview: async (input) => {
+            reviewCalls += 1;
+            assert.deepEqual(input, {
+              sessionId: "session-review-1",
+              instructions: "please review current diff",
+            });
+            return {
+              reviewThreadId: "thread-review-1-review",
+              turnId: "turn-review-1",
+            };
+          },
+          getRuntimeStore: () => runtimeStore,
+          getIdentityLinkService: () => ({}),
+          getPrincipalSkillsService: () => ({}),
+        },
+      },
+    }),
+  );
+});
+
+test("/api/tasks/actions 的 steer 模式在 runtime 不支持时返回清晰错误", async () => {
+  await withHttpServer(
+    new AppServerActionBridge(),
+    async ({ baseUrl, runtimeStore }) => {
+      runtimeStore.saveSession({
+        sessionId: "session-steer-unsupported-1",
+        threadId: "thread-steer-unsupported-1",
+        createdAt: "2026-03-29T12:00:00.000Z",
+        updatedAt: "2026-03-29T12:00:00.000Z",
+      });
+      runtimeStore.upsertTurnFromRequest({
+        requestId: "req-steer-previous",
+        taskId: "task-steer-previous",
+        sourceChannel: "web",
+        user: { userId: "webui" },
+        goal: "previous sdk turn",
+        channelContext: { sessionId: "session-steer-unsupported-1" },
+        createdAt: "2026-03-29T12:00:00.000Z",
+      }, "task-steer-previous");
+      runtimeStore.completeTaskTurn({
+        request: {
+          requestId: "req-steer-previous",
+          taskId: "task-steer-previous",
+          sourceChannel: "web",
+          user: { userId: "webui" },
+          goal: "previous sdk turn",
+          channelContext: { sessionId: "session-steer-unsupported-1" },
+          createdAt: "2026-03-29T12:00:00.000Z",
+        },
+        result: {
+          taskId: "task-steer-previous",
+          requestId: "req-steer-previous",
+          status: "completed",
+          summary: "ok",
+          structuredOutput: {
+            session: {
+              sessionId: "session-steer-unsupported-1",
+              threadId: "thread-steer-unsupported-1",
+              engine: "sdk",
+            },
+          },
+          completedAt: "2026-03-29T12:01:00.000Z",
+        },
+        sessionMode: "resumed",
+        threadId: "thread-steer-unsupported-1",
+      });
+
+      const authHeaders = await createAuthenticatedWebHeaders({
+        baseUrl,
+        runtimeStore,
+      });
+
+      const response = await fetch(`${baseUrl}/api/tasks/actions`, {
+        method: "POST",
+        headers: {
+          ...authHeaders,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          mode: "steer",
+          sessionId: "session-steer-unsupported-1",
+          message: "focus on tests only",
+        }),
+      });
+
+      assert.equal(response.status, 409);
+      assert.deepEqual(await response.json(), {
+        error: {
+          code: "UNSUPPORTED_ACTION",
+          message: "当前会话的运行时不支持 steer。",
+        },
+      });
+    },
+  );
+});
+
+test("/api/tasks/actions 的 steer 模式在会话状态不允许时返回 409，而不是 500", async () => {
+  await withHttpServer(
+    new AppServerActionBridge(),
+    async ({ baseUrl, runtimeStore }) => {
+      runtimeStore.saveSession({
+        sessionId: "session-steer-conflict-1",
+        threadId: "thread-steer-conflict-1",
+        createdAt: "2026-03-29T12:00:00.000Z",
+        updatedAt: "2026-03-29T12:00:00.000Z",
+      });
+      runtimeStore.upsertTurnFromRequest({
+        requestId: "req-steer-conflict-previous",
+        taskId: "task-steer-conflict-previous",
+        sourceChannel: "web",
+        user: { userId: "webui" },
+        goal: "previous app-server turn",
+        channelContext: { sessionId: "session-steer-conflict-1" },
+        createdAt: "2026-03-29T12:00:00.000Z",
+      }, "task-steer-conflict-previous");
+      runtimeStore.completeTaskTurn({
+        request: {
+          requestId: "req-steer-conflict-previous",
+          taskId: "task-steer-conflict-previous",
+          sourceChannel: "web",
+          user: { userId: "webui" },
+          goal: "previous app-server turn",
+          channelContext: { sessionId: "session-steer-conflict-1" },
+          createdAt: "2026-03-29T12:00:00.000Z",
+        },
+        result: {
+          taskId: "task-steer-conflict-previous",
+          requestId: "req-steer-conflict-previous",
+          status: "completed",
+          summary: "ok",
+          structuredOutput: {
+            session: {
+              sessionId: "session-steer-conflict-1",
+              threadId: "thread-steer-conflict-1",
+              engine: "app-server",
+            },
+          },
+          completedAt: "2026-03-29T12:01:00.000Z",
+        },
+        sessionMode: "resumed",
+        threadId: "thread-steer-conflict-1",
+      });
+
+      const authHeaders = await createAuthenticatedWebHeaders({
+        baseUrl,
+        runtimeStore,
+      });
+
+      const response = await fetch(`${baseUrl}/api/tasks/actions`, {
+        method: "POST",
+        headers: {
+          ...authHeaders,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          mode: "steer",
+          sessionId: "session-steer-conflict-1",
+          message: "focus on tests only",
+        }),
+      });
+
+      assert.equal(response.status, 409);
+      assert.deepEqual(await response.json(), {
+        error: {
+          code: "INVALID_ACTION_STATE",
+          message: "当前会话还没有可引导的 app-server turn。",
+        },
+      });
+    },
+    ({ runtimeStore }) => ({
+      defaultRuntime: {
+        runTask: async () => {
+          throw new Error("default runtime should not be used");
+        },
+        getRuntimeStore: () => runtimeStore,
+        getIdentityLinkService: () => ({}),
+        getPrincipalSkillsService: () => ({}),
+      },
+      runtimes: {
+        "app-server": {
+          runTask: async () => {
+            throw new Error("runTask should not be used");
+          },
+          steerTurn: async () => {
+            throw new Error("当前会话还没有可引导的 app-server turn。");
+          },
+          getRuntimeStore: () => runtimeStore,
+          getIdentityLinkService: () => ({}),
+          getPrincipalSkillsService: () => ({}),
+        },
+      },
+    }),
+  );
+});
+
+test("/api/tasks/actions 的 review 模式会为预绑定但无 completed turn 的 app-server session 选择 app-server runtime", async () => {
+  let reviewCalls = 0;
+  let readCalls = 0;
+
+  await withHttpServer(
+    new AppServerActionBridge(),
+    async ({ baseUrl, runtimeStore }) => {
+      runtimeStore.saveSession({
+        sessionId: "session-review-prebound-1",
+        threadId: "thread-review-prebound-1",
+        createdAt: "2026-03-29T12:00:00.000Z",
+        updatedAt: "2026-03-29T12:00:00.000Z",
+      });
+
+      const authHeaders = await createAuthenticatedWebHeaders({
+        baseUrl,
+        runtimeStore,
+      });
+
+      const response = await fetch(`${baseUrl}/api/tasks/actions`, {
+        method: "POST",
+        headers: {
+          ...authHeaders,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          mode: "review",
+          sessionId: "session-review-prebound-1",
+          instructions: "review prebound thread",
+        }),
+      });
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), {
+        ok: true,
+        reviewThreadId: "thread-review-prebound-1-review",
+        turnId: "turn-review-prebound-2",
+      });
+      assert.equal(readCalls, 1);
+      assert.equal(reviewCalls, 1);
+    },
+    ({ runtimeStore }) => ({
+      defaultRuntime: {
+        runTask: async () => {
+          throw new Error("default runtime should not be used");
+        },
+        getRuntimeStore: () => runtimeStore,
+        getIdentityLinkService: () => ({}),
+        getPrincipalSkillsService: () => ({}),
+      },
+      runtimes: {
+        "app-server": {
+          runTask: async () => {
+            throw new Error("runTask should not be used");
+          },
+          readThreadSnapshot: async (input) => {
+            readCalls += 1;
+            assert.deepEqual(input, {
+              threadId: "thread-review-prebound-1",
+            });
+            return {
+              threadId: "thread-review-prebound-1",
+              turnCount: 0,
+              turns: [],
+            };
+          },
+          startReview: async (input) => {
+            reviewCalls += 1;
+            assert.deepEqual(input, {
+              sessionId: "session-review-prebound-1",
+              instructions: "review prebound thread",
+            });
+            return {
+              reviewThreadId: "thread-review-prebound-1-review",
+              turnId: "turn-review-prebound-2",
+            };
+          },
+          getRuntimeStore: () => runtimeStore,
+          getIdentityLinkService: () => ({}),
+          getPrincipalSkillsService: () => ({}),
+        },
+      },
+    }),
+  );
+});
+
+test("/api/tasks/actions 的 review 模式在旧 sdk turn 后切到预绑定 app-server thread 时仍选择 app-server runtime", async () => {
+  let reviewCalls = 0;
+
+  await withHttpServer(
+    new AppServerActionBridge(),
+    async ({ baseUrl, runtimeStore }) => {
+      runtimeStore.upsertTurnFromRequest({
+        requestId: "req-review-mixed-sdk-1",
+        taskId: "task-review-mixed-sdk-1",
+        sourceChannel: "web",
+        user: { userId: "webui" },
+        goal: "previous sdk turn",
+        channelContext: { sessionId: "session-review-mixed-1" },
+        createdAt: "2026-03-29T13:00:00.000Z",
+      }, "task-review-mixed-sdk-1");
+      runtimeStore.completeTaskTurn({
+        request: {
+          requestId: "req-review-mixed-sdk-1",
+          taskId: "task-review-mixed-sdk-1",
+          sourceChannel: "web",
+          user: { userId: "webui" },
+          goal: "previous sdk turn",
+          channelContext: { sessionId: "session-review-mixed-1" },
+          createdAt: "2026-03-29T13:00:00.000Z",
+        },
+        result: {
+          taskId: "task-review-mixed-sdk-1",
+          requestId: "req-review-mixed-sdk-1",
+          status: "completed",
+          summary: "sdk completed",
+          structuredOutput: {
+            session: {
+              sessionId: "session-review-mixed-1",
+              threadId: "thread-sdk-review-legacy-1",
+              engine: "sdk",
+            },
+          },
+          completedAt: "2026-03-29T13:00:30.000Z",
+        },
+        sessionMode: "resumed",
+        threadId: "thread-sdk-review-legacy-1",
+      });
+      runtimeStore.saveSession({
+        sessionId: "session-review-mixed-1",
+        threadId: "thread-app-review-migrated-1",
+        createdAt: "2026-03-29T13:00:00.000Z",
+        updatedAt: "2026-03-29T13:01:00.000Z",
+      });
+
+      const authHeaders = await createAuthenticatedWebHeaders({
+        baseUrl,
+        runtimeStore,
+      });
+
+      const response = await fetch(`${baseUrl}/api/tasks/actions`, {
+        method: "POST",
+        headers: {
+          ...authHeaders,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          mode: "review",
+          sessionId: "session-review-mixed-1",
+          instructions: "review migrated thread",
+        }),
+      });
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), {
+        ok: true,
+        reviewThreadId: "thread-app-review-migrated-1-review",
+        turnId: "turn-review-mixed-1",
+      });
+      assert.equal(reviewCalls, 1);
+    },
+    ({ runtimeStore }) => ({
+      defaultRuntime: {
+        runTask: async () => {
+          throw new Error("default runtime should not be used");
+        },
+        getRuntimeStore: () => runtimeStore,
+        getIdentityLinkService: () => ({}),
+        getPrincipalSkillsService: () => ({}),
+      },
+      runtimes: {
+        "app-server": {
+          runTask: async () => {
+            throw new Error("runTask should not be used");
+          },
+          startReview: async (input) => {
+            reviewCalls += 1;
+            assert.deepEqual(input, {
+              sessionId: "session-review-mixed-1",
+              instructions: "review migrated thread",
+            });
+            return {
+              reviewThreadId: "thread-app-review-migrated-1-review",
+              turnId: "turn-review-mixed-1",
+            };
+          },
+          getRuntimeStore: () => runtimeStore,
+          getIdentityLinkService: () => ({}),
+          getPrincipalSkillsService: () => ({}),
+        },
+      },
+    }),
   );
 });
 

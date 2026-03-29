@@ -286,11 +286,12 @@ export function createStoreHelpers({ app, getState, saveState }) {
   function repairInterruptedTurns() {
     for (const thread of getState().threads) {
       for (const turn of thread.turns) {
-        if (turn.state !== "queued" && turn.state !== "running") {
+        if (turn.state !== "queued" && turn.state !== "running" && turn.state !== "waiting") {
           continue;
         }
 
         turn.state = "cancelled";
+        turn.pendingAction = null;
         turn.result = turn.result ?? {
           status: "cancelled",
           summary: "浏览器刷新或会话关闭后，本次任务已中断。",

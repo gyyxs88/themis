@@ -25,6 +25,10 @@ test("resolveRuntimeEngine 会在未配置时使用 sdk 作为后备值", () => 
   assert.equal(resolveRuntimeEngine(undefined, "sdk"), "sdk");
 });
 
+test("resolveRuntimeEngine 在未显式传 fallback 时默认回 app-server", () => {
+  assert.equal(resolveRuntimeEngine(undefined), "app-server");
+});
+
 test("resolveRuntimeEngine 会在未配置时使用 app-server 作为后备值", () => {
   assert.equal(resolveRuntimeEngine(undefined, "app-server"), "app-server");
 });

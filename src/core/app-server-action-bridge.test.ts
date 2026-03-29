@@ -55,3 +55,58 @@ test("AppServerActionBridge 会在 resolve 后把提交 payload 回填给 waitFo
     decision: "approve",
   });
 });
+
+test("AppServerActionBridge 查找同名 actionId 时可以按 scope 限定当前会话", () => {
+  const bridge = new AppServerActionBridge();
+
+  bridge.register({
+    taskId: "task-other",
+    requestId: "req-other",
+    actionId: "approval-shared",
+    actionType: "approval",
+    prompt: "Allow other command?",
+    scope: {
+      sourceChannel: "feishu",
+      sessionId: "session-other",
+      userId: "user-1",
+    },
+  });
+  bridge.register({
+    taskId: "task-current",
+    requestId: "req-current",
+    actionId: "approval-shared",
+    actionType: "approval",
+    prompt: "Allow current command?",
+    scope: {
+      sourceChannel: "feishu",
+      sessionId: "session-current",
+      userId: "user-1",
+    },
+  });
+
+  assert.equal(bridge.find("approval-shared", {
+    sourceChannel: "feishu",
+    sessionId: "session-current",
+    userId: "user-1",
+  })?.taskId, "task-current");
+  assert.equal(bridge.find("approval-shared", {
+    sourceChannel: "feishu",
+    sessionId: "session-missing",
+    userId: "user-1",
+  }), null);
+});
+
+test("AppServerActionBridge 支持丢弃未完成的 pending action", () => {
+  const bridge = new AppServerActionBridge();
+
+  bridge.register({
+    taskId: "task-drop",
+    requestId: "req-drop",
+    actionId: "approval-drop",
+    actionType: "approval",
+    prompt: "Allow command?",
+  });
+
+  bridge.discard("task-drop", "req-drop", "approval-drop");
+  assert.equal(bridge.find("approval-drop"), null);
+});

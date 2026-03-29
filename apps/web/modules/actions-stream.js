@@ -92,7 +92,7 @@ export function createStreamActions(app) {
 
       if (message.title === "task.action_required") {
         turn.state = "waiting";
-        turn.pendingAction = message.metadata?.action ?? null;
+        turn.pendingAction = resolvePendingActionMetadata(message.metadata);
         store.appendStep(turn, "等待处理", message.text, "warning", message.metadata);
         return;
       }
@@ -207,6 +207,40 @@ export function createStreamActions(app) {
 
   function shouldScrollRunningThread(threadId) {
     return store.state.activeThreadId === threadId;
+  }
+
+  function resolvePendingActionMetadata(metadata) {
+    if (!metadata || typeof metadata !== "object") {
+      return null;
+    }
+
+    const directAction = normalizePendingAction(metadata);
+
+    if (directAction) {
+      return directAction;
+    }
+
+    return normalizePendingAction(metadata.action);
+  }
+
+  function normalizePendingAction(value) {
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+
+    const actionId = typeof value.actionId === "string" ? value.actionId : "";
+    const actionType = typeof value.actionType === "string" ? value.actionType : "";
+
+    if (!actionId || !actionType) {
+      return null;
+    }
+
+    return {
+      actionId,
+      actionType,
+      ...(typeof value.prompt === "string" ? { prompt: value.prompt } : {}),
+      ...(Array.isArray(value.choices) ? { choices: value.choices.filter((choice) => typeof choice === "string") } : {}),
+    };
   }
 
   return {

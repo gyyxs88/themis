@@ -11,11 +11,71 @@ export interface TaskRuntimeRunHooks {
   finalizeResult?: (request: TaskRequest, result: TaskResult) => Promise<TaskResult> | TaskResult;
 }
 
+export interface TaskRuntimeStartReviewRequest {
+  sessionId: string;
+  instructions: string;
+}
+
+export interface TaskRuntimeStartReviewResult {
+  reviewThreadId: string;
+  turnId: string;
+}
+
+export interface TaskRuntimeSteerTurnRequest {
+  sessionId: string;
+  message: string;
+  turnId?: string;
+}
+
+export interface TaskRuntimeSteerTurnResult {
+  turnId: string;
+}
+
+export interface TaskRuntimeForkThreadRequest {
+  threadId: string;
+}
+
+export interface TaskRuntimeForkedThread {
+  strategy: "native-thread-fork";
+  sourceThreadId: string;
+  threadId: string;
+}
+
+export interface TaskRuntimeReadThreadSnapshotRequest {
+  threadId: string;
+  includeTurns?: boolean;
+}
+
+export interface TaskRuntimeThreadSnapshotTurn {
+  turnId: string;
+  status?: string;
+  summary?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface TaskRuntimeThreadSnapshot {
+  threadId: string;
+  preview?: string;
+  status?: string;
+  cwd?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  turnCount: number;
+  turns: TaskRuntimeThreadSnapshotTurn[];
+}
+
 export interface TaskRuntimeFacade {
   runTask: (request: TaskRequest, hooks?: TaskRuntimeRunHooks) => Promise<TaskResult>;
   getRuntimeStore: () => unknown;
   getIdentityLinkService: () => unknown;
   getPrincipalSkillsService: () => unknown;
+  startReview?: (request: TaskRuntimeStartReviewRequest) => Promise<TaskRuntimeStartReviewResult>;
+  steerTurn?: (request: TaskRuntimeSteerTurnRequest) => Promise<TaskRuntimeSteerTurnResult>;
+  forkThread?: (request: TaskRuntimeForkThreadRequest) => Promise<TaskRuntimeForkedThread | null>;
+  readThreadSnapshot?: (
+    request: TaskRuntimeReadThreadSnapshotRequest,
+  ) => Promise<TaskRuntimeThreadSnapshot | null>;
 }
 
 export interface TaskRuntimeRegistry {
@@ -32,7 +92,7 @@ export function parseRuntimeEngine(value: string | undefined | null): RuntimeEng
 
 export function resolveRuntimeEngine(
   configured: string | undefined | null,
-  fallback: RuntimeEngine = "sdk",
+  fallback: RuntimeEngine = "app-server",
 ): RuntimeEngine {
   return parseRuntimeEngine(configured) ?? fallback;
 }

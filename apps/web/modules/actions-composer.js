@@ -105,6 +105,13 @@ export function createComposerActions(app, streamActions) {
       return;
     }
 
+    const specialAction = parseSpecialAction(mergeDraftContent(thread.draftGoal, thread.draftContext));
+
+    if (specialAction) {
+      await submitSpecialAction(thread, currentTurn, specialAction);
+      return;
+    }
+
     const runningThreadId = store.getRunningThreadId();
 
     if (runningThreadId) {
@@ -324,6 +331,42 @@ export function createComposerActions(app, streamActions) {
     app.renderer.renderAll(shouldScrollThread(thread.id));
   }
 
+  async function submitSpecialAction(thread, currentTurn, specialAction) {
+    if (!specialAction.value) {
+      if (store.getActiveThread()?.id === thread.id) {
+        dom.goalInput.focus();
+      }
+      return;
+    }
+
+    try {
+      if (specialAction.mode === "review") {
+        await actionInteraction.submitReview(thread, specialAction.value);
+        store.setTransientStatus(thread.id, "已提交 review 请求。");
+      } else if (specialAction.mode === "steer") {
+        const steerTurn = resolveSteerTurn(thread, currentTurn);
+        await actionInteraction.submitSteer(thread, specialAction.value, steerTurn?.serverTurnId);
+        store.setTransientStatus(thread.id, "已发送 steer 请求。");
+      } else {
+        store.setTransientStatus(thread.id, `暂不支持指令：/${specialAction.mode}`);
+        app.renderer.renderAll();
+        return;
+      }
+    } catch (error) {
+      store.setTransientStatus(thread.id, error?.message ?? "提交 action 失败");
+      app.renderer.renderAll();
+      return;
+    }
+
+    thread.draftGoal = "";
+    thread.draftContext = "";
+    dom.goalInput.value = "";
+    app.utils.autoResizeTextarea(dom.goalInput);
+    store.touchThread(thread.id);
+    store.saveState();
+    app.renderer.renderAll(shouldScrollThread(thread.id));
+  }
+
   async function submitActionRequest(payload) {
     const response = await fetch("/api/tasks/actions", {
       method: "POST",
@@ -434,6 +477,38 @@ export function createComposerActions(app, streamActions) {
     }
 
     return `${normalizedGoal}\n\n补充要求：\n${normalizedContext}`;
+  }
+
+  function parseSpecialAction(goal) {
+    const normalizedGoal = typeof goal === "string" ? goal.trim() : "";
+
+    if (!normalizedGoal.startsWith("/")) {
+      return null;
+    }
+
+    if (/^\/review(?:\s|$)/.test(normalizedGoal)) {
+      return {
+        mode: "review",
+        value: normalizedGoal.replace(/^\/review\b/, "").trim(),
+      };
+    }
+
+    if (/^\/steer(?:\s|$)/.test(normalizedGoal)) {
+      return {
+        mode: "steer",
+        value: normalizedGoal.replace(/^\/steer\b/, "").trim(),
+      };
+    }
+
+    return null;
+  }
+
+  function resolveSteerTurn(thread, currentTurn) {
+    if (app.runtime.activeRunRef?.threadId === thread.id && currentTurn) {
+      return currentTurn;
+    }
+
+    return thread.turns.at(-1) ?? null;
   }
 
   function clearSubmittedDraft(thread, pendingSubmission) {

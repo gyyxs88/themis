@@ -13,6 +13,27 @@ export function createActionInteraction(options) {
     });
   }
 
+  async function submitReview(thread, instructions) {
+    await submitAction({
+      mode: "review",
+      sessionId: thread.id,
+      instructions,
+    });
+
+    return { ok: true };
+  }
+
+  async function submitSteer(thread, message, turnId) {
+    await submitAction({
+      mode: "steer",
+      sessionId: thread.id,
+      message,
+      ...(typeof turnId === "string" && turnId ? { turnId } : {}),
+    });
+
+    return { ok: true };
+  }
+
   async function submitPendingAction(turn, payload) {
     if (!turn?.pendingAction) {
       return { ok: false };
@@ -32,6 +53,8 @@ export function createActionInteraction(options) {
 
   return {
     submitApproval,
+    submitReview,
+    submitSteer,
     submitUserInput,
   };
 }

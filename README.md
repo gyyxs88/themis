@@ -1,6 +1,6 @@
 # Themis
 
-Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
+Themis 是一个以 `codex app-server` 为主执行链路、面向内部协作的 Codex 壳项目。
 
 当前目标不是再包一层通用平台，而是把 Codex 的能力收敛成更适合内部员工使用的 Web / 飞书入口，并把项目现状、决策、任务和长期可复用结论持续留在仓库里。
 
@@ -8,7 +8,7 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 
 - 员工主入口已经是 LAN Web 聊天工作台。
 - 飞书长连接渠道已经接入，可与 Web 共享同一套通信层、运行时和本地持久化。
-- 后端围绕 `@openai/codex-sdk` 做会话复用、流式输出、分叉上下文和历史恢复。
+- 后端任务主执行链路已经切到 `codex app-server`；Web 与飞书默认新任务都会走 app-server runtime，`@openai/codex-sdk` 仅保留显式 `runtimeEngine: sdk` 与历史兼容路径，不再作为默认主执行引擎。
 - 本地 SQLite `infra/local/themis.db` 负责持久化 conversation、turn、event、touched files、identity 和第三方兼容 provider 配置。
 - Web 端已支持 Codex 认证、设备码登录、多账号自动建槽与管理、会话级手动切号、历史加载、会话分叉、第三方兼容接入、首次对话长期画像建档、principal 级长期人格配置和运行参数设置。
 - LAN Web 页面和受保护 API 现在要求 owner 访问口令登录；登录后由服务端 session 配合 `HttpOnly` cookie 维持 30 天，会话失效后需要重新登录。
@@ -59,9 +59,10 @@ Themis 是一个构建在 Codex SDK 之上的内部协作壳项目。
 - 会话工作区冻结：会话一旦出现后端已执行痕迹（例如已确认的 turn / 已有服务端历史），就不能再修改 `workspacePath`，只能新建会话后再改。
 - 执行目录解析：运行时每次执行任务会按会话解析工作区目录；如果当前会话没设置工作区会回退到 Themis 启动目录。Themis 自身 SQLite、认证账号槽位和第三方 provider 配置仍固定在控制目录体系下管理。
 - NDJSON 流式任务输出：支持中途事件、最终结果、取消和断连中止。
+- Web `/api/tasks/actions` 与飞书命令式 action 回路都已接上 app-server waiting action：飞书收到等待中的审批或补充输入后，可用 `/approve <actionId>`、`/deny <actionId>`、`/reply <actionId> <内容>` 完成回填。
 - 回复额度尾注：认证模式下，Web / 飞书最终回复会附带当前认证返回的额度剩余尾注；当前 ChatGPT 常见会显示 `5h` 和 `1w` 两个窗口。
 - 多账号认证池：当前只针对 ChatGPT 登录态做多账号自动建槽；Themis 会按真实账号邮箱自动创建并命名账号槽位，自动把认证文件归档到对应 `CODEX_HOME`；再次检测到同邮箱时会直接复用已有槽位。Web 和飞书现在共享同一份 `principal` 级默认认证账号与任务配置；飞书支持 `/settings account ...` 命令树，同时保留 `/account ...` 兼容入口。
-- 飞书长连接主链路：普通文本消息、会话切换、命令、额度查询，以及“处理中占位槽位 + 顺序延迟 progress 缓冲 + 消息编辑更新 + 飞书富文本渲染”的回复桥接。
+- 飞书长连接主链路：普通文本消息、会话切换、命令、额度查询，以及“处理中占位槽位 + 顺序延迟 progress 缓冲 + 消息编辑更新 + 飞书富文本渲染”的回复桥接；默认普通任务与最小 action 闭环都已走 app-server runtime。
 - 身份与会话辅助：Web 浏览器身份、一次性绑定码、跨端接入已有 `conversationId`。
 - 长期协作档案：首次对话会进入一次性 bootstrap，用 4 轮分组采集称呼、长期背景、协作偏好，以及 Themis 的长期人格字段（语言风格 / 性格标签 / 补充说明 / SOUL），并按 `principal` 持久化；后续跨 Web / 飞书、跨会话复用。
 - principal 重置：Web 顶部按钮和飞书 `/reset confirm` 都可以清空当前 principal 的人格档案、对话历史、默认任务配置和后端线程索引，并重新开始。

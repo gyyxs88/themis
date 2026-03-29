@@ -48,6 +48,10 @@ export class FeishuTaskMessageBridge {
   async deliver(message: FeishuDeliveryMessage): Promise<void> {
     switch (message.kind) {
       case "event":
+        if (message.title === "task.action_required") {
+          await this.deliverWaitingAction(message);
+          return;
+        }
         await this.deliverProgress(message);
         return;
       case "result":
@@ -107,6 +111,17 @@ export class FeishuTaskMessageBridge {
     }
 
     await this.deliverTerminalText(buildFeishuTerminalStateText("任务失败", text));
+  }
+
+  private async deliverWaitingAction(message: FeishuDeliveryMessage): Promise<void> {
+    const metadata = asRecord(message.metadata);
+    const text = resolveDeliveryText(message, metadata);
+
+    if (!text) {
+      return;
+    }
+
+    await this.deliverTerminalText(text);
   }
 
   private async deliverProgressText(text: string): Promise<void> {

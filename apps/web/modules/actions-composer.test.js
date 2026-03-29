@@ -99,6 +99,106 @@ test("waiting 时点击取消不会直接把 turn 标成 cancelled", async () =>
   }
 });
 
+test("composer 输入 /review 会走 /api/tasks/actions 的 review 模式，而不是普通 stream", async () => {
+  const harness = createComposerHarness({
+    activeThreadDraftGoal: "/review please review current diff",
+  });
+
+  try {
+    const { app, dom } = harness;
+    const actions = createComposerActions(app, {
+      consumeNdjsonStream: async () => {
+        throw new Error("stream should not run for /review");
+      },
+      finalizeTurnCancelled() {},
+      finalizeTurnError() {},
+    });
+    actions.bindComposerControls();
+
+    await dom.form.listeners.submit[0]({
+      preventDefault() {},
+    });
+
+    assert.equal(app.runtime.submitActionCalls.length, 1);
+    assert.deepEqual(app.runtime.submitActionCalls[0], {
+      mode: "review",
+      sessionId: "thread-a",
+      instructions: "please review current diff",
+    });
+    assert.equal(app.runtime.streamRequestCount, 0);
+  } finally {
+    harness.restore();
+  }
+});
+
+test("composer 输入 /steer 会走 /api/tasks/actions 的 steer 模式，而不是打断成新任务", async () => {
+  const harness = createComposerHarness({
+    activeThreadDraftGoal: "/steer focus on tests only",
+    activeTurnState: "running",
+    activeTurnAction: null,
+  });
+
+  try {
+    const { app, dom } = harness;
+    const actions = createComposerActions(app, {
+      consumeNdjsonStream: async () => {
+        throw new Error("stream should not run for /steer");
+      },
+      finalizeTurnCancelled() {},
+      finalizeTurnError() {},
+    });
+    actions.bindComposerControls();
+
+    await dom.form.listeners.submit[0]({
+      preventDefault() {},
+    });
+
+    assert.equal(app.runtime.submitActionCalls.length, 1);
+    assert.deepEqual(app.runtime.submitActionCalls[0], {
+      mode: "steer",
+      sessionId: "thread-a",
+      message: "focus on tests only",
+    });
+    assert.equal(app.runtime.abortCount, 0);
+    assert.equal(app.runtime.streamRequestCount, 0);
+  } finally {
+    harness.restore();
+  }
+});
+
+test("composer 输入 /steer 时不会强依赖本地当前 turn 仍处于 running", async () => {
+  const harness = createComposerHarness({
+    activeThreadDraftGoal: "/steer keep going",
+    activeTurnState: "completed",
+    activeTurnAction: null,
+  });
+
+  try {
+    const { app, dom } = harness;
+    const actions = createComposerActions(app, {
+      consumeNdjsonStream: async () => {
+        throw new Error("stream should not run for /steer");
+      },
+      finalizeTurnCancelled() {},
+      finalizeTurnError() {},
+    });
+    actions.bindComposerControls();
+
+    await dom.form.listeners.submit[0]({
+      preventDefault() {},
+    });
+
+    assert.equal(app.runtime.submitActionCalls.length, 1);
+    assert.deepEqual(app.runtime.submitActionCalls[0], {
+      mode: "steer",
+      sessionId: "thread-a",
+      message: "keep going",
+    });
+  } finally {
+    harness.restore();
+  }
+});
+
 function createComposerHarness(options = {}) {
   const renderCalls = [];
   const waitingThread = createThreadRecord({
@@ -138,6 +238,7 @@ function createComposerHarness(options = {}) {
       sessionControlBusy: false,
       pendingInterruptSubmit: null,
       abortCount: 0,
+      streamRequestCount: 0,
       submitActionCalls: [],
     },
     utils: {
@@ -249,7 +350,13 @@ function createComposerHarness(options = {}) {
 
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_url, init = {}) => {
-    app.runtime.submitActionCalls.push(JSON.parse(init.body));
+    const url = typeof _url === "string" ? _url : _url?.url ?? String(_url);
+    if (url === "/api/tasks/actions") {
+      app.runtime.submitActionCalls.push(JSON.parse(init.body));
+    }
+    if (url === "/api/tasks/stream") {
+      app.runtime.streamRequestCount += 1;
+    }
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { "Content-Type": "application/json" },

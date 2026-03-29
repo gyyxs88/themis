@@ -35,6 +35,7 @@ interface AppServerJourneySessionState {
   started: Array<{ cwd: string }>;
   resumed: Array<{ threadId: string; cwd: string }>;
   prompts: string[];
+  read: string[];
 }
 
 for (const runtimeEngine of ["sdk", "app-server"] as const) {
@@ -132,6 +133,11 @@ for (const runtimeEngine of ["sdk", "app-server"] as const) {
       assert.equal(historyDetailResponse.status, 200);
 
       const historyDetailPayload = await historyDetailResponse.json() as {
+        nativeThread?: {
+          threadId?: string;
+          preview?: string;
+          turnCount?: number;
+        };
         turns?: Array<{
           events?: Array<{
             type?: string;
@@ -163,6 +169,12 @@ for (const runtimeEngine of ["sdk", "app-server"] as const) {
         assert.match(appServerJourneyState.prompts[0] ?? "", /真实 web 旅程测试/);
         assert.match(appServerJourneyState.prompts[1] ?? "", /继续执行真实 web 旅程测试/);
         assert.equal(runtimeStore.getSession(sessionId)?.threadId, "thread-app-web-journey-1");
+        assert.deepEqual(historyDetailPayload.nativeThread, {
+          threadId: "thread-app-web-journey-1",
+          preview: "app-server native preview",
+          turnCount: 2,
+        });
+        assert.deepEqual(appServerJourneyState.read, ["thread-app-web-journey-1"]);
       }
       assert.equal(runtimeStore.getSession(sessionId)?.activeTaskId, undefined);
     });
@@ -206,6 +218,19 @@ async function withHttpServer(
       resumeThread: async (threadId, params) => {
         appServerJourneyState.resumed.push({ threadId, cwd: params.cwd });
         return { threadId };
+      },
+      readThread: async (threadId) => {
+        appServerJourneyState.read.push(threadId);
+        return {
+          threadId,
+          preview: "app-server native preview",
+          status: "idle",
+          cwd: controlDirectory,
+          createdAt: "2026-03-29T08:00:00.000Z",
+          updatedAt: "2026-03-29T08:05:00.000Z",
+          turnCount: 2,
+          turns: [],
+        };
       },
       startTurn: async (_threadId, prompt) => {
         appServerJourneyState.prompts.push(prompt);
@@ -308,6 +333,7 @@ function createAppServerJourneySessionState(): AppServerJourneySessionState {
     started: [],
     resumed: [],
     prompts: [],
+    read: [],
   };
 }
 

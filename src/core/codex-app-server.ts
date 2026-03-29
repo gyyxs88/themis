@@ -2,6 +2,10 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import type {
+  TaskRuntimeThreadSnapshot,
+  TaskRuntimeThreadSnapshotTurn,
+} from "../types/runtime-engine.js";
 import { buildCodexCliConfigArgs, type CodexCliConfigOverrides } from "./auth-accounts.js";
 
 export interface CodexRuntimeReasoningOption {
@@ -151,6 +155,8 @@ export interface AppServerThreadStartParams {
   approvalPolicy?: string;
   sandbox?: string;
   webSearchMode?: string;
+  experimentalRawEvents?: boolean;
+  persistExtendedHistory?: boolean;
 }
 
 export interface AppServerReverseRequest {
@@ -186,7 +192,24 @@ interface AppServerThreadResponse {
   threadId?: unknown;
 }
 
+interface AppServerThreadForkResponse {
+  thread?: unknown;
+}
+
+interface AppServerThreadReadResponse {
+  thread?: unknown;
+}
+
 interface AppServerTurnResponse {
+  turnId?: unknown;
+}
+
+interface AppServerReviewStartResponse {
+  turn?: unknown;
+  reviewThreadId?: unknown;
+}
+
+interface AppServerTurnSteerResponse {
   turnId?: unknown;
 }
 
@@ -399,7 +422,11 @@ export class CodexAppServerSession {
   }
 
   async startThread(params: AppServerThreadStartParams): Promise<{ threadId: string }> {
-    const response = await this.request<AppServerThreadResponse>("thread/start", params);
+    const response = await this.request<AppServerThreadResponse>("thread/start", {
+      experimentalRawEvents: params.experimentalRawEvents ?? false,
+      persistExtendedHistory: params.persistExtendedHistory ?? true,
+      ...params,
+    });
 
     return {
       threadId: requireText(response.threadId, "codex app-server thread/start did not return a threadId."),
@@ -408,6 +435,7 @@ export class CodexAppServerSession {
 
   async resumeThread(threadId: string, params: AppServerThreadStartParams): Promise<{ threadId: string }> {
     const response = await this.request<AppServerThreadResponse>("thread/resume", {
+      persistExtendedHistory: params.persistExtendedHistory ?? true,
       ...params,
       threadId,
     });
@@ -415,6 +443,34 @@ export class CodexAppServerSession {
     return {
       threadId: requireText(response.threadId, "codex app-server thread/resume did not return a threadId."),
     };
+  }
+
+  async forkThread(threadId: string): Promise<{ threadId: string }> {
+    const response = await this.request<AppServerThreadForkResponse>("thread/fork", {
+      threadId,
+      persistExtendedHistory: true,
+    });
+
+    return {
+      threadId: requireText(
+        extractThreadId(response.thread),
+        "codex app-server thread/fork did not return a thread.id.",
+      ),
+    };
+  }
+
+  async readThread(
+    threadId: string,
+    options: {
+      includeTurns?: boolean;
+    } = {},
+  ): Promise<TaskRuntimeThreadSnapshot> {
+    const response = await this.request<AppServerThreadReadResponse>("thread/read", {
+      threadId,
+      includeTurns: options.includeTurns === true,
+    });
+
+    return normalizeThreadSnapshot(response.thread);
   }
 
   async startTurn(threadId: string, prompt: string): Promise<{ turnId: string }> {
@@ -425,6 +481,45 @@ export class CodexAppServerSession {
 
     return {
       turnId: requireText(response.turnId, "codex app-server turn/start did not return a turnId."),
+    };
+  }
+
+  async startReview(threadId: string, instructions: string): Promise<{ reviewThreadId: string; turnId: string }> {
+    const response = await this.request<AppServerReviewStartResponse>("review/start", {
+      threadId,
+      target: {
+        type: "custom",
+        instructions,
+      },
+    });
+
+    return {
+      reviewThreadId: requireText(
+        response.reviewThreadId,
+        "codex app-server review/start did not return a reviewThreadId.",
+      ),
+      turnId: requireText(
+        extractTurnId(response.turn),
+        "codex app-server review/start did not return a turn.id.",
+      ),
+    };
+  }
+
+  async steerTurn(threadId: string, expectedTurnId: string, message: string): Promise<{ turnId: string }> {
+    const response = await this.request<AppServerTurnSteerResponse>("turn/steer", {
+      threadId,
+      expectedTurnId,
+      input: [
+        {
+          type: "text",
+          text: message,
+          text_elements: [],
+        },
+      ],
+    });
+
+    return {
+      turnId: requireText(response.turnId, "codex app-server turn/steer did not return a turnId."),
     };
   }
 
@@ -897,6 +992,74 @@ function normalizeAuthRateLimitCredits(value: unknown): CodexAuthRateLimitCredit
   };
 }
 
+function extractThreadId(thread: unknown): string | null {
+  if (!isRecord(thread)) {
+    return null;
+  }
+
+  return normalizeOptionalText(thread.id);
+}
+
+function extractTurnId(turn: unknown): string | null {
+  if (!isRecord(turn)) {
+    return null;
+  }
+
+  return normalizeOptionalText(turn.id) ?? normalizeOptionalText(turn.turnId);
+}
+
+function normalizeThreadSnapshot(thread: unknown): TaskRuntimeThreadSnapshot {
+  if (!isRecord(thread)) {
+    throw new Error("codex app-server thread/read did not return a thread.");
+  }
+
+  const threadId = requireText(thread.id, "codex app-server thread/read did not return a thread.id.");
+  const preview = normalizeOptionalText(thread.preview);
+  const status = normalizeOptionalText(thread.status);
+  const cwd = normalizeOptionalText(thread.cwd);
+  const createdAt = normalizeOptionalTimestamp(thread.createdAt);
+  const updatedAt = normalizeOptionalTimestamp(thread.updatedAt);
+  const turns = Array.isArray(thread.turns)
+    ? thread.turns.map(normalizeThreadTurn).filter((value): value is TaskRuntimeThreadSnapshotTurn => value !== null)
+    : [];
+
+  return {
+    threadId,
+    ...(preview ? { preview } : {}),
+    ...(status ? { status } : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(createdAt ? { createdAt } : {}),
+    ...(updatedAt ? { updatedAt } : {}),
+    turnCount: turns.length,
+    turns,
+  };
+}
+
+function normalizeThreadTurn(threadTurn: unknown): TaskRuntimeThreadSnapshotTurn | null {
+  if (!isRecord(threadTurn)) {
+    return null;
+  }
+
+  const turnId = normalizeOptionalText(threadTurn.id) ?? normalizeOptionalText(threadTurn.turnId);
+
+  if (!turnId) {
+    return null;
+  }
+
+  const status = normalizeOptionalText(threadTurn.status);
+  const summary = normalizeOptionalText(threadTurn.preview) ?? normalizeOptionalText(threadTurn.summary);
+  const createdAt = normalizeOptionalTimestamp(threadTurn.createdAt);
+  const updatedAt = normalizeOptionalTimestamp(threadTurn.updatedAt);
+
+  return {
+    turnId,
+    ...(status ? { status } : {}),
+    ...(summary ? { summary } : {}),
+    ...(createdAt ? { createdAt } : {}),
+    ...(updatedAt ? { updatedAt } : {}),
+  };
+}
+
 function requireText(value: unknown, errorMessage: string): string {
   const text = normalizeOptionalText(value);
 
@@ -943,6 +1106,14 @@ function normalizeUnixTimestamp(value: unknown): string | null {
   }
 
   return new Date(value * 1000).toISOString();
+}
+
+function normalizeOptionalTimestamp(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return new Date(value * 1000).toISOString();
+  }
+
+  return normalizeOptionalText(value);
 }
 
 function normalizeOptionalText(value: unknown): string | null {

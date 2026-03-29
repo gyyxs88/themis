@@ -141,7 +141,15 @@ test("/api/tasks/stream 会按 ack -> event* -> result -> done 顺序返回 NDJS
         reply: "ok",
       },
     });
-  });
+  }, {
+    authenticated: false,
+    requiresOpenaiAuth: false,
+  }, ({ runtime }) => ({
+    defaultRuntime: runtime,
+    runtimes: {
+      sdk: runtime,
+    },
+  }));
 });
 
 test("/api/tasks/stream 会按 runtimeEngine 选择对应 runtime，并保持 NDJSON 契约", async () => {
@@ -234,6 +242,143 @@ test("/api/tasks/stream 会按 runtimeEngine 选择对应 runtime，并保持 ND
   });
 });
 
+test("/api/tasks/stream 在未传 runtimeRegistry 时默认走内建 app-server runtime", async () => {
+  let sdkCalls = 0;
+  let appServerCalls = 0;
+  const originalAppServerRunTask = AppServerTaskRuntime.prototype.runTask;
+
+  AppServerTaskRuntime.prototype.runTask = async function patchedRunTask(request) {
+    appServerCalls += 1;
+    return {
+      taskId: request.taskId ?? "task-app-default-built-in-1",
+      requestId: request.requestId,
+      status: "completed",
+      summary: "built-in app-server default",
+      structuredOutput: {
+        session: {
+          engine: "app-server",
+        },
+      },
+      completedAt: "2026-03-29T16:00:00.000Z",
+    };
+  };
+
+  try {
+    await withHttpServer(async ({ baseUrl, runtimeStore, runtime }) => {
+      const authHeaders = await createAuthenticatedWebHeaders({
+        baseUrl,
+        runtimeStore,
+      });
+
+      (runtime as CodexTaskRuntime & {
+        runTask: CodexTaskRuntime["runTask"];
+      }).runTask = async (request) => {
+        sdkCalls += 1;
+        return {
+          taskId: request.taskId ?? "task-sdk-should-not-run",
+          requestId: request.requestId,
+          status: "completed",
+          summary: "sdk should not run",
+          completedAt: "2026-03-29T16:00:01.000Z",
+        };
+      };
+
+      const response = await fetch(`${baseUrl}/api/tasks/stream`, {
+        method: "POST",
+        headers: {
+          ...authHeaders,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          goal: "请走内建 app-server runtime",
+          sessionId: "session-http-built-in-default-runtime-1",
+        }),
+      });
+
+      assert.equal(response.status, 200);
+
+      const lines = parseNdjson(await response.text());
+      const result = lines.find((line) => line.kind === "result");
+      assert.equal(appServerCalls, 1);
+      assert.equal(sdkCalls, 0);
+      assert.equal(
+        (result?.metadata as { structuredOutput?: { session?: { engine?: string } } } | undefined)?.structuredOutput?.session?.engine,
+        "app-server",
+      );
+    }, {
+      authenticated: true,
+      requiresOpenaiAuth: true,
+    });
+  } finally {
+    AppServerTaskRuntime.prototype.runTask = originalAppServerRunTask;
+  }
+});
+
+test("/api/tasks/stream 未显式传 runtimeEngine 时会遵循 runtimeRegistry.defaultRuntime", async () => {
+  let appServerCalls = 0;
+
+  await withHttpServer(async ({ baseUrl, runtimeStore, runtime }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/stream`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请走默认 app-server runtime",
+        sessionId: "session-http-default-runtime-1",
+      }),
+    });
+
+    assert.equal(response.status, 200);
+
+    const lines = parseNdjson(await response.text());
+    const result = lines.find((line) => line.kind === "result");
+    assert.equal(appServerCalls, 1);
+    assert.equal(
+      (result?.metadata as { structuredOutput?: { session?: { engine?: string } } } | undefined)?.structuredOutput?.session?.engine,
+      "app-server",
+    );
+  }, {
+    authenticated: true,
+    requiresOpenaiAuth: true,
+  }, ({ runtimeStore, runtime }) => {
+    const appServerRuntime = {
+      runTask: async (request: Parameters<CodexTaskRuntime["runTask"]>[0]) => {
+        appServerCalls += 1;
+        return {
+          taskId: request.taskId ?? "task-app-default-1",
+          requestId: request.requestId,
+          status: "completed" as const,
+          summary: "app-server default",
+          structuredOutput: {
+            session: {
+              engine: "app-server",
+            },
+          },
+          completedAt: "2026-03-29T15:00:00.000Z",
+        };
+      },
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => runtime.getIdentityLinkService(),
+      getPrincipalSkillsService: () => runtime.getPrincipalSkillsService(),
+    };
+
+    return {
+      defaultRuntime: appServerRuntime,
+      runtimes: {
+        sdk: runtime,
+        "app-server": appServerRuntime,
+      },
+    };
+  });
+});
+
 test("/api/tasks/stream 显式请求未注册的 app-server runtime 时会 fail-fast，不会静默回退到 sdk", async () => {
   await withHttpServer(async ({ baseUrl, runtimeStore, runtime }) => {
     const authHeaders = await createAuthenticatedWebHeaders({
@@ -277,7 +422,15 @@ test("/api/tasks/stream 显式请求未注册的 app-server runtime 时会 fail-
     assert.equal(lines[0]?.title, "INVALID_REQUEST");
     assert.match(String(lines[0]?.text ?? ""), /app-server|runtime/i);
     assert.equal(sdkRunCount, 0);
-  });
+  }, {
+    authenticated: false,
+    requiresOpenaiAuth: false,
+  }, ({ runtime }) => ({
+    defaultRuntime: runtime,
+    runtimes: {
+      sdk: runtime,
+    },
+  }));
 });
 
 test("/api/tasks/stream 显式传非法 runtimeEngine 时会返回 INVALID_REQUEST", async () => {
@@ -357,7 +510,15 @@ test("/api/tasks/stream 在 runtime.runTask() 抛错时会先 ack，再 error，
     assert.deepEqual(lines.map((line) => line.kind), ["ack", "error", "fatal"]);
     assert.equal(lines[1]?.title, "CORE_RUNTIME_ERROR");
     assert.equal(lines[2]?.title, "CORE_RUNTIME_ERROR");
-  });
+  }, {
+    authenticated: false,
+    requiresOpenaiAuth: false,
+  }, ({ runtime }) => ({
+    defaultRuntime: runtime,
+    runtimes: {
+      sdk: runtime,
+    },
+  }));
 });
 
 test("/api/tasks/stream 在认证前置失败时不会发 ack，但会发 adapter error 和 fatal", async () => {

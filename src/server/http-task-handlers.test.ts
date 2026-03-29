@@ -116,7 +116,12 @@ test("/api/tasks/run 会记录任务已接受和 cancelled 审计", async () => 
     assert.ok(cancelled);
     assert.equal(accepted?.remoteIp, "127.0.0.1");
     assert.equal(cancelled?.remoteIp, "127.0.0.1");
-  });
+  }, ({ runtime }) => ({
+    defaultRuntime: runtime,
+    runtimes: {
+      sdk: runtime,
+    },
+  }));
 });
 
 test("/api/tasks/run 传 app-server runtimeEngine 时会走 selected runtime，并把审计写进共享 store", async () => {
@@ -298,7 +303,12 @@ test("/api/tasks/stream 会记录任务已接受审计", async () => {
 
     assert.ok(accepted);
     assert.equal(accepted?.remoteIp, "127.0.0.1");
-  });
+  }, ({ runtime }) => ({
+    defaultRuntime: runtime,
+    runtimes: {
+      sdk: runtime,
+    },
+  }));
 });
 
 function listenServer(server: Server): Promise<Server> {

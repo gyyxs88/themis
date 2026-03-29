@@ -159,15 +159,40 @@ export interface TaskActionDescriptor {
   choices?: string[];
   inputSchema?: Record<string, unknown>;
   expiresAt?: string;
+  scope?: TaskActionScope;
 }
 
-export interface TaskActionSubmitRequest {
+export interface TaskActionScope {
+  sourceChannel?: ChannelId;
+  sessionId?: string;
+  userId?: string;
+}
+
+export interface TaskPendingActionSubmitRequest {
   taskId: string;
   requestId: string;
   actionId: string;
   decision?: string;
   inputText?: string;
 }
+
+export interface TaskReviewActionSubmitRequest {
+  mode: "review";
+  sessionId: string;
+  instructions: string;
+}
+
+export interface TaskSteerActionSubmitRequest {
+  mode: "steer";
+  sessionId: string;
+  message: string;
+  turnId?: string;
+}
+
+export type TaskActionSubmitRequest =
+  | TaskPendingActionSubmitRequest
+  | TaskReviewActionSubmitRequest
+  | TaskSteerActionSubmitRequest;
 
 export interface TaskEvent {
   eventId: string;

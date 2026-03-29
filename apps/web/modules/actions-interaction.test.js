@@ -56,3 +56,43 @@ test("user-input action 会在提交后调用 /api/tasks/actions 并带上 input
   assert.equal(turn.pendingAction, null);
   assert.equal(turn.state, "running");
 });
+
+test("review action 会带上 mode、sessionId 与 instructions", async () => {
+  const calls = [];
+  const interaction = createActionInteraction({
+    submitAction: async (payload) => {
+      calls.push(payload);
+      return { ok: true };
+    },
+  });
+
+  await interaction.submitReview({
+    id: "thread-review-1",
+  }, "please review current diff");
+
+  assert.deepEqual(calls[0], {
+    mode: "review",
+    sessionId: "thread-review-1",
+    instructions: "please review current diff",
+  });
+});
+
+test("steer action 会带上 mode、sessionId 与 message", async () => {
+  const calls = [];
+  const interaction = createActionInteraction({
+    submitAction: async (payload) => {
+      calls.push(payload);
+      return { ok: true };
+    },
+  });
+
+  await interaction.submitSteer({
+    id: "thread-steer-1",
+  }, "focus on tests only");
+
+  assert.deepEqual(calls[0], {
+    mode: "steer",
+    sessionId: "thread-steer-1",
+    message: "focus on tests only",
+  });
+});
