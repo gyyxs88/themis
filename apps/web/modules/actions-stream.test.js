@@ -188,7 +188,196 @@ test("consumeNdjsonStream handles ack -> error -> fatal and clears active run st
   }
 });
 
-function createAppHarness() {
+test("consumeNdjsonStream handles task.action_required and marks the turn as waiting", async () => {
+  const { app, actions, thread, turn, storage, storageKey, restore } = createAppHarness();
+
+  try {
+    const actionMessage = {
+      kind: "event",
+      title: "task.action_required",
+      text: "请确认是否继续。",
+      metadata: {
+        actionId: "approval-1",
+        actionType: "approval",
+        prompt: "Allow command?",
+        choices: ["approve", "deny"],
+        phase: "waiting",
+      },
+    };
+    const controlledStream = createControlledNdjsonBody();
+    const consumePromise = actions.consumeNdjsonStream(controlledStream.body);
+
+    controlledStream.push({
+      kind: "ack",
+      requestId: "req-waiting",
+      taskId: "task-waiting",
+    });
+    controlledStream.push(actionMessage);
+    await waitFor(() => turn.state === "waiting");
+
+    assert.equal(turn.state, "waiting");
+    assert.deepEqual(turn.pendingAction, {
+      actionId: "approval-1",
+      actionType: "approval",
+      prompt: "Allow command?",
+      choices: ["approve", "deny"],
+    });
+    const waitingStep = findStepByMetadata(turn.steps, actionMessage.metadata);
+    assert.ok(waitingStep);
+    assert.equal(waitingStep.title, "等待处理");
+    assert.equal(waitingStep.text, "请确认是否继续。");
+    assert.equal(app.store.threadStatus(thread), "waiting");
+    assert.equal(app.runtime.activeRunRef?.turnId, turn.id);
+    assert.ok(app.runtime.activeRequestController);
+
+    const persisted = JSON.parse(storage.getItem(storageKey));
+    const persistedThread = persisted.threads.find((entry) => entry.id === thread.id);
+    const persistedTurn = persistedThread.turns.find((entry) => entry.id === turn.id);
+
+    assert.equal(persistedTurn.state, "waiting");
+    assert.deepEqual(persistedTurn.pendingAction, {
+      actionId: "approval-1",
+      actionType: "approval",
+      prompt: "Allow command?",
+      choices: ["approve", "deny"],
+    });
+
+    controlledStream.error(new Error("TEST_STREAM_STOP"));
+    await assert.rejects(consumePromise, /TEST_STREAM_STOP/);
+  } finally {
+    restore();
+  }
+});
+
+test("consumeNdjsonStream 在 waiting 后流提前结束时会把 turn 收口为失败", async () => {
+  const { app, actions, thread, turn, storage, storageKey, restore } = createAppHarness();
+
+  try {
+    await actions.consumeNdjsonStream(createChunkedNdjsonBody([
+      {
+        kind: "ack",
+        requestId: "req-waiting-eof",
+        taskId: "task-waiting-eof",
+      },
+      {
+        kind: "event",
+        title: "task.action_required",
+        text: "请确认是否继续。",
+        metadata: {
+          actionId: "approval-eof",
+          actionType: "approval",
+          prompt: "Allow command?",
+          choices: ["approve", "deny"],
+          phase: "waiting",
+        },
+      },
+    ]).body);
+
+    assert.equal(turn.state, "failed");
+    assert.equal(turn.pendingAction, null);
+    assert.deepEqual(turn.result, {
+      status: "failed",
+      summary: "流式连接已中断，任务未返回最终结果。请刷新后重试。",
+    });
+    assert.equal(thread.storedStatus, "failed");
+    assert.equal(thread.storedSummary, "流式连接已中断，任务未返回最终结果。请刷新后重试。");
+    assert.equal(app.runtime.activeRunRef, null);
+    assert.equal(app.runtime.activeRequestController, null);
+
+    const persisted = JSON.parse(storage.getItem(storageKey));
+    const persistedThread = persisted.threads.find((entry) => entry.id === thread.id);
+    const persistedTurn = persistedThread.turns.find((entry) => entry.id === turn.id);
+
+    assert.equal(persistedTurn.state, "failed");
+    assert.equal(persistedTurn.pendingAction, null);
+    assert.deepEqual(persistedTurn.result, {
+      status: "failed",
+      summary: "流式连接已中断，任务未返回最终结果。请刷新后重试。",
+    });
+  } finally {
+    restore();
+  }
+});
+
+test("consumeNdjsonStream 在已收到 task.completed 后即使 trailer 丢失也不会把 turn 收口为 failed", async () => {
+  const { app, actions, thread, turn, storage, storageKey, restore } = createAppHarness();
+
+  try {
+    await actions.consumeNdjsonStream(createChunkedNdjsonBody([
+      {
+        kind: "ack",
+        requestId: "req-terminal-eof",
+        taskId: "task-terminal-eof",
+      },
+      {
+        kind: "event",
+        title: "task.completed",
+        text: "任务已经在服务端完成，但 trailer 丢了。",
+        metadata: {
+          phase: "completed",
+        },
+      },
+    ]).body);
+
+    assert.equal(turn.state, "completed");
+    assert.equal(turn.pendingAction, null);
+    assert.deepEqual(turn.result, {
+      status: "completed",
+      summary: "任务已经在服务端完成，但 trailer 丢了。",
+    });
+    assert.equal(thread.storedStatus, "completed");
+    assert.equal(thread.storedSummary, "任务已经在服务端完成，但 trailer 丢了。");
+    assert.equal(app.runtime.activeRunRef, null);
+    assert.equal(app.runtime.activeRequestController, null);
+
+    const persisted = JSON.parse(storage.getItem(storageKey));
+    const persistedThread = persisted.threads.find((entry) => entry.id === thread.id);
+    const persistedTurn = persistedThread.turns.find((entry) => entry.id === turn.id);
+
+    assert.equal(persistedTurn.state, "completed");
+    assert.deepEqual(persistedTurn.result, {
+      status: "completed",
+      summary: "任务已经在服务端完成，但 trailer 丢了。",
+    });
+  } finally {
+    restore();
+  }
+});
+
+test("consumeNdjsonStream 在 EOF 收口后会恢复挂起的 replacement submit", async () => {
+  const { app, actions, restore } = createAppHarness({
+    pendingInterruptSubmit: {
+      targetThreadId: "thread-next",
+      goal: "新的消息",
+      draftGoal: "新的消息",
+      draftContext: "",
+    },
+  });
+
+  try {
+    await actions.consumeNdjsonStream(createChunkedNdjsonBody([
+      {
+        kind: "ack",
+        requestId: "req-eof-resume",
+        taskId: "task-eof-resume",
+      },
+      {
+        kind: "event",
+        title: "task.progress",
+        text: "还在执行中",
+        metadata: {
+          phase: "running",
+        },
+      },
+    ]).body);
+
+    assert.equal(app.runtime.resumeInterruptedSubmitCalls, 1);
+  } finally {
+    restore();
+  }
+});
+
+function createAppHarness(options = {}) {
   const storageKey = "themis-actions-stream-test";
   const storage = createLocalStorageMock();
   const originalLocalStorage = globalThis.localStorage;
@@ -205,8 +394,11 @@ function createAppHarness() {
     runtime: {
       activeRunRef: null,
       activeRequestController: { abort() {} },
-      pendingInterruptSubmit: null,
-      resumeInterruptedSubmit() {},
+      pendingInterruptSubmit: options.pendingInterruptSubmit ?? null,
+      resumeInterruptedSubmitCalls: 0,
+      resumeInterruptedSubmit() {
+        this.resumeInterruptedSubmitCalls += 1;
+      },
       identity: {
         assistantLanguageStyle: "",
         assistantMbti: "",
@@ -363,4 +555,37 @@ function createChunkedNdjsonBody(messages, chunkSize = 11) {
       },
     }),
   };
+}
+
+function createControlledNdjsonBody() {
+  const encoder = new TextEncoder();
+  let controllerRef = null;
+
+  return {
+    body: new ReadableStream({
+      start(controller) {
+        controllerRef = controller;
+      },
+    }),
+    push(message) {
+      controllerRef.enqueue(encoder.encode(`${JSON.stringify(message)}\n`));
+    },
+    error(error) {
+      controllerRef.error(error);
+    },
+  };
+}
+
+async function waitFor(predicate, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  throw new Error("waitFor timeout");
 }

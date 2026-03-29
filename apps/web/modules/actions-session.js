@@ -13,16 +13,29 @@ export function createSessionActions(app) {
       store.setTransientStatus(source.id, "正在准备 fork 会话，优先从真实 Codex 会话提取逐轮转录。");
       app.renderer.renderAll();
 
-      const bootstrap = await buildForkBootstrap(source);
       const fork = store.createThread();
+      let bootstrap;
+
+      try {
+        bootstrap = await buildForkBootstrap(source, fork.id);
+      } catch (error) {
+        store.setTransientStatus(source.id, toErrorMessage(error));
+        return;
+      }
+
       fork.title = buildForkTitle(source.title);
       fork.settings = {
         ...store.createDefaultThreadSettings(),
         ...source.settings,
       };
       fork.turns = JSON.parse(JSON.stringify(source.turns));
-      fork.bootstrapTranscript = bootstrap.transcript;
-      fork.bootstrapMode = bootstrap.mode;
+      fork.bootstrapTranscript = bootstrap.transcript ?? "";
+      fork.bootstrapMode = bootstrap.mode ?? null;
+      if (bootstrap.serverThreadId) {
+        fork.serverThreadId = bootstrap.serverThreadId;
+        fork.bootstrapTranscript = "";
+        fork.bootstrapMode = null;
+      }
       store.state.threads.unshift(fork);
       store.state = {
         ...store.state,
@@ -161,7 +174,7 @@ export function createSessionActions(app) {
     }
   }
 
-  async function buildForkBootstrap(thread) {
+  async function buildForkBootstrap(thread, targetSessionId) {
     if (thread.serverThreadId) {
       try {
         const response = await fetch("/api/sessions/fork-context", {
@@ -172,9 +185,19 @@ export function createSessionActions(app) {
           body: JSON.stringify({
             sessionId: thread.id,
             threadId: thread.serverThreadId,
+            targetSessionId,
           }),
         });
         const data = await app.utils.safeReadJson(response);
+
+        if (response.ok && data?.strategy === "native-thread-fork" && typeof data?.threadId === "string") {
+          return {
+            transcript: "",
+            mode: null,
+            serverThreadId: data.threadId,
+            message: "已创建 fork 会话。后端已直接从真实 Codex 会话 fork 新 thread，无需再导入逐轮转录。",
+          };
+        }
 
         if (response.ok && data?.historyContext) {
           return {
@@ -185,15 +208,34 @@ export function createSessionActions(app) {
             }`,
           };
         }
-      } catch {
-        // Fall back to local reconstruction when the server cannot read the persisted Codex session.
+
+        const error = new Error(
+          typeof data?.error?.message === "string" && data.error.message.trim()
+            ? data.error.message
+            : "真实 Codex 会话 fork 失败，请重试。",
+        );
+        error.code = typeof data?.error?.code === "string" ? data.error.code.trim() : "";
+        throw error;
+      } catch (error) {
+        if (error?.code === "SESSION_CONFLICT") {
+          throw error;
+        }
+
+        return buildLocalForkBootstrap(
+          thread,
+          `真实 Codex 会话 fork 失败，已回退到浏览器本地逐轮会话转录。${toErrorMessage(error) ? ` 原因：${toErrorMessage(error)}。` : ""}`,
+        );
       }
     }
 
+    return buildLocalForkBootstrap(thread);
+  }
+
+  function buildLocalForkBootstrap(thread, prefixMessage = "已创建 fork 会话。") {
     return {
       transcript: store.buildLocalForkTranscript(thread),
       mode: "local-transcript",
-      message: "已创建 fork 会话。第一次发送时会把浏览器里保存的逐轮会话转录导入新的 Codex 会话。",
+      message: `${prefixMessage}第一次发送时会把浏览器里保存的逐轮会话转录导入新的 Codex 会话。`,
     };
   }
 
@@ -207,4 +249,12 @@ export function createSessionActions(app) {
     handleJoinConversation,
     handleResetPrincipalState,
   };
+}
+
+function toErrorMessage(error) {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+
+  return "真实 Codex 会话 fork 失败，请重试。";
 }

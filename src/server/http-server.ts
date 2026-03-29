@@ -1,7 +1,10 @@
 import { createServer, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
+import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
+import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import type { RuntimeEngine, TaskRuntimeFacade } from "../types/index.js";
 import { WebAccessService } from "../core/web-access.js";
 import { serveWebAsset } from "./http-assets.js";
 import {
@@ -43,6 +46,7 @@ import {
   handleSessionSettingsRead,
   handleSessionSettingsWrite,
 } from "./http-session-handlers.js";
+import { handleTaskActionSubmit } from "./http-task-actions.js";
 import { handleTaskRun, handleTaskStream } from "./http-task-handlers.js";
 import {
   handleThirdPartyCapabilityWriteback,
@@ -54,17 +58,31 @@ import {
 
 const DEFAULT_PRIVATE_ASSISTANT_PRINCIPAL_ID = "principal-local-owner";
 
+export interface ThemisServerRuntimeRegistry {
+  defaultRuntime: TaskRuntimeFacade;
+  runtimes?: Partial<Record<RuntimeEngine, TaskRuntimeFacade>>;
+}
+
 export interface ThemisHttpServerOptions {
   host?: string;
   port?: number;
   runtime?: CodexTaskRuntime;
+  runtimeRegistry?: ThemisServerRuntimeRegistry;
   authRuntime?: CodexAuthRuntime;
   taskTimeoutMs?: number;
   createMcpInspector?: CreateMcpInspector;
+  actionBridge?: AppServerActionBridge;
 }
 
 export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): Server {
   const runtime = options.runtime ?? new CodexTaskRuntime();
+  const actionBridge = options.actionBridge ?? new AppServerActionBridge();
+  const defaultAppServerRuntime = new AppServerTaskRuntime({
+    workingDirectory: runtime.getWorkingDirectory(),
+    runtimeStore: runtime.getRuntimeStore(),
+    actionBridge,
+  });
+  const runtimeRegistry = normalizeRuntimeRegistry(runtime, defaultAppServerRuntime, options.runtimeRegistry);
   const authRuntime = options.authRuntime ?? new CodexAuthRuntime({
     workingDirectory: runtime.getWorkingDirectory(),
     registry: runtime.getRuntimeStore(),
@@ -208,15 +226,19 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
       }
 
       if (request.method === "POST" && url.pathname === "/api/tasks/run") {
-        return handleTaskRun(request, response, runtime, authRuntime, taskTimeoutMs);
+        return handleTaskRun(request, response, runtime, runtimeRegistry, authRuntime, taskTimeoutMs);
       }
 
       if (request.method === "POST" && url.pathname === "/api/tasks/stream") {
-        return handleTaskStream(request, response, runtime, authRuntime, taskTimeoutMs);
+        return handleTaskStream(request, response, runtime, runtimeRegistry, authRuntime, taskTimeoutMs);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/tasks/actions") {
+        return await handleTaskActionSubmit(request, response, actionBridge, runtimeRegistry);
       }
 
       if (request.method === "POST" && url.pathname === "/api/sessions/fork-context") {
-        return handleSessionForkContext(request, response, runtime);
+        return handleSessionForkContext(request, response, runtimeRegistry);
       }
 
       if ((request.method === "GET" || isHeadRequest) && url.pathname.startsWith("/api/sessions/") && url.pathname.endsWith("/settings")) {
@@ -232,7 +254,7 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
       }
 
       if ((request.method === "GET" || isHeadRequest) && url.pathname.startsWith("/api/history/sessions/")) {
-        return handleHistorySessionDetail(url, response, runtimeStore, isHeadRequest);
+        return await handleHistorySessionDetail(url, response, runtimeStore, runtimeRegistry, isHeadRequest);
       }
 
       if (request.method === "GET" || isHeadRequest) {
@@ -276,6 +298,48 @@ export function resolveListenAddresses(host: string, port: number): string[] {
   }
 
   return [...addresses];
+}
+
+function normalizeRuntimeRegistry(
+  runtime: CodexTaskRuntime,
+  defaultAppServerRuntime: TaskRuntimeFacade,
+  runtimeRegistry: ThemisServerRuntimeRegistry | undefined,
+): ThemisServerRuntimeRegistry {
+  if (!runtimeRegistry) {
+    return {
+      defaultRuntime: defaultAppServerRuntime,
+      runtimes: {
+        sdk: runtime,
+        "app-server": defaultAppServerRuntime,
+      },
+    };
+  }
+
+  const defaultRuntime = runtimeRegistry.defaultRuntime;
+  const normalizedRegistry: ThemisServerRuntimeRegistry = {
+    defaultRuntime,
+    runtimes: {
+      sdk: runtime,
+      ...(runtimeRegistry.runtimes ?? {}),
+    },
+  };
+  const baseStore = runtime.getRuntimeStore();
+
+  if (defaultRuntime.getRuntimeStore() !== baseStore) {
+    throw new Error("Task runtime store mismatch for default runtime: all runtimes must share the base runtime store.");
+  }
+
+  for (const [engine, registeredRuntime] of Object.entries(normalizedRegistry.runtimes ?? {})) {
+    if (!registeredRuntime) {
+      continue;
+    }
+
+    if (registeredRuntime.getRuntimeStore() !== baseStore) {
+      throw new Error(`Task runtime store mismatch for engine "${engine}": all runtimes must share the base runtime store.`);
+    }
+  }
+
+  return normalizedRegistry;
 }
 
 function resolveTaskTimeoutMs(): number {

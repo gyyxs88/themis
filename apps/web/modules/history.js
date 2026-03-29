@@ -24,7 +24,7 @@ export function createHistoryController(app) {
     return Boolean(
       thread.serverHistoryAvailable &&
       thread.storedTurnCount > 0 &&
-      (!thread.historyHydrated || thread.turns.length !== thread.storedTurnCount),
+      (!thread.historyHydrated || thread.historyNeedsRehydrate || thread.turns.length !== thread.storedTurnCount),
     );
   }
 
@@ -243,19 +243,26 @@ export function createHistoryController(app) {
     thread.storedSummary = session.latestTurn?.summary ?? session.latestTurn?.goal ?? thread.storedSummary;
     thread.storedStatus = session.latestTurn?.status ?? thread.storedStatus;
     thread.historyHydrated = true;
-    thread.turns = Array.isArray(data?.turns) ? data.turns.map(mapStoredTurnToLocalTurn).filter(Boolean) : [];
+    thread.turns = Array.isArray(data?.turns)
+      ? data.turns
+        .map((turn) => mapStoredTurnToLocalTurn(turn, findExistingTurn(thread, turn)))
+        .filter(Boolean)
+      : [];
     thread.storedTurnCount = Math.max(thread.storedTurnCount ?? 0, thread.turns.length);
+    thread.historyNeedsRehydrate = thread.turns.some((turn) => Boolean(turn?.submittedPendingActionId));
 
     if (thread.turns.length) {
       thread.updatedAt = thread.turns.at(-1)?.createdAt ?? thread.updatedAt;
     }
   }
 
-  function mapStoredTurnToLocalTurn(turn) {
+  function mapStoredTurnToLocalTurn(turn, existingTurn = null) {
     if (!turn || typeof turn !== "object") {
       return null;
     }
 
+    const restoredPendingAction = resolvePendingActionFromStoredTurn(turn);
+    const suppressDuplicatePendingAction = shouldSuppressDuplicatePendingAction(existingTurn, restoredPendingAction, turn);
     const result = buildResultFromStoredTurn(turn);
     const assistantMessages = buildAssistantMessagesFromStoredTurnEvents(turn.events);
     const steps = buildStepsFromStoredTurnEvents(turn.events, turn);
@@ -271,10 +278,17 @@ export function createHistoryController(app) {
       options: parseJsonText(turn.optionsJson),
       requestId: typeof turn.requestId === "string" ? turn.requestId : null,
       taskId: typeof turn.taskId === "string" ? turn.taskId : null,
+      pendingAction: suppressDuplicatePendingAction ? null : restoredPendingAction,
+      submittedPendingActionId: resolveSubmittedPendingActionId(
+        existingTurn,
+        turn,
+        restoredPendingAction,
+        suppressDuplicatePendingAction,
+      ),
       serverThreadId: typeof turn.codexThreadId === "string" ? turn.codexThreadId : null,
       serverSessionId: typeof turn.sessionId === "string" ? turn.sessionId : null,
       sessionMode: typeof turn.sessionMode === "string" ? turn.sessionMode : null,
-      state: typeof turn.status === "string" ? turn.status : "completed",
+      state: suppressDuplicatePendingAction ? "running" : typeof turn.status === "string" ? turn.status : "completed",
       assistantMessages,
       steps,
       result,
@@ -375,6 +389,105 @@ export function createHistoryController(app) {
 
   function parseStoredEventPayload(event) {
     return event?.payloadJson ? parseJsonText(event.payloadJson) : null;
+  }
+
+  function resolvePendingActionFromStoredTurn(turn) {
+    if (turn?.status !== "waiting" || !Array.isArray(turn.events) || !turn.events.length) {
+      return null;
+    }
+
+    const waitingEvent = [...turn.events]
+      .reverse()
+      .find((event) => event?.type === "task.action_required");
+
+    if (!waitingEvent) {
+      return null;
+    }
+
+    const payload = parseStoredEventPayload(waitingEvent);
+    return normalizePendingAction(payload) ?? normalizePendingAction(payload?.action);
+  }
+
+  function findExistingTurn(thread, storedTurn) {
+    if (!thread || !Array.isArray(thread.turns) || !thread.turns.length) {
+      return null;
+    }
+
+    const requestId = typeof storedTurn?.requestId === "string" ? storedTurn.requestId : "";
+    const taskId = typeof storedTurn?.taskId === "string" ? storedTurn.taskId : "";
+
+    return thread.turns.find((turn) => {
+      if (requestId && turn?.requestId === requestId) {
+        return true;
+      }
+
+      if (taskId && turn?.taskId === taskId) {
+        return true;
+      }
+
+      return false;
+    }) ?? null;
+  }
+
+  function shouldSuppressDuplicatePendingAction(existingTurn, pendingAction, storedTurn) {
+    if (
+      !existingTurn ||
+      !pendingAction ||
+      typeof existingTurn.submittedPendingActionId !== "string" ||
+      !existingTurn.submittedPendingActionId
+    ) {
+      return false;
+    }
+
+    if (existingTurn.pendingAction) {
+      return false;
+    }
+
+    return storedTurn?.status === "waiting" && existingTurn.submittedPendingActionId === pendingAction.actionId;
+  }
+
+  function resolveSubmittedPendingActionId(existingTurn, storedTurn, pendingAction, suppressDuplicatePendingAction) {
+    const submittedPendingActionId = typeof existingTurn?.submittedPendingActionId === "string"
+      ? existingTurn.submittedPendingActionId
+      : "";
+
+    if (!submittedPendingActionId) {
+      return null;
+    }
+
+    if (isTerminalTurnStatus(storedTurn?.status)) {
+      return null;
+    }
+
+    if (storedTurn?.status === "waiting") {
+      return suppressDuplicatePendingAction ? submittedPendingActionId : null;
+    }
+
+    return pendingAction ? null : submittedPendingActionId;
+  }
+
+  function isTerminalTurnStatus(status) {
+    return status === "completed" || status === "failed" || status === "cancelled";
+  }
+
+  function normalizePendingAction(value) {
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+
+    const actionId = typeof value.actionId === "string" ? value.actionId : "";
+    const actionType = typeof value.actionType === "string" ? value.actionType : "";
+
+    if (!actionId || !actionType) {
+      return null;
+    }
+
+    return {
+      actionId,
+      actionType,
+      ...(typeof value.prompt === "string" ? { prompt: value.prompt } : {}),
+      ...(Array.isArray(value.choices) ? { choices: value.choices.filter((choice) => typeof choice === "string") } : {}),
+    };
   }
 
   function resolveStoredAssistantMessageText(event, metadata) {

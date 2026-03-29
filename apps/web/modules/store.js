@@ -238,15 +238,32 @@ export function createStore(app) {
   }
 
   function isBusy() {
-    return Boolean(app.runtime.activeRequestController && app.runtime.activeRunRef);
+    return Boolean(
+      (app.runtime.activeRequestController && app.runtime.activeRunRef)
+      || app.runtime.restoredActionHydrationThreadId,
+    );
   }
 
   function getRunningThreadId() {
-    return isBusy() ? app.runtime.activeRunRef.threadId : null;
+    return app.runtime.activeRequestController && app.runtime.activeRunRef
+      ? app.runtime.activeRunRef.threadId
+      : null;
   }
 
   function isThreadRunning(threadId) {
-    return Boolean(threadId) && getRunningThreadId() === threadId;
+    return Boolean(threadId)
+      && (
+        getRunningThreadId() === threadId
+        || app.runtime.restoredActionHydrationThreadId === threadId
+      );
+  }
+
+  function isRestoredActionHydrating(threadId) {
+    if (typeof threadId === "string" && threadId) {
+      return app.runtime.restoredActionHydrationThreadId === threadId;
+    }
+
+    return Boolean(app.runtime.restoredActionHydrationThreadId);
   }
 
   function clearActiveRun() {
@@ -313,6 +330,7 @@ export function createStore(app) {
     isBusy,
     getRunningThreadId,
     isThreadRunning,
+    isRestoredActionHydrating,
     clearActiveRun,
     isDefaultThreadTitle: helpers.isDefaultThreadTitle,
     buildLocalForkTranscript: helpers.buildLocalForkTranscript,

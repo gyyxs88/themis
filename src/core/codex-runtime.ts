@@ -48,7 +48,14 @@ import {
 } from "./codex-session-store.js";
 import { ContextBuilder } from "../context/context-builder.js";
 import { SqliteCodexSessionRegistry, type StoredAuthAccountRecord } from "../storage/index.js";
-import type { PrincipalTaskSettings, TaskAccessMode, TaskEvent, TaskRequest, TaskResult } from "../types/index.js";
+import type {
+  PrincipalTaskSettings,
+  TaskAccessMode,
+  TaskEvent,
+  TaskRequest,
+  TaskResult,
+  TaskRuntimeRunHooks,
+} from "../types/index.js";
 import {
   readOpenAICompatibleProviderConfigs,
   type OpenAICompatibleProviderConfig,
@@ -79,12 +86,8 @@ interface ResolvedRuntimeTarget {
 
 const SESSION_WORKSPACE_UNAVAILABLE_ERROR = "当前会话绑定的工作区不可用，请新建会话后重新设置。";
 
-export interface CodexTaskRuntimeHooks {
-  onEvent?: (event: TaskEvent) => Promise<void> | void;
-  signal?: AbortSignal;
-  timeoutMs?: number;
+export interface CodexTaskRuntimeHooks extends TaskRuntimeRunHooks {
   allowUnsupportedThirdPartyModel?: boolean;
-  finalizeResult?: (request: TaskRequest, result: TaskResult) => Promise<TaskResult> | TaskResult;
 }
 
 export class CodexTaskRuntime {
@@ -941,7 +944,7 @@ function resolveSessionPersistence(
   };
 }
 
-async function finalizeTaskResult(
+export async function finalizeTaskResult(
   request: TaskRequest,
   result: TaskResult,
   finalizeResult: CodexTaskRuntimeHooks["finalizeResult"],
@@ -1126,7 +1129,7 @@ function createProviderRuntimeModel(
   };
 }
 
-function createTaskEvent(
+export function createTaskEvent(
   taskId: string,
   requestId: string,
   type: TaskEvent["type"],

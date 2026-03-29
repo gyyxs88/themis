@@ -3,7 +3,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { buildForkContextFromThread } from "./codex-session-fork.js";
+import {
+  buildForkContextFromThread,
+  buildPreferredForkContext,
+} from "./codex-session-fork.js";
 
 function responseItem(role: "user" | "assistant", text: string): string {
   return JSON.stringify({
@@ -46,6 +49,73 @@ test("buildForkContextFromThread 找不到 thread 对应文件时返回 null", a
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("buildPreferredForkContext 在 app-server 下优先使用原生 thread/fork", async () => {
+  const calls: string[] = [];
+
+  const result = await buildPreferredForkContext({
+    runtimeEngine: "app-server",
+    sourceThreadId: "thread-source-1",
+    forkThread: async () => {
+      calls.push("thread/fork");
+      return {
+        threadId: "thread-forked-1",
+      };
+    },
+    replayFallback: async () => {
+      calls.push("replay");
+      return {
+        historyContext: "should-not-run",
+        sourceThreadId: "thread-source-1",
+        strategy: "session-transcript",
+        totalTurns: 1,
+        includedTurns: 1,
+        truncated: false,
+      };
+    },
+  });
+
+  assert.deepEqual(result, {
+    strategy: "native-thread-fork",
+    sourceThreadId: "thread-source-1",
+    threadId: "thread-forked-1",
+  });
+  assert.deepEqual(calls, ["thread/fork"]);
+});
+
+test("buildPreferredForkContext 在原生 thread/fork 失败时会回退 transcript replay", async () => {
+  const calls: string[] = [];
+
+  const result = await buildPreferredForkContext({
+    runtimeEngine: "app-server",
+    sourceThreadId: "thread-source-2",
+    forkThread: async () => {
+      calls.push("thread/fork");
+      throw new Error("fork failed");
+    },
+    replayFallback: async () => {
+      calls.push("replay");
+      return {
+        historyContext: "fallback-transcript",
+        sourceThreadId: "thread-source-2",
+        strategy: "session-transcript",
+        totalTurns: 2,
+        includedTurns: 2,
+        truncated: false,
+      };
+    },
+  });
+
+  assert.deepEqual(result, {
+    historyContext: "fallback-transcript",
+    sourceThreadId: "thread-source-2",
+    strategy: "session-transcript",
+    totalTurns: 2,
+    includedTurns: 2,
+    truncated: false,
+  });
+  assert.deepEqual(calls, ["thread/fork", "replay"]);
 });
 
 test("buildForkContextFromThread 只提取 Themis turn，并附着 assistant 回复", async () => {

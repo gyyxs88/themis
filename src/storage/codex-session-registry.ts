@@ -291,6 +291,7 @@ export interface FailTaskTurnInput {
   completedAt?: string;
   sessionMode?: string;
   threadId?: string;
+  structuredOutput?: TaskResult["structuredOutput"];
 }
 
 export interface SqliteCodexSessionRegistryOptions {
@@ -570,6 +571,80 @@ export class SqliteCodexSessionRegistry {
         updated_at: record.updatedAt,
         active_task_id: record.activeTaskId ?? null,
       });
+  }
+
+  tryCreateSessionBinding(record: StoredCodexSessionRecord): boolean {
+    const sessionId = record.sessionId.trim();
+    const threadId = record.threadId.trim();
+
+    if (!sessionId) {
+      throw new Error("Session id is required.");
+    }
+
+    if (!threadId) {
+      throw new Error("Thread id is required.");
+    }
+
+    const bind = this.db.transaction(() => {
+      const existingSession = this.db
+        .prepare(
+          `
+            SELECT 1
+            FROM codex_sessions
+            WHERE session_id = ?
+          `,
+        )
+        .get(sessionId) as { 1: number } | undefined;
+
+      if (existingSession) {
+        return false;
+      }
+
+      const existingTurn = this.db
+        .prepare(
+          `
+            SELECT 1
+            FROM themis_turns
+            WHERE session_id = ?
+            LIMIT 1
+          `,
+        )
+        .get(sessionId) as { 1: number } | undefined;
+
+      if (existingTurn) {
+        return false;
+      }
+
+      this.db
+        .prepare(
+          `
+            INSERT INTO codex_sessions (
+              session_id,
+              thread_id,
+              created_at,
+              updated_at,
+              active_task_id
+            ) VALUES (
+              @session_id,
+              @thread_id,
+              @created_at,
+              @updated_at,
+              @active_task_id
+            )
+          `,
+        )
+        .run({
+          session_id: sessionId,
+          thread_id: threadId,
+          created_at: record.createdAt,
+          updated_at: record.updatedAt,
+          active_task_id: record.activeTaskId ?? null,
+        });
+
+      return true;
+    });
+
+    return bind();
   }
 
   deleteSession(sessionId: string): boolean {
@@ -2819,6 +2894,7 @@ export class SqliteCodexSessionRegistry {
 
   failTaskTurn(input: FailTaskTurnInput): void {
     const completedAt = input.completedAt ?? new Date().toISOString();
+    const structuredOutputJson = stringifyJson(input.structuredOutput);
 
     this.db
       .prepare(
@@ -2836,6 +2912,10 @@ export class SqliteCodexSessionRegistry {
               WHEN @codex_thread_id IS NOT NULL AND @codex_thread_id <> '' THEN @codex_thread_id
               ELSE codex_thread_id
             END,
+            structured_output_json = CASE
+              WHEN @structured_output_json IS NOT NULL AND @structured_output_json <> '' THEN @structured_output_json
+              ELSE structured_output_json
+            END,
             updated_at = @updated_at,
             completed_at = @completed_at
           WHERE request_id = @request_id
@@ -2847,6 +2927,7 @@ export class SqliteCodexSessionRegistry {
         error_message: input.message,
         session_mode: input.sessionMode ?? null,
         codex_thread_id: input.threadId ?? null,
+        structured_output_json: structuredOutputJson,
         updated_at: completedAt,
         completed_at: completedAt,
       });

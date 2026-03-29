@@ -1,5 +1,8 @@
 import type { ServerResponse } from "node:http";
+import { resolveStoredSessionThreadReference } from "../core/session-thread-reference.js";
 import type { SqliteCodexSessionRegistry } from "../storage/index.js";
+import type { RuntimeEngine, TaskRuntimeRegistry, TaskRuntimeThreadSnapshot } from "../types/index.js";
+import { resolveTaskRuntime } from "../types/index.js";
 import { writeJson } from "./http-responses.js";
 
 export function handleHistorySessions(
@@ -15,12 +18,13 @@ export function handleHistorySessions(
   writeJson(response, 200, { sessions }, headOnly);
 }
 
-export function handleHistorySessionDetail(
+export async function handleHistorySessionDetail(
   url: URL,
   response: ServerResponse,
   store: SqliteCodexSessionRegistry,
+  runtimeRegistry?: TaskRuntimeRegistry,
   headOnly = false,
-): void {
+): Promise<void> {
   const sessionId = decodeURIComponent(url.pathname.slice("/api/history/sessions/".length)).trim();
 
   if (!sessionId) {
@@ -53,6 +57,7 @@ export function handleHistorySessionDetail(
     events: store.listTurnEvents(turn.requestId),
     touchedFiles: store.listTurnFiles(turn.requestId),
   }));
+  const nativeThread = await readNativeThreadSummary(store, sessionId, runtimeRegistry);
 
   writeJson(response, 200, {
     session: session ?? {
@@ -72,5 +77,72 @@ export function handleHistorySessionDetail(
       },
     },
     turns: detailedTurns,
+    ...(nativeThread ? { nativeThread } : {}),
   }, headOnly);
+}
+
+async function readNativeThreadSummary(
+  store: SqliteCodexSessionRegistry,
+  sessionId: string,
+  runtimeRegistry?: TaskRuntimeRegistry,
+): Promise<{ threadId: string; preview?: string; turnCount: number } | null> {
+  if (!runtimeRegistry) {
+    return null;
+  }
+
+  const reference = resolveSessionThreadReference(store, sessionId);
+
+  if (reference.engine !== "app-server" || !reference.threadId) {
+    return null;
+  }
+
+  const runtime = resolveTaskRuntime(runtimeRegistry, reference.engine);
+
+  if (typeof runtime.readThreadSnapshot !== "function") {
+    return null;
+  }
+
+  try {
+    const snapshot = await runtime.readThreadSnapshot({
+      threadId: reference.threadId,
+      includeTurns: true,
+    });
+
+    return normalizeNativeThreadSummary(snapshot);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeNativeThreadSummary(
+  snapshot: TaskRuntimeThreadSnapshot | null,
+): { threadId: string; preview?: string; turnCount: number } | null {
+  if (!snapshot) {
+    return null;
+  }
+
+  return {
+    threadId: snapshot.threadId,
+    ...(snapshot.preview ? { preview: snapshot.preview } : {}),
+    turnCount: snapshot.turnCount,
+  };
+}
+
+function resolveSessionThreadReference(
+  store: SqliteCodexSessionRegistry,
+  sessionId: string,
+): {
+  engine: RuntimeEngine | null;
+  threadId: string | null;
+} {
+  return resolveStoredSessionThreadReference(store, sessionId);
+}
+
+function normalizeText(value: string | undefined | null): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized ? normalized : null;
 }

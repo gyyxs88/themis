@@ -2,6 +2,10 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import type {
+  TaskRuntimeThreadSnapshot,
+  TaskRuntimeThreadSnapshotTurn,
+} from "../types/runtime-engine.js";
 import { buildCodexCliConfigArgs, type CodexCliConfigOverrides } from "./auth-accounts.js";
 
 export interface CodexRuntimeReasoningOption {
@@ -145,6 +149,22 @@ export interface CodexAppServerNotification {
   params?: unknown;
 }
 
+export interface AppServerThreadStartParams {
+  cwd: string;
+  model?: string;
+  approvalPolicy?: string;
+  sandbox?: string;
+  webSearchMode?: string;
+  experimentalRawEvents?: boolean;
+  persistExtendedHistory?: boolean;
+}
+
+export interface AppServerReverseRequest {
+  id: string | number;
+  method: string;
+  params?: unknown;
+}
+
 interface AppServerModelListResponse {
   data?: unknown;
 }
@@ -168,13 +188,37 @@ interface AppServerAccountRateLimitsResponse {
   rateLimitsByLimitId?: unknown;
 }
 
+interface AppServerThreadResponse {
+  threadId?: unknown;
+}
+
+interface AppServerThreadForkResponse {
+  thread?: unknown;
+}
+
+interface AppServerThreadReadResponse {
+  thread?: unknown;
+}
+
+interface AppServerTurnResponse {
+  turnId?: unknown;
+}
+
+interface AppServerReviewStartResponse {
+  turn?: unknown;
+  reviewThreadId?: unknown;
+}
+
+interface AppServerTurnSteerResponse {
+  turnId?: unknown;
+}
+
 interface PendingRequest<TResult> {
   resolve: (value: TResult) => void;
   reject: (error: Error) => void;
 }
 
 interface CodexAppServerSessionOptions {
-  onNotification?: (notification: CodexAppServerNotification) => void;
   env?: Record<string, string>;
   configOverrides?: CodexCliConfigOverrides;
 }
@@ -281,12 +325,12 @@ export class CodexAppServerSession {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<number, PendingRequest<unknown>>();
   private readonly stderrChunks: string[] = [];
-  private readonly onNotification?: CodexAppServerSessionOptions["onNotification"];
+  private readonly notificationHandlers = new Set<(notification: CodexAppServerNotification) => void>();
+  private readonly serverRequestHandlers = new Set<(request: AppServerReverseRequest) => void>();
   private nextId = 1;
   private closed = false;
 
   constructor(cwd: string, options: CodexAppServerSessionOptions = {}) {
-    this.onNotification = options.onNotification;
     this.child = spawn(resolveCodexBinary(), [...buildCodexCliConfigArgs(options.configOverrides), "app-server"], {
       cwd,
       ...(options.env ? { env: options.env } : {}),
@@ -346,26 +390,160 @@ export class CodexAppServerSession {
     const id = this.nextId;
     this.nextId += 1;
 
-    const payload = JSON.stringify({
-      method,
-      id,
-      params,
-    });
-
     return await new Promise<TResult>((resolve, reject) => {
       this.pending.set(id, {
         resolve: resolve as PendingRequest<unknown>["resolve"],
         reject,
       });
 
-      this.child.stdin.write(`${payload}\n`, "utf8", (error) => {
-        if (!error) {
-          return;
-        }
-
+      void this.writeJsonRpcMessage({
+        method,
+        id,
+        params,
+      }).catch((error) => {
         this.pending.delete(id);
         reject(error instanceof Error ? error : new Error(String(error)));
       });
+    });
+  }
+
+  onNotification(handler: (notification: CodexAppServerNotification) => void): () => void {
+    this.notificationHandlers.add(handler);
+    return () => {
+      this.notificationHandlers.delete(handler);
+    };
+  }
+
+  onServerRequest(handler: (request: AppServerReverseRequest) => void): () => void {
+    this.serverRequestHandlers.add(handler);
+    return () => {
+      this.serverRequestHandlers.delete(handler);
+    };
+  }
+
+  async startThread(params: AppServerThreadStartParams): Promise<{ threadId: string }> {
+    const response = await this.request<AppServerThreadResponse>("thread/start", {
+      experimentalRawEvents: params.experimentalRawEvents ?? false,
+      persistExtendedHistory: params.persistExtendedHistory ?? true,
+      ...params,
+    });
+
+    return {
+      threadId: requireText(response.threadId, "codex app-server thread/start did not return a threadId."),
+    };
+  }
+
+  async resumeThread(threadId: string, params: AppServerThreadStartParams): Promise<{ threadId: string }> {
+    const response = await this.request<AppServerThreadResponse>("thread/resume", {
+      persistExtendedHistory: params.persistExtendedHistory ?? true,
+      ...params,
+      threadId,
+    });
+
+    return {
+      threadId: requireText(response.threadId, "codex app-server thread/resume did not return a threadId."),
+    };
+  }
+
+  async forkThread(threadId: string): Promise<{ threadId: string }> {
+    const response = await this.request<AppServerThreadForkResponse>("thread/fork", {
+      threadId,
+      persistExtendedHistory: true,
+    });
+
+    return {
+      threadId: requireText(
+        extractThreadId(response.thread),
+        "codex app-server thread/fork did not return a thread.id.",
+      ),
+    };
+  }
+
+  async readThread(
+    threadId: string,
+    options: {
+      includeTurns?: boolean;
+    } = {},
+  ): Promise<TaskRuntimeThreadSnapshot> {
+    const response = await this.request<AppServerThreadReadResponse>("thread/read", {
+      threadId,
+      includeTurns: options.includeTurns === true,
+    });
+
+    return normalizeThreadSnapshot(response.thread);
+  }
+
+  async startTurn(threadId: string, prompt: string): Promise<{ turnId: string }> {
+    const response = await this.request<AppServerTurnResponse>("turn/start", {
+      threadId,
+      prompt,
+    });
+
+    return {
+      turnId: requireText(response.turnId, "codex app-server turn/start did not return a turnId."),
+    };
+  }
+
+  async startReview(threadId: string, instructions: string): Promise<{ reviewThreadId: string; turnId: string }> {
+    const response = await this.request<AppServerReviewStartResponse>("review/start", {
+      threadId,
+      target: {
+        type: "custom",
+        instructions,
+      },
+    });
+
+    return {
+      reviewThreadId: requireText(
+        response.reviewThreadId,
+        "codex app-server review/start did not return a reviewThreadId.",
+      ),
+      turnId: requireText(
+        extractTurnId(response.turn),
+        "codex app-server review/start did not return a turn.id.",
+      ),
+    };
+  }
+
+  async steerTurn(threadId: string, expectedTurnId: string, message: string): Promise<{ turnId: string }> {
+    const response = await this.request<AppServerTurnSteerResponse>("turn/steer", {
+      threadId,
+      expectedTurnId,
+      input: [
+        {
+          type: "text",
+          text: message,
+          text_elements: [],
+        },
+      ],
+    });
+
+    return {
+      turnId: requireText(response.turnId, "codex app-server turn/steer did not return a turnId."),
+    };
+  }
+
+  async interruptTurn(threadId: string, turnId: string): Promise<void> {
+    await this.request("turn/interrupt", {
+      threadId,
+      turnId,
+    });
+  }
+
+  async respondToServerRequest(id: string | number, result: unknown): Promise<void> {
+    await this.writeJsonRpcMessage({
+      id,
+      result: result ?? null,
+    });
+  }
+
+  async rejectServerRequest(id: string | number, error: Error): Promise<void> {
+    await this.writeJsonRpcMessage({
+      id,
+      error: {
+        code: -32000,
+        message: normalizeOptionalText(error.message) ?? String(error),
+      },
     });
   }
 
@@ -402,37 +580,51 @@ export class CodexAppServerSession {
       return;
     }
 
-    let parsed: JsonRpcResponse<unknown>;
+    let parsed: Record<string, unknown>;
 
     try {
-      parsed = JSON.parse(trimmed) as JsonRpcResponse<unknown>;
+      parsed = JSON.parse(trimmed) as Record<string, unknown>;
     } catch {
       return;
     }
 
-    if (typeof parsed.id !== "number") {
-      const method = isRecord(parsed) ? normalizeOptionalText(parsed.method) : null;
+    const method = normalizeOptionalText(parsed.method);
+    const hasResult = Object.prototype.hasOwnProperty.call(parsed, "result");
+    const hasError = Object.prototype.hasOwnProperty.call(parsed, "error");
+    const id = parsed.id;
 
+    if (method && !hasResult && !hasError && (typeof id === "string" || typeof id === "number")) {
+      this.emitServerRequest({
+        id,
+        method,
+        ...(Object.prototype.hasOwnProperty.call(parsed, "params") ? { params: parsed.params } : {}),
+      });
+      return;
+    }
+
+    if (typeof id !== "number") {
       if (method) {
-        this.onNotification?.({
+        this.emitNotification({
           method,
-          ...(isRecord(parsed) && "params" in parsed ? { params: parsed.params } : {}),
+          ...(Object.prototype.hasOwnProperty.call(parsed, "params") ? { params: parsed.params } : {}),
         });
       }
 
       return;
     }
 
-    const pending = this.pending.get(parsed.id);
+    const requestId = id;
+    const pending = this.pending.get(requestId);
 
     if (!pending) {
       return;
     }
 
-    this.pending.delete(parsed.id);
+    this.pending.delete(requestId);
 
     if ("error" in parsed) {
-      const message = parsed.error?.message?.trim() || `codex app-server request failed: ${parsed.id}`;
+      const message = isRecord(parsed.error) && normalizeOptionalText(parsed.error.message)
+        || `codex app-server request failed: ${requestId}`;
       pending.reject(new Error(message));
       return;
     }
@@ -445,6 +637,37 @@ export class CodexAppServerSession {
       this.pending.delete(id);
       pending.reject(error);
     }
+  }
+
+  private emitNotification(notification: CodexAppServerNotification): void {
+    for (const handler of this.notificationHandlers) {
+      handler(notification);
+    }
+  }
+
+  private emitServerRequest(request: AppServerReverseRequest): void {
+    for (const handler of this.serverRequestHandlers) {
+      handler(request);
+    }
+  }
+
+  private async writeJsonRpcMessage(message: Record<string, unknown>): Promise<void> {
+    if (this.closed) {
+      throw new Error("codex app-server is not available.");
+    }
+
+    const payload = JSON.stringify(message);
+
+    await new Promise<void>((resolve, reject) => {
+      this.child.stdin.write(`${payload}\n`, "utf8", (error) => {
+        if (!error) {
+          resolve();
+          return;
+        }
+
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
   }
 }
 
@@ -769,6 +992,84 @@ function normalizeAuthRateLimitCredits(value: unknown): CodexAuthRateLimitCredit
   };
 }
 
+function extractThreadId(thread: unknown): string | null {
+  if (!isRecord(thread)) {
+    return null;
+  }
+
+  return normalizeOptionalText(thread.id);
+}
+
+function extractTurnId(turn: unknown): string | null {
+  if (!isRecord(turn)) {
+    return null;
+  }
+
+  return normalizeOptionalText(turn.id) ?? normalizeOptionalText(turn.turnId);
+}
+
+function normalizeThreadSnapshot(thread: unknown): TaskRuntimeThreadSnapshot {
+  if (!isRecord(thread)) {
+    throw new Error("codex app-server thread/read did not return a thread.");
+  }
+
+  const threadId = requireText(thread.id, "codex app-server thread/read did not return a thread.id.");
+  const preview = normalizeOptionalText(thread.preview);
+  const status = normalizeOptionalText(thread.status);
+  const cwd = normalizeOptionalText(thread.cwd);
+  const createdAt = normalizeOptionalTimestamp(thread.createdAt);
+  const updatedAt = normalizeOptionalTimestamp(thread.updatedAt);
+  const turns = Array.isArray(thread.turns)
+    ? thread.turns.map(normalizeThreadTurn).filter((value): value is TaskRuntimeThreadSnapshotTurn => value !== null)
+    : [];
+
+  return {
+    threadId,
+    ...(preview ? { preview } : {}),
+    ...(status ? { status } : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(createdAt ? { createdAt } : {}),
+    ...(updatedAt ? { updatedAt } : {}),
+    turnCount: turns.length,
+    turns,
+  };
+}
+
+function normalizeThreadTurn(threadTurn: unknown): TaskRuntimeThreadSnapshotTurn | null {
+  if (!isRecord(threadTurn)) {
+    return null;
+  }
+
+  const turnId = normalizeOptionalText(threadTurn.id) ?? normalizeOptionalText(threadTurn.turnId);
+
+  if (!turnId) {
+    return null;
+  }
+
+  const status = normalizeOptionalText(threadTurn.status);
+  const summary = normalizeOptionalText(threadTurn.preview) ?? normalizeOptionalText(threadTurn.summary);
+  const createdAt = normalizeOptionalTimestamp(threadTurn.createdAt);
+  const updatedAt = normalizeOptionalTimestamp(threadTurn.updatedAt);
+
+  return {
+    turnId,
+    ...(status ? { status } : {}),
+    ...(summary ? { summary } : {}),
+    ...(createdAt ? { createdAt } : {}),
+    ...(updatedAt ? { updatedAt } : {}),
+  };
+}
+
+function requireText(value: unknown, errorMessage: string): string {
+  const text = normalizeOptionalText(value);
+
+  if (!text) {
+    throw new Error(errorMessage);
+  }
+
+  return text;
+}
+
 function normalizeBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
@@ -805,6 +1106,14 @@ function normalizeUnixTimestamp(value: unknown): string | null {
   }
 
   return new Date(value * 1000).toISOString();
+}
+
+function normalizeOptionalTimestamp(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return new Date(value * 1000).toISOString();
+  }
+
+  return normalizeOptionalText(value);
 }
 
 function normalizeOptionalText(value: unknown): string | null {

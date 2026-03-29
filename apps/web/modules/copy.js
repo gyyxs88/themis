@@ -20,6 +20,10 @@ export function resolveToneFromTitle(title) {
     return "error";
   }
 
+  if (title === "task.action_required") {
+    return "busy";
+  }
+
   if (title === "task.completed" || title === "task.cancelled") {
     return "success";
   }
@@ -32,6 +36,7 @@ export function formatStatusLabel(status) {
     idle: "空闲",
     queued: "排队中",
     running: "执行中",
+    waiting: "等待中",
     completed: "完成",
     failed: "失败",
     cancelled: "已取消",
@@ -42,6 +47,10 @@ export function formatStatusLabel(status) {
 
 export function badgeToneForStatus(status) {
   if (status === "running" || status === "queued") {
+    return "busy";
+  }
+
+  if (status === "waiting") {
     return "busy";
   }
 
@@ -60,6 +69,7 @@ export function assistantHeadline(turn) {
   const labels = {
     queued: "正在排队并建立执行通道。",
     running: "正在把这条任务交给 Codex 执行。",
+    waiting: "正在等待 action 回复。",
     completed: "这条任务已经完成。",
     failed: "这条任务执行失败。",
     cancelled: "这条任务已被取消。",
@@ -69,7 +79,7 @@ export function assistantHeadline(turn) {
 }
 
 export function assistantCardClass(stateValue) {
-  if (stateValue === "running" || stateValue === "queued") {
+  if (stateValue === "running" || stateValue === "queued" || stateValue === "waiting") {
     return "is-running";
   }
 

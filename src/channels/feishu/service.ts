@@ -1,6 +1,8 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
 import type { EventHandles } from "@larksuiteoapi/node-sdk";
 import { InMemoryCommunicationRouter } from "../../communication/router.js";
+import { AppServerActionBridge } from "../../core/app-server-action-bridge.js";
+import { AppServerTaskRuntime } from "../../core/app-server-task-runtime.js";
 import type { CodexRuntimeCatalog } from "../../core/codex-app-server.js";
 import { CodexAuthRuntime } from "../../core/codex-auth.js";
 import { CodexTaskRuntime } from "../../core/codex-runtime.js";
@@ -21,7 +23,10 @@ import {
   type ApprovalPolicy,
   type SandboxMode,
   type TaskRequest,
+  type TaskRuntimeFacade,
+  type TaskRuntimeRegistry,
   type WebSearchMode,
+  resolveTaskRuntime,
 } from "../../types/index.js";
 import { FeishuAdapter } from "./adapter.js";
 import { renderFeishuAssistantMessage, type FeishuRenderedMessageDraft } from "./message-renderer.js";
@@ -71,6 +76,8 @@ interface FeishuActiveSessionTask {
 
 export interface FeishuChannelServiceOptions {
   runtime: CodexTaskRuntime;
+  runtimeRegistry?: TaskRuntimeRegistry;
+  actionBridge?: AppServerActionBridge;
   authRuntime: CodexAuthRuntime;
   taskTimeoutMs: number;
   appId?: string;
@@ -89,6 +96,8 @@ const FEISHU_SETTINGS_EFFECT_LINE = "生效规则：只影响之后新发起的�
 
 export class FeishuChannelService {
   private readonly runtime: CodexTaskRuntime;
+  private readonly runtimeRegistry: TaskRuntimeRegistry;
+  private readonly actionBridge: AppServerActionBridge;
   private readonly authRuntime: CodexAuthRuntime;
   private readonly taskTimeoutMs: number;
   private readonly appId: string;
@@ -108,6 +117,13 @@ export class FeishuChannelService {
 
   constructor(options: FeishuChannelServiceOptions) {
     this.runtime = options.runtime;
+    this.actionBridge = options.actionBridge ?? new AppServerActionBridge();
+    const defaultAppServerRuntime = new AppServerTaskRuntime({
+      workingDirectory: this.runtime.getWorkingDirectory(),
+      runtimeStore: this.runtime.getRuntimeStore(),
+      actionBridge: this.actionBridge,
+    });
+    this.runtimeRegistry = normalizeFeishuRuntimeRegistry(this.runtime, defaultAppServerRuntime, options.runtimeRegistry);
     this.authRuntime = options.authRuntime;
     this.taskTimeoutMs = options.taskTimeoutMs;
     this.appId = normalizeText(options.appId ?? process.env.FEISHU_APP_ID) ?? "";
@@ -321,6 +337,15 @@ export class FeishuChannelService {
       case "approval":
         await this.updateApprovalPolicy(command.args, context);
         return;
+      case "approve":
+        await this.resolvePendingApproval(command.args[0], "approve", context);
+        return;
+      case "deny":
+        await this.resolvePendingApproval(command.args[0], "deny", context);
+        return;
+      case "reply":
+        await this.replyPendingAction(command.args, context);
+        return;
       case "msgupdate":
       case "updateprobe":
       case "testupdate":
@@ -368,8 +393,9 @@ export class FeishuChannelService {
       normalizedRequest = router.normalizeRequest(this.createTaskPayload(context, sessionId));
       await bridge.prepareResponseSlot();
       await ensureAuthAvailable(this.authRuntime, normalizedRequest);
+      const selectedRuntime = resolveTaskRuntime(this.runtimeRegistry, normalizedRequest.options?.runtimeEngine);
 
-      const result = await this.runtime.runTask(normalizedRequest, {
+      const result = await selectedRuntime.runTask(normalizedRequest, {
         signal: taskLease.signal,
         timeoutMs: this.taskTimeoutMs,
         finalizeResult: (request, taskResult) => appendTaskReplyQuotaFooter(this.authRuntime, request, taskResult),
@@ -1971,6 +1997,152 @@ export class FeishuChannelService {
       await this.safeSendText(chatId, chunk);
     }
   }
+
+  private async resolvePendingApproval(
+    rawActionId: string | undefined,
+    decision: "approve" | "deny",
+    context: FeishuIncomingContext,
+  ): Promise<void> {
+    const actionId = normalizeText(rawActionId);
+
+    if (!actionId) {
+      const usage = decision === "approve" ? "用法：/approve <actionId>" : "用法：/deny <actionId>";
+      await this.safeSendText(context.chatId, usage);
+      return;
+    }
+
+    const actionScope = this.resolvePendingActionScope(context);
+
+    if (!actionScope) {
+      await this.safeSendText(context.chatId, "当前没有激活会话，请先切回对应会话后再提交 action。");
+      return;
+    }
+
+    const action = this.actionBridge.find(actionId, actionScope);
+
+    if (!action) {
+      await this.safeSendText(context.chatId, `未找到等待中的 action：${actionId}`);
+      return;
+    }
+
+    if (action.actionType !== "approval") {
+      await this.safeSendText(context.chatId, `action ${actionId} 不是审批请求，请改用 /reply。`);
+      return;
+    }
+
+    if (!this.actionBridge.resolve({
+      taskId: action.taskId,
+      requestId: action.requestId,
+      actionId,
+      decision,
+    })) {
+      await this.safeSendText(context.chatId, `提交审批失败：${actionId} 已失效。`);
+      return;
+    }
+
+    const message = decision === "approve" ? "已提交审批。" : "已提交拒绝。";
+    await this.safeSendTaggedText(context.chatId, message, "处理中");
+  }
+
+  private async replyPendingAction(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const actionId = normalizeText(args[0]);
+    const inputText = normalizeText(args.slice(1).join(" "));
+
+    if (!actionId || !inputText) {
+      await this.safeSendText(context.chatId, "用法：/reply <actionId> <内容>");
+      return;
+    }
+
+    const actionScope = this.resolvePendingActionScope(context);
+
+    if (!actionScope) {
+      await this.safeSendText(context.chatId, "当前没有激活会话，请先切回对应会话后再提交 action。");
+      return;
+    }
+
+    const action = this.actionBridge.find(actionId, actionScope);
+
+    if (!action) {
+      await this.safeSendText(context.chatId, `未找到等待中的 action：${actionId}`);
+      return;
+    }
+
+    if (action.actionType !== "user-input") {
+      await this.safeSendText(context.chatId, `action ${actionId} 不是补充输入请求，请改用 /approve 或 /deny。`);
+      return;
+    }
+
+    if (!this.actionBridge.resolve({
+      taskId: action.taskId,
+      requestId: action.requestId,
+      actionId,
+      inputText,
+    })) {
+      await this.safeSendText(context.chatId, `提交补充输入失败：${actionId} 已失效。`);
+      return;
+    }
+
+    await this.safeSendTaggedText(context.chatId, "已提交补充输入。", "处理中");
+  }
+
+  private resolvePendingActionScope(context: FeishuIncomingContext): {
+    sourceChannel: "feishu";
+    sessionId: string;
+    userId: string;
+  } | null {
+    const sessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
+
+    if (!sessionId) {
+      return null;
+    }
+
+    return {
+      sourceChannel: "feishu",
+      sessionId,
+      userId: context.userId,
+    };
+  }
+}
+
+function normalizeFeishuRuntimeRegistry(
+  runtime: CodexTaskRuntime,
+  defaultAppServerRuntime: TaskRuntimeFacade,
+  runtimeRegistry?: TaskRuntimeRegistry,
+): TaskRuntimeRegistry {
+  if (!runtimeRegistry) {
+    return {
+      defaultRuntime: defaultAppServerRuntime,
+      runtimes: {
+        sdk: runtime,
+        "app-server": defaultAppServerRuntime,
+      },
+    };
+  }
+
+  const normalizedRegistry: TaskRuntimeRegistry = {
+    defaultRuntime: runtimeRegistry.defaultRuntime,
+    runtimes: {
+      sdk: runtime,
+      ...(runtimeRegistry.runtimes ?? {}),
+    },
+  };
+  const baseStore = runtime.getRuntimeStore();
+
+  for (const [engine, registeredRuntime] of Object.entries(normalizedRegistry.runtimes ?? {})) {
+    if (!registeredRuntime) {
+      continue;
+    }
+
+    if (registeredRuntime.getRuntimeStore() !== baseStore) {
+      throw new Error(`Feishu task runtime store mismatch for engine "${engine}": all runtimes must share the base runtime store.`);
+    }
+  }
+
+  if (normalizedRegistry.defaultRuntime.getRuntimeStore() !== baseStore) {
+    throw new Error("Feishu default runtime store mismatch: all runtimes must share the base runtime store.");
+  }
+
+  return normalizedRegistry;
 }
 
 function normalizeIncomingContext(event: FeishuMessageReceiveEvent): FeishuIncomingContext | null {

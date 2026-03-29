@@ -1011,6 +1011,12 @@ export function createRenderer(app) {
       activeThread: thread,
       pendingInterruptSubmit: app.runtime.pendingInterruptSubmit,
     });
+    const restoredActionHydrationMessage = buildRestoredActionHydrationNote({
+      activeThread: thread,
+      hydratingThread: app.runtime.restoredActionHydrationThreadId
+        ? store.getThreadById(app.runtime.restoredActionHydrationThreadId)
+        : null,
+    });
     const runningMessage = buildComposerRunNote({
       activeThread: thread,
       runningThread: runningThreadId ? store.getThreadById(runningThreadId) : null,
@@ -1022,7 +1028,13 @@ export function createRenderer(app) {
       thirdPartySelection: store.resolveThirdPartySelection(settings),
       effectiveSettings: store.resolveEffectiveSettings(settings),
     });
-    const message = [transientMessage, pendingInterruptMessage, runningMessage, authMessage].filter(Boolean).join(" ");
+    const message = [
+      transientMessage,
+      pendingInterruptMessage,
+      restoredActionHydrationMessage,
+      runningMessage,
+      authMessage,
+    ].filter(Boolean).join(" ");
     const visible = Boolean(message);
 
     dom.composerAuthNote.classList.toggle("hidden", !visible);
@@ -1037,6 +1049,8 @@ export function createRenderer(app) {
   function syncBusyState() {
     const activeThread = store.getActiveThread();
     const runBusy = store.isBusy();
+    const cancellableRunBusy = Boolean(app.runtime.activeRequestController && app.runtime.activeRunRef);
+    const restoredActionHydrating = Boolean(app.runtime.restoredActionHydrationThreadId);
     const settings = activeThread?.settings ?? store.createDefaultThreadSettings();
     const effectiveSettings = store.resolveEffectiveSettings(settings);
     const accessMode = store.resolveAccessMode(settings);
@@ -1055,10 +1069,11 @@ export function createRenderer(app) {
     const editorBusy = controlsBusy || thirdPartyEditor.submitting;
 
     dom.submitButton.disabled = app.runtime.sessionControlBusy
+      || restoredActionHydrating
       || authMissing
       || thirdPartyUnavailable
       || (accessMode === "auth" && app.runtime.auth.status === "loading");
-    dom.cancelButton.disabled = !runBusy;
+    dom.cancelButton.disabled = !cancellableRunBusy;
     dom.forkThreadButton.disabled = app.runtime.sessionControlBusy || runBusy;
     dom.resetPrincipalButton.disabled = controlsBusy || runBusy;
     dom.newThreadButton.disabled = app.runtime.sessionControlBusy;
@@ -1616,6 +1631,42 @@ function buildPendingInterruptNote({ activeThread, pendingInterruptSubmit }) {
   }
 
   return "正在打断当前任务，随后会自动发送你刚才的新消息。";
+}
+
+function buildRestoredActionHydrationNote({ activeThread, hydratingThread }) {
+  if (!hydratingThread) {
+    return "";
+  }
+
+  if (!isSubmittedActionHydrationThread(hydratingThread)) {
+    if (activeThread?.id === hydratingThread.id) {
+      return "浏览器刚恢复这个会话，正在向服务端同步上一轮任务的真实状态；当前会话暂时不能继续发送新消息。";
+    }
+
+    const hydratingTitle = typeof hydratingThread.title === "string" && hydratingThread.title.trim()
+      ? `「${hydratingThread.title.trim()}」`
+      : "另一个会话";
+    return `${hydratingTitle} 正在同步上一轮任务的真实状态。当前 Web 端暂不支持并行继续执行，请稍候再发新消息。`;
+  }
+
+  if (activeThread?.id === hydratingThread.id) {
+    return "上一轮 action 已提交，正在等待服务端继续执行并同步状态；当前会话暂时不能继续发送新消息。";
+  }
+
+  const hydratingTitle = typeof hydratingThread.title === "string" && hydratingThread.title.trim()
+    ? `「${hydratingThread.title.trim()}」`
+    : "另一个会话";
+  return `${hydratingTitle} 仍在同步上一轮 action 的后续状态。当前 Web 端暂不支持并行继续执行，请稍候再发新消息。`;
+}
+
+function isSubmittedActionHydrationThread(thread) {
+  if (!thread || !Array.isArray(thread.turns)) {
+    return false;
+  }
+
+  return thread.turns.some(
+    (turn) => typeof turn?.submittedPendingActionId === "string" && turn.submittedPendingActionId,
+  );
 }
 
 function buildAccessModePendingNote(store, settings, effectiveSettings, draft, auth) {

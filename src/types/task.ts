@@ -1,5 +1,6 @@
 import type { ChannelContext, ChannelId, ChannelUser } from "./channel.js";
 import type { MemoryUpdate } from "./memory.js";
+import type { RuntimeEngine } from "./runtime-engine.js";
 
 export const TASK_ATTACHMENT_TYPES = ["text", "link", "file", "image"] as const;
 
@@ -100,6 +101,7 @@ export interface TaskOptions {
   assistantMbti?: string;
   styleNotes?: string;
   assistantSoul?: string;
+  runtimeEngine?: RuntimeEngine;
   authAccountId?: string;
   model?: string;
   reasoning?: ReasoningLevel;
@@ -149,6 +151,48 @@ export interface TaskRequest {
   channelContext: ChannelContext;
   createdAt: string;
 }
+
+export interface TaskActionDescriptor {
+  actionId: string;
+  actionType: "approval" | "user-input";
+  prompt: string;
+  choices?: string[];
+  inputSchema?: Record<string, unknown>;
+  expiresAt?: string;
+  scope?: TaskActionScope;
+}
+
+export interface TaskActionScope {
+  sourceChannel?: ChannelId;
+  sessionId?: string;
+  userId?: string;
+}
+
+export interface TaskPendingActionSubmitRequest {
+  taskId: string;
+  requestId: string;
+  actionId: string;
+  decision?: string;
+  inputText?: string;
+}
+
+export interface TaskReviewActionSubmitRequest {
+  mode: "review";
+  sessionId: string;
+  instructions: string;
+}
+
+export interface TaskSteerActionSubmitRequest {
+  mode: "steer";
+  sessionId: string;
+  message: string;
+  turnId?: string;
+}
+
+export type TaskActionSubmitRequest =
+  | TaskPendingActionSubmitRequest
+  | TaskReviewActionSubmitRequest
+  | TaskSteerActionSubmitRequest;
 
 export interface TaskEvent {
   eventId: string;

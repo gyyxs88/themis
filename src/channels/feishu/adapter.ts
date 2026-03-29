@@ -85,6 +85,18 @@ export class FeishuAdapter implements ChannelAdapter<FeishuTaskPayload> {
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const itemType = normalizeText(typeof payload?.itemType === "string" ? payload.itemType : undefined);
 
+    if (event.type === "task.action_required") {
+      await this.deliver({
+        kind: "event",
+        requestId: event.requestId,
+        taskId: event.taskId,
+        title: event.type,
+        text: resolveActionRequiredText(event, payload),
+        ...(payload ? { metadata: payload } : {}),
+      });
+      return;
+    }
+
     if (event.type !== "task.progress" || itemType !== "agent_message") {
       return;
     }
@@ -140,6 +152,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function normalizeText(value: string | undefined): string | undefined {
   const text = value?.trim();
   return text ? text : undefined;
+}
+
+function resolveActionRequiredText(event: TaskEvent, payload: Record<string, unknown> | undefined): string {
+  const message = normalizeText(event.message);
+
+  if (message) {
+    return message;
+  }
+
+  const prompt = normalizeText(typeof payload?.prompt === "string" ? payload.prompt : undefined);
+  return prompt ?? "当前任务正在等待进一步操作。";
 }
 
 function createId(prefix: string): string {

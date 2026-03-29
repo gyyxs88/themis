@@ -1,6 +1,6 @@
 import { Codex, type Thread, type ThreadOptions } from "@openai/codex-sdk";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
-import type { TaskRequest } from "../types/index.js";
+import type { RuntimeEngine, TaskRequest } from "../types/index.js";
 
 export type CodexSessionMode = "ephemeral" | "created" | "resumed";
 
@@ -17,6 +17,7 @@ export interface CodexSessionLease {
   thread: Thread;
   threadId?: string;
   sessionMode: CodexSessionMode;
+  runtimeEngine?: RuntimeEngine;
   release: (finalThreadId?: string | null) => Promise<void>;
 }
 
@@ -58,6 +59,7 @@ export class CodexThreadSessionStore {
       return {
         thread: this.codex.startThread(threadOptions),
         sessionMode: "ephemeral",
+        runtimeEngine: "sdk",
         release: async () => {},
       };
     }
@@ -84,6 +86,7 @@ export class CodexThreadSessionStore {
         threadId: existing.threadId,
         thread: this.codex.resumeThread(existing.threadId, threadOptions),
         sessionMode: "resumed",
+        runtimeEngine: "sdk",
         release: async (finalThreadId) => {
           await this.release(storageSessionId, taskId, finalThreadId);
         },
@@ -102,6 +105,7 @@ export class CodexThreadSessionStore {
       sessionId,
       thread: this.codex.startThread(threadOptions),
       sessionMode: "created",
+      runtimeEngine: "sdk",
       release: async (finalThreadId) => {
         await this.release(storageSessionId, taskId, finalThreadId);
       },

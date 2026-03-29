@@ -41,6 +41,7 @@ export function createStoreModelHelpers() {
       storedSummary: "",
       storedStatus: null,
       historyHydrated: true,
+      historyNeedsRehydrate: false,
       turns: [],
     };
   }
@@ -63,6 +64,8 @@ export function createStoreModelHelpers() {
       ...(options ? { options } : {}),
       requestId: null,
       taskId: null,
+      pendingAction: null,
+      submittedPendingActionId: null,
       serverThreadId: null,
       serverSessionId: null,
       sessionMode: null,
@@ -111,6 +114,7 @@ export function createStoreModelHelpers() {
       storedSummary: typeof thread.storedSummary === "string" ? thread.storedSummary : "",
       storedStatus: typeof thread.storedStatus === "string" ? thread.storedStatus : null,
       historyHydrated: typeof thread.historyHydrated === "boolean" ? thread.historyHydrated : true,
+      historyNeedsRehydrate: typeof thread.historyNeedsRehydrate === "boolean" ? thread.historyNeedsRehydrate : false,
       turns: Array.isArray(thread.turns) ? thread.turns.map(normalizeTurn).filter(Boolean) : [],
     };
   }
@@ -128,6 +132,8 @@ export function createStoreModelHelpers() {
       options: normalizeTurnOptions(turn.options),
       requestId: typeof turn.requestId === "string" ? turn.requestId : null,
       taskId: typeof turn.taskId === "string" ? turn.taskId : null,
+      pendingAction: normalizePendingAction(turn.pendingAction),
+      submittedPendingActionId: typeof turn.submittedPendingActionId === "string" ? turn.submittedPendingActionId : null,
       serverThreadId: typeof turn.serverThreadId === "string" ? turn.serverThreadId : null,
       serverSessionId: typeof turn.serverSessionId === "string" ? turn.serverSessionId : null,
       sessionMode: typeof turn.sessionMode === "string" ? turn.sessionMode : null,
@@ -240,6 +246,26 @@ export function createStoreModelHelpers() {
       ...(result.structuredOutput && typeof result.structuredOutput === "object"
         ? { structuredOutput: result.structuredOutput }
         : {}),
+    };
+  }
+
+  function normalizePendingAction(value) {
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+
+    const actionId = typeof value.actionId === "string" ? value.actionId : "";
+    const actionType = typeof value.actionType === "string" ? value.actionType : "";
+
+    if (!actionId || !actionType) {
+      return null;
+    }
+
+    return {
+      actionId,
+      actionType,
+      ...(typeof value.prompt === "string" ? { prompt: value.prompt } : {}),
+      ...(Array.isArray(value.choices) ? { choices: value.choices.filter((choice) => typeof choice === "string") } : {}),
     };
   }
 

@@ -1,26 +1,28 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
+import type { ThemisServerRuntimeRegistry } from "./http-server.js";
 import { createThemisHttpServer } from "./http-server.js";
 import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
 
 interface TestServerContext {
-  server: Server;
   baseUrl: string;
   root: string;
   runtimeStore: SqliteCodexSessionRegistry;
+  runtime: CodexTaskRuntime;
   authHeaders: Record<string, string>;
 }
 
 async function withHttpServer(
   run: (context: TestServerContext) => Promise<void>,
+  createRuntimeRegistry?: (context: TestServerContext) => ThemisServerRuntimeRegistry | undefined,
 ): Promise<void> {
-  const root = mkdtempSync(join(tmpdir(), "themis-http-session-settings-"));
+  const root = mkdtempSync(join(tmpdir(), "themis-http-session-handlers-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
@@ -28,7 +30,18 @@ async function withHttpServer(
     workingDirectory: root,
     runtimeStore,
   });
-  const server = createThemisHttpServer({ runtime });
+  const context: TestServerContext = {
+    baseUrl: "",
+    root,
+    runtimeStore,
+    runtime,
+    authHeaders: {},
+  };
+  const runtimeRegistry = createRuntimeRegistry?.(context);
+  const server = createThemisHttpServer({
+    runtime,
+    ...(runtimeRegistry ? { runtimeRegistry } : {}),
+  });
   const listeningServer = await listenServer(server);
   const address = listeningServer.address();
 
@@ -44,10 +57,10 @@ async function withHttpServer(
 
   try {
     await run({
-      server: listeningServer,
       baseUrl,
       root,
       runtimeStore,
+      runtime,
       authHeaders,
     });
   } finally {
@@ -56,229 +69,241 @@ async function withHttpServer(
   }
 }
 
-test("PUT /api/sessions/:id/settings 会保存合法 workspacePath", async () => {
-  await withHttpServer(async ({ baseUrl, root, authHeaders, runtimeStore }) => {
-    const workspace = join(root, "workspace");
-    mkdirSync(workspace);
+test("POST /api/sessions/fork-context 在 app-server 会话下会优先原生 fork 并预绑定 target session", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore, authHeaders }) => {
+    const sessionId = "session-native-source-1";
+    const sourceThreadId = "thread-native-source-1";
+    const targetSessionId = "session-native-child-1";
+    const request = buildTaskRequest({
+      sessionId,
+      requestId: "req-native-source-1",
+      taskId: "task-native-source-1",
+      createdAt: "2026-03-29T09:00:00.000Z",
+    });
 
-    const response = await fetch(`${baseUrl}/api/sessions/session-http-1/settings`, {
-      method: "PUT",
+    runtimeStore.upsertTurnFromRequest(request, request.taskId!);
+    runtimeStore.completeTaskTurn({
+      request,
+      result: buildTaskResult({
+        requestId: request.requestId,
+        taskId: request.taskId!,
+        completedAt: "2026-03-29T09:00:30.000Z",
+        structuredOutput: {
+          session: {
+            sessionId,
+            threadId: sourceThreadId,
+            engine: "app-server",
+          },
+        },
+      }),
+      sessionMode: "resumed",
+      threadId: sourceThreadId,
+    });
+
+    const response = await fetch(`${baseUrl}/api/sessions/fork-context`, {
+      method: "POST",
       headers: {
+        "content-type": "application/json",
         ...authHeaders,
-        "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        settings: {
-          profile: "dev",
-          workspacePath: workspace,
-        },
+        sessionId,
+        targetSessionId,
       }),
     });
 
     assert.equal(response.status, 200);
-
-    const payload = await response.json() as Record<string, unknown>;
-    assert.equal(payload.ok, true);
-    assert.equal(payload.sessionId, "session-http-1");
-    assert.deepEqual(payload.settings, {
-      profile: "dev",
-      workspacePath: workspace,
-    });
-
-    const audit = runtimeStore
-      .listWebAuditEvents()
-      .find((event) => event.eventType === "web_access.session_settings_updated");
-
-    assert.ok(audit);
-    assert.equal(audit?.remoteIp, "127.0.0.1");
-    assert.equal(JSON.parse(audit?.payloadJson ?? "{}").sessionId, "session-http-1");
-  });
-});
-
-test("PUT /api/sessions/:id/settings 会拒绝相对路径 workspacePath", async () => {
-  await withHttpServer(async ({ baseUrl, authHeaders }) => {
-    const response = await fetch(`${baseUrl}/api/sessions/session-http-2/settings`, {
-      method: "PUT",
-      headers: {
-        ...authHeaders,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        settings: {
-          workspacePath: "relative/project",
-        },
-      }),
-    });
-
-    assert.equal(response.status, 400);
-
     const payload = await response.json() as {
-      error?: {
-        code?: string;
-        message?: string;
-      };
+      strategy?: string;
+      sourceThreadId?: string;
+      threadId?: string;
+      targetSessionId?: string;
     };
-    assert.equal(payload.error?.code, "INVALID_REQUEST");
-    assert.match(payload.error?.message ?? "", /绝对路径/);
-  });
+
+    assert.deepEqual(payload, {
+      ok: true,
+      sessionId,
+      targetSessionId,
+      strategy: "native-thread-fork",
+      sourceThreadId,
+      threadId: "thread-native-child-1",
+    });
+    assert.equal(runtimeStore.getSession(targetSessionId)?.threadId, "thread-native-child-1");
+  }, ({ runtimeStore }) => ({
+    defaultRuntime: {
+      runTask: async () => {
+        throw new Error("default runtime should not run");
+      },
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => ({}),
+      getPrincipalSkillsService: () => ({}),
+    },
+    runtimes: {
+      "app-server": {
+        runTask: async () => {
+          throw new Error("app-server runTask should not run");
+        },
+        getRuntimeStore: () => runtimeStore,
+        getIdentityLinkService: () => ({}),
+        getPrincipalSkillsService: () => ({}),
+        forkThread: async () => ({
+          strategy: "native-thread-fork",
+          sourceThreadId: "thread-native-source-1",
+          threadId: "thread-native-child-1",
+        }),
+      },
+    },
+  }));
 });
 
-test("PUT /api/sessions/:id/settings 在冻结会话改成非法路径时返回冻结错误", async () => {
-  await withHttpServer(async ({ baseUrl, root, runtimeStore, authHeaders }) => {
-    const workspace = join(root, "workspace");
-    mkdirSync(workspace);
-
-    const saveResponse = await fetch(`${baseUrl}/api/sessions/session-http-frozen/settings`, {
-      method: "PUT",
-      headers: {
-        ...authHeaders,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        settings: {
-          workspacePath: workspace,
-        },
-      }),
-    });
-    assert.equal(saveResponse.status, 200);
-
-    runtimeStore.upsertTurnFromRequest({
-      requestId: "request-http-frozen-1",
-      sourceChannel: "web",
-      user: {
-        userId: "user-http-frozen-1",
-      },
-      goal: "hello",
-      channelContext: {
-        sessionId: "session-http-frozen",
-      },
-      createdAt: "2026-03-26T00:00:00.000Z",
-    }, "task-http-frozen-1");
-
-    const response = await fetch(`${baseUrl}/api/sessions/session-http-frozen/settings`, {
-      method: "PUT",
-      headers: {
-        ...authHeaders,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        settings: {
-          workspacePath: "relative/project",
-        },
-      }),
-    });
-
-    assert.equal(response.status, 400);
-
-    const payload = await response.json() as {
-      error?: {
-        code?: string;
-        message?: string;
-      };
-    };
-    assert.equal(payload.error?.code, "INVALID_REQUEST");
-    assert.equal(payload.error?.message, "当前会话已经执行过任务，不能再修改工作区；请先新建会话。");
-  });
-});
-
-test("PUT /api/sessions/:id/settings 支持用空白 workspacePath 删除该字段", async () => {
-  await withHttpServer(async ({ baseUrl, root, runtimeStore, authHeaders }) => {
-    const workspace = join(root, "workspace");
-    mkdirSync(workspace);
-
-    const saveResponse = await fetch(`${baseUrl}/api/sessions/session-http-clear-workspace/settings`, {
-      method: "PUT",
-      headers: {
-        ...authHeaders,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        settings: {
-          profile: "dev",
-          workspacePath: workspace,
-        },
-      }),
-    });
-    assert.equal(saveResponse.status, 200);
-
-    const clearResponse = await fetch(`${baseUrl}/api/sessions/session-http-clear-workspace/settings`, {
-      method: "PUT",
-      headers: {
-        ...authHeaders,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        settings: {
-          workspacePath: "   ",
-        },
-      }),
-    });
-
-    assert.equal(clearResponse.status, 200);
-
-    const payload = await clearResponse.json() as {
-      settings?: {
-        profile?: string;
-        workspacePath?: string;
-      } | null;
-    };
-    assert.deepEqual(payload.settings, {
-      profile: "dev",
-    });
-    assert.equal(runtimeStore.getSessionTaskSettings("session-http-clear-workspace")?.settings.workspacePath, undefined);
-  });
-});
-
-test("PUT /api/sessions/:id/settings 支持用 null 删除 networkAccessEnabled", async () => {
+test("POST /api/sessions/fork-context 不允许覆盖已有 target session 的真实 thread 绑定", async () => {
   await withHttpServer(async ({ baseUrl, runtimeStore, authHeaders }) => {
-    const saveResponse = await fetch(`${baseUrl}/api/sessions/session-http-clear-network/settings`, {
-      method: "PUT",
-      headers: {
-        ...authHeaders,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        settings: {
-          networkAccessEnabled: true,
-          webSearchMode: "disabled",
-        },
-      }),
+    const sourceSessionId = "session-native-source-2";
+    const sourceThreadId = "thread-native-source-2";
+    const targetSessionId = "session-native-existing-1";
+    const sourceRequest = buildTaskRequest({
+      sessionId: sourceSessionId,
+      requestId: "req-native-source-2",
+      taskId: "task-native-source-2",
+      createdAt: "2026-03-29T10:00:00.000Z",
     });
-    assert.equal(saveResponse.status, 200);
-
-    const clearResponse = await fetch(`${baseUrl}/api/sessions/session-http-clear-network/settings`, {
-      method: "PUT",
-      headers: {
-        ...authHeaders,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        settings: {
-          networkAccessEnabled: null,
-        },
-      }),
+    const targetRequest = buildTaskRequest({
+      sessionId: targetSessionId,
+      requestId: "req-native-target-1",
+      taskId: "task-native-target-1",
+      createdAt: "2026-03-29T10:10:00.000Z",
     });
 
-    assert.equal(clearResponse.status, 200);
+    runtimeStore.upsertTurnFromRequest(sourceRequest, sourceRequest.taskId!);
+    runtimeStore.completeTaskTurn({
+      request: sourceRequest,
+      result: buildTaskResult({
+        requestId: sourceRequest.requestId,
+        taskId: sourceRequest.taskId!,
+        completedAt: "2026-03-29T10:00:30.000Z",
+        structuredOutput: {
+          session: {
+            sessionId: sourceSessionId,
+            threadId: sourceThreadId,
+            engine: "app-server",
+          },
+        },
+      }),
+      sessionMode: "resumed",
+      threadId: sourceThreadId,
+    });
 
-    const payload = await clearResponse.json() as {
-      settings?: {
-        webSearchMode?: string;
-        networkAccessEnabled?: boolean;
-      } | null;
+    runtimeStore.upsertTurnFromRequest(targetRequest, targetRequest.taskId!);
+    runtimeStore.saveSession({
+      sessionId: targetSessionId,
+      threadId: "thread-native-existing-1",
+      createdAt: "2026-03-29T10:10:00.000Z",
+      updatedAt: "2026-03-29T10:10:30.000Z",
+    });
+    runtimeStore.completeTaskTurn({
+      request: targetRequest,
+      result: buildTaskResult({
+        requestId: targetRequest.requestId,
+        taskId: targetRequest.taskId!,
+        completedAt: "2026-03-29T10:10:30.000Z",
+        structuredOutput: {
+          session: {
+            sessionId: targetSessionId,
+            threadId: "thread-native-existing-1",
+            engine: "app-server",
+          },
+        },
+      }),
+      sessionMode: "resumed",
+      threadId: "thread-native-existing-1",
+    });
+
+    const response = await fetch(`${baseUrl}/api/sessions/fork-context`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...authHeaders,
+      },
+      body: JSON.stringify({
+        sessionId: sourceSessionId,
+        targetSessionId,
+      }),
+    });
+
+    assert.equal(response.status, 409);
+    const payload = await response.json() as {
+      error?: {
+        code?: string;
+      };
     };
-    assert.deepEqual(payload.settings, {
-      webSearchMode: "disabled",
-    });
-    assert.equal(
-      runtimeStore.getSessionTaskSettings("session-http-clear-network")?.settings.networkAccessEnabled,
-      undefined,
-    );
-  });
+    assert.equal(payload.error?.code, "SESSION_CONFLICT");
+    assert.equal(runtimeStore.getSession(targetSessionId)?.threadId, "thread-native-existing-1");
+  }, ({ runtimeStore }) => ({
+    defaultRuntime: {
+      runTask: async () => {
+        throw new Error("default runtime should not run");
+      },
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => ({}),
+      getPrincipalSkillsService: () => ({}),
+    },
+    runtimes: {
+      "app-server": {
+        runTask: async () => {
+          throw new Error("app-server runTask should not run");
+        },
+        getRuntimeStore: () => runtimeStore,
+        getIdentityLinkService: () => ({}),
+        getPrincipalSkillsService: () => ({}),
+        forkThread: async () => ({
+          strategy: "native-thread-fork",
+          sourceThreadId: "thread-native-source-2",
+          threadId: "thread-native-should-not-bind",
+        }),
+      },
+    },
+  }));
 });
 
-function listenServer(server: Server): Promise<Server> {
-  return new Promise((resolve, reject) => {
+function buildTaskRequest(overrides: {
+  sessionId: string;
+  requestId: string;
+  taskId: string;
+  createdAt: string;
+}) {
+  return {
+    requestId: overrides.requestId,
+    taskId: overrides.taskId,
+    sourceChannel: "web",
+    user: {
+      userId: "web-user",
+    },
+    goal: "seed native session",
+    channelContext: {
+      sessionId: overrides.sessionId,
+    },
+    createdAt: overrides.createdAt,
+  };
+}
+
+function buildTaskResult(overrides: {
+  requestId: string;
+  taskId: string;
+  completedAt: string;
+  structuredOutput: Record<string, unknown>;
+}) {
+  return {
+    taskId: overrides.taskId,
+    requestId: overrides.requestId,
+    status: "completed" as const,
+    summary: "seed native result",
+    structuredOutput: overrides.structuredOutput,
+    completedAt: overrides.completedAt,
+  };
+}
+
+async function listenServer(server: Server): Promise<Server> {
+  return await new Promise<Server>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => {
       server.off("error", reject);
@@ -287,8 +312,8 @@ function listenServer(server: Server): Promise<Server> {
   });
 }
 
-function closeServer(server: Server): Promise<void> {
-  return new Promise((resolve, reject) => {
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
     server.close((error) => {
       if (error) {
         reject(error);

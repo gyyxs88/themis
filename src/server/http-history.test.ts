@@ -7,7 +7,7 @@ import test from "node:test";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import type { TaskEvent, TaskRequest, TaskResult } from "../types/index.js";
-import { createThemisHttpServer } from "./http-server.js";
+import { createThemisHttpServer, type ThemisServerRuntimeRegistry } from "./http-server.js";
 import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
 
 interface TestServerContext {
@@ -23,6 +23,7 @@ const HISTORY_BASE_TIME = Date.UTC(2026, 2, 28, 10, 0, 0);
 
 async function withHttpServer(
   run: (context: TestServerContext) => Promise<void>,
+  createRuntimeRegistry?: (context: TestServerContext) => ThemisServerRuntimeRegistry | undefined,
 ): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "themis-http-history-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
@@ -32,7 +33,18 @@ async function withHttpServer(
     workingDirectory: root,
     runtimeStore,
   });
-  const server = createThemisHttpServer({ runtime });
+  const context = {
+    baseUrl: "",
+    root,
+    runtimeStore,
+    runtime,
+    authHeaders: {},
+  };
+  const runtimeRegistry = createRuntimeRegistry?.(context);
+  const server = createThemisHttpServer({
+    runtime,
+    ...(runtimeRegistry ? { runtimeRegistry } : {}),
+  });
   const listeningServer = await listenServer(server);
   const address = listeningServer.address();
 
@@ -216,6 +228,193 @@ test("GET /api/history/sessions/:id 会返回 400 / 404 / 200，并带上 events
   });
 });
 
+test("GET /api/history/sessions/:id 在 app-server 会话下会附加 nativeThread 增强数据", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore, authHeaders }) => {
+    const sessionId = "session-history-native";
+    const requestId = "request-history-native";
+    const taskId = "task-history-native";
+    const request = buildTaskRequest({
+      sessionId,
+      requestId,
+      taskId,
+      createdAt: timestamp(60),
+    });
+
+    runtimeStore.upsertTurnFromRequest(request, taskId);
+    runtimeStore.completeTaskTurn({
+      request,
+      result: buildTaskResult({
+        requestId,
+        taskId,
+        completedAt: timestamp(61),
+        structuredOutput: {
+          session: {
+            engine: "app-server",
+            threadId: "thread-history-native",
+          },
+        },
+      }),
+      sessionMode: "resumed",
+      threadId: "thread-history-native",
+    });
+
+    const response = await fetch(`${baseUrl}/api/history/sessions/${sessionId}`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+
+    assert.equal(response.status, 200);
+    const payload = await response.json() as {
+      nativeThread?: {
+        threadId?: string;
+        preview?: string;
+        turnCount?: number;
+      };
+    };
+
+    assert.deepEqual(payload.nativeThread, {
+      threadId: "thread-history-native",
+      preview: "native preview",
+      turnCount: 2,
+    });
+  }, ({ runtimeStore }) => ({
+    defaultRuntime: {
+      runTask: async () => {
+        throw new Error("default runtime should not run");
+      },
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => ({}),
+      getPrincipalSkillsService: () => ({}),
+    },
+    runtimes: {
+      "app-server": {
+        runTask: async () => {
+          throw new Error("app-server runTask should not run");
+        },
+        getRuntimeStore: () => runtimeStore,
+        getIdentityLinkService: () => ({}),
+        getPrincipalSkillsService: () => ({}),
+        readThreadSnapshot: async () => ({
+          threadId: "thread-history-native",
+          preview: "native preview",
+          status: "idle",
+          cwd: "/workspace/native",
+          createdAt: "2026-03-29T12:00:00.000Z",
+          updatedAt: "2026-03-29T12:30:00.000Z",
+          turnCount: 2,
+          turns: [],
+        }),
+      },
+    },
+  }));
+});
+
+test("GET /api/history/sessions/:id 在最新 failed turn 未写 engine 时仍保留 nativeThread 增强", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore, authHeaders }) => {
+    const sessionId = "session-history-native-failed";
+    const threadId = "thread-history-native-failed-1";
+    const completedRequestId = "request-history-native-completed";
+    const completedTaskId = "task-history-native-completed";
+    const failedRequestId = "request-history-native-failed";
+    const failedTaskId = "task-history-native-failed";
+    const completedRequest = buildTaskRequest({
+      sessionId,
+      requestId: completedRequestId,
+      taskId: completedTaskId,
+      createdAt: timestamp(62),
+    });
+    const failedRequest = buildTaskRequest({
+      sessionId,
+      requestId: failedRequestId,
+      taskId: failedTaskId,
+      createdAt: timestamp(63),
+    });
+
+    runtimeStore.upsertTurnFromRequest(completedRequest, completedTaskId);
+    runtimeStore.completeTaskTurn({
+      request: completedRequest,
+      result: buildTaskResult({
+        requestId: completedRequestId,
+        taskId: completedTaskId,
+        completedAt: timestamp(62, 30),
+        structuredOutput: {
+          session: {
+            engine: "app-server",
+            threadId,
+          },
+        },
+      }),
+      sessionMode: "resumed",
+      threadId,
+    });
+
+    runtimeStore.upsertTurnFromRequest(failedRequest, failedTaskId);
+    runtimeStore.failTaskTurn({
+      request: failedRequest,
+      taskId: failedTaskId,
+      message: "app-server turn failed",
+      completedAt: timestamp(63, 30),
+      sessionMode: "resumed",
+      threadId,
+    });
+    runtimeStore.saveSession({
+      sessionId,
+      threadId,
+      createdAt: timestamp(62),
+      updatedAt: timestamp(63, 30),
+    });
+
+    const response = await fetch(`${baseUrl}/api/history/sessions/${sessionId}`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+
+    assert.equal(response.status, 200);
+    const payload = await response.json() as {
+      nativeThread?: {
+        threadId?: string;
+        preview?: string;
+        turnCount?: number;
+      };
+    };
+
+    assert.deepEqual(payload.nativeThread, {
+      threadId,
+      preview: "failed but still native",
+      turnCount: 2,
+    });
+  }, ({ runtimeStore }) => ({
+    defaultRuntime: {
+      runTask: async () => {
+        throw new Error("default runtime should not run");
+      },
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => ({}),
+      getPrincipalSkillsService: () => ({}),
+    },
+    runtimes: {
+      "app-server": {
+        runTask: async () => {
+          throw new Error("app-server runTask should not run");
+        },
+        getRuntimeStore: () => runtimeStore,
+        getIdentityLinkService: () => ({}),
+        getPrincipalSkillsService: () => ({}),
+        readThreadSnapshot: async () => ({
+          threadId: "thread-history-native-failed-1",
+          preview: "failed but still native",
+          status: "idle",
+          cwd: "/workspace/native",
+          createdAt: "2026-03-29T12:00:00.000Z",
+          updatedAt: "2026-03-29T12:30:00.000Z",
+          turnCount: 2,
+          turns: [],
+        }),
+      },
+    },
+  }));
+});
+
 test("HEAD /api/history/sessions 与 HEAD /api/history/sessions/:id 不返回 body", async () => {
   await withHttpServer(async ({ baseUrl, runtimeStore, authHeaders }) => {
     const sessionId = "session-history-head";
@@ -321,6 +520,7 @@ function buildTaskResult(input: {
   requestId: string;
   taskId: string;
   touchedFiles?: string[];
+  structuredOutput?: TaskResult["structuredOutput"];
   completedAt: string;
 }): TaskResult {
   return {
@@ -329,6 +529,7 @@ function buildTaskResult(input: {
     status: "completed",
     summary: "History test completed.",
     ...(input.touchedFiles ? { touchedFiles: input.touchedFiles } : {}),
+    ...(input.structuredOutput ? { structuredOutput: input.structuredOutput } : {}),
     completedAt: input.completedAt,
   };
 }
