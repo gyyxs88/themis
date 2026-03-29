@@ -975,6 +975,112 @@ test("飞书收到 task.action_required 时会提示命令式回复", async () =
   }
 });
 
+test("飞书命令式审批恢复会沿同一任务链收口 action 提示、审批提交与最终结果", async () => {
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      actionBridge,
+      taskRuntimeCalls,
+    }) => ({
+      async runTask(request, hooks = {}) {
+        taskRuntimeCalls.appServer += 1;
+        const taskId = request.taskId ?? "task-feishu-journey-1";
+        const requestId = request.requestId;
+        const actionId = "approval-feishu-journey-1";
+
+        actionBridge.register({
+          taskId,
+          requestId,
+          actionId,
+          actionType: "approval",
+          prompt: "Allow feishu recovery journey?",
+          choices: ["approve", "deny"],
+          scope: {
+            sourceChannel: "feishu",
+            sessionId: request.channelContext.channelSessionKey,
+            userId: request.user.userId,
+          },
+        });
+
+        await hooks.onEvent?.({
+          eventId: "event-feishu-journey-action-required",
+          taskId,
+          requestId,
+          type: "task.action_required",
+          status: "waiting",
+          message: `Allow feishu recovery journey?\n使用 /approve ${actionId} 或 /deny ${actionId}`,
+          payload: {
+            actionId,
+            actionType: "approval",
+            prompt: "Allow feishu recovery journey?",
+            choices: ["approve", "deny"],
+          },
+          timestamp: new Date().toISOString(),
+        });
+
+        const submissionPromise = actionBridge.waitForSubmission(taskId, requestId, actionId);
+        assert.ok(submissionPromise);
+        const submission = await submissionPromise;
+        assert.ok(submission);
+        assert.equal(submission.decision, "approve");
+
+        const result: TaskResult = {
+          taskId,
+          requestId,
+          status: "completed",
+          summary: `最终结果：${request.goal}`,
+          output: `最终结果：${request.goal}`,
+          structuredOutput: {
+            session: {
+              engine: "app-server",
+            },
+          },
+          completedAt: new Date().toISOString(),
+        };
+
+        return hooks.finalizeResult ? await hooks.finalizeResult(request, result) : result;
+      },
+      getRuntimeStore() {
+        return runtimeStore;
+      },
+      getIdentityLinkService() {
+        return identityService;
+      },
+      getPrincipalSkillsService() {
+        return principalSkillsService;
+      },
+    }),
+  } as FeishuHarnessConfig);
+
+  try {
+    const taskPromise = harness.handleIncomingText("请执行一次飞书恢复闭环测试");
+
+    await waitFor(() => {
+      const messages = harness.peekMessages();
+      return messages.some((message) => message.includes("/approve approval-feishu-journey-1"));
+    });
+
+    await harness.handleCommand("approve", ["approval-feishu-journey-1"]);
+    await taskPromise;
+
+    const messages = harness.takeMessages().join("\n");
+    assert.match(messages, /Allow feishu recovery journey\?/);
+    assert.match(messages, /已提交审批/);
+    assert.match(messages, /最终结果：请执行一次飞书恢复闭环测试/);
+    const submissions = harness.getResolvedActionSubmissions();
+    assert.equal(submissions.length, 1);
+    assert.match(submissions[0]?.taskId ?? "", /^task-/);
+    assert.equal(submissions[0]?.actionId, "approval-feishu-journey-1");
+    assert.equal(submissions[0]?.decision, "approve");
+    assert.ok(submissions[0]?.requestId);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 type FeishuHarnessSkillItem = {
   skillName: string;
   description: string;
@@ -994,6 +1100,36 @@ type FeishuHarnessConfig = {
   runtimeEngine?: "sdk" | "app-server";
   omitRuntimeRegistry?: boolean;
   appServerEventsBuilder?: (request: TaskRequest) => TaskEvent[];
+  appServerRuntimeFactory?: (input: {
+    runtimeStore: SqliteCodexSessionRegistry;
+    identityService: IdentityLinkService;
+    principalSkillsService: {
+      listPrincipalSkills: () => FeishuHarnessSkillItem[];
+      listCuratedSkills: () => Promise<FeishuHarnessCuratedItem[]>;
+      installFromLocalPath: (input: {
+        principalId: string;
+        absolutePath: string;
+        replace?: boolean;
+      }) => Promise<unknown>;
+      installFromGithub: (input: {
+        principalId: string;
+        repo?: string;
+        path?: string;
+        url?: string;
+        ref?: string;
+        replace?: boolean;
+      }) => Promise<unknown>;
+      installFromCurated: (input: {
+        principalId: string;
+        skillName: string;
+        replace?: boolean;
+      }) => Promise<unknown>;
+      removeSkill: (principalId: string, skillName: string) => unknown;
+      syncSkill: (principalId: string, skillName: string, options?: { force?: boolean }) => Promise<unknown>;
+    };
+    taskRuntimeCalls: { sdk: number; appServer: number };
+    actionBridge: AppServerActionBridge;
+  }) => TaskRuntimeFacade;
   listItems?: Array<FeishuHarnessSkillItem>;
   curatedItems?: Array<FeishuHarnessCuratedItem>;
 };
@@ -1115,6 +1251,7 @@ function createHarness(
       || "runtimeCatalog" in runtimeCatalogOrSkillsOverrides
       || "omitRuntimeRegistry" in runtimeCatalogOrSkillsOverrides
       || "appServerEventsBuilder" in runtimeCatalogOrSkillsOverrides
+      || "appServerRuntimeFactory" in runtimeCatalogOrSkillsOverrides
     )
       ? runtimeCatalogOrSkillsOverrides as FeishuHarnessConfig
       : null;
@@ -1317,6 +1454,7 @@ function createHarness(
     sdk: 0,
     appServer: 0,
   };
+  const actionBridge = new AppServerActionBridge();
   const baseRuntime = createTaskRuntimeDouble({
     engine: "sdk",
     runtimeStore,
@@ -1347,16 +1485,23 @@ function createHarness(
       return settings;
     },
   } as unknown as CodexTaskRuntime;
-  const appServerRuntime = createTaskRuntimeDouble({
-    engine: "app-server",
-    runtimeStore,
-    identityService,
-    principalSkillsService,
-    taskRuntimeCalls,
-    ...(harnessConfig?.appServerEventsBuilder ? { eventBuilder: harnessConfig.appServerEventsBuilder } : {}),
-  });
+  const appServerRuntime = harnessConfig?.appServerRuntimeFactory
+    ? harnessConfig.appServerRuntimeFactory({
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      taskRuntimeCalls,
+      actionBridge,
+    })
+    : createTaskRuntimeDouble({
+      engine: "app-server",
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      taskRuntimeCalls,
+      ...(harnessConfig?.appServerEventsBuilder ? { eventBuilder: harnessConfig.appServerEventsBuilder } : {}),
+    });
   const loggerState = createLogger();
-  const actionBridge = new AppServerActionBridge();
   const resolvedActionSubmissions: TaskPendingActionSubmitRequest[] = [];
   const originalResolveAction = actionBridge.resolve.bind(actionBridge);
   actionBridge.resolve = (payload) => {
@@ -1496,6 +1641,9 @@ function createHarness(
       messages.length = 0;
       return current;
     },
+    peekMessages() {
+      return [...messages];
+    },
     takeSingleMessage() {
       assert.equal(messages.length, 1);
       return messages.pop() ?? "";
@@ -1623,6 +1771,20 @@ function extractFeishuRenderedText(content: string): string {
 
   const firstText = parsed.zh_cn?.content?.flat().find((item) => typeof item.text === "string")?.text;
   return typeof firstText === "string" ? firstText : "";
+}
+
+async function waitFor(check: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (check()) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  throw new Error(`waitFor timeout after ${timeoutMs}ms`);
 }
 
 function createRuntimeCatalog(): CodexRuntimeCatalog {
