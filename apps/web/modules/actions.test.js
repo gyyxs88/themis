@@ -256,6 +256,7 @@ test("initialize 恢复 waiting action 后，经过第二个 action 与再次刷
     assert.equal(restoreTurn.state, "running");
     assert.equal(restoreTurn.submittedPendingActionId, "input-restore");
     assert.equal(restoreThread.historyNeedsRehydrate, true);
+    assert.equal(sharedRestoreState.restoreDoubleActionPhase, "first-action-running");
   } finally {
     firstHarness.restore();
   }
@@ -287,6 +288,7 @@ test("initialize 恢复 waiting action 后，经过第二个 action 与再次刷
     assert.equal(waitingRestoreTurn.submittedPendingActionId, null);
     assert.equal(restoreThread.historyNeedsRehydrate, false);
     assert.equal(app.runtime.restoredActionHydrationThreadId, null);
+    assert.equal(sharedRestoreState.restoreDoubleActionPhase, "second-action-ready");
 
     dom.goalInput.value = "第二次恢复回复";
     dom.goalInput.listeners.input[0]();
@@ -307,7 +309,12 @@ test("initialize 恢复 waiting action 后，经过第二个 action 与再次刷
       inputText: "第二次恢复回复",
     });
     assert.equal(restoreTurn.state, "completed");
+    assert.equal(restoreTurn.pendingAction, null);
+    assert.equal(restoreTurn.submittedPendingActionId, null);
+    assert.equal(restoreThread.historyNeedsRehydrate, false);
+    assert.equal(app.runtime.restoredActionHydrationThreadId, null);
     assert.equal(restoreTurn.result.summary, "恢复链第二轮 action 已收口");
+    assert.equal(sharedRestoreState.restoreDoubleActionPhase, "completed");
   } finally {
     secondHarness.restore();
   }
@@ -387,11 +394,11 @@ function createActionsHarness(options = {}) {
   if (typeof sharedRestoreState.restoreSecondActionSubmitted !== "boolean") {
     sharedRestoreState.restoreSecondActionSubmitted = false;
   }
+  if (typeof sharedRestoreState.restoreDoubleActionPhase !== "string" || !sharedRestoreState.restoreDoubleActionPhase) {
+    sharedRestoreState.restoreDoubleActionPhase = "initial";
+  }
   if (!Number.isFinite(sharedRestoreState.restorePostSubmitDetailCount)) {
     sharedRestoreState.restorePostSubmitDetailCount = 0;
-  }
-  if (!Number.isFinite(sharedRestoreState.restoreSecondStageDetailCount)) {
-    sharedRestoreState.restoreSecondStageDetailCount = 0;
   }
   const originalLocalStorage = globalThis.localStorage;
   const originalFetch = globalThis.fetch;
@@ -629,6 +636,13 @@ function createActionsHarness(options = {}) {
     if (!localThread) {
       throw new Error(`reusePersistedState could not find local thread: ${sharedRestoreState.localThreadId}`);
     }
+
+    if (
+      restoreScenario === "double-action-second-refresh" &&
+      sharedRestoreState.restoreDoubleActionPhase === "first-action-running"
+    ) {
+      sharedRestoreState.restoreDoubleActionPhase = "ready-for-second-refresh";
+    }
   } else {
     restoreThread = app.store.getActiveThread();
     restoreThread.id = "thread-restore";
@@ -695,7 +709,8 @@ function createActionsHarness(options = {}) {
       const doubleActionSecondRefreshRunning =
         restoreScenario === "double-action-second-refresh" &&
         sharedRestoreState.restoreActionSubmitted &&
-        !sharedRestoreState.restoreSecondActionSubmitted;
+        !sharedRestoreState.restoreSecondActionSubmitted &&
+        sharedRestoreState.restoreDoubleActionPhase !== "second-action-ready";
       const waitingRestoreAction =
         (restoreScenario === "waiting-action" ||
           restoreScenario === "second-waiting-action" ||
@@ -750,6 +765,10 @@ function createActionsHarness(options = {}) {
       calls.actionSubmit.push(JSON.parse(init.body));
       if (restoreScenario === "double-action-second-refresh" && sharedRestoreState.restoreActionSubmitted) {
         sharedRestoreState.restoreSecondActionSubmitted = true;
+        sharedRestoreState.restoreDoubleActionPhase = "second-action-submitted";
+      } else if (restoreScenario === "double-action-second-refresh") {
+        sharedRestoreState.restoreActionSubmitted = true;
+        sharedRestoreState.restoreDoubleActionPhase = "first-action-running";
       } else {
         sharedRestoreState.restoreActionSubmitted = true;
       }
@@ -820,24 +839,23 @@ function createActionsHarness(options = {}) {
 
       if (restoreScenario === "double-action-second-refresh") {
         if (!sharedRestoreState.restoreSecondActionSubmitted) {
-          sharedRestoreState.restoreSecondStageDetailCount += 1;
-
-          if (sharedRestoreState.restoreSecondStageDetailCount <= 2) {
+          if (sharedRestoreState.restoreDoubleActionPhase === "ready-for-second-refresh") {
+            sharedRestoreState.restoreDoubleActionPhase = "second-action-ready";
             return jsonResponse({
               session: {
                 sessionId: restoreThread.id,
                 threadId: "server-thread-restore",
                 createdAt: "2026-03-29T00:00:00.000Z",
-                updatedAt: "2026-03-29T00:01:10.000Z",
+                updatedAt: "2026-03-29T00:01:20.000Z",
                 turnCount: 1,
                 latestTurn: {
                   requestId: "req-restore",
                   taskId: "task-restore",
                   goal: "恢复任务",
-                  status: "running",
-                  summary: "服务端仍在处理第一次回复",
+                  status: "waiting",
+                  summary: "还差最后一条补充，请继续回复",
                   codexThreadId: "server-thread-restore",
-                  updatedAt: "2026-03-29T00:01:10.000Z",
+                  updatedAt: "2026-03-29T00:01:20.000Z",
                 },
               },
               turns: [
@@ -846,45 +864,49 @@ function createActionsHarness(options = {}) {
                   taskId: "task-restore",
                   sessionId: "server-session-restore",
                   goal: "恢复任务",
-                  status: "running",
-                  summary: "服务端仍在处理第一次回复",
+                  status: "waiting",
+                  summary: "还差最后一条补充，请继续回复",
                   sessionMode: "cli",
                   codexThreadId: "server-thread-restore",
                   createdAt: "2026-03-29T00:00:00.000Z",
-                  updatedAt: "2026-03-29T00:01:10.000Z",
+                  updatedAt: "2026-03-29T00:01:20.000Z",
                   events: [
                     {
-                      eventId: "event-restore-running-double-refresh-1",
+                      eventId: "event-restore-waiting-double-refresh-2",
                       requestId: "req-restore",
                       taskId: "task-restore",
-                      type: "task.started",
-                      status: "running",
-                      message: "服务端仍在处理第一次回复",
-                      payloadJson: null,
-                      createdAt: "2026-03-29T00:01:10.000Z",
+                      type: "task.action_required",
+                      status: "waiting",
+                      message: "还差最后一条补充，请继续回复",
+                      payloadJson: JSON.stringify({
+                        actionId: "input-restore-2",
+                        actionType: "user-input",
+                        prompt: "还差最后一条补充，请继续回复",
+                      }),
+                      createdAt: "2026-03-29T00:01:20.000Z",
                     },
                   ],
                   touchedFiles: [],
                 },
               ],
-            });
-          }
+        });
+      }
 
-          return jsonResponse({
-            session: {
+        return jsonResponse({
+          session: {
               sessionId: restoreThread.id,
               threadId: "server-thread-restore",
               createdAt: "2026-03-29T00:00:00.000Z",
-              updatedAt: "2026-03-29T00:01:20.000Z",
+              updatedAt: "2026-03-29T00:01:10.000Z",
               turnCount: 1,
               latestTurn: {
                 requestId: "req-restore",
                 taskId: "task-restore",
                 goal: "恢复任务",
-                status: "waiting",
-                summary: "还差最后一条补充，请继续回复",
+                status: "running",
+                summary: "服务端仍在处理第一次回复",
                 codexThreadId: "server-thread-restore",
-                updatedAt: "2026-03-29T00:01:20.000Z",
+                updatedAt: "2026-03-29T00:01:10.000Z",
               },
             },
             turns: [
@@ -893,26 +915,22 @@ function createActionsHarness(options = {}) {
                 taskId: "task-restore",
                 sessionId: "server-session-restore",
                 goal: "恢复任务",
-                status: "waiting",
-                summary: "还差最后一条补充，请继续回复",
+                status: "running",
+                summary: "服务端仍在处理第一次回复",
                 sessionMode: "cli",
                 codexThreadId: "server-thread-restore",
                 createdAt: "2026-03-29T00:00:00.000Z",
-                updatedAt: "2026-03-29T00:01:20.000Z",
+                updatedAt: "2026-03-29T00:01:10.000Z",
                 events: [
                   {
-                    eventId: "event-restore-waiting-double-refresh-2",
+                    eventId: "event-restore-running-double-refresh-1",
                     requestId: "req-restore",
                     taskId: "task-restore",
-                    type: "task.action_required",
-                    status: "waiting",
-                    message: "还差最后一条补充，请继续回复",
-                    payloadJson: JSON.stringify({
-                      actionId: "input-restore-2",
-                      actionType: "user-input",
-                      prompt: "还差最后一条补充，请继续回复",
-                    }),
-                    createdAt: "2026-03-29T00:01:20.000Z",
+                    type: "task.started",
+                    status: "running",
+                    message: "服务端仍在处理第一次回复",
+                    payloadJson: null,
+                    createdAt: "2026-03-29T00:01:10.000Z",
                   },
                 ],
                 touchedFiles: [],
@@ -921,6 +939,7 @@ function createActionsHarness(options = {}) {
           });
         }
 
+        sharedRestoreState.restoreDoubleActionPhase = "completed";
         return jsonResponse({
           session: {
             sessionId: restoreThread.id,
