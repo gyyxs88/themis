@@ -303,6 +303,94 @@ test("真实 Web 旅程在 app-server 下会走通 action_required -> /api/tasks
   });
 });
 
+test("真实 Web 旅程在 app-server 下会在 action_required 断流后保留 waiting turn，并允许后续提交 action 恢复完成", async () => {
+  await withHttpServer(async ({ baseUrl, root, runtimeStore, authHeaders }) => {
+    const sessionId = "session-web-journey-action-recovery-1";
+    const workspace = join(root, "workspace-action-recovery");
+    seedCompletedWebOwnerPersona(runtimeStore);
+
+    writeWorkspaceDocs(workspace, {
+      readmeTitle: "workspace-action-recovery",
+    });
+
+    const saveWorkspaceResponse = await fetch(`${baseUrl}/api/sessions/${sessionId}/settings`, {
+      method: "PUT",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        settings: {
+          workspacePath: workspace,
+        },
+      }),
+    });
+
+    assert.equal(saveWorkspaceResponse.status, 200);
+
+    const streamResponse = await fetch(`${baseUrl}/api/tasks/stream`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sessionId,
+        goal: "请等待审批并在断流后恢复",
+        options: {
+          runtimeEngine: "app-server",
+        },
+      }),
+    });
+
+    assert.equal(streamResponse.status, 200);
+    assert.ok(streamResponse.body);
+
+    const reader = createNdjsonStreamReader(streamResponse.body!);
+    const partialLines = await withTimeout(
+      reader.readUntil((lines) => lines.some((line) => line.kind === "event" && line.title === "task.action_required")),
+      "missing action_required before disconnect",
+    );
+    const actionRequiredLine = partialLines.find(
+      (line) => line.kind === "event" && line.title === "task.action_required",
+    );
+
+    assert.ok(actionRequiredLine);
+    await reader.cancel();
+
+    const waitingHistory = await waitForHistoryTurnStatus(baseUrl, authHeaders, sessionId, "waiting");
+    assert.equal(waitingHistory.turns?.length, 1);
+    assert.ok(waitingHistory.turns?.[0]?.events?.some((event) => event.type === "task.action_required"));
+
+    const actionSubmitResponse = await fetch(`${baseUrl}/api/tasks/actions`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        taskId: actionRequiredLine?.taskId,
+        requestId: actionRequiredLine?.requestId,
+        actionId: actionRequiredLine?.metadata?.actionId,
+        decision: "approve",
+      }),
+    });
+
+    assert.equal(actionSubmitResponse.status, 200);
+    assert.deepEqual(await actionSubmitResponse.json(), {
+      ok: true,
+    });
+
+    const completedHistory = await waitForHistoryTurnStatus(baseUrl, authHeaders, sessionId, "completed");
+    assert.equal(completedHistory.turns?.length, 1);
+    assert.equal(completedHistory.turns?.[0]?.status, "completed");
+    assert.ok(completedHistory.turns?.[0]?.events?.some((event) => event.type === "task.action_required"));
+    assert.equal(runtimeStore.getSession(sessionId)?.threadId, "thread-app-web-journey-1");
+  }, {
+    appServerRequiresApproval: true,
+  });
+});
+
 async function withHttpServer(
   run: (context: TestServerContext) => Promise<void>,
   options: {
@@ -526,6 +614,7 @@ function createNdjsonStreamReader(body: ReadableStream<Uint8Array>): {
     predicate: (lines: Array<Record<string, any>>) => boolean,
   ) => Promise<Array<Record<string, any>>>;
   readAll: () => Promise<Array<Record<string, any>>>;
+  cancel: () => Promise<void>;
 } {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -588,7 +677,57 @@ function createNdjsonStreamReader(body: ReadableStream<Uint8Array>): {
       const all = await drainUntil(() => false, true);
       return all.slice(consumedBefore);
     },
+    cancel: async () => {
+      await reader.cancel();
+    },
   };
+}
+
+async function waitForHistoryTurnStatus(
+  baseUrl: string,
+  authHeaders: Record<string, string>,
+  sessionId: string,
+  expectedStatus: string,
+  timeoutMs = 1_000,
+): Promise<{
+  turns?: Array<{
+    status?: string;
+    events?: Array<{
+      type?: string;
+    }>;
+  }>;
+}> {
+  const startedAt = Date.now();
+
+  while (true) {
+    const historyDetailResponse = await fetch(`${baseUrl}/api/history/sessions/${sessionId}`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    assert.equal(historyDetailResponse.status, 200);
+
+    const historyDetailPayload = await historyDetailResponse.json() as {
+      turns?: Array<{
+        status?: string;
+        events?: Array<{
+          type?: string;
+        }>;
+      }>;
+    };
+
+    if (historyDetailPayload.turns?.some((turn) => turn.status === expectedStatus)) {
+      return historyDetailPayload;
+    }
+
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error(`history turn did not reach status ${expectedStatus}`);
+    }
+
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 20);
+      timer.unref?.();
+    });
+  }
 }
 
 async function withTimeout<T>(promise: Promise<T>, message: string, timeoutMs = 1000): Promise<T> {

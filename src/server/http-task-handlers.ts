@@ -24,10 +24,11 @@ export async function handleTaskStream(
   const abortController = new AbortController();
   let streamClosed = false;
   let streamCompleted = false;
+  let allowDetachedActionRecovery = false;
   const markClosed = (): void => {
     streamClosed = true;
 
-    if (!streamCompleted && !abortController.signal.aborted) {
+    if (!streamCompleted && !allowDetachedActionRecovery && !abortController.signal.aborted) {
       abortController.abort(new Error("CLIENT_DISCONNECTED"));
     }
   };
@@ -75,6 +76,10 @@ export async function handleTaskStream(
       timeoutMs: taskTimeoutMs,
       finalizeResult: (request, taskResult) => appendTaskReplyQuotaFooter(authRuntime, request, taskResult),
       onEvent: async (event) => {
+        if (event.type === "task.action_required") {
+          allowDetachedActionRecovery = true;
+        }
+
         await router.publishEvent(event);
       },
     });

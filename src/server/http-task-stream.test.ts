@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
+import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import { AppServerTaskRuntime, type AppServerTaskRuntimeSession } from "../core/app-server-task-runtime.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
@@ -640,6 +641,126 @@ test("handleTaskStream 在 close 后会中止任务并停止继续写流", async
   }
 });
 
+test("handleTaskStream 在 task.action_required 后 close 不会中止 waiting action，并保留 pending action 供后续提交", async () => {
+  let capturedTaskId = "";
+  let capturedRequestId = "";
+  let abortMessage: string | null = null;
+  const actionBridge = new AppServerActionBridge();
+  let resolveRuntimeCompleted!: () => void;
+  const runtimeCompleted = new Promise<void>((resolve) => {
+    resolveRuntimeCompleted = resolve;
+  });
+
+  await withHttpServer(async ({ baseUrl, runtimeStore, runtime }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/stream`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请在等待 action 时断开连接",
+        sessionId: "session-task-stream-action-disconnect",
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.ok(response.body);
+
+    const reader = createNdjsonStreamReader(response.body!);
+    const partialLines = await reader.readUntil((lines) => lines.some((line) => line.title === "task.action_required"));
+    const actionRequiredLine = partialLines.find((line) => line.title === "task.action_required");
+
+    assert.ok(actionRequiredLine);
+    await reader.cancel();
+
+    await waitFor(() => capturedTaskId.length > 0 && capturedRequestId.length > 0);
+    await waitFor(() => actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-detached-1") !== null);
+
+    assert.equal(abortMessage, null);
+    assert.ok(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-detached-1"));
+
+    assert.equal(actionBridge.resolve({
+      taskId: capturedTaskId,
+      requestId: capturedRequestId,
+      actionId: "approval-detached-1",
+      decision: "approve",
+    }), true);
+
+    await runtimeCompleted;
+
+    assert.equal(abortMessage, null);
+    assert.equal(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-detached-1"), null);
+  }, {
+    authenticated: false,
+    requiresOpenaiAuth: false,
+  }, ({ runtimeStore, runtime }) => {
+    const actionRuntime = {
+      runTask: async (taskRequest: Parameters<CodexTaskRuntime["runTask"]>[0], hooks: Parameters<CodexTaskRuntime["runTask"]>[1] = {}) => {
+        const { onEvent, signal } = hooks;
+        assert.ok(signal);
+        capturedTaskId = taskRequest.taskId ?? "task-stream-action-disconnect";
+        capturedRequestId = taskRequest.requestId;
+
+        const action = actionBridge.register({
+          taskId: capturedTaskId,
+          requestId: capturedRequestId,
+          actionId: "approval-detached-1",
+          actionType: "approval",
+          prompt: "Need approval",
+        });
+        const submission = actionBridge.waitForSubmission(capturedTaskId, capturedRequestId, action.actionId);
+        assert.ok(submission);
+
+        signal.addEventListener("abort", () => {
+          abortMessage = signal.reason instanceof Error
+            ? signal.reason.message
+            : String(signal.reason);
+          actionBridge.discard(capturedTaskId, capturedRequestId, action.actionId);
+        }, { once: true });
+
+        await onEvent?.({
+          eventId: "event-action-required-1",
+          taskId: capturedTaskId,
+          requestId: capturedRequestId,
+          type: "task.action_required",
+          status: "waiting",
+          message: "Need approval",
+          actionId: action.actionId,
+          actionType: action.actionType,
+          timestamp: "2026-03-29T09:00:00.000Z",
+        });
+
+        const payload = await submission;
+        resolveRuntimeCompleted();
+
+        return {
+          taskId: capturedTaskId,
+          requestId: capturedRequestId,
+          status: signal.aborted ? "cancelled" as const : "completed" as const,
+          summary: signal.aborted ? "任务已取消" : `已处理 ${payload.decision}`,
+          completedAt: "2026-03-29T09:00:02.000Z",
+        };
+      },
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => runtime.getIdentityLinkService(),
+      getPrincipalSkillsService: () => runtime.getPrincipalSkillsService(),
+    };
+
+    return {
+      defaultRuntime: actionRuntime,
+      runtimes: {
+        sdk: runtime,
+      },
+    };
+  });
+});
+
 function parseNdjson(body: string): Array<{ kind?: string; title?: string; text?: unknown; result?: unknown; metadata?: unknown }> {
   return body
     .split("\n")
@@ -677,8 +798,10 @@ function createAppServerSessionDoubleState(): AppServerSessionDoubleState {
   };
 }
 
-function createTaskStreamResponse(onFirstWrite: () => void): TaskStreamResponseStub {
-  return new TaskStreamResponseStub(onFirstWrite);
+function createTaskStreamResponse(
+  onWrite: (payload: { writeCount: number; chunk: string }) => void = () => {},
+): TaskStreamResponseStub {
+  return new TaskStreamResponseStub(onWrite);
 }
 
 class TaskStreamResponseStub extends EventEmitter {
@@ -686,21 +809,22 @@ class TaskStreamResponseStub extends EventEmitter {
   destroyed = false;
   writableEnded = false;
   readonly lines: string[] = [];
-  private wroteFirstChunk = false;
+  private writeCount = 0;
 
-  constructor(private readonly onFirstWrite: () => void) {
+  constructor(private readonly onWrite: (payload: { writeCount: number; chunk: string }) => void) {
     super();
   }
 
   setHeader(_name: string, _value: string | number | readonly string[]): void {}
 
   write(chunk: unknown): boolean {
-    this.lines.push(String(chunk));
-
-    if (!this.wroteFirstChunk) {
-      this.wroteFirstChunk = true;
-      this.onFirstWrite();
-    }
+    const renderedChunk = String(chunk);
+    this.lines.push(renderedChunk);
+    this.writeCount += 1;
+    this.onWrite({
+      writeCount: this.writeCount,
+      chunk: renderedChunk,
+    });
 
     return true;
   }
@@ -718,6 +842,70 @@ function listenServer(server: Server): Promise<Server> {
       resolve(server);
     });
   });
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const startedAt = Date.now();
+
+  while (!predicate()) {
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error("waitFor timeout");
+    }
+
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 10);
+      timer.unref?.();
+    });
+  }
+}
+
+function createNdjsonStreamReader(body: ReadableStream<Uint8Array>): {
+  readUntil: (
+    predicate: (lines: Array<{ kind?: string; title?: string; text?: unknown; result?: unknown; metadata?: unknown }>) => boolean,
+  ) => Promise<Array<{ kind?: string; title?: string; text?: unknown; result?: unknown; metadata?: unknown }>>;
+  cancel: () => Promise<void>;
+} {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const lines: Array<{ kind?: string; title?: string; text?: unknown; result?: unknown; metadata?: unknown }> = [];
+
+  return {
+    readUntil: async (predicate) => {
+      while (true) {
+        if (predicate(lines)) {
+          return [...lines];
+        }
+
+        const { value, done } = await reader.read();
+
+        if (done) {
+          throw new Error("NDJSON stream ended before predicate matched.");
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const chunks = buffer.split("\n");
+        buffer = chunks.pop() ?? "";
+
+        for (const chunk of chunks) {
+          const trimmed = chunk.trim();
+
+          if (!trimmed) {
+            continue;
+          }
+
+          lines.push(JSON.parse(trimmed) as { kind?: string; title?: string; text?: unknown; result?: unknown; metadata?: unknown });
+
+          if (predicate(lines)) {
+            return [...lines];
+          }
+        }
+      }
+    },
+    cancel: async () => {
+      await reader.cancel();
+    },
+  };
 }
 
 function closeServer(server: Server): Promise<void> {
