@@ -360,7 +360,11 @@ test("真实 Web 旅程在 app-server 下会在 action_required 断流后保留 
 
     const waitingHistory = await waitForHistoryTurnStatus(baseUrl, authHeaders, sessionId, "waiting");
     assert.equal(waitingHistory.turns?.length, 1);
-    assert.ok(waitingHistory.turns?.[0]?.events?.some((event) => event.type === "task.action_required"));
+    const restoredAction = extractActionRequiredFromHistory(waitingHistory);
+
+    assert.ok(restoredAction);
+    assert.equal(restoredAction.actionId, "approval-web-1");
+    assert.equal(restoredAction.actionType, "approval");
 
     const actionSubmitResponse = await fetch(`${baseUrl}/api/tasks/actions`, {
       method: "POST",
@@ -369,9 +373,9 @@ test("真实 Web 旅程在 app-server 下会在 action_required 断流后保留 
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        taskId: actionRequiredLine?.taskId,
-        requestId: actionRequiredLine?.requestId,
-        actionId: actionRequiredLine?.metadata?.actionId,
+        taskId: restoredAction.taskId,
+        requestId: restoredAction.requestId,
+        actionId: restoredAction.actionId,
         decision: "approve",
       }),
     });
@@ -689,14 +693,7 @@ async function waitForHistoryTurnStatus(
   sessionId: string,
   expectedStatus: string,
   timeoutMs = 1_000,
-): Promise<{
-  turns?: Array<{
-    status?: string;
-    events?: Array<{
-      type?: string;
-    }>;
-  }>;
-}> {
+): Promise<HistorySessionDetailPayload> {
   const startedAt = Date.now();
 
   while (true) {
@@ -706,14 +703,7 @@ async function waitForHistoryTurnStatus(
     });
     assert.equal(historyDetailResponse.status, 200);
 
-    const historyDetailPayload = await historyDetailResponse.json() as {
-      turns?: Array<{
-        status?: string;
-        events?: Array<{
-          type?: string;
-        }>;
-      }>;
-    };
+    const historyDetailPayload = await historyDetailResponse.json() as HistorySessionDetailPayload;
 
     if (historyDetailPayload.turns?.some((turn) => turn.status === expectedStatus)) {
       return historyDetailPayload;
@@ -738,6 +728,54 @@ async function withTimeout<T>(promise: Promise<T>, message: string, timeoutMs = 
       timer.unref?.();
     }),
   ]);
+}
+
+type HistorySessionDetailPayload = {
+  turns?: Array<{
+    status?: string;
+    requestId?: string;
+    taskId?: string;
+    events?: Array<{
+      type?: string;
+      requestId?: string;
+      taskId?: string;
+      payloadJson?: string;
+    }>;
+  }>;
+};
+
+function extractActionRequiredFromHistory(
+  historyDetailPayload: HistorySessionDetailPayload,
+): {
+  taskId: string;
+  requestId: string;
+  actionId: string;
+  actionType?: string;
+} | null {
+  const waitingTurn = historyDetailPayload.turns?.find((turn) => turn.status === "waiting");
+  const actionRequiredEvent = waitingTurn?.events?.find((event) => event.type === "task.action_required");
+
+  if (!actionRequiredEvent?.payloadJson) {
+    return null;
+  }
+
+  const payload = JSON.parse(actionRequiredEvent.payloadJson) as {
+    actionId?: string;
+    actionType?: string;
+  };
+  const taskId = actionRequiredEvent.taskId ?? waitingTurn?.taskId;
+  const requestId = actionRequiredEvent.requestId ?? waitingTurn?.requestId;
+
+  if (!taskId || !requestId || !payload.actionId) {
+    return null;
+  }
+
+  return {
+    taskId,
+    requestId,
+    actionId: payload.actionId,
+    ...(payload.actionType ? { actionType: payload.actionType } : {}),
+  };
 }
 
 function listenServer(server: Server): Promise<Server> {
