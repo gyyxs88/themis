@@ -1000,8 +1000,12 @@ test("飞书命令式审批恢复会沿同一任务链收口 action 提示、审
           choices: ["approve", "deny"],
           scope: {
             sourceChannel: "feishu",
-            sessionId: request.channelContext.channelSessionKey,
             userId: request.user.userId,
+            ...(request.channelContext.channelSessionKey
+              ? {
+                sessionId: request.channelContext.channelSessionKey,
+              }
+              : {}),
           },
         });
 

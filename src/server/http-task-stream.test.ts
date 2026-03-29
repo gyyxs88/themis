@@ -981,12 +981,28 @@ test("handleTaskStream 仅收到无 bridge pending action 的 task.action_requir
   }
 });
 
-function parseNdjson(body: string): Array<{ kind?: string; title?: string; text?: unknown; result?: unknown; metadata?: unknown }> {
+function parseNdjson(body: string): Array<{
+  kind?: string;
+  title?: string;
+  text?: unknown;
+  result?: unknown;
+  metadata?: unknown;
+  taskId?: string;
+  requestId?: string;
+}> {
   return body
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as { kind?: string; title?: string; text?: unknown; result?: unknown; metadata?: unknown });
+    .map((line) => JSON.parse(line) as {
+      kind?: string;
+      title?: string;
+      text?: unknown;
+      result?: unknown;
+      metadata?: unknown;
+      taskId?: string;
+      requestId?: string;
+    });
 }
 
 function createAuthRuntime(snapshot: {
