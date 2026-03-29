@@ -1085,6 +1085,203 @@ test("飞书命令式审批恢复会沿同一任务链收口 action 提示、审
   }
 });
 
+test("飞书连续 waiting action 恢复会在第二轮命令提交后才最终收口", async () => {
+  const emittedEventSummaries: string[] = [];
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      actionBridge,
+      taskRuntimeCalls,
+    }) => ({
+      async runTask(request, hooks = {}) {
+        taskRuntimeCalls.appServer += 1;
+        const taskId = request.taskId ?? "task-feishu-journey-2";
+        const requestId = request.requestId;
+        const firstActionId = "approval-feishu-journey-2a";
+        const secondActionId = "approval-feishu-journey-2b";
+
+        actionBridge.register({
+          taskId,
+          requestId,
+          actionId: firstActionId,
+          actionType: "approval",
+          prompt: "Allow first feishu recovery step?",
+          choices: ["approve", "deny"],
+          scope: {
+            sourceChannel: "feishu",
+            userId: request.user.userId,
+            ...(request.channelContext.channelSessionKey
+              ? {
+                sessionId: request.channelContext.channelSessionKey,
+              }
+              : {}),
+          },
+        });
+
+        await hooks.onEvent?.({
+          eventId: "event-feishu-journey-2-action-required-a",
+          taskId,
+          requestId,
+          type: "task.action_required",
+          status: "waiting",
+          message: `Allow first feishu recovery step?\n使用 /approve ${firstActionId} 或 /deny ${firstActionId}`,
+          payload: {
+            actionId: firstActionId,
+            actionType: "approval",
+            prompt: "Allow first feishu recovery step?",
+            choices: ["approve", "deny"],
+          },
+          timestamp: new Date().toISOString(),
+        });
+        emittedEventSummaries.push(`task.action_required:${firstActionId}`);
+
+        const firstSubmissionPromise = actionBridge.waitForSubmission(taskId, requestId, firstActionId);
+        assert.ok(firstSubmissionPromise);
+        const firstSubmission = await firstSubmissionPromise;
+        assert.ok(firstSubmission);
+        assert.equal(firstSubmission.decision, "approve");
+
+        emittedEventSummaries.push("task.progress:running");
+        await hooks.onEvent?.({
+          eventId: "event-feishu-journey-2-running",
+          taskId,
+          requestId,
+          type: "task.progress",
+          status: "running",
+          message: "第一轮审批已提交，任务继续执行中。",
+          payload: {
+            itemType: "agent_message",
+            threadEventType: "item.completed",
+            itemId: "item-feishu-journey-2-running",
+          },
+          timestamp: new Date().toISOString(),
+        });
+
+        actionBridge.register({
+          taskId,
+          requestId,
+          actionId: secondActionId,
+          actionType: "approval",
+          prompt: "Allow second feishu recovery step?",
+          choices: ["approve", "deny"],
+          scope: {
+            sourceChannel: "feishu",
+            userId: request.user.userId,
+            ...(request.channelContext.channelSessionKey
+              ? {
+                sessionId: request.channelContext.channelSessionKey,
+              }
+              : {}),
+          },
+        });
+
+        await hooks.onEvent?.({
+          eventId: "event-feishu-journey-2-action-required-b",
+          taskId,
+          requestId,
+          type: "task.action_required",
+          status: "waiting",
+          message: `Allow second feishu recovery step?\n使用 /approve ${secondActionId} 或 /deny ${secondActionId}`,
+          payload: {
+            actionId: secondActionId,
+            actionType: "approval",
+            prompt: "Allow second feishu recovery step?",
+            choices: ["approve", "deny"],
+          },
+          timestamp: new Date().toISOString(),
+        });
+        emittedEventSummaries.push(`task.action_required:${secondActionId}`);
+
+        const secondSubmissionPromise = actionBridge.waitForSubmission(taskId, requestId, secondActionId);
+        assert.ok(secondSubmissionPromise);
+        const secondSubmission = await secondSubmissionPromise;
+        assert.ok(secondSubmission);
+        assert.equal(secondSubmission.decision, "approve");
+
+        const result: TaskResult = {
+          taskId,
+          requestId,
+          status: "completed",
+          summary: `最终结果：${request.goal}`,
+          output: `最终结果：${request.goal}`,
+          structuredOutput: {
+            session: {
+              engine: "app-server",
+            },
+          },
+          completedAt: new Date().toISOString(),
+        };
+
+        return hooks.finalizeResult ? await hooks.finalizeResult(request, result) : result;
+      },
+      getRuntimeStore() {
+        return runtimeStore;
+      },
+      getIdentityLinkService() {
+        return identityService;
+      },
+      getPrincipalSkillsService() {
+        return principalSkillsService;
+      },
+    }),
+  } as FeishuHarnessConfig);
+
+  try {
+    let taskSettled = false;
+    const taskPromise = harness.handleIncomingText("请执行一次飞书连续恢复闭环测试").then(() => {
+      taskSettled = true;
+    });
+
+    await waitFor(() => {
+      const messages = harness.peekMessages();
+      return messages.some((message) => message.includes("/approve approval-feishu-journey-2a"));
+    });
+
+    const sessionId = harness.getCurrentSessionId();
+    assert.ok(sessionId);
+
+    await harness.handleCommand("approve", ["approval-feishu-journey-2a"]);
+
+    await waitFor(() => {
+      const messages = harness.peekMessages();
+      return messages.some((message) => message.includes("/approve approval-feishu-journey-2b"));
+    });
+
+    const messagesAfterFirstApproval = harness.peekMessages().join("\n");
+    assert.equal(taskSettled, false);
+    assert.match(messagesAfterFirstApproval, /Allow first feishu recovery step\?/);
+    assert.match(messagesAfterFirstApproval, /Allow second feishu recovery step\?/);
+    assert.match(messagesAfterFirstApproval, /\/approve approval-feishu-journey-2b/);
+    assert.doesNotMatch(messagesAfterFirstApproval, /最终结果：请执行一次飞书连续恢复闭环测试/);
+    assert.deepEqual(emittedEventSummaries, [
+      "task.action_required:approval-feishu-journey-2a",
+      "task.progress:running",
+      "task.action_required:approval-feishu-journey-2b",
+    ]);
+
+    await harness.handleCommand("approve", ["approval-feishu-journey-2b"]);
+    await taskPromise;
+
+    const messages = harness.takeMessages().join("\n");
+    assert.equal(harness.getCurrentSessionId(), sessionId);
+    assert.match(messages, /\/approve approval-feishu-journey-2a/);
+    assert.match(messages, /\/approve approval-feishu-journey-2b/);
+    assert.match(messages, /最终结果：请执行一次飞书连续恢复闭环测试/);
+    assert.deepEqual(
+      harness.getResolvedActionSubmissions().map((entry) => entry.actionId),
+      [
+        "approval-feishu-journey-2a",
+        "approval-feishu-journey-2b",
+      ],
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
 type FeishuHarnessSkillItem = {
   skillName: string;
   description: string;
