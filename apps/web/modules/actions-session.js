@@ -68,6 +68,9 @@ export function createSessionActions(app) {
       return;
     }
 
+    const sourceThread = store.getActiveThread();
+    const sourceThreadId = sourceThread?.id ?? store.state.activeThreadId ?? null;
+
     try {
       app.runtime.sessionControlBusy = true;
       app.renderer.renderAll();
@@ -90,11 +93,17 @@ export function createSessionActions(app) {
       app.renderer.renderAll(true);
       dom.goalInput.focus();
     } catch (error) {
-      const targetThread = store.getThreadById(rawConversationId) ?? store.getActiveThread();
+      if (sourceThreadId && store.state.activeThreadId !== sourceThreadId) {
+        store.state = {
+          ...store.state,
+          activeThreadId: sourceThreadId,
+        };
+        store.saveState();
+      }
 
-      if (targetThread) {
+      if (sourceThreadId) {
         store.setTransientStatus(
-          targetThread.id,
+          sourceThreadId,
           error instanceof Error && error.message.trim()
             ? error.message
             : "接入 conversation 失败，请重试。",
@@ -168,6 +177,7 @@ export function createSessionActions(app) {
       );
       app.runtime.activeRequestController = null;
       app.runtime.activeRunRef = null;
+      app.runtime.threadControlJoinOpen = false;
       app.runtime.workspaceToolsOpen = false;
       app.runtime.historyHydratingThreadId = null;
       app.runtime.identity = {

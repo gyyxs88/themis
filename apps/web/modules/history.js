@@ -161,9 +161,14 @@ export function createHistoryController(app) {
       };
     }
 
+    const originalActiveThreadId = app.store.state.activeThreadId;
     let thread = app.store.getThreadById(normalizedConversationId);
 
-    if (!thread) {
+    function ensureAttachedThread() {
+      if (thread) {
+        return thread;
+      }
+
       thread = app.store.createThread({
         threadOrigin: "attached",
       });
@@ -171,28 +176,26 @@ export function createHistoryController(app) {
       thread.title = `会话 ${normalizedConversationId.slice(0, 12)}`;
       thread.historyHydrated = true;
       app.store.state.threads.unshift(thread);
+      return thread;
     }
 
-    if (thread.threadOrigin !== "fork") {
-      thread.threadOrigin = "attached";
-    }
-
-    app.store.state.activeThreadId = thread.id;
-    app.store.trimThreads();
-    app.store.saveState();
-    app.renderer.renderAll(true);
-
-    app.runtime.historyHydratingThreadId = thread.id;
+    app.runtime.historyHydratingThreadId = normalizedConversationId;
     app.renderer.renderAll();
 
     try {
-      const response = await fetch(`/api/history/sessions/${encodeURIComponent(thread.id)}`);
+      const response = await fetch(`/api/history/sessions/${encodeURIComponent(normalizedConversationId)}`);
       const data = await app.utils.safeReadJson(response);
 
       if (response.ok) {
+        thread = ensureAttachedThread();
+        if (thread.threadOrigin !== "fork") {
+          thread.threadOrigin = "attached";
+        }
         applyHistorySessionDetail(data);
         thread = app.store.getThreadById(thread.id) ?? thread;
         await app.sessionSettings.loadThreadSettings(thread.id, { quiet: true });
+        app.store.state.activeThreadId = thread.id;
+        app.store.trimThreads();
         app.store.saveState();
         app.renderer.renderAll(true);
         return {
@@ -205,6 +208,10 @@ export function createHistoryController(app) {
         throw new Error(data?.error?.message ?? "载入会话详情失败。");
       }
 
+      thread = ensureAttachedThread();
+      if (thread.threadOrigin !== "fork") {
+        thread.threadOrigin = "attached";
+      }
       thread.serverHistoryAvailable = false;
       thread.serverThreadId = null;
       thread.storedTurnCount = 0;
@@ -212,6 +219,8 @@ export function createHistoryController(app) {
       thread.storedStatus = null;
       thread.historyHydrated = true;
       await app.sessionSettings.loadThreadSettings(thread.id, { quiet: true });
+      app.store.state.activeThreadId = thread.id;
+      app.store.trimThreads();
       app.store.saveState();
       app.renderer.renderAll(true);
 
@@ -219,6 +228,13 @@ export function createHistoryController(app) {
         foundHistory: false,
         thread,
       };
+    } catch (error) {
+      if (app.store.state.activeThreadId !== originalActiveThreadId) {
+        app.store.state.activeThreadId = originalActiveThreadId;
+        app.store.saveState();
+      }
+
+      throw error;
     } finally {
       app.runtime.historyHydratingThreadId = null;
       app.renderer.renderAll();

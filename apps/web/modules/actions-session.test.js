@@ -173,7 +173,7 @@ test("handleJoinConversation 失败后会保留输入和展开态，并给当前
   assert.equal(harness.app.store.transientStatus?.text, "join failed");
 });
 
-test("handleJoinConversation 在 attach 先切到目标线程再失败时，会把错误提示写到目标线程", async () => {
+test("handleJoinConversation 失败后会留在原线程、保留输入和展开态，并把错误写回原线程", async () => {
   const harness = createSessionHarness({
     attachConversationById: async (rawConversationId) => {
       harness.attachConversationCalls.push(rawConversationId);
@@ -192,8 +192,55 @@ test("handleJoinConversation 在 attach 先切到目标线程再失败时，会�
 
   assert.equal(harness.app.dom.conversationLinkInput.value, "conversation-target-1");
   assert.equal(harness.app.runtime.threadControlJoinOpen, true);
-  assert.equal(harness.app.store.transientStatus?.threadId, "conversation-target-1");
+  assert.equal(harness.app.store.state.activeThreadId, "thread-source-1");
+  assert.equal(harness.app.store.getActiveThread()?.id, "thread-source-1");
+  assert.equal(harness.app.store.transientStatus?.threadId, "thread-source-1");
   assert.equal(harness.app.store.transientStatus?.text, "target thread failed");
+});
+
+test("handleResetPrincipalState 成功后会收口 thread control join panel 并切到新的空线程", async () => {
+  const harness = createSessionHarness();
+  const originalWindow = globalThis.window;
+  const originalFetch = globalThis.fetch;
+
+  try {
+    globalThis.window = {
+      confirm: () => true,
+    };
+    globalThis.fetch = async (url, init = {}) => {
+      assert.equal(url, "/api/identity/reset");
+      assert.equal(init.method, "POST");
+      assert.deepEqual(JSON.parse(init.body), {
+        channel: "web",
+        channelUserId: "user-1",
+      });
+
+      return new Response(JSON.stringify({
+        reset: {
+          clearedConversationCount: 2,
+          clearedTurnCount: 5,
+        },
+      }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    };
+
+    harness.app.runtime.threadControlJoinOpen = true;
+
+    const actions = createSessionActions(harness.app);
+    await actions.handleResetPrincipalState();
+
+    assert.equal(harness.app.runtime.threadControlJoinOpen, false);
+    assert.equal(harness.app.store.state.threads.length, 1);
+    assert.equal(harness.app.store.state.activeThreadId, harness.app.store.state.threads[0].id);
+    assert.match(harness.app.store.transientStatus?.text ?? "", /已清空当前 principal/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.window = originalWindow;
+  }
 });
 
 function createSessionHarness(options = {}) {
@@ -276,6 +323,12 @@ function createSessionHarness(options = {}) {
       },
       trimThreads() {},
       saveState() {},
+      isBusy() {
+        return false;
+      },
+      clearTransientStatus() {
+        this.transientStatus = null;
+      },
       setTransientStatus(threadId, text) {
         this.transientStatus = {
           threadId,
@@ -294,6 +347,13 @@ function createSessionHarness(options = {}) {
     },
     sessionSettings: {
       persistThreadSettings: async () => ({ ok: true }),
+      async loadThreadSettings() {},
+    },
+    identity: {
+      getRequestIdentity() {
+        return { userId: "user-1" };
+      },
+      async load() {},
     },
     history: {
       attachConversationById: options.attachConversationById ?? (async (rawConversationId) => {

@@ -150,6 +150,56 @@ test("activateThread 和 newThreadButton 成功路径都会收起 thread control
   }
 });
 
+test("resetPrincipalButton 会在 initialize 后绑定 click 处理", async () => {
+  const harness = createActionsHarness();
+  const originalWindow = globalThis.window;
+  const originalFetch = globalThis.fetch;
+
+  try {
+    globalThis.window = {
+      ...originalWindow,
+      confirm: () => true,
+    };
+    globalThis.fetch = async (url, init = {}) => {
+      const ref = typeof url === "string" ? url : String(url);
+
+      if (ref.startsWith("/api/history/sessions?limit=")) {
+        return jsonResponse({
+          sessions: [],
+        });
+      }
+
+      if (ref === "/api/identity/reset") {
+        assert.equal(init.method, "POST");
+        assert.deepEqual(JSON.parse(init.body), {
+          channel: "web",
+          channelUserId: "user-1",
+        });
+
+        return jsonResponse({
+          reset: {
+            clearedConversationCount: 2,
+            clearedTurnCount: 5,
+          },
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${ref}`);
+    };
+
+    const { app, dom, actions } = harness;
+
+    app.runtime.threadControlJoinOpen = true;
+    actions.initialize();
+    assert.equal(dom.resetPrincipalButton.listeners.click.length, 1);
+    assert.equal(typeof dom.resetPrincipalButton.listeners.click[0], "function");
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.window = originalWindow;
+    harness.restore();
+  }
+});
+
 test("waiting approval 卡片点击批准会直接提交 decision", async () => {
   const harness = createActionsHarness({
     restoreScenario: "waiting-approval",

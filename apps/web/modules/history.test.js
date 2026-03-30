@@ -218,6 +218,39 @@ test("attachConversationById 会在新建、standard 和 fork 分支里保留正
   }
 });
 
+test("attachConversationById 在服务端失败时会留在原线程并且不创建半成品目标线程", async () => {
+  const harness = createAttachHarness();
+  const originalFetch = globalThis.fetch;
+  const originalActiveThreadId = harness.app.store.state.activeThreadId;
+  const originalThreadCount = harness.app.store.state.threads.length;
+
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      error: {
+        message: "join failed",
+      },
+    }), {
+      status: 500,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    await assert.rejects(
+      harness.history.attachConversationById("conversation-failed"),
+      /join failed/,
+    );
+
+    assert.equal(harness.app.store.state.activeThreadId, originalActiveThreadId);
+    assert.equal(harness.app.store.state.threads.length, originalThreadCount);
+    assert.equal(harness.app.store.getThreadById("conversation-failed"), null);
+    assert.equal(harness.app.runtime.historyHydratingThreadId, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+    harness.restore();
+  }
+});
+
 function createHistoryHarness(options = {}) {
   const storageKey = "themis-history-test";
   const storage = createLocalStorageMock();
