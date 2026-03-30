@@ -129,6 +129,55 @@ test("第三方模型未声明图片输入时会阻止图片附件请求", () =>
   }
 });
 
+test("CodexTaskRuntime 构造时会为现有 auth account 预建 session store，并在 auth 请求中复用", () => {
+  const workingDirectory = mkdtempSync(join(tmpdir(), "themis-runtime-auth-store-"));
+  const registry = new SqliteCodexSessionRegistry({
+    databaseFile: join(workingDirectory, "infra/local/themis.db"),
+  });
+
+  registry.saveAuthAccount({
+    accountId: "acct-1",
+    label: "账户一",
+    accountEmail: "acct-1@example.com",
+    codexHome: join(workingDirectory, "infra/local/codex-auth/acct-1"),
+    isActive: true,
+    createdAt: "2026-03-30T00:00:00.000Z",
+    updatedAt: "2026-03-30T00:00:00.000Z",
+  });
+
+  const records = createRecordingSessionStoreFactoryRecords();
+  const runtime = new CodexTaskRuntime({
+    workingDirectory,
+    runtimeStore: registry,
+    createSessionStore: records.createSessionStore,
+  });
+
+  try {
+    assert.equal(records.calls.length, 1);
+    assert.equal(records.calls[0]?.sessionIdNamespace, "auth:acct-1");
+
+    const target = (runtime as unknown as {
+      resolveRuntimeTarget(request: TaskRequest, allowUnsupportedThirdPartyModel?: boolean): {
+        accessMode: "auth" | "third-party";
+        authAccountId: string | null;
+        providerId: string | null;
+        providerConfig: OpenAICompatibleProviderConfig | null;
+        sessionStore: CodexThreadSessionStore;
+      };
+    }).resolveRuntimeTarget(createRequest({
+      requestId: "req-auth-runtime-1",
+      taskId: "task-auth-runtime-1",
+    }));
+
+    assert.equal(target.accessMode, "auth");
+    assert.equal(target.authAccountId, "acct-1");
+    assert.equal(target.sessionStore, records.calls[0]?.store);
+    assert.equal(records.calls.length, 1);
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
 test("runTask 会优先使用会话绑定的工作区", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-runtime-session-workspace-"));
   const controlDirectory = join(root, "control");
@@ -654,6 +703,42 @@ function createFailingSessionStoreDouble(runtimeStore: SqliteCodexSessionRegistr
       release: async () => {},
     }),
   } as unknown as CodexThreadSessionStore;
+}
+
+function createRecordingSessionStoreFactoryRecords(): {
+  calls: Array<{
+    sessionIdNamespace: string | undefined;
+    store: CodexThreadSessionStore;
+  }>;
+  createSessionStore: (options: {
+    sessionRegistry?: SqliteCodexSessionRegistry;
+    sessionIdNamespace?: string;
+  }) => CodexThreadSessionStore;
+} {
+  const calls: Array<{
+    sessionIdNamespace: string | undefined;
+    store: CodexThreadSessionStore;
+  }> = [];
+
+  return {
+    calls,
+    createSessionStore: (options) => {
+      const store = {
+        getSessionRegistry: () => options.sessionRegistry ?? null,
+        resolveThreadId: async () => null,
+        acquire: async () => {
+          throw new Error("acquire should not be called in this test");
+        },
+      } as unknown as CodexThreadSessionStore;
+
+      calls.push({
+        sessionIdNamespace: options.sessionIdNamespace,
+        store,
+      });
+
+      return store;
+    },
+  };
 }
 
 function writeRuntimeFile(root: string, path: string, content: string): void {

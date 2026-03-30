@@ -43,6 +43,7 @@ import {
 import { buildForkContextFromThread, type CodexForkContext } from "./codex-session-fork.js";
 import {
   CodexThreadSessionStore,
+  type CodexThreadSessionStoreOptions,
   type CodexSessionLease,
   type CodexSessionMode,
 } from "./codex-session-store.js";
@@ -74,6 +75,7 @@ export interface CodexTaskRuntimeOptions {
   principalSkillsService?: PrincipalSkillsService;
   createContextBuilder?: (workingDirectory: string) => ContextBuilder;
   createMemoryService?: (workingDirectory: string) => MemoryService;
+  createSessionStore?: (options: CodexThreadSessionStoreOptions) => CodexThreadSessionStore;
 }
 
 interface ResolvedRuntimeTarget {
@@ -100,6 +102,7 @@ export class CodexTaskRuntime {
   private readonly principalSkillsService: PrincipalSkillsService;
   private readonly createContextBuilder: (workingDirectory: string) => ContextBuilder;
   private readonly createMemoryService: (workingDirectory: string) => MemoryService;
+  private readonly createSessionStore: (options: CodexThreadSessionStoreOptions) => CodexThreadSessionStore;
   private providerConfigs: OpenAICompatibleProviderConfig[];
   private readonly authClients = new Map<string, Codex>();
   private readonly authSessionStores = new Map<string, CodexThreadSessionStore>();
@@ -126,6 +129,7 @@ export class CodexTaskRuntime {
     this.createMemoryService = options.createMemoryService ?? ((workingDirectory) => new MemoryService({
       workingDirectory,
     }));
+    this.createSessionStore = options.createSessionStore ?? ((sessionStoreOptions) => new CodexThreadSessionStore(sessionStoreOptions));
     this.providerConfigs = options.providerConfigs
       ?? (options.providerConfig
         ? [options.providerConfig]
@@ -763,7 +767,7 @@ export class CodexTaskRuntime {
         : createCodexClient(providerConfig);
       const providerSessionStore = index === 0 && providerSessionStoreOverride
         ? providerSessionStoreOverride
-        : new CodexThreadSessionStore({
+        : this.createSessionStore({
           codex: providerCodex,
           sessionRegistry: this.runtimeStore,
           sessionIdNamespace: `third-party:${providerConfig.id}`,
@@ -787,7 +791,7 @@ export class CodexTaskRuntime {
         : createAuthCodexClient(this.workingDirectory, account);
       const authSessionStore = index === 0 && authSessionStoreOverride
         ? authSessionStoreOverride
-        : new CodexThreadSessionStore({
+        : this.createSessionStore({
           codex: authCodex,
           sessionRegistry: this.runtimeStore,
           sessionIdNamespace: `auth:${account.accountId}`,
@@ -806,7 +810,7 @@ export class CodexTaskRuntime {
     }
 
     const authCodex = createAuthCodexClient(this.workingDirectory, account);
-    const authSessionStore = new CodexThreadSessionStore({
+    const authSessionStore = this.createSessionStore({
       codex: authCodex,
       sessionRegistry: this.runtimeStore,
       sessionIdNamespace: `auth:${account.accountId}`,
