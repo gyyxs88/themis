@@ -37,11 +37,22 @@ interface AppServerJourneySessionState {
   resumed: Array<{ threadId: string; cwd: string }>;
   prompts: string[];
   read: string[];
+  approvalPlan: AppServerApprovalPlanEntry[];
   approvals: Array<{ id: string | number; method: string }>;
   respondedApprovals: Array<{ id: string | number; result: unknown }>;
+  notificationHandler: ((notification: { method: string; params?: unknown }) => void) | null;
   serverRequestHandler: ((request: { id: string | number; method: string; params?: unknown }) => void) | null;
   resolveApproval: (() => void) | null;
 }
+
+type AppServerApprovalPlanEntry = {
+  serverRequestId: string;
+  approvalId: string;
+  turnId: string;
+  itemId: string;
+  command: string;
+  reason: string;
+};
 
 for (const runtimeEngine of ["sdk", "app-server"] as const) {
   test(`真实 Web 旅程在 ${runtimeEngine} 下都能走通 owner 登录、workspace 保存、task stream 与 history 查询`, async () => {
@@ -395,10 +406,179 @@ test("真实 Web 旅程在 app-server 下会在 action_required 断流后保留 
   });
 });
 
+test("真实 Web 旅程在 app-server 下会补齐双 waiting action 的长恢复链", async () => {
+  await withHttpServer(async ({ baseUrl, root, runtimeStore, authHeaders, appServerJourneyState }) => {
+    const sessionId = "session-web-journey-action-recovery-2";
+    const workspace = join(root, "workspace-action-recovery-2");
+    seedCompletedWebOwnerPersona(runtimeStore);
+
+    writeWorkspaceDocs(workspace, {
+      readmeTitle: "workspace-action-recovery-2",
+    });
+
+    const saveWorkspaceResponse = await fetch(`${baseUrl}/api/sessions/${sessionId}/settings`, {
+      method: "PUT",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        settings: {
+          workspacePath: workspace,
+        },
+      }),
+    });
+
+    assert.equal(saveWorkspaceResponse.status, 200);
+
+    const streamResponse = await fetch(`${baseUrl}/api/tasks/stream`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sessionId,
+        goal: "请等待两轮审批后继续执行",
+        options: {
+          runtimeEngine: "app-server",
+        },
+      }),
+    });
+
+    assert.equal(streamResponse.status, 200);
+    assert.ok(streamResponse.body);
+
+    const reader = createNdjsonStreamReader(streamResponse.body!);
+    const partialLines = await withTimeout(
+      reader.readUntil((lines) => lines.some((line) => line.kind === "event" && line.title === "task.action_required")),
+      "missing first action_required before disconnect",
+    );
+    const firstActionRequiredLine = partialLines.find(
+      (line) => line.kind === "event" && line.title === "task.action_required",
+    );
+
+    assert.ok(firstActionRequiredLine);
+    assert.deepEqual(partialLines.slice(0, 1).map((line) => line.kind), ["ack"]);
+    assert.equal(firstActionRequiredLine?.metadata?.actionId, "approval-web-1", JSON.stringify(firstActionRequiredLine));
+    assert.equal(firstActionRequiredLine?.metadata?.actionType, "approval", JSON.stringify(firstActionRequiredLine));
+    assert.match(String(firstActionRequiredLine?.text ?? ""), /审批|approve|Need approval/);
+
+    await reader.cancel();
+
+    const waitingHistory = await waitForHistoryTurnStatus(baseUrl, authHeaders, sessionId, "waiting");
+    const firstAction = extractActionRequiredFromHistory(waitingHistory);
+
+    assert.ok(firstAction);
+    assert.equal(firstAction.actionId, "approval-web-1");
+    assert.equal(firstAction.actionType, "approval");
+
+    const firstActionSubmitResponse = await fetch(`${baseUrl}/api/tasks/actions`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        taskId: firstAction.taskId,
+        requestId: firstAction.requestId,
+        actionId: firstAction.actionId,
+        decision: "approve",
+      }),
+    });
+
+    assert.equal(firstActionSubmitResponse.status, 200);
+    assert.deepEqual(await firstActionSubmitResponse.json(), {
+      ok: true,
+    });
+
+    const runningHistory = await waitForHistoryTurnStatus(baseUrl, authHeaders, sessionId, "running");
+    assert.equal(runningHistory.turns?.length, 1);
+    assert.equal(runningHistory.turns?.[0]?.status, "running");
+
+    const secondAction = await waitForHistoryActionId(baseUrl, authHeaders, sessionId, "approval-web-2");
+    assert.equal(secondAction.actionId, "approval-web-2");
+    assert.equal(secondAction.actionType, "approval");
+
+    const secondActionSubmitResponse = await fetch(`${baseUrl}/api/tasks/actions`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        taskId: secondAction.taskId,
+        requestId: secondAction.requestId,
+        actionId: secondAction.actionId,
+        decision: "approve",
+      }),
+    });
+
+    assert.equal(secondActionSubmitResponse.status, 200);
+    assert.deepEqual(await secondActionSubmitResponse.json(), {
+      ok: true,
+    });
+
+    const completedHistory = await waitForHistoryTurnStatus(baseUrl, authHeaders, sessionId, "completed");
+    assert.equal(completedHistory.turns?.length, 1);
+    assert.equal(completedHistory.turns?.[0]?.status, "completed");
+    assert.ok(completedHistory.turns?.[0]?.events?.some((event) => event.type === "task.action_required"));
+    assert.equal(runtimeStore.getSession(sessionId)?.threadId, "thread-app-web-journey-1");
+    assert.deepEqual(appServerJourneyState.approvals, [
+      {
+        id: "server-approval-web-1",
+        method: "item/commandExecution/requestApproval",
+      },
+      {
+        id: "server-approval-web-2",
+        method: "item/commandExecution/requestApproval",
+      },
+    ]);
+    assert.deepEqual(appServerJourneyState.respondedApprovals.map((item) => item.id), [
+      "server-approval-web-1",
+      "server-approval-web-2",
+    ]);
+    assert.deepEqual(appServerJourneyState.respondedApprovals, [
+      {
+        id: "server-approval-web-1",
+        result: {
+          decision: "accept",
+        },
+      },
+      {
+        id: "server-approval-web-2",
+        result: {
+          decision: "accept",
+        },
+      },
+    ]);
+  }, {
+    appServerApprovalPlan: [
+      {
+        serverRequestId: "server-approval-web-1",
+        approvalId: "approval-web-1",
+        turnId: "turn-app-web-journey-action-2",
+        itemId: "item-app-web-journey-approval-1",
+        command: "rm -rf tmp",
+        reason: "Need approval 1",
+      },
+      {
+        serverRequestId: "server-approval-web-2",
+        approvalId: "approval-web-2",
+        turnId: "turn-app-web-journey-action-2",
+        itemId: "item-app-web-journey-approval-2",
+        command: "rm -rf tmp",
+        reason: "Need approval 2",
+      },
+    ],
+  });
+});
+
 async function withHttpServer(
   run: (context: TestServerContext) => Promise<void>,
   options: {
     appServerRequiresApproval?: boolean;
+    appServerApprovalPlan?: AppServerApprovalPlanEntry[];
   } = {},
 ): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "themis-http-web-journey-"));
@@ -423,7 +603,18 @@ async function withHttpServer(
     sessionStore: journeyStore,
   });
   const actionBridge = new AppServerActionBridge();
-  const appServerJourneyState = createAppServerJourneySessionState();
+  const appServerJourneyState = createAppServerJourneySessionState(
+    options.appServerApprovalPlan ?? (options.appServerRequiresApproval
+      ? [{
+          serverRequestId: "server-approval-web-1",
+          approvalId: "approval-web-1",
+          turnId: "turn-app-web-journey-action-1",
+          itemId: "item-app-web-journey-approval-1",
+          command: "rm -rf tmp",
+          reason: "Need approval",
+        }]
+      : []),
+  );
   const appServerRuntime = new AppServerTaskRuntime({
     workingDirectory: controlDirectory,
     runtimeStore,
@@ -453,33 +644,49 @@ async function withHttpServer(
       },
       startTurn: async (_threadId, prompt) => {
         appServerJourneyState.prompts.push(prompt);
-        if (options.appServerRequiresApproval) {
+        for (const approval of appServerJourneyState.approvalPlan) {
           appServerJourneyState.approvals.push({
-            id: "server-approval-web-1",
+            id: approval.serverRequestId,
             method: "item/commandExecution/requestApproval",
           });
           const approvalResolved = new Promise<void>((resolve) => {
             appServerJourneyState.resolveApproval = resolve;
           });
           appServerJourneyState.serverRequestHandler?.({
-            id: "server-approval-web-1",
+            id: approval.serverRequestId,
             method: "item/commandExecution/requestApproval",
             params: {
               threadId: "thread-app-web-journey-1",
-              turnId: "turn-app-web-journey-action-1",
-              itemId: "item-app-web-journey-approval-1",
-              approvalId: "approval-web-1",
-              command: "rm -rf tmp",
-              reason: "Need approval",
+              turnId: approval.turnId,
+              itemId: approval.itemId,
+              approvalId: approval.approvalId,
+              command: approval.command,
+              reason: approval.reason,
             },
           });
           await approvalResolved;
           appServerJourneyState.resolveApproval = null;
+
+          if (approval !== appServerJourneyState.approvalPlan[appServerJourneyState.approvalPlan.length - 1]) {
+            appServerJourneyState.notificationHandler?.({
+              method: "item/agentMessage/delta",
+              params: {
+                itemId: `${approval.serverRequestId}-running`,
+                text: "第一轮审批通过，继续处理后续步骤。",
+              },
+            });
+            await new Promise<void>((resolve) => {
+              const timer = setTimeout(resolve, 300);
+              timer.unref?.();
+            });
+          }
         }
         return { turnId: "turn-app-web-journey-1" };
       },
       close: async () => {},
-      onNotification: () => {},
+      onNotification: (handler) => {
+        appServerJourneyState.notificationHandler = handler;
+      },
       onServerRequest: (handler) => {
         appServerJourneyState.serverRequestHandler = handler;
       },
@@ -578,14 +785,18 @@ function createJourneyCodexDouble(): {
   }
 }
 
-function createAppServerJourneySessionState(): AppServerJourneySessionState {
+function createAppServerJourneySessionState(
+  approvalPlan: AppServerApprovalPlanEntry[] = [],
+): AppServerJourneySessionState {
   return {
     started: [],
     resumed: [],
     prompts: [],
     read: [],
+    approvalPlan,
     approvals: [],
     respondedApprovals: [],
+    notificationHandler: null,
     serverRequestHandler: null,
     resolveApproval: null,
   };
@@ -720,6 +931,45 @@ async function waitForHistoryTurnStatus(
   }
 }
 
+async function waitForHistoryActionId(
+  baseUrl: string,
+  authHeaders: Record<string, string>,
+  sessionId: string,
+  expectedActionId: string,
+  timeoutMs = 1_000,
+): Promise<{
+  taskId: string;
+  requestId: string;
+  actionId: string;
+  actionType?: string;
+}> {
+  const startedAt = Date.now();
+
+  while (true) {
+    const historyDetailResponse = await fetch(`${baseUrl}/api/history/sessions/${sessionId}`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    assert.equal(historyDetailResponse.status, 200);
+
+    const historyDetailPayload = await historyDetailResponse.json() as HistorySessionDetailPayload;
+    const actionRequired = extractActionRequiredFromHistoryByActionId(historyDetailPayload, expectedActionId);
+
+    if (actionRequired) {
+      return actionRequired;
+    }
+
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error(`history action did not reach actionId ${expectedActionId}`);
+    }
+
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 20);
+      timer.unref?.();
+    });
+  }
+}
+
 async function withTimeout<T>(promise: Promise<T>, message: string, timeoutMs = 1000): Promise<T> {
   return await Promise.race([
     promise,
@@ -776,6 +1026,53 @@ function extractActionRequiredFromHistory(
     actionId: payload.actionId,
     ...(payload.actionType ? { actionType: payload.actionType } : {}),
   };
+}
+
+function extractActionRequiredFromHistoryByActionId(
+  historyDetailPayload: HistorySessionDetailPayload,
+  expectedActionId: string,
+): {
+  taskId: string;
+  requestId: string;
+  actionId: string;
+  actionType?: string;
+} | null {
+  for (const turn of historyDetailPayload.turns ?? []) {
+    if (turn.status !== "waiting") {
+      continue;
+    }
+
+    for (const event of turn.events ?? []) {
+      if (event.type !== "task.action_required" || !event.payloadJson) {
+        continue;
+      }
+
+      const payload = JSON.parse(event.payloadJson) as {
+        actionId?: string;
+        actionType?: string;
+      };
+
+      if (payload.actionId !== expectedActionId) {
+        continue;
+      }
+
+      const taskId = event.taskId ?? turn.taskId;
+      const requestId = event.requestId ?? turn.requestId;
+
+      if (!taskId || !requestId) {
+        continue;
+      }
+
+      return {
+        taskId,
+        requestId,
+        actionId: payload.actionId,
+        ...(payload.actionType ? { actionType: payload.actionType } : {}),
+      };
+    }
+  }
+
+  return null;
 }
 
 function listenServer(server: Server): Promise<Server> {
