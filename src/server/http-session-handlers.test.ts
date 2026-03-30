@@ -265,6 +265,95 @@ test("POST /api/sessions/fork-context 不允许覆盖已有 target session 的�
   }));
 });
 
+test("POST /api/sessions/fork-context 在历史 sdk 会话且 optimistic 条件具备时会借 app-server runtime 走 native fork", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore, authHeaders }) => {
+    const sessionId = "session-sdk-source-1";
+    const sourceThreadId = "thread-sdk-source-1";
+    const targetSessionId = "session-sdk-child-1";
+    const request = buildTaskRequest({
+      sessionId,
+      requestId: "req-sdk-source-1",
+      taskId: "task-sdk-source-1",
+      createdAt: "2026-03-30T13:00:00.000Z",
+    });
+
+    runtimeStore.upsertTurnFromRequest(request, request.taskId!);
+    runtimeStore.completeTaskTurn({
+      request,
+      result: buildTaskResult({
+        requestId: request.requestId,
+        taskId: request.taskId!,
+        completedAt: "2026-03-30T13:00:30.000Z",
+        structuredOutput: {
+          session: {
+            sessionId,
+            threadId: sourceThreadId,
+            engine: "sdk",
+          },
+        },
+      }),
+      sessionMode: "resumed",
+      threadId: sourceThreadId,
+    });
+
+    const response = await fetch(`${baseUrl}/api/sessions/fork-context`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...authHeaders,
+      },
+      body: JSON.stringify({
+        sessionId,
+        targetSessionId,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const payload = await response.json() as {
+      ok?: boolean;
+      sessionId?: string;
+      strategy?: string;
+      sourceThreadId?: string;
+      targetSessionId?: string;
+      threadId?: string;
+    };
+
+    assert.deepEqual(payload, {
+      ok: true,
+      sessionId,
+      targetSessionId,
+      strategy: "native-thread-fork",
+      sourceThreadId,
+      threadId: "thread-sdk-child-1",
+    });
+    assert.equal(runtimeStore.getSession(targetSessionId)?.threadId, "thread-sdk-child-1");
+  }, ({ runtimeStore }) => ({
+    defaultRuntime: {
+      runTask: async () => {
+        throw new Error("default runtime should not run");
+      },
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => ({}),
+      getPrincipalSkillsService: () => ({}),
+    },
+    runtimes: {
+      "app-server": {
+        runTask: async () => {
+          throw new Error("app-server runTask should not run");
+        },
+        getRuntimeStore: () => runtimeStore,
+        getIdentityLinkService: () => ({}),
+        getPrincipalSkillsService: () => ({}),
+        forkThread: async () => ({
+          strategy: "native-thread-fork",
+          sourceThreadId: "thread-sdk-source-1",
+          threadId: "thread-sdk-child-1",
+        }),
+      },
+    },
+  }));
+});
+
 function buildTaskRequest(overrides: {
   sessionId: string;
   requestId: string;
