@@ -19,6 +19,7 @@ export function createDom() {
     threadSearchInput: document.getElementById("thread-search-input"),
     threadList: document.getElementById("thread-list"),
     threadEmpty: document.getElementById("thread-empty"),
+    threadRiskBanner: document.getElementById("thread-risk-banner"),
     workspaceToolsToggle: document.getElementById("workspace-tools-toggle"),
     workspaceToolsBackdrop: document.getElementById("workspace-tools-backdrop"),
     workspaceToolsClose: document.getElementById("workspace-tools-close"),

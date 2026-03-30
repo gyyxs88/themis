@@ -27,9 +27,48 @@ export function renderThreadButton(thread, { active, busy, status, escapeHtml })
   `;
 }
 
-export function renderTurnMarkup(turn, index, { store, utils }) {
+export function renderThreadRiskBannerMarkup(riskState, utils) {
+  if (!riskState) {
+    return "";
+  }
+
+  const tone = riskState.tone === "warning" ? "warning" : "neutral";
+  const actionKind = typeof riskState.actionKind === "string" ? riskState.actionKind : "";
+  const actionLabel = typeof riskState.actionLabel === "string" ? riskState.actionLabel : "";
+  const threadId = typeof riskState.threadId === "string" ? riskState.threadId : "";
+  const turnId = typeof riskState.turnId === "string" ? riskState.turnId : "";
+  const actionMarkup = actionKind && actionLabel
+    ? `
+      <button
+        type="button"
+        class="thread-risk-banner-action toolbar-button"
+        data-risk-banner-action="${utils.escapeHtml(actionKind)}"
+        ${threadId ? `data-thread-id="${utils.escapeHtml(threadId)}"` : ""}
+        ${turnId ? `data-turn-id="${utils.escapeHtml(turnId)}"` : ""}
+      >
+        ${utils.escapeHtml(actionLabel)}
+      </button>
+    `
+    : "";
+
+  return `
+    <div class="thread-risk-banner-shell tone-${tone}" data-risk-banner-kind="${utils.escapeHtml(riskState.kind ?? "unknown")}">
+      <div class="thread-risk-banner-copy">
+        <p class="thread-risk-banner-kicker">任务提醒</p>
+        <p class="thread-risk-banner-message">${utils.escapeHtml(riskState.message ?? "")}</p>
+      </div>
+      ${actionMarkup}
+    </div>
+  `;
+}
+
+export function renderTurnMarkup(turn, index, { thread = null, store, utils }) {
   const assistantLabel = store.resolveAssistantDisplayLabel(turn.options);
   const assistantMessages = store.getVisibleAssistantMessages(turn);
+  const turnActionState = typeof store.resolveTurnActionState === "function"
+    ? store.resolveTurnActionState(thread, turn)
+    : null;
+  const actionSurfaceMarkup = renderTurnActionSurface(turnActionState, turn, thread, utils);
   const assistantStreamMarkup = assistantMessages.length
     ? renderAssistantMessages(assistantMessages, utils, { showOperatorDetails: false })
     : "";
@@ -51,7 +90,13 @@ export function renderTurnMarkup(turn, index, { store, utils }) {
       </article>
     </section>
 
-    <section class="message-row assistant-row" aria-label="Themis 响应">
+    <section
+      class="message-row assistant-row"
+      id="turn-anchor-${utils.escapeHtml(turn.id)}"
+      data-turn-id="${utils.escapeHtml(turn.id)}"
+      aria-label="Themis 响应"
+      tabindex="-1"
+    >
       <article class="message-card assistant-card ${assistantCardClass(turn.state)}">
         <div class="assistant-head">
           <div>
@@ -60,6 +105,7 @@ export function renderTurnMarkup(turn, index, { store, utils }) {
           </div>
           <span class="badge ${badgeToneForStatus(turn.state)}">${formatStatusLabel(turn.state)}</span>
         </div>
+        ${actionSurfaceMarkup}
         ${assistantSummaryMarkup}
         ${assistantStreamMarkup}
         ${resultMarkup}
@@ -105,6 +151,140 @@ function renderAssistantMessage(message, index, utils, { showOperatorDetails }) 
       <p class="assistant-stream-copy">${utils.escapeHtml(message.text)}</p>
     </article>
   `;
+}
+
+function renderTurnActionSurface(actionState, turn, thread, utils) {
+  if (!actionState) {
+    return "";
+  }
+
+  if (actionState.kind === "waiting") {
+    return renderWaitingActionSurface(actionState, turn, thread, utils);
+  }
+
+  if (actionState.kind === "rehydrating") {
+    return renderRecoveryActionSurface(actionState, turn, thread, utils);
+  }
+
+  return "";
+}
+
+function renderWaitingActionSurface(actionState, turn, thread, utils) {
+  const actionType = actionState.actionType || "approval";
+  const threadId = typeof thread?.id === "string" ? thread.id : "";
+  const actionLabel = actionState.prompt || "等待处理中的 action。";
+  const actionChoices = actionType === "approval"
+    ? resolveApprovalChoices(actionState.choices)
+    : [];
+  const choiceMarkup = actionType === "approval"
+    ? `
+      <div class="turn-action-choice-row">
+        ${actionChoices.map((choice) => `
+          <button
+            type="button"
+            class="choice-chip turn-action-choice"
+            data-turn-action-kind="waiting"
+            data-waiting-action-decision="${utils.escapeHtml(choice.decision)}"
+            ${threadId ? `data-thread-id="${utils.escapeHtml(threadId)}"` : ""}
+            data-turn-id="${utils.escapeHtml(turn.id)}"
+            ${actionState.submitting ? "disabled" : ""}
+          >
+            ${utils.escapeHtml(choice.label)}
+          </button>
+        `).join("")}
+      </div>
+    `
+    : `
+      <form class="turn-action-input-form" data-turn-action-kind="waiting" data-waiting-action-type="${utils.escapeHtml(actionType)}">
+        <label class="turn-action-input-label" for="turn-action-input-${utils.escapeHtml(turn.id)}">
+          输入回复
+        </label>
+        <textarea
+          id="turn-action-input-${utils.escapeHtml(turn.id)}"
+          class="turn-action-input"
+          rows="4"
+          data-turn-id="${utils.escapeHtml(turn.id)}"
+          ${threadId ? `data-thread-id="${utils.escapeHtml(threadId)}"` : ""}
+          placeholder="请输入回复">${utils.escapeHtml(actionState.inputText || "")}</textarea>
+        <div class="turn-action-input-footer">
+          <button
+            type="button"
+            class="primary-button turn-action-submit"
+            data-turn-action-kind="waiting"
+            data-waiting-action-submit="true"
+            data-waiting-action-type="${utils.escapeHtml(actionType)}"
+            data-turn-id="${utils.escapeHtml(turn.id)}"
+            ${threadId ? `data-thread-id="${utils.escapeHtml(threadId)}"` : ""}
+            ${actionState.submitting ? "disabled" : ""}
+          >
+            提交回复
+          </button>
+        </div>
+      </form>
+    `;
+  const errorMarkup = actionState.errorMessage
+    ? `<p class="turn-action-error">${utils.escapeHtml(actionState.errorMessage)}</p>`
+    : "";
+
+  return `
+    <section
+      class="turn-action-surface waiting"
+      data-turn-action-kind="waiting"
+      data-turn-id="${utils.escapeHtml(turn.id)}"
+      ${threadId ? `data-thread-id="${utils.escapeHtml(threadId)}"` : ""}
+    >
+      <div class="turn-action-head">
+        <div>
+          <p class="turn-action-kicker">等待处理</p>
+          <p class="turn-action-copy">${utils.escapeHtml(actionLabel)}</p>
+        </div>
+        <span class="badge busy">等待中</span>
+      </div>
+      ${choiceMarkup}
+      ${errorMarkup}
+    </section>
+  `;
+}
+
+function renderRecoveryActionSurface(actionState, turn, thread, utils) {
+  const threadId = typeof thread?.id === "string" ? thread.id : "";
+
+  return `
+    <section
+      class="turn-action-surface recovery"
+      data-turn-action-kind="rehydrating"
+      data-turn-id="${utils.escapeHtml(turn.id)}"
+      ${threadId ? `data-thread-id="${utils.escapeHtml(threadId)}"` : ""}
+    >
+      <div class="turn-action-head">
+        <div>
+          <p class="turn-action-kicker">${utils.escapeHtml(actionState.heading || "状态同步中")}</p>
+          <p class="turn-action-copy">${utils.escapeHtml(actionState.prompt || "")}</p>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function resolveApprovalChoices(choices) {
+  const normalizedChoices = Array.isArray(choices) && choices.length
+    ? choices
+    : ["approve", "deny"];
+
+  return normalizedChoices.map((choice) => {
+    const decision = String(choice);
+    const normalized = decision.trim().toLowerCase();
+
+    if (normalized === "approve") {
+      return { decision, label: "批准" };
+    }
+
+    if (normalized === "deny" || normalized === "reject") {
+      return { decision, label: "拒绝" };
+    }
+
+    return { decision, label: decision };
+  });
 }
 
 export function renderHistoryLoadingState(thread, turnCount, escapeHtml) {

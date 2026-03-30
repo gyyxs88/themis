@@ -1,6 +1,7 @@
 import {
   renderHistoryLoadingState,
   renderStoredSummaryState,
+  renderThreadRiskBannerMarkup,
   renderThreadButton,
   renderTurnMarkup,
 } from "./ui-markup.js";
@@ -17,6 +18,7 @@ export function createRenderer(app) {
     renderWorkspaceHeader();
     renderWorkspaceTools();
     renderThirdPartyEditor();
+    renderThreadRiskBanner();
     renderConversation(scrollToBottom);
     renderComposer();
     renderComposerMeta();
@@ -132,6 +134,22 @@ export function createRenderer(app) {
     }
 
     dom.settingsNote.textContent = "上方人格字段和下方 sandbox / search / network / approval / account 都属于当前 principal 的长期默认配置，会同时影响 Web 和飞书后续新任务。";
+  }
+
+  function renderThreadRiskBanner() {
+    const thread = store.getActiveThread();
+    const riskState = thread ? store.resolveTopRiskState(thread) : null;
+
+    if (!riskState) {
+      dom.threadRiskBanner.innerHTML = "";
+      dom.threadRiskBanner.classList.add("hidden");
+      dom.threadRiskBanner.setAttribute("aria-hidden", "true");
+      return;
+    }
+
+    dom.threadRiskBanner.innerHTML = renderThreadRiskBannerMarkup(riskState, utils);
+    dom.threadRiskBanner.classList.remove("hidden");
+    dom.threadRiskBanner.setAttribute("aria-hidden", "false");
   }
 
   function renderThirdPartyEditor() {
@@ -986,7 +1004,7 @@ export function createRenderer(app) {
     }
 
     dom.conversation.innerHTML = thread.turns
-      .map((turn, index) => renderTurnMarkup(turn, index + 1, { store, utils }))
+      .map((turn, index) => renderTurnMarkup(turn, index + 1, { thread, store, utils }))
       .join("");
 
     if (scrollToBottom) {
@@ -1011,12 +1029,6 @@ export function createRenderer(app) {
       activeThread: thread,
       pendingInterruptSubmit: app.runtime.pendingInterruptSubmit,
     });
-    const restoredActionHydrationMessage = buildRestoredActionHydrationNote({
-      activeThread: thread,
-      hydratingThread: app.runtime.restoredActionHydrationThreadId
-        ? store.getThreadById(app.runtime.restoredActionHydrationThreadId)
-        : null,
-    });
     const runningMessage = buildComposerRunNote({
       activeThread: thread,
       runningThread: runningThreadId ? store.getThreadById(runningThreadId) : null,
@@ -1031,7 +1043,6 @@ export function createRenderer(app) {
     const message = [
       transientMessage,
       pendingInterruptMessage,
-      restoredActionHydrationMessage,
       runningMessage,
       authMessage,
     ].filter(Boolean).join(" ");

@@ -95,6 +95,110 @@
   margin: 6px 0 0;
 }
 
+.turn-action-surface {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background: #ffffff;
+}
+
+.turn-action-surface.waiting {
+  border-color: #f1d2ac;
+  background: linear-gradient(180deg, rgba(255, 248, 239, 0.98), rgba(255, 255, 255, 0.98));
+}
+
+.turn-action-surface.recovery {
+  border-color: #d8e2ec;
+  background: linear-gradient(180deg, rgba(245, 248, 252, 0.98), rgba(255, 255, 255, 0.98));
+}
+
+.turn-action-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.turn-action-kicker {
+  margin: 0;
+  color: #6b5a2d;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.turn-action-surface.recovery .turn-action-kicker {
+  color: #45607a;
+}
+
+.turn-action-copy {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.turn-action-choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.turn-action-choice {
+  min-height: 42px;
+}
+
+.turn-action-input-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.turn-action-input-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.turn-action-input {
+  width: 100%;
+  min-height: 112px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: #ffffff;
+  color: var(--text);
+  resize: vertical;
+  font: inherit;
+}
+
+.turn-action-input:focus-visible {
+  outline: 2px solid rgba(15, 18, 24, 0.12);
+  outline-offset: 2px;
+}
+
+.turn-action-input-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.turn-action-submit {
+  min-width: 132px;
+}
+
+.turn-action-error {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid #f4d8d5;
+  background: #fff7f6;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .assistant-summary {
   margin-top: 16px;
   padding: 14px 16px;
