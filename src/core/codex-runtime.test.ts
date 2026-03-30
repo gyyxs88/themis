@@ -181,6 +181,68 @@ test("CodexTaskRuntime 构造时会为现有 auth account 预建 session store�
   }
 });
 
+test("resolveRuntimeTarget 首次命中后补建 auth session store，并在同账号下复用", () => {
+  const workingDirectory = mkdtempSync(join(tmpdir(), "themis-runtime-auth-lazy-store-"));
+  const registry = new SqliteCodexSessionRegistry({
+    databaseFile: join(workingDirectory, "infra/local/themis.db"),
+  });
+  const records = createRecordingSessionStoreFactoryRecords();
+  const runtime = new CodexTaskRuntime({
+    workingDirectory,
+    runtimeStore: registry,
+    createSessionStore: records.createSessionStore,
+  });
+
+  try {
+    assert.equal(records.calls.filter((entry) => entry.sessionIdNamespace === "auth:managed-2").length, 0);
+
+    registry.saveAuthAccount({
+      accountId: "managed-2",
+      label: "账户二",
+      accountEmail: "managed-2@example.com",
+      codexHome: join(workingDirectory, "infra/local/codex-auth/managed-2"),
+      isActive: false,
+      createdAt: "2026-03-30T00:00:00.000Z",
+      updatedAt: "2026-03-30T00:00:00.000Z",
+    });
+
+    const runtimeAsTestDouble = runtime as unknown as {
+      resolveRuntimeTarget(request: TaskRequest, allowUnsupportedThirdPartyModel?: boolean): {
+        accessMode: "auth" | "third-party";
+        authAccountId: string | null;
+        providerId: string | null;
+        providerConfig: OpenAICompatibleProviderConfig | null;
+        sessionStore: CodexThreadSessionStore;
+      };
+    };
+
+    const firstTarget = runtimeAsTestDouble.resolveRuntimeTarget(createRequest({
+      requestId: "req-auth-lazy-1",
+      taskId: "task-auth-lazy-1",
+      options: {
+        authAccountId: "managed-2",
+      },
+    }));
+    const secondTarget = runtimeAsTestDouble.resolveRuntimeTarget(createRequest({
+      requestId: "req-auth-lazy-2",
+      taskId: "task-auth-lazy-2",
+      options: {
+        authAccountId: "managed-2",
+      },
+    }));
+
+    const managed2Calls = records.calls.filter((entry) => entry.sessionIdNamespace === "auth:managed-2");
+
+    assert.equal(managed2Calls.length, 1);
+    assert.equal(firstTarget.authAccountId, "managed-2");
+    assert.equal(secondTarget.authAccountId, "managed-2");
+    assert.equal(firstTarget.sessionStore, managed2Calls[0]?.store);
+    assert.equal(secondTarget.sessionStore, managed2Calls[0]?.store);
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
 test("runTask 会优先使用会话绑定的工作区", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-runtime-session-workspace-"));
   const controlDirectory = join(root, "control");
