@@ -32,6 +32,7 @@ export function createStoreModelHelpers() {
       updatedAt: timestamp,
       draftGoal: "",
       draftContext: "",
+      composerMode: normalizeComposerMode(options.composerMode),
       settings: normalizeThreadSettings(settings),
       serverThreadId: null,
       bootstrapTranscript: "",
@@ -108,6 +109,7 @@ export function createStoreModelHelpers() {
       updatedAt: typeof thread.updatedAt === "string" ? thread.updatedAt : nowIso(),
       draftGoal: typeof thread.draftGoal === "string" ? thread.draftGoal : "",
       draftContext: typeof thread.draftContext === "string" ? thread.draftContext : "",
+      composerMode: normalizeComposerMode(thread.composerMode),
       settings: normalizeThreadSettings(thread.settings),
       serverThreadId: typeof thread.serverThreadId === "string" ? thread.serverThreadId : null,
       bootstrapTranscript: typeof thread.bootstrapTranscript === "string" ? thread.bootstrapTranscript : "",
@@ -283,6 +285,14 @@ export function createStoreModelHelpers() {
     return null;
   }
 
+  function normalizeComposerMode(value) {
+    if (value === "chat" || value === "review" || value === "steer") {
+      return value;
+    }
+
+    return "chat";
+  }
+
   function normalizeOptionalBooleanSetting(value) {
     return typeof value === "boolean" ? value : "";
   }
@@ -294,5 +304,6 @@ export function createStoreModelHelpers() {
     createTurn,
     normalizeState,
     normalizeBootstrapMode,
+    normalizeComposerMode,
   };
 }

@@ -446,6 +446,77 @@ export function createStoreHelpers({ app, getState, saveState }) {
     return null;
   }
 
+  function resolveComposerActionBarState(thread) {
+    const mode = normalizeComposerMode(thread?.composerMode);
+    const latestTurn = Array.isArray(thread?.turns) ? thread.turns.at(-1) : null;
+    const turnActionState = resolveTurnActionState(thread, latestTurn);
+    const isCurrentThreadHydrating = Boolean(
+      thread?.historyNeedsRehydrate
+      && app.runtime.restoredActionHydrationThreadId === thread?.id,
+    );
+    const shouldDisableBoth = Boolean(
+      !latestTurn
+      || latestTurn.state === "waiting"
+      || turnActionState?.kind === "waiting"
+      || turnActionState?.kind === "rehydrating"
+      || isCurrentThreadHydrating,
+    );
+
+    if (shouldDisableBoth) {
+      return {
+        mode,
+        review: {
+          enabled: false,
+          reason: "当前还没有可审查的已收口结果",
+        },
+        steer: {
+          enabled: false,
+          reason: "当前没有执行中的任务可调整",
+        },
+      };
+    }
+
+    if (latestTurn.state === "completed" || latestTurn.state === "failed" || latestTurn.state === "cancelled") {
+      return {
+        mode,
+        review: {
+          enabled: true,
+          reason: "",
+        },
+        steer: {
+          enabled: false,
+          reason: "当前没有执行中的任务可调整",
+        },
+      };
+    }
+
+    if (latestTurn.state === "running") {
+      return {
+        mode,
+        review: {
+          enabled: false,
+          reason: "当前还没有可审查的已收口结果",
+        },
+        steer: {
+          enabled: true,
+          reason: "",
+        },
+      };
+    }
+
+    return {
+      mode,
+      review: {
+        enabled: false,
+        reason: "当前还没有可审查的已收口结果",
+      },
+      steer: {
+        enabled: false,
+        reason: "当前没有执行中的任务可调整",
+      },
+    };
+  }
+
   function hasRecoverableServerState(thread, turn) {
     return Boolean(
       thread?.serverHistoryAvailable
@@ -749,6 +820,14 @@ export function createStoreHelpers({ app, getState, saveState }) {
     return value.trim();
   }
 
+  function normalizeComposerMode(value) {
+    if (value === "chat" || value === "review" || value === "steer") {
+      return value;
+    }
+
+    return "chat";
+  }
+
   function normalizeBooleanSetting(value) {
     return typeof value === "boolean" ? value : null;
   }
@@ -916,6 +995,7 @@ export function createStoreHelpers({ app, getState, saveState }) {
     repairInterruptedTurns,
     resolveTopRiskState,
     resolveTurnActionState,
+    resolveComposerActionBarState,
     describeBootstrapLabel,
     threadStatus,
     latestTurnMessage,

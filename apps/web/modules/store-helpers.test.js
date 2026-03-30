@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createStore } from "./store.js";
 import { createStoreHelpers } from "./store-helpers.js";
+import { createStoreModelHelpers } from "./store-models.js";
+import * as utils from "./utils.js";
 
 test("principal task settings 会覆盖旧的会话级 sandbox/search/network/approval/account", () => {
   const helpers = createStoreHelpers({
@@ -58,6 +61,206 @@ test("buildTaskOptions 会把 principal task settings 带到新任务里", () =>
   assert.equal(options.webSearchMode, "disabled");
   assert.equal(options.networkAccessEnabled, false);
   assert.equal(options.approvalPolicy, "on-request");
+});
+
+test("composerMode 会在线程模型中默认回退为 chat，并按 turn 派生动作条可用性", () => {
+  const models = createStoreModelHelpers();
+
+  assert.equal(models.createThread().composerMode, "chat");
+
+  const normalizedState = models.normalizeState({
+    activeThreadId: "thread-review",
+    threads: [
+      {
+        id: "thread-invalid",
+        composerMode: "invalid",
+      },
+      {
+        id: "thread-review",
+        composerMode: "review",
+      },
+    ],
+  });
+
+  assert.equal(normalizedState.threads[0].composerMode, "chat");
+  assert.equal(normalizedState.threads[1].composerMode, "review");
+
+  const reviewDisabledReason = "当前还没有可审查的已收口结果";
+  const steerDisabledReason = "当前没有执行中的任务可调整";
+  const app = createAppHarness();
+  const helpers = createStoreHelpers({
+    app,
+    getState: () => ({ activeThreadId: null, threads: [] }),
+    saveState() {},
+  });
+
+  const completedThread = createThreadRecord({
+    id: "thread-completed",
+    composerMode: "review",
+    turns: [
+      createTurnRecord({
+        id: "turn-completed",
+        state: "completed",
+        result: {
+          status: "completed",
+          summary: "任务已完成",
+        },
+      }),
+    ],
+  });
+
+  assert.deepEqual(helpers.resolveComposerActionBarState(completedThread), {
+    mode: "review",
+    review: {
+      enabled: true,
+      reason: "",
+    },
+    steer: {
+      enabled: false,
+      reason: steerDisabledReason,
+    },
+  });
+
+  const runningThread = createThreadRecord({
+    id: "thread-running",
+    composerMode: "steer",
+    turns: [
+      createTurnRecord({
+        id: "turn-running",
+        state: "running",
+      }),
+    ],
+  });
+
+  assert.deepEqual(helpers.resolveComposerActionBarState(runningThread), {
+    mode: "steer",
+    review: {
+      enabled: false,
+      reason: reviewDisabledReason,
+    },
+    steer: {
+      enabled: true,
+      reason: "",
+    },
+  });
+
+  const waitingThread = createThreadRecord({
+    id: "thread-waiting",
+    composerMode: "chat",
+    turns: [
+      createTurnRecord({
+        id: "turn-waiting",
+        state: "waiting",
+        pendingAction: {
+          actionId: "action-1",
+          actionType: "approval",
+          prompt: "请确认",
+        },
+      }),
+    ],
+  });
+
+  assert.deepEqual(helpers.resolveComposerActionBarState(waitingThread), {
+    mode: "chat",
+    review: {
+      enabled: false,
+      reason: reviewDisabledReason,
+    },
+    steer: {
+      enabled: false,
+      reason: steerDisabledReason,
+    },
+  });
+
+  const rehydratingThread = createThreadRecord({
+    id: "thread-rehydrating",
+    composerMode: "steer",
+    historyNeedsRehydrate: true,
+    turns: [
+      createTurnRecord({
+        id: "turn-rehydrating",
+        state: "running",
+        submittedPendingActionId: "action-2",
+      }),
+    ],
+  });
+  app.runtime.restoredActionHydrationThreadId = "thread-rehydrating";
+
+  assert.deepEqual(helpers.resolveComposerActionBarState(rehydratingThread), {
+    mode: "steer",
+    review: {
+      enabled: false,
+      reason: reviewDisabledReason,
+    },
+    steer: {
+      enabled: false,
+      reason: steerDisabledReason,
+    },
+  });
+
+  const emptyThread = createThreadRecord({
+    id: "thread-empty",
+    composerMode: "review",
+    turns: [],
+  });
+
+  assert.deepEqual(helpers.resolveComposerActionBarState(emptyThread), {
+    mode: "review",
+    review: {
+      enabled: false,
+      reason: reviewDisabledReason,
+    },
+    steer: {
+      enabled: false,
+      reason: steerDisabledReason,
+    },
+  });
+});
+
+test("setThreadComposerMode 会归一化并持久化线程级 composerMode，缺失线程时静默返回", () => {
+  const storageKey = "themis-store-helper-test";
+  const storage = createLocalStorageMock({
+    [storageKey]: JSON.stringify({
+      activeThreadId: "thread-mode",
+      threads: [
+        {
+          id: "thread-mode",
+          title: "模式会话",
+          createdAt: "2026-03-29T00:00:00.000Z",
+          updatedAt: "2026-03-29T00:00:00.000Z",
+          composerMode: "review",
+          settings: {},
+          turns: [],
+        },
+      ],
+    }),
+  });
+  const originalLocalStorage = globalThis.localStorage;
+  globalThis.localStorage = storage;
+
+  try {
+    const app = createStoreAppHarness(storageKey);
+    const store = createStore(app);
+
+    assert.equal(store.getThreadById("thread-mode").composerMode, "review");
+
+    store.setThreadComposerMode("thread-mode", "steer");
+
+    assert.equal(store.getThreadById("thread-mode").composerMode, "steer");
+    assert.notEqual(store.getThreadById("thread-mode").updatedAt, "2026-03-29T00:00:00.000Z");
+    assert.equal(JSON.parse(storage.getItem(storageKey)).threads[0].composerMode, "steer");
+
+    store.setThreadComposerMode("thread-mode", "invalid-value");
+
+    assert.equal(store.getThreadById("thread-mode").composerMode, "chat");
+    assert.equal(JSON.parse(storage.getItem(storageKey)).threads[0].composerMode, "chat");
+
+    const persistedBefore = storage.getItem(storageKey);
+    store.setThreadComposerMode("missing-thread", "review");
+    assert.equal(storage.getItem(storageKey), persistedBefore);
+  } finally {
+    globalThis.localStorage = originalLocalStorage;
+  }
 });
 
 test("resolveTopRiskState 会按 waiting、当前恢复、其他恢复的优先级返回顶部任务条状态", () => {
@@ -470,6 +673,7 @@ function createThreadRecord(overrides = {}) {
   return {
     id: "thread-default",
     title: "新会话",
+    composerMode: "chat",
     historyNeedsRehydrate: false,
     turns: [],
     ...overrides,
@@ -555,6 +759,40 @@ function createAppHarness(overrides = {}) {
         thirdPartyProviders: [],
         personas: [],
       },
+    },
+  };
+}
+
+function createStoreAppHarness(storageKey) {
+  const harness = createAppHarness();
+
+  harness.constants = {
+    MAX_THREAD_COUNT: 20,
+    STORAGE_KEY: storageKey,
+  };
+  harness.utils = utils;
+  harness.renderer = {
+    renderAll() {},
+  };
+
+  return harness;
+}
+
+function createLocalStorageMock(initialEntries = {}) {
+  const storage = new Map(Object.entries(initialEntries));
+
+  return {
+    getItem(key) {
+      return storage.has(key) ? storage.get(key) : null;
+    },
+    setItem(key, value) {
+      storage.set(key, String(value));
+    },
+    removeItem(key) {
+      storage.delete(key);
+    },
+    clear() {
+      storage.clear();
     },
   };
 }

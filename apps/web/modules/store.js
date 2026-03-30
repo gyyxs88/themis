@@ -178,6 +178,18 @@ export function createStore(app) {
     return thread.settings;
   }
 
+  function setThreadComposerMode(threadId, mode) {
+    const thread = getThreadById(threadId);
+
+    if (!thread) {
+      return;
+    }
+
+    thread.composerMode = models.normalizeComposerMode(mode);
+    touchThread(thread.id);
+    saveState();
+  }
+
   function createAndActivateThread(options = {}) {
     const thread = models.createThread(options);
     state.threads.unshift(thread);
@@ -302,6 +314,7 @@ export function createStore(app) {
     touchThread,
     updateActiveDraft,
     updateThreadSettings,
+    setThreadComposerMode,
     createAndActivateThread,
     applyRuntimeMetadata,
     buildTaskOptions: helpers.buildTaskOptions,
@@ -325,6 +338,7 @@ export function createStore(app) {
     getVisibleAssistantMessages: helpers.getVisibleAssistantMessages,
     resolveTopRiskState: helpers.resolveTopRiskState,
     resolveTurnActionState: helpers.resolveTurnActionState,
+    resolveComposerActionBarState: helpers.resolveComposerActionBarState,
     setTransientStatus,
     clearTransientStatus,
     resolveTransientStatus,
