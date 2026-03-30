@@ -323,6 +323,8 @@ export function createStore(app) {
     threadStatus: helpers.threadStatus,
     latestTurnMessage: helpers.latestTurnMessage,
     getVisibleAssistantMessages: helpers.getVisibleAssistantMessages,
+    resolveTopRiskState: helpers.resolveTopRiskState,
+    resolveTurnActionState: helpers.resolveTurnActionState,
     setTransientStatus,
     clearTransientStatus,
     resolveTransientStatus,

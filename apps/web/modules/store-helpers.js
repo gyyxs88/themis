@@ -329,6 +329,113 @@ export function createStoreHelpers({ app, getState, saveState }) {
     saveState();
   }
 
+  function resolveTopRiskState(activeThread) {
+    if (!activeThread) {
+      return null;
+    }
+
+    const latestTurn = Array.isArray(activeThread.turns) ? activeThread.turns.at(-1) : null;
+
+    if (latestTurn?.state === "waiting") {
+      return {
+        kind: "waiting",
+        threadId: activeThread.id,
+        turnId: latestTurn.id,
+        message: "当前会话等待处理",
+        actionKind: "focus-turn",
+        actionLabel: "跳到当前 turn",
+        tone: "warning",
+      };
+    }
+
+    if (latestTurn?.submittedPendingActionId) {
+      return {
+        kind: "rehydrating-current",
+        message: "当前会话正在同步上一轮 action 后续状态",
+        actionKind: "focus-turn",
+        actionLabel: "查看当前 turn",
+        tone: "neutral",
+      };
+    }
+
+    if (activeThread.historyNeedsRehydrate && app.runtime.restoredActionHydrationThreadId === activeThread.id) {
+      return {
+        kind: "rehydrating-current",
+        message: "当前会话正在同步上一轮任务的真实状态",
+        actionKind: "focus-turn",
+        actionLabel: "查看当前 turn",
+        tone: "neutral",
+      };
+    }
+
+    const state = getState();
+    const hydratingThreads = Array.isArray(state?.threads)
+      ? state.threads.filter((thread) => thread?.id !== activeThread.id && thread?.historyNeedsRehydrate)
+      : [];
+    const otherHydratingThread = hydratingThreads.find((thread) => thread.id === app.runtime.restoredActionHydrationThreadId)
+      ?? hydratingThreads[0]
+      ?? null;
+
+    if (!otherHydratingThread) {
+      return null;
+    }
+
+    const otherTurn = Array.isArray(otherHydratingThread.turns) ? otherHydratingThread.turns.at(-1) : null;
+
+    return {
+      kind: "rehydrating-other",
+      threadId: otherHydratingThread.id,
+      turnId: otherTurn?.id ?? null,
+      message: otherTurn?.submittedPendingActionId
+        ? `会话「${formatThreadTitle(otherHydratingThread)}」仍在同步上一轮 action 后续状态`
+        : `会话「${formatThreadTitle(otherHydratingThread)}」仍在同步上一轮任务的真实状态`,
+      actionKind: "open-thread",
+      actionLabel: "切过去查看",
+      tone: "neutral",
+    };
+  }
+
+  function resolveTurnActionState(thread, turn) {
+    if (!turn) {
+      return null;
+    }
+
+    if (turn.state === "waiting") {
+      const pendingAction = turn.pendingAction ?? {};
+
+      return {
+        kind: "waiting",
+        heading: "等待处理",
+        actionType: typeof pendingAction.actionType === "string" ? pendingAction.actionType : "",
+        prompt: typeof pendingAction.prompt === "string" ? pendingAction.prompt : "",
+        choices: Array.isArray(pendingAction.choices)
+          ? pendingAction.choices.filter((choice) => typeof choice === "string")
+          : [],
+        errorMessage: typeof turn.pendingActionError === "string" ? turn.pendingActionError : "",
+        submitting: Boolean(turn.pendingActionSubmitting),
+        inputText: "",
+      };
+    }
+
+    if (turn.submittedPendingActionId) {
+      return {
+        kind: "rehydrating",
+        heading: "状态同步中",
+        prompt: "上一轮 action 已提交，正在等待服务端继续执行并同步状态。",
+      };
+    }
+
+    if (thread?.historyNeedsRehydrate && app.runtime.restoredActionHydrationThreadId === thread.id) {
+      return {
+        kind: "rehydrating",
+        heading: "状态同步中",
+        prompt: "浏览器刚恢复这个会话，正在向服务端同步上一轮任务的真实状态。",
+      };
+    }
+
+    return null;
+  }
+
   function hasRecoverableServerState(thread, turn) {
     return Boolean(
       thread?.serverHistoryAvailable
@@ -636,6 +743,10 @@ export function createStoreHelpers({ app, getState, saveState }) {
     return typeof value === "boolean" ? value : null;
   }
 
+  function formatThreadTitle(thread) {
+    return typeof thread?.title === "string" && thread.title.trim() ? thread.title.trim() : "新会话";
+  }
+
   function normalizeLongText(value) {
     if (typeof value !== "string") {
       return "";
@@ -793,6 +904,8 @@ export function createStoreHelpers({ app, getState, saveState }) {
     resolveEffectiveSettings,
     shouldBootstrapThread,
     repairInterruptedTurns,
+    resolveTopRiskState,
+    resolveTurnActionState,
     describeBootstrapLabel,
     threadStatus,
     latestTurnMessage,
