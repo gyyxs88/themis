@@ -397,6 +397,7 @@ test("POST /api/sessions/fork-context 在历史 sdk 会话且 optimistic 条件�
   const sourceThreadId = "thread-sdk-fallback-1";
   const previousSessionRoot = process.env.THEMIS_TEST_CODEX_SESSION_ROOT;
   const transcriptRoot = mkdtempSync(join(tmpdir(), "themis-sdk-fork-delete-gate-"));
+  let forkThreadCalls = 0;
 
   try {
     process.env.THEMIS_TEST_CODEX_SESSION_ROOT = transcriptRoot;
@@ -471,11 +472,18 @@ test("POST /api/sessions/fork-context 在历史 sdk 会话且 optimistic 条件�
           getIdentityLinkService: () => ({}),
           getPrincipalSkillsService: () => ({}),
           forkThread: async () => {
-            throw new Error("app-server forkThread should not run without targetSessionId");
+            forkThreadCalls += 1;
+            return {
+              strategy: "native-thread-fork",
+              sourceThreadId,
+              threadId: "thread-sdk-fallback-child",
+            };
           },
         },
       },
     }));
+
+    assert.equal(forkThreadCalls, 0);
   } finally {
     if (previousSessionRoot === undefined) {
       delete process.env.THEMIS_TEST_CODEX_SESSION_ROOT;
