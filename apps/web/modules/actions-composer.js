@@ -187,7 +187,7 @@ export function createComposerActions(app, streamActions) {
       return;
     }
 
-    const { thread, turn } = resolveConversationWaitingActionTarget(form);
+    const { thread, turn } = resolveConversationWaitingActionTarget(submitButton);
 
     if (!thread || !turn) {
       return;
@@ -525,8 +525,9 @@ export function createComposerActions(app, streamActions) {
   }
 
   function resolveConversationWaitingActionTarget(element) {
-    const threadId = typeof element?.dataset?.threadId === "string" ? element.dataset.threadId : "";
-    const turnId = typeof element?.dataset?.turnId === "string" ? element.dataset.turnId : "";
+    const target = findWaitingActionTargetElement(element);
+    const threadId = typeof target?.dataset?.threadId === "string" ? target.dataset.threadId : "";
+    const turnId = typeof target?.dataset?.turnId === "string" ? target.dataset.turnId : "";
 
     if (!threadId || !turnId) {
       return {
@@ -548,6 +549,23 @@ export function createComposerActions(app, streamActions) {
       thread,
       turn: store.getTurn(threadId, turnId),
     };
+  }
+
+  function findWaitingActionTargetElement(element) {
+    if (typeof element?.dataset?.threadId === "string" && typeof element?.dataset?.turnId === "string") {
+      return element;
+    }
+
+    if (typeof element?.querySelector !== "function") {
+      return null;
+    }
+
+    return (
+      element.querySelector("[data-thread-id][data-turn-id], [data-turn-id][data-thread-id]") ||
+      element.querySelector("[data-thread-id][data-turn-id]") ||
+      element.querySelector("[data-turn-id][data-thread-id]") ||
+      null
+    );
   }
 
   function readWaitingActionInputText(form) {

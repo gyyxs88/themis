@@ -125,7 +125,7 @@ test("waiting approval 卡片点击批准会直接提交 decision", async () => 
   }
 });
 
-test("waiting action form 提交会通过 conversation 事件委派发送 inputText", async () => {
+test("waiting action 的 submit 按钮点击会从真实子节点解析 thread/turn 并提交 inputText", async () => {
   const harness = createActionsHarness({
     restoreScenario: "waiting-action",
   });
@@ -138,25 +138,113 @@ test("waiting action form 提交会通过 conversation 事件委派发送 inputT
     await waitFor(() => getLatestTurn(app, restoreThread.id)?.id === "task-restore");
     await waitFor(() => getLatestTurn(app, restoreThread.id)?.pendingAction?.actionType === "user-input");
 
-    await dom.conversation.listeners.submit[0]({
-      preventDefault() {},
-      target: {
-        closest() {
+    const form = {
+      querySelector(selector) {
+        if (selector === "textarea") {
+          return {
+            value: "这是通过卡片按钮提交的回复",
+          };
+        }
+
+        if (selector === "[data-thread-id][data-turn-id], [data-turn-id][data-thread-id]") {
           return {
             dataset: {
               threadId: restoreThread.id,
               turnId: "task-restore",
             },
-            querySelector(selector) {
-              if (selector === "textarea") {
-                return {
-                  value: "这是通过卡片表单提交的回复",
-                };
-              }
-
-              return null;
-            },
           };
+        }
+
+        return null;
+      },
+    };
+    const submitButton = {
+      dataset: {
+        threadId: restoreThread.id,
+        turnId: "task-restore",
+      },
+      closest(selector) {
+        if (selector === 'form[data-turn-action-kind="waiting"]') {
+          return form;
+        }
+
+        return null;
+      },
+    };
+
+    await dom.conversation.listeners.click[0]({
+      target: {
+        closest(selector) {
+          if (selector === "[data-waiting-action-submit]") {
+            return submitButton;
+          }
+
+          return null;
+        },
+      },
+    });
+
+    await waitFor(() => calls.actionSubmit.length === 1);
+
+    assert.deepEqual(calls.actionSubmit[0], {
+      taskId: "task-restore",
+      requestId: "req-restore",
+      actionId: "input-restore",
+      inputText: "这是通过卡片按钮提交的回复",
+    });
+  } finally {
+    harness.restore();
+  }
+});
+
+test("waiting action 的 submit 事件会在 form 没有 dataset 时仍从子节点解析 thread/turn", async () => {
+  const harness = createActionsHarness({
+    restoreScenario: "waiting-action",
+  });
+
+  try {
+    const { app, dom, restoreThread, actions, calls } = harness;
+
+    actions.initialize();
+
+    await waitFor(() => getLatestTurn(app, restoreThread.id)?.pendingAction?.actionType === "user-input");
+
+    const textarea = {
+      value: "这是通过卡片表单提交的回复",
+      dataset: {
+        threadId: restoreThread.id,
+        turnId: "task-restore",
+      },
+    };
+    const submitButton = {
+      dataset: {
+        threadId: restoreThread.id,
+        turnId: "task-restore",
+      },
+    };
+    const form = {
+      querySelector(selector) {
+        if (selector === "textarea") {
+          return textarea;
+        }
+
+        if (selector === "[data-thread-id][data-turn-id], [data-turn-id][data-thread-id]") {
+          return submitButton;
+        }
+
+        return null;
+      },
+    };
+
+    await dom.conversation.listeners.submit[0]({
+      preventDefault() {},
+      target: {
+        closest(selector) {
+          if (selector === 'form[data-turn-action-kind="waiting"]') {
+            return form;
+          }
+
+          return null;
         },
       },
     });
