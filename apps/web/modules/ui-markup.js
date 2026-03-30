@@ -219,8 +219,8 @@ function renderComposerModeButton(mode, label, option, activeMode, utils) {
         type="button"
         class="${classes}"
         data-composer-mode-button="${utils.escapeHtml(mode)}"
+        ${unavailable ? 'data-composer-mode-unavailable="true"' : ""}
         aria-pressed="${active ? "true" : "false"}"
-        aria-disabled="${unavailable ? "true" : "false"}"
         ${disabledReasonId ? `aria-describedby="${disabledReasonId}"` : ""}
       >
         ${utils.escapeHtml(label)}

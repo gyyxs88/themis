@@ -159,6 +159,30 @@ test("disabled mode 点击不会切换，只会写 transientStatus", async () =>
   }
 });
 
+test("submitActiveComposerMode() 会在当前 mode 不可用时直接返回 ok false 并拒绝提交", async () => {
+  const harness = createComposerHarness({
+    activeTurnState: "running",
+    activeTurnAction: null,
+    activeThreadDraftGoal: "不该提交的 review",
+    activeThreadDraftContext: "",
+    activeThreadComposerMode: "review",
+  });
+
+  try {
+    const { app, activeThread, activeTurn } = harness;
+    const actions = createComposerActions(app, {});
+    actions.bindComposerControls();
+
+    const result = await actions.submitActiveComposerMode(activeThread, activeTurn, "review");
+
+    assert.deepEqual(result, { ok: false });
+    assert.equal(app.runtime.submitActionCalls.length, 0);
+    assert.equal(app.runtime.streamRequestCount, 0);
+  } finally {
+    harness.restore();
+  }
+});
+
 test("persisted review mode 在当前 latest turn running 时会回退到普通发送", async () => {
   const harness = createComposerHarness({
     activeRunRef: null,
@@ -188,6 +212,35 @@ test("persisted review mode 在当前 latest turn running 时会回退到普通�
 
     assert.equal(app.runtime.submitActionCalls.length, 0);
     assert.equal(app.runtime.streamRequestCount, 1);
+  } finally {
+    harness.restore();
+  }
+});
+
+test("waiting action 优先级高于显式 composer mode", async () => {
+  const harness = createComposerHarness({
+    activeTurnState: "waiting",
+    activeTurnAction: {
+      actionId: "approval-1",
+      actionType: "approval",
+      prompt: "Allow?",
+    },
+    activeThreadComposerMode: "review",
+  });
+
+  try {
+    const { app, dom, activeTurn } = harness;
+    const actions = createComposerActions(app, {});
+    actions.bindComposerControls();
+
+    await dom.form.listeners.submit[0]({
+      preventDefault() {},
+    });
+
+    assert.equal(app.runtime.submitActionCalls.length, 0);
+    assert.equal(activeTurn.pendingAction?.actionId, "approval-1");
+    assert.equal(activeTurn.state, "waiting");
+    assert.match(app.store.transientStatus?.text ?? "", /请直接在 turn 卡片上点批准或拒绝/);
   } finally {
     harness.restore();
   }
@@ -253,6 +306,42 @@ test("steer 失败后保留 mode 和输入", async () => {
     assert.equal(app.dom.goalInput.value, "先把范围收紧");
     assert.equal(app.store.transientStatus?.threadId, activeThread.id);
     assert.match(app.store.transientStatus?.text ?? "", /网关超时/);
+  } finally {
+    harness.restore();
+  }
+});
+
+test("显式 review mode 优先于草稿里的 /steer slash", async () => {
+  const harness = createComposerHarness({
+    activeTurnState: "completed",
+    activeTurnAction: null,
+    activeThreadDraftGoal: "/steer focus on tests only",
+    activeThreadDraftContext: "",
+    activeThreadComposerMode: "review",
+  });
+
+  try {
+    const { app, dom } = harness;
+    const actions = createComposerActions(app, {
+      consumeNdjsonStream: async () => {
+        throw new Error("stream should not run for explicit review mode");
+      },
+      finalizeTurnCancelled() {},
+      finalizeTurnError() {},
+    });
+    actions.bindComposerControls();
+
+    await dom.form.listeners.submit[0]({
+      preventDefault() {},
+    });
+
+    assert.equal(app.runtime.submitActionCalls.length, 1);
+    assert.deepEqual(app.runtime.submitActionCalls[0], {
+      mode: "review",
+      sessionId: "thread-a",
+      instructions: "/steer focus on tests only",
+    });
+    assert.equal(app.runtime.streamRequestCount, 0);
   } finally {
     harness.restore();
   }

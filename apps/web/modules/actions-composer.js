@@ -613,6 +613,10 @@ export function createComposerActions(app, streamActions) {
       return { ok: false };
     }
 
+    if (!isComposerModeAvailable(thread, resolvedMode)) {
+      return { ok: false };
+    }
+
     const submission = await submitSpecialAction(thread, currentTurn, {
       mode: resolvedMode,
       value: mergeDraftContent(thread.draftGoal, thread.draftContext),
@@ -965,17 +969,23 @@ export function createComposerActions(app, streamActions) {
     const mode = typeof thread?.composerMode === "string" ? thread.composerMode : "";
 
     if (mode === "review" || mode === "steer") {
-      const actionBarState = typeof store.resolveComposerActionBarState === "function"
-        ? store.resolveComposerActionBarState(thread)
-        : null;
-      const actionOption = mode === "review" ? actionBarState?.review : actionBarState?.steer;
-
-      if (actionOption?.enabled) {
-        return mode;
-      }
+      return isComposerModeAvailable(thread, mode) ? mode : null;
     }
 
     return null;
+  }
+
+  function isComposerModeAvailable(thread, mode) {
+    if (mode !== "review" && mode !== "steer") {
+      return false;
+    }
+
+    const actionBarState = typeof store.resolveComposerActionBarState === "function"
+      ? store.resolveComposerActionBarState(thread)
+      : null;
+    const actionOption = mode === "review" ? actionBarState?.review : actionBarState?.steer;
+
+    return Boolean(actionOption?.enabled);
   }
 
   function resolveSteerTurn(thread, currentTurn) {

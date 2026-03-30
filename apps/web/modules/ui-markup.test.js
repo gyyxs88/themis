@@ -273,7 +273,7 @@ test("renderComposerActionBarMarkup 会渲染 Review / Steer 动作条与退出�
   assert.ok(html.includes("退出动作模式"));
 });
 
-test("renderComposerActionBarMarkup 在不可用态时会使用 aria-disabled 而不是原生 disabled", () => {
+test("renderComposerActionBarMarkup 在不可用态时会使用 data-composer-mode-unavailable 契约", () => {
   const html = markup.renderComposerActionBarMarkup(
     {
       mode: "chat",
@@ -290,9 +290,10 @@ test("renderComposerActionBarMarkup 在不可用态时会使用 aria-disabled �
   );
 
   assert.ok(html.includes('data-composer-mode-button="review"'));
-  assert.ok(html.includes('aria-disabled="true"'));
+  assert.ok(html.includes('data-composer-mode-unavailable="true"'));
   assert.ok(html.includes("composer-mode-button unavailable"));
   assert.ok(!/data-composer-mode-button="review"[^>]*\sdisabled(\s|>|$)/.test(html));
+  assert.ok(!html.includes('aria-disabled="true"'));
 });
 
 test("renderComposerActionBarMarkup 在 chat 模式下会渲染中性说明", () => {
