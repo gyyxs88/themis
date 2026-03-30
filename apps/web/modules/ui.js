@@ -1337,6 +1337,7 @@ export function createRenderer(app) {
 
   return {
     renderAll,
+    renderComposer,
     renderThreadList,
     renderWorkspaceTools,
     setToolsPanelOpen,
