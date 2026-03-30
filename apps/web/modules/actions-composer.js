@@ -326,9 +326,6 @@ export function createComposerActions(app, streamActions) {
     }
 
     const actionType = turn.pendingAction?.actionType;
-    const explicitDecision = typeof submission.decision === "string" ? submission.decision.trim() : "";
-    const explicitInputText = typeof submission.inputText === "string" ? submission.inputText.trim() : "";
-    const actionInput = explicitInputText || mergeDraftContent(thread.draftGoal, thread.draftContext).trim();
 
     if (!actionType) {
       store.setTransientStatus(thread.id, "当前等待中的 action 已失效，请刷新后重试。");
@@ -336,16 +333,18 @@ export function createComposerActions(app, streamActions) {
       return;
     }
 
-    if (actionType === "approval" && !explicitDecision) {
-      store.setTransientStatus(thread.id, "请直接在当前 turn 卡片里点击批准或拒绝。");
-      app.renderer.renderAll();
-      return;
-    }
+    const resolvedSubmission = resolveWaitingActionSubmission(thread, actionType, submission);
 
-    if (actionType === "user-input" && !actionInput) {
-      if (store.getActiveThread()?.id === thread.id) {
+    if (!resolvedSubmission.ok) {
+      if (resolvedSubmission.focusGoalInput && store.getActiveThread()?.id === thread.id) {
         dom.goalInput.focus();
       }
+
+      if (resolvedSubmission.message) {
+        store.setTransientStatus(thread.id, resolvedSubmission.message);
+        app.renderer.renderAll();
+      }
+
       return;
     }
 
@@ -357,9 +356,9 @@ export function createComposerActions(app, streamActions) {
 
     try {
       if (actionType === "approval") {
-        await actionInteraction.submitApproval(turn, explicitDecision);
+        await actionInteraction.submitApproval(turn, resolvedSubmission.decision);
       } else if (actionType === "user-input") {
-        await actionInteraction.submitUserInput(turn, actionInput);
+        await actionInteraction.submitUserInput(turn, resolvedSubmission.inputText);
       } else {
         turn.pendingActionSubmitting = false;
         store.setTransientStatus(thread.id, `暂不支持等待中的 action 类型：${actionType}`);
@@ -375,10 +374,13 @@ export function createComposerActions(app, streamActions) {
       return;
     }
 
-    thread.draftGoal = "";
-    thread.draftContext = "";
-    dom.goalInput.value = "";
-    app.utils.autoResizeTextarea(dom.goalInput);
+    if (resolvedSubmission.consumedComposerDraft) {
+      thread.draftGoal = "";
+      thread.draftContext = "";
+      dom.goalInput.value = "";
+      app.utils.autoResizeTextarea(dom.goalInput);
+    }
+
     store.syncThreadStoredState(thread, turn);
     store.touchThread(thread.id);
     store.saveState();
@@ -387,6 +389,85 @@ export function createComposerActions(app, streamActions) {
     if (options.restoredFromHistory && typeof app.history?.ensureThreadHistoryLoaded === "function") {
       void continueRestoredActionHydration(thread.id);
     }
+  }
+
+  function resolveWaitingActionSubmission(thread, actionType, submission) {
+    if (actionType === "approval") {
+      const hasExplicitDecision = typeof submission?.decision === "string";
+      const explicitDecision = normalizeApprovalDecision(submission?.decision);
+
+      if (hasExplicitDecision) {
+        if (explicitDecision) {
+          return {
+            ok: true,
+            decision: explicitDecision,
+            consumedComposerDraft: false,
+          };
+        }
+
+        return {
+          ok: false,
+          message: "当前临时只支持 approve / deny，等卡片按钮接上后再走显式按钮。",
+        };
+      }
+
+      const draftDecision = normalizeApprovalDecision(mergeDraftContent(thread.draftGoal, thread.draftContext));
+
+      if (draftDecision) {
+        return {
+          ok: true,
+          decision: draftDecision,
+          consumedComposerDraft: true,
+        };
+      }
+
+      return {
+        ok: false,
+        message: "当前临时只支持 approve / deny，等卡片按钮接上后再走显式按钮。",
+      };
+    }
+
+    if (actionType === "user-input") {
+      const explicitInputText = typeof submission?.inputText === "string" ? submission.inputText.trim() : "";
+
+      if (explicitInputText) {
+        return {
+          ok: true,
+          inputText: explicitInputText,
+          consumedComposerDraft: false,
+        };
+      }
+
+      const draftInputText = mergeDraftContent(thread.draftGoal, thread.draftContext).trim();
+
+      if (draftInputText) {
+        return {
+          ok: true,
+          inputText: draftInputText,
+          consumedComposerDraft: true,
+        };
+      }
+
+      return {
+        ok: false,
+        focusGoalInput: true,
+      };
+    }
+
+    return {
+      ok: false,
+      message: `暂不支持等待中的 action 类型：${actionType}`,
+    };
+  }
+
+  function normalizeApprovalDecision(value) {
+    const token = typeof value === "string" ? value.trim() : "";
+
+    if (token === "approve" || token === "deny") {
+      return token;
+    }
+
+    return "";
   }
 
   async function submitSpecialAction(thread, currentTurn, specialAction) {
@@ -740,5 +821,6 @@ export function createComposerActions(app, streamActions) {
   return {
     bindComposerControls,
     bindLifecycleEvents,
+    submitWaitingAction,
   };
 }

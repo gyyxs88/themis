@@ -45,7 +45,7 @@ test("approval waiting action 不会把 composer 草稿当成 decision，必须�
       prompt: "Allow?",
       choices: ["approve", "deny"],
     },
-    activeThreadDraftGoal: "approve",
+    activeThreadDraftGoal: "好的，继续",
     activeThreadDraftContext: "",
   });
 
@@ -61,7 +61,53 @@ test("approval waiting action 不会把 composer 草稿当成 decision，必须�
     assert.equal(app.runtime.submitActionCalls.length, 0);
     assert.equal(activeTurn.pendingAction?.actionId, "approval-1");
     assert.equal(activeTurn.state, "waiting");
-    assert.match(app.store.transientStatus?.text ?? "", /请直接在当前 turn 卡片里点击批准或拒绝/);
+    assert.match(
+      app.store.transientStatus?.text ?? "",
+      /当前临时只支持 approve \/ deny，等卡片按钮接上后再走显式按钮/,
+    );
+  } finally {
+    harness.restore();
+  }
+});
+
+test("approval waiting action 的 composer 临时 fallback 只接受 approve", async () => {
+  const harness = createComposerHarness({
+    activeThreadId: "thread-a",
+    activeTurnState: "waiting",
+    activeTurnAction: {
+      actionId: "approval-1",
+      actionType: "approval",
+      prompt: "Allow?",
+      choices: ["approve", "deny"],
+    },
+    activeThreadDraftGoal: "approve",
+    activeThreadDraftContext: "",
+  });
+
+  try {
+    const { app, dom, activeThread, activeTurn } = harness;
+    dom.goalInput.value = "approve";
+    const actions = createComposerActions(app, {});
+    actions.bindComposerControls();
+
+    await dom.form.listeners.submit[0]({
+      preventDefault() {},
+    });
+
+    assert.equal(app.runtime.submitActionCalls.length, 1);
+    assert.deepEqual(app.runtime.submitActionCalls[0], {
+      taskId: "task-a",
+      requestId: "request-a",
+      actionId: "approval-1",
+      decision: "approve",
+    });
+    assert.equal(activeTurn.state, "running");
+    assert.equal(activeTurn.pendingAction, null);
+    assert.equal(activeTurn.pendingActionError, "");
+    assert.equal(activeTurn.pendingActionSubmitting, false);
+    assert.equal(activeThread.draftGoal, "");
+    assert.equal(activeThread.draftContext, "");
+    assert.equal(dom.goalInput.value, "");
   } finally {
     harness.restore();
   }
@@ -180,6 +226,46 @@ test("waiting action 提交中会先写入 pendingActionSubmitting，重复提�
     await waitFor(() => activeTurn.pendingActionSubmitting === false);
     assert.equal(activeTurn.pendingAction, null);
     assert.equal(activeTurn.pendingActionError, "");
+  } finally {
+    harness.restore();
+  }
+});
+
+test("explicit decision 提交 approval 时不会清空无关 composer 草稿", async () => {
+  const harness = createComposerHarness({
+    activeThreadId: "thread-a",
+    activeTurnState: "waiting",
+    activeTurnAction: {
+      actionId: "approval-1",
+      actionType: "approval",
+      prompt: "Allow?",
+      choices: ["approve", "deny"],
+    },
+    activeThreadDraftGoal: "保留的草稿",
+    activeThreadDraftContext: "保留的补充",
+  });
+
+  try {
+    const { app, activeThread, activeTurn } = harness;
+    const actions = createComposerActions(app, {});
+    actions.bindComposerControls();
+    app.dom.goalInput.value = "保留的草稿";
+
+    await actions.submitWaitingAction(activeThread, activeTurn, {
+      decision: "approve",
+    });
+
+    assert.equal(app.runtime.submitActionCalls.length, 1);
+    assert.deepEqual(app.runtime.submitActionCalls[0], {
+      taskId: "task-a",
+      requestId: "request-a",
+      actionId: "approval-1",
+      decision: "approve",
+    });
+    assert.equal(activeTurn.state, "running");
+    assert.equal(activeThread.draftGoal, "保留的草稿");
+    assert.equal(activeThread.draftContext, "保留的补充");
+    assert.equal(app.dom.goalInput.value, "保留的草稿");
   } finally {
     harness.restore();
   }
