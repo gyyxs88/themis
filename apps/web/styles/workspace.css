@@ -75,6 +75,124 @@
   padding: 0 32px 12px;
 }
 
+.thread-control-panel {
+  padding: 0 32px 12px;
+}
+
+.thread-control-card {
+  max-width: 920px;
+  margin: 0 auto;
+  display: grid;
+  gap: 14px;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%);
+  box-shadow: var(--shadow-sm);
+}
+
+.thread-control-head,
+.thread-control-status-row,
+.thread-control-actions,
+.thread-control-join-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.thread-control-head,
+.thread-control-status-row,
+.thread-control-join-actions {
+  flex-wrap: wrap;
+}
+
+.thread-control-summary {
+  min-width: 0;
+}
+
+.thread-control-kicker {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.thread-control-status {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.thread-control-actions {
+  flex: 0 0 auto;
+}
+
+.thread-control-details,
+.thread-control-join-hint {
+  color: var(--muted);
+}
+
+.thread-control-detail-list {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.thread-control-detail-item {
+  padding: 12px 14px;
+  border: 1px solid rgba(216, 216, 221, 0.9);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.thread-control-detail-item dt {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.thread-control-detail-item dd {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  word-break: break-all;
+}
+
+.thread-control-join-hint,
+.thread-control-join-note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.thread-control-join-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px dashed rgba(180, 189, 199, 0.92);
+  border-radius: 20px;
+  background: rgba(247, 249, 252, 0.88);
+}
+
+.thread-control-field {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.thread-control-field input {
+  min-height: 42px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #ffffff;
+  color: var(--text);
+}
+
 .thread-risk-banner-shell {
   max-width: 920px;
   margin: 0 auto;

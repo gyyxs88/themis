@@ -36,6 +36,7 @@ const app = {
     historySyncBusy: false,
     historyHydratingThreadId: null,
     threadSearchQuery: "",
+    threadControlJoinOpen: false,
     authBusy: false,
     auth: createDefaultAuthState(),
     identity: null,

@@ -316,6 +316,28 @@ test("renderComposerActionBarMarkup 在 chat 模式下会渲染中性说明", ()
   assert.ok(!html.includes("退出动作模式"));
 });
 
+test("renderThreadControlDetailsMarkup 会渲染 conversationId、serverThreadId 和来源", () => {
+  assert.equal(typeof markup.renderThreadControlDetailsMarkup, "function");
+
+  const html = markup.renderThreadControlDetailsMarkup(
+    {
+      details: [
+        { label: "conversationId", value: "conversation-123" },
+        { label: "serverThreadId", value: "server-thread-456" },
+        { label: "来源", value: "已接入" },
+      ],
+    },
+    utils,
+  );
+
+  assert.ok(html.includes("conversationId"));
+  assert.ok(html.includes("conversation-123"));
+  assert.ok(html.includes("serverThreadId"));
+  assert.ok(html.includes("server-thread-456"));
+  assert.ok(html.includes("来源"));
+  assert.ok(html.includes("已接入"));
+});
+
 function createStoreStub({
   assistantLabel,
   latestTurnMessage,

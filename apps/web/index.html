@@ -103,7 +103,6 @@
           </div>
 
           <div class="workspace-toolbar">
-            <button id="fork-thread-button" type="button" class="toolbar-button">分叉</button>
             <button id="reset-principal-button" type="button" class="danger-button">重置</button>
             <button
               id="workspace-tools-toggle"
@@ -116,6 +115,56 @@
             </button>
           </div>
         </header>
+
+        <section id="thread-control-panel" class="thread-control-panel hidden" aria-label="线程状态卡" aria-hidden="true">
+          <div class="thread-control-card">
+            <div class="thread-control-head">
+              <div class="thread-control-summary">
+                <p class="thread-control-kicker">Thread Control</p>
+                <div class="thread-control-status-row">
+                  <p id="thread-control-status" class="thread-control-status">当前空闲</p>
+                  <div id="thread-control-source" class="thread-control-source"></div>
+                </div>
+              </div>
+              <div class="thread-control-actions">
+                <button id="fork-thread-button" type="button" class="toolbar-button subtle">分叉</button>
+                <button
+                  id="thread-control-join-toggle"
+                  type="button"
+                  class="toolbar-button subtle"
+                  aria-expanded="false"
+                  aria-controls="thread-control-join-panel"
+                >
+                  接入已有会话
+                </button>
+              </div>
+            </div>
+
+            <div id="thread-control-details" class="thread-control-details"></div>
+
+            <div id="thread-control-join-hint" class="thread-control-join-hint"></div>
+
+            <div id="thread-control-join-panel" class="thread-control-join-panel hidden" aria-hidden="true">
+              <label class="thread-control-field" for="conversation-link-input">
+                <span>已有 conversationId</span>
+                <input
+                  id="conversation-link-input"
+                  type="text"
+                  placeholder="粘贴飞书 /current 或其他渠道拿到的 conversationId"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+              </label>
+
+              <div class="thread-control-join-actions">
+                <button id="conversation-link-button" type="button" class="toolbar-button subtle">接入这个会话</button>
+                <p id="conversation-link-note" class="thread-control-join-note">
+                  Web 会切到这个 conversationId，并尝试加载本机历史和服务端会话设置。
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
 
         <section id="thread-risk-banner" class="thread-risk-banner hidden" aria-live="polite" aria-hidden="true"></section>
 
@@ -374,37 +423,6 @@
                     </div>
 
                     <p class="settings-section-copy">网络访问只在 `workspace-write` 沙箱下生效；联网搜索控制 Codex 内置 web search。</p>
-                  </div>
-                </section>
-
-                <section class="workspace-tool-group">
-                  <div class="tool-group-head">
-                    <h3>会话接入</h3>
-                    <span class="meta-label">切到已有 conversationId</span>
-                  </div>
-
-                  <div class="settings-stack">
-                    <p id="conversation-link-current" class="settings-probe-note">
-                      当前 conversationId：尚未确定
-                    </p>
-
-                    <label class="settings-field">
-                      <span>已有 conversationId</span>
-                      <input
-                        id="conversation-link-input"
-                        type="text"
-                        placeholder="粘贴飞书 /current 或其他渠道拿到的 conversationId"
-                        autocomplete="off"
-                        spellcheck="false"
-                      />
-                    </label>
-
-                    <div class="settings-inline-actions">
-                      <button id="conversation-link-button" type="button" class="toolbar-button subtle">接入这个会话</button>
-                      <p id="conversation-link-note" class="settings-inline-copy">
-                        Web 会切到这个 conversationId，并尝试加载本机历史和服务端会话设置。
-                      </p>
-                    </div>
                   </div>
                 </section>
 

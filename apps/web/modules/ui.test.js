@@ -79,11 +79,52 @@ test("renderComposer 会在持久模式不可用时回退到 chat 语义", () =>
   assert.ok(!harness.dom.composerActionBar.innerHTML.includes('active"'));
 });
 
-function createHarness({ actionBarState }) {
+test("renderThreadControlPanel 会渲染状态摘要、来源标签，并在 runtime 标记下展开接入面板", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: {
+        enabled: false,
+        reason: "",
+      },
+      steer: {
+        enabled: false,
+        reason: "",
+      },
+    },
+    threadControlState: {
+      status: { kind: "waiting", label: "等待处理中的 action" },
+      source: { kind: "attached", label: "已接入" },
+      conversationId: "conversation-123",
+      joinHint: "把飞书 /current 或其他渠道拿到的 conversationId 粘贴到这里，就能切到同一条统一会话。",
+      details: [
+        { label: "conversationId", value: "conversation-123" },
+        { label: "serverThreadId", value: "server-thread-456" },
+        { label: "来源", value: "已接入" },
+      ],
+    },
+    runtime: {
+      threadControlJoinOpen: true,
+    },
+  });
+
+  assert.equal(typeof harness.renderer.renderThreadControlPanel, "function");
+  harness.renderer.renderThreadControlPanel();
+
+  assert.equal(harness.dom.threadControlStatus.textContent, "等待处理中的 action");
+  assert.ok(harness.dom.threadControlSource.innerHTML.includes("已接入"));
+  assert.ok(harness.dom.threadControlDetails.innerHTML.includes("conversation-123"));
+  assert.equal(harness.dom.threadControlPanel.hidden, false);
+  assert.equal(harness.dom.threadControlJoinPanel.hidden, false);
+  assert.equal(harness.dom.threadControlJoinToggle.getAttribute("aria-expanded"), "true");
+});
+
+function createHarness({ actionBarState, threadControlState = null, runtime = {} }) {
   const thread = {
     id: "thread-composer",
     title: "Composer 线程",
     composerMode: actionBarState.mode,
+    serverThreadId: threadControlState?.details?.find((item) => item.label === "serverThreadId")?.value || "",
     settings: {},
     turns: [],
   };
@@ -93,6 +134,97 @@ function createHarness({ actionBarState }) {
     submitButton: createTextStub(),
     composerActionBar: createTextStub(),
     composerAuthNote: createTextStub(),
+    threadControlPanel: createPanelStub(),
+    threadControlStatus: createTextStub(),
+    threadControlSource: createTextStub(),
+    threadControlDetails: createTextStub(),
+    threadControlJoinHint: createTextStub(),
+    threadControlJoinToggle: createButtonStub(),
+    threadControlJoinPanel: createPanelStub(true),
+    conversationLinkInput: createDisabledInputStub(),
+    conversationLinkButton: createButtonStub(),
+    conversationLinkNote: createTextStub(),
+    forkThreadButton: createButtonStub(),
+    resetPrincipalButton: createButtonStub(),
+    newThreadButton: createButtonStub(),
+    workspaceToolsToggle: createButtonStub(),
+    workspaceToolsClose: createButtonStub(),
+    threadSearchInput: createDisabledInputStub(),
+    assistantLanguageStyleInput: createDisabledInputStub(),
+    assistantMbtiInput: createDisabledInputStub(),
+    assistantStyleNotesInput: createDisabledInputStub(),
+    assistantSoulInput: createDisabledInputStub(),
+    reasoningSelect: createDisabledInputStub(),
+    approvalSelect: createDisabledInputStub(),
+    sandboxSelect: createDisabledInputStub(),
+    webSearchSelect: createDisabledInputStub(),
+    networkAccessSelect: createDisabledInputStub(),
+    modelSelect: createDisabledInputStub(),
+    identityLinkCodeButton: createButtonStub(),
+    skillsLocalPathInput: createDisabledInputStub(),
+    skillsGithubUrlInput: createDisabledInputStub(),
+    skillsGithubUrlRefInput: createDisabledInputStub(),
+    skillsGithubRepoInput: createDisabledInputStub(),
+    skillsGithubPathInput: createDisabledInputStub(),
+    skillsGithubRepoRefInput: createDisabledInputStub(),
+    skillsInstallLocalButton: createButtonStub(),
+    skillsInstallGithubUrlButton: createButtonStub(),
+    skillsInstallGithubRepoButton: createButtonStub(),
+    skillsRefreshButton: createButtonStub(),
+    skillsPanelActions: {
+      querySelectorAll() {
+        return [];
+      },
+    },
+    accessModeSelect: createDisabledInputStub(),
+    modeSwitchAuthAccountSelect: createDisabledInputStub(),
+    accessModeApplyButton: createButtonStub(),
+    sessionWorkspaceInput: createDisabledInputStub(),
+    sessionWorkspaceApplyButton: createButtonStub(),
+    thirdPartyProviderSelect: createDisabledInputStub(),
+    thirdPartyEndpointProbeButton: createButtonStub(),
+    thirdPartyModelSelect: createDisabledInputStub(),
+    thirdPartyProbeButton: createButtonStub(),
+    thirdPartyProbeApplyButton: createButtonStub(),
+    thirdPartyAddProviderButton: createButtonStub(),
+    thirdPartyAddModelButton: createButtonStub(),
+    thirdPartyEditorClose: createButtonStub(),
+    thirdPartyEditorBackdrop: createButtonStub(),
+    thirdPartyProviderIdInput: createDisabledInputStub(),
+    thirdPartyProviderNameInput: createDisabledInputStub(),
+    thirdPartyProviderBaseUrlInput: createDisabledInputStub(),
+    thirdPartyProviderApiKeyInput: createDisabledInputStub(),
+    thirdPartyProviderEndpointCandidatesInput: createDisabledInputStub(),
+    thirdPartyProviderWireApiSelect: createDisabledInputStub(),
+    thirdPartyProviderWebsocketInput: createDisabledInputStub(),
+    thirdPartyProviderSubmitButton: createButtonStub(),
+    thirdPartyProviderCancelButton: createButtonStub(),
+    thirdPartyModelProviderSelect: createDisabledInputStub(),
+    thirdPartyModelIdInput: createDisabledInputStub(),
+    thirdPartyModelDisplayNameInput: createDisabledInputStub(),
+    thirdPartyModelDefaultReasoningSelect: createDisabledInputStub(),
+    thirdPartyModelContextWindowInput: createDisabledInputStub(),
+    thirdPartyModelDescriptionInput: createDisabledInputStub(),
+    thirdPartyModelSupportsCodexInput: createDisabledInputStub(),
+    thirdPartyModelImageInput: createDisabledInputStub(),
+    thirdPartyModelSearchInput: createDisabledInputStub(),
+    thirdPartyModelParallelToolsInput: createDisabledInputStub(),
+    thirdPartyModelVerbosityInput: createDisabledInputStub(),
+    thirdPartyModelReasoningSummaryInput: createDisabledInputStub(),
+    thirdPartyModelImageDetailInput: createDisabledInputStub(),
+    thirdPartyModelDefaultInput: createDisabledInputStub(),
+    thirdPartyModelSubmitButton: createButtonStub(),
+    thirdPartyModelCancelButton: createButtonStub(),
+    authAccountSelect: createDisabledInputStub(),
+    authAccountActivateButton: createButtonStub(),
+    authAccountCreateInput: createDisabledInputStub(),
+    authAccountCreateButton: createButtonStub(),
+    authChatgptLoginButton: createButtonStub(),
+    authChatgptDeviceLoginButton: createButtonStub(),
+    authLogoutButton: createButtonStub(),
+    authLoginCancelButton: createButtonStub(),
+    authApiKeyInput: createDisabledInputStub(),
+    authApiKeyButton: createButtonStub(),
   };
 
   const store = {
@@ -105,11 +237,17 @@ function createHarness({ actionBarState }) {
     createDefaultThreadSettings() {
       return {};
     },
+    resolveThreadControlState() {
+      return threadControlState;
+    },
     resolveEffectiveSettings() {
       return {};
     },
     resolveTransientStatus() {
       return "";
+    },
+    isBusy() {
+      return false;
     },
     getRunningThreadId() {
       return "";
@@ -126,6 +264,9 @@ function createHarness({ actionBarState }) {
         model: null,
         modelId: "",
       };
+    },
+    getVisibleModels() {
+      return [];
     },
   };
 
@@ -199,6 +340,8 @@ function createHarness({ actionBarState }) {
       activeRequestController: null,
       activeRunRef: null,
       restoredActionHydrationThreadId: null,
+      threadControlJoinOpen: false,
+      ...runtime,
     },
     history: {
       getDisplayTurnCount() {
@@ -228,6 +371,7 @@ function createHarness({ actionBarState }) {
 
 function createTextStub() {
   return {
+    disabled: false,
     textContent: "",
     innerHTML: "",
     classList: {
@@ -242,10 +386,64 @@ function createTextStub() {
 
 function createInputStub() {
   return {
+    disabled: false,
     value: "",
     placeholder: "",
     scrollHeight: 0,
     style: {},
+  };
+}
+
+function createDisabledInputStub() {
+  return {
+    ...createInputStub(),
+    checked: false,
+  };
+}
+
+function createButtonStub() {
+  return {
+    disabled: false,
+    hidden: false,
+    textContent: "",
+    attributes: {},
+    classList: {
+      add() {},
+      remove() {},
+      toggle(_className, force) {
+        return Boolean(force);
+      },
+    },
+    setAttribute(name, value) {
+      this.attributes[name] = String(value);
+    },
+    getAttribute(name) {
+      return this.attributes[name];
+    },
+  };
+}
+
+function createPanelStub(hidden = false) {
+  return {
+    hidden,
+    innerHTML: "",
+    attributes: {},
+    classList: {
+      add() {},
+      remove() {},
+      toggle(_className, force) {
+        if (typeof force === "boolean") {
+          this.hidden = !force;
+        }
+        return Boolean(force);
+      },
+    },
+    setAttribute(name, value) {
+      this.attributes[name] = String(value);
+    },
+    getAttribute(name) {
+      return this.attributes[name];
+    },
   };
 }
 

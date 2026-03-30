@@ -62,6 +62,39 @@ export function renderThreadRiskBannerMarkup(riskState, utils) {
   `;
 }
 
+export function renderThreadControlSourceMarkup(threadControlState, utils) {
+  if (!threadControlState?.source?.label) {
+    return "";
+  }
+
+  const tone = threadControlState.source.kind === "attached"
+    ? "success"
+    : threadControlState.source.kind === "fork"
+      ? "warning"
+      : "idle";
+
+  return `<span class="badge ${utils.escapeHtml(tone)}">${utils.escapeHtml(threadControlState.source.label)}</span>`;
+}
+
+export function renderThreadControlDetailsMarkup(threadControlState, utils) {
+  const details = Array.isArray(threadControlState?.details) ? threadControlState.details : [];
+
+  if (!details.length) {
+    return "";
+  }
+
+  return `
+    <dl class="thread-control-detail-list">
+      ${details.map((item) => `
+        <div class="thread-control-detail-item">
+          <dt>${utils.escapeHtml(item.label ?? "")}</dt>
+          <dd>${utils.escapeHtml(item.value ?? "")}</dd>
+        </div>
+      `).join("")}
+    </dl>
+  `;
+}
+
 export function renderComposerActionBarMarkup(actionBarState, utils) {
   const state = normalizeComposerActionBarState(actionBarState);
   const modeLabel = resolveComposerModeLabel(state.mode);

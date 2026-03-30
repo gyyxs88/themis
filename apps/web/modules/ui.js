@@ -2,7 +2,9 @@ import {
   renderComposerActionBarMarkup,
   renderHistoryLoadingState,
   renderStoredSummaryState,
+  renderThreadControlDetailsMarkup,
   renderThreadRiskBannerMarkup,
+  renderThreadControlSourceMarkup,
   renderThreadButton,
   renderTurnMarkup,
 } from "./ui-markup.js";
@@ -31,6 +33,7 @@ export function createRenderer(app) {
     dom.threadSearchInput.value = app.runtime.threadSearchQuery;
     renderThreadList();
     renderWorkspaceHeader();
+    renderThreadControlPanel();
     renderWorkspaceTools();
     renderThirdPartyEditor();
     renderThreadRiskBanner();
@@ -124,7 +127,6 @@ export function createRenderer(app) {
     renderNetworkAccessSelect(effectiveSettings);
     renderAssistantStyleNote(effectiveSettings);
     renderRuntimeConfigNote(settings, effectiveSettings);
-    renderConversationLinkState(thread);
     renderIdentityState();
     renderSkillsState();
     renderThirdPartyNotes(settings, effectiveSettings);
@@ -165,6 +167,34 @@ export function createRenderer(app) {
     dom.threadRiskBanner.innerHTML = renderThreadRiskBannerMarkup(riskState, utils);
     dom.threadRiskBanner.classList.remove("hidden");
     dom.threadRiskBanner.setAttribute("aria-hidden", "false");
+  }
+
+  function renderThreadControlPanel() {
+    const thread = store.getActiveThread();
+    const threadControlState = thread ? store.resolveThreadControlState(thread) : null;
+    const joinOpen = Boolean(app.runtime.threadControlJoinOpen);
+
+    if (!thread || !threadControlState) {
+      dom.threadControlPanel.innerHTML = "";
+      dom.threadControlPanel.hidden = true;
+      dom.threadControlPanel.classList.add("hidden");
+      dom.threadControlPanel.setAttribute("aria-hidden", "true");
+      return;
+    }
+
+    dom.threadControlStatus.textContent = threadControlState.status?.label || "当前空闲";
+    dom.threadControlSource.innerHTML = renderThreadControlSourceMarkup(threadControlState, utils);
+    dom.threadControlDetails.innerHTML = renderThreadControlDetailsMarkup(threadControlState, utils);
+    dom.threadControlJoinHint.textContent = threadControlState.joinHint || "";
+    dom.conversationLinkInput.value = threadControlState.conversationId || "";
+    dom.conversationLinkNote.textContent = threadControlState.joinHint || "";
+    dom.threadControlJoinPanel.hidden = !joinOpen;
+    dom.threadControlJoinPanel.classList.toggle("hidden", !joinOpen);
+    dom.threadControlJoinPanel.setAttribute("aria-hidden", String(!joinOpen));
+    dom.threadControlJoinToggle.setAttribute("aria-expanded", String(joinOpen));
+    dom.threadControlPanel.hidden = false;
+    dom.threadControlPanel.classList.remove("hidden");
+    dom.threadControlPanel.setAttribute("aria-hidden", "false");
   }
 
   function renderThirdPartyEditor() {
@@ -1132,6 +1162,7 @@ export function createRenderer(app) {
       || app.runtime.identity?.savingTaskSettings
       || effectiveSettings.sandboxMode === "read-only"
       || effectiveSettings.sandboxMode === "danger-full-access";
+    dom.threadControlJoinToggle.disabled = controlsBusy;
     dom.conversationLinkInput.disabled = controlsBusy;
     dom.conversationLinkButton.disabled = controlsBusy;
     dom.identityLinkCodeButton.disabled = controlsBusy || app.runtime.identity?.issuing;
@@ -1283,19 +1314,6 @@ export function createRenderer(app) {
     return "chat";
   }
 
-  function renderConversationLinkState(thread) {
-    const conversationId = thread?.id || "";
-
-    if (!conversationId) {
-      dom.conversationLinkCurrent.textContent = "当前 conversationId：尚未确定";
-      dom.conversationLinkNote.textContent = "粘贴一个已有 conversationId，Web 会切到对应会话并尝试载入历史。";
-      return;
-    }
-
-    dom.conversationLinkCurrent.textContent = `当前 conversationId：${conversationId}`;
-    dom.conversationLinkNote.textContent = "把飞书 /current 或其他渠道看到的 conversationId 粘贴到上面，就能把 Web 切到同一条统一会话。";
-  }
-
   function renderIdentityState() {
     const identity = app.runtime.identity;
     const browserUserId = identity?.browserUserId || "";
@@ -1339,6 +1357,7 @@ export function createRenderer(app) {
     renderAll,
     renderComposer,
     renderThreadList,
+    renderThreadControlPanel,
     renderWorkspaceTools,
     setToolsPanelOpen,
     setToolsPanelSection,
