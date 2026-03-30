@@ -140,7 +140,6 @@ test("disabled mode 点击不会切换，只会写 transientStatus", async () =>
               dataset: {
                 composerModeButton: "review",
               },
-              disabled: true,
             };
           }
 

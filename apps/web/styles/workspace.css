@@ -1065,6 +1065,19 @@
   color: #ffffff;
 }
 
+.composer-mode-button.unavailable {
+  opacity: 0.58;
+  cursor: not-allowed;
+  border-style: dashed;
+  background: #f5f7fa;
+  color: var(--muted);
+}
+
+.composer-mode-button.unavailable:hover {
+  transform: none;
+  background: #f5f7fa;
+}
+
 .composer-mode-reason {
   margin: 0;
   color: var(--muted);

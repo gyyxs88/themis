@@ -273,6 +273,28 @@ test("renderComposerActionBarMarkup 会渲染 Review / Steer 动作条与退出�
   assert.ok(html.includes("退出动作模式"));
 });
 
+test("renderComposerActionBarMarkup 在不可用态时会使用 aria-disabled 而不是原生 disabled", () => {
+  const html = markup.renderComposerActionBarMarkup(
+    {
+      mode: "chat",
+      review: {
+        enabled: false,
+        reason: "当前还没有可审查的已收口结果",
+      },
+      steer: {
+        enabled: true,
+        reason: "",
+      },
+    },
+    utils,
+  );
+
+  assert.ok(html.includes('data-composer-mode-button="review"'));
+  assert.ok(html.includes('aria-disabled="true"'));
+  assert.ok(html.includes("composer-mode-button unavailable"));
+  assert.ok(!/data-composer-mode-button="review"[^>]*\sdisabled(\s|>|$)/.test(html));
+});
+
 test("renderComposerActionBarMarkup 在 chat 模式下会渲染中性说明", () => {
   const html = markup.renderComposerActionBarMarkup(
     {

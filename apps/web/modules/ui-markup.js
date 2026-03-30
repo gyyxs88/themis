@@ -203,15 +203,24 @@ function resolveComposerActionBarCopy(actionBarState) {
 function renderComposerModeButton(mode, label, option, activeMode, utils) {
   const active = activeMode === mode;
   const disabledReasonId = option.reason ? `composer-${mode}-reason` : "";
+  const unavailable = !option.enabled;
+  const classes = [
+    "toolbar-button",
+    "composer-mode-button",
+    active ? "active" : "",
+    unavailable ? "unavailable" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return `
     <div class="composer-mode-card">
       <button
         type="button"
-        class="toolbar-button composer-mode-button ${active ? "active" : ""}"
+        class="${classes}"
         data-composer-mode-button="${utils.escapeHtml(mode)}"
         aria-pressed="${active ? "true" : "false"}"
-        ${option.enabled ? "" : "disabled"}
+        aria-disabled="${unavailable ? "true" : "false"}"
         ${disabledReasonId ? `aria-describedby="${disabledReasonId}"` : ""}
       >
         ${utils.escapeHtml(label)}
