@@ -279,6 +279,8 @@ export function createHistoryController(app) {
       requestId: typeof turn.requestId === "string" ? turn.requestId : null,
       taskId: typeof turn.taskId === "string" ? turn.taskId : null,
       pendingAction: suppressDuplicatePendingAction ? null : restoredPendingAction,
+      pendingActionError: "",
+      pendingActionSubmitting: false,
       submittedPendingActionId: resolveSubmittedPendingActionId(
         existingTurn,
         turn,

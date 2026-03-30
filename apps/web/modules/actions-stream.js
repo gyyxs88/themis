@@ -110,6 +110,7 @@ export function createStreamActions(app) {
       store.applyRuntimeMetadata(thread, turn, message.metadata);
 
       if (message.title === "task.action_required") {
+        clearPendingActionFeedback(turn);
         turn.state = "waiting";
         turn.pendingAction = resolvePendingActionMetadata(message.metadata);
         if (turn.pendingAction?.actionId !== turn.submittedPendingActionId) {
@@ -127,6 +128,7 @@ export function createStreamActions(app) {
       }
 
       if (message.title === "task.failed") {
+        clearPendingActionFeedback(turn);
         turn.pendingAction = null;
         turn.submittedPendingActionId = null;
         turn.state = "failed";
@@ -134,6 +136,7 @@ export function createStreamActions(app) {
       }
 
       if (message.title === "task.cancelled") {
+        clearPendingActionFeedback(turn);
         turn.pendingAction = null;
         turn.submittedPendingActionId = null;
         turn.state = "cancelled";
@@ -141,6 +144,7 @@ export function createStreamActions(app) {
       }
 
       if (message.title === "task.completed") {
+        clearPendingActionFeedback(turn);
         turn.pendingAction = null;
         turn.submittedPendingActionId = null;
         turn.state = "completed";
@@ -152,6 +156,7 @@ export function createStreamActions(app) {
     }
 
     if (message.kind === "result") {
+      clearPendingActionFeedback(turn);
       store.applyRuntimeMetadata(thread, turn, message.metadata?.structuredOutput);
       store.appendStep(turn, "已生成结果", message.text, "success", message.metadata);
       return;
@@ -195,6 +200,7 @@ export function createStreamActions(app) {
 
   function finalizeTurn(thread, turn, result) {
     store.applyRuntimeMetadata(thread, turn, result.structuredOutput);
+    clearPendingActionFeedback(turn);
     turn.pendingAction = null;
     turn.submittedPendingActionId = null;
     turn.state = result.status ?? "completed";
@@ -212,6 +218,7 @@ export function createStreamActions(app) {
   }
 
   function finalizeTurnCancelled(turn, summary) {
+    clearPendingActionFeedback(turn);
     turn.pendingAction = null;
     turn.submittedPendingActionId = null;
     turn.state = "cancelled";
@@ -223,6 +230,7 @@ export function createStreamActions(app) {
   }
 
   function finalizeTurnError(turn, message) {
+    clearPendingActionFeedback(turn);
     turn.pendingAction = null;
     turn.submittedPendingActionId = null;
     turn.state = "failed";
@@ -234,6 +242,7 @@ export function createStreamActions(app) {
   }
 
   function finalizeTerminalTurnAfterUnexpectedEof(turn) {
+    clearPendingActionFeedback(turn);
     turn.pendingAction = null;
     turn.submittedPendingActionId = null;
 
@@ -245,6 +254,15 @@ export function createStreamActions(app) {
       status: turn.state,
       summary: resolveTerminalSummary(turn),
     };
+  }
+
+  function clearPendingActionFeedback(turn) {
+    if (!turn) {
+      return;
+    }
+
+    turn.pendingActionError = "";
+    turn.pendingActionSubmitting = false;
   }
 
   function resolveTerminalSummary(turn) {

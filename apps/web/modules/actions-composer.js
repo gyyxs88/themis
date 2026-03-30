@@ -131,7 +131,7 @@ export function createComposerActions(app, streamActions) {
     }
 
     if (restoredWaitingTurn) {
-      await submitWaitingAction(thread, restoredWaitingTurn, {
+      await submitWaitingAction(thread, restoredWaitingTurn, {}, {
         restoredFromHistory: true,
       });
       return;
@@ -320,9 +320,15 @@ export function createComposerActions(app, streamActions) {
     }
   }
 
-  async function submitWaitingAction(thread, turn, options = {}) {
+  async function submitWaitingAction(thread, turn, submission = {}, options = {}) {
+    if (turn.pendingActionSubmitting) {
+      return;
+    }
+
     const actionType = turn.pendingAction?.actionType;
-    const actionInput = mergeDraftContent(thread.draftGoal, thread.draftContext).trim();
+    const explicitDecision = typeof submission.decision === "string" ? submission.decision.trim() : "";
+    const explicitInputText = typeof submission.inputText === "string" ? submission.inputText.trim() : "";
+    const actionInput = explicitInputText || mergeDraftContent(thread.draftGoal, thread.draftContext).trim();
 
     if (!actionType) {
       store.setTransientStatus(thread.id, "当前等待中的 action 已失效，请刷新后重试。");
@@ -330,26 +336,42 @@ export function createComposerActions(app, streamActions) {
       return;
     }
 
-    if (!actionInput) {
+    if (actionType === "approval" && !explicitDecision) {
+      store.setTransientStatus(thread.id, "请直接在当前 turn 卡片里点击批准或拒绝。");
+      app.renderer.renderAll();
+      return;
+    }
+
+    if (actionType === "user-input" && !actionInput) {
       if (store.getActiveThread()?.id === thread.id) {
         dom.goalInput.focus();
       }
       return;
     }
 
+    turn.pendingActionError = "";
+    turn.pendingActionSubmitting = true;
+    store.touchThread(thread.id);
+    store.saveState();
+    app.renderer.renderAll(shouldScrollThread(thread.id));
+
     try {
       if (actionType === "approval") {
-        await actionInteraction.submitApproval(turn, actionInput);
+        await actionInteraction.submitApproval(turn, explicitDecision);
       } else if (actionType === "user-input") {
         await actionInteraction.submitUserInput(turn, actionInput);
       } else {
+        turn.pendingActionSubmitting = false;
         store.setTransientStatus(thread.id, `暂不支持等待中的 action 类型：${actionType}`);
         app.renderer.renderAll();
         return;
       }
     } catch (error) {
-      store.setTransientStatus(thread.id, error?.message ?? "提交 action 失败");
-      app.renderer.renderAll();
+      turn.pendingActionSubmitting = false;
+      turn.pendingActionError = error?.message ?? "提交 action 失败";
+      store.touchThread(thread.id);
+      store.saveState();
+      app.renderer.renderAll(shouldScrollThread(thread.id));
       return;
     }
 

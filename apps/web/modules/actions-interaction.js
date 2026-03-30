@@ -47,6 +47,8 @@ export function createActionInteraction(options) {
       ...payload,
     });
 
+    turn.pendingActionError = "";
+    turn.pendingActionSubmitting = false;
     turn.pendingAction = null;
     turn.state = "running";
     turn.submittedPendingActionId = submittedPendingActionId;
