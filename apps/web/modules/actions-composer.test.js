@@ -160,6 +160,40 @@ test("disabled mode 点击不会切换，只会写 transientStatus", async () =>
   }
 });
 
+test("persisted review mode 在当前 latest turn running 时会回退到普通发送", async () => {
+  const harness = createComposerHarness({
+    activeRunRef: null,
+    activeRequestController: null,
+    allowCreateTurn: true,
+    activeTurnState: "running",
+    activeTurnAction: null,
+    activeThreadDraftGoal: "普通发送应该走 stream",
+    activeThreadDraftContext: "",
+    activeThreadComposerMode: "review",
+  });
+
+  try {
+    const { app, dom, activeThread } = harness;
+    const actions = createComposerActions(app, {
+      consumeNdjsonStream: async () => {},
+      finalizeTurnCancelled() {},
+      finalizeTurnError() {},
+    });
+    actions.bindComposerControls();
+
+    assert.equal(actions.resolveActiveComposerMode(activeThread), null);
+
+    await dom.form.listeners.submit[0]({
+      preventDefault() {},
+    });
+
+    assert.equal(app.runtime.submitActionCalls.length, 0);
+    assert.equal(app.runtime.streamRequestCount, 1);
+  } finally {
+    harness.restore();
+  }
+});
+
 test("submitActiveComposerMode() 在 review 成功后会走 actions endpoint，并自动退出到 chat", async () => {
   const harness = createComposerHarness({
     activeThreadId: "thread-a",

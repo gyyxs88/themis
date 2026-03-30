@@ -965,7 +965,14 @@ export function createComposerActions(app, streamActions) {
     const mode = typeof thread?.composerMode === "string" ? thread.composerMode : "";
 
     if (mode === "review" || mode === "steer") {
-      return mode;
+      const actionBarState = typeof store.resolveComposerActionBarState === "function"
+        ? store.resolveComposerActionBarState(thread)
+        : null;
+      const actionOption = mode === "review" ? actionBarState?.review : actionBarState?.steer;
+
+      if (actionOption?.enabled) {
+        return mode;
+      }
     }
 
     return null;
