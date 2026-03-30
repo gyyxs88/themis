@@ -242,6 +242,53 @@ test("renderTurnMarkup 保留 completed turn 的最终结果区块", () => {
   assert.ok(html.includes("最终输出"));
 });
 
+test("renderComposerActionBarMarkup 会渲染 Review / Steer 动作条与退出入口", () => {
+  assert.equal(typeof markup.renderComposerActionBarMarkup, "function");
+
+  const html = markup.renderComposerActionBarMarkup(
+    {
+      mode: "review",
+      review: {
+        enabled: true,
+        reason: "",
+      },
+      steer: {
+        enabled: false,
+        reason: "当前没有执行中的任务可调整",
+      },
+    },
+    utils,
+  );
+
+  assert.ok(html.includes("Review"));
+  assert.ok(html.includes("Steer"));
+  assert.ok(html.includes('data-composer-mode-button="review"'));
+  assert.ok(html.includes('data-composer-mode-button="steer"'));
+  assert.ok(html.includes('aria-pressed="true"'));
+  assert.ok(html.includes("当前没有执行中的任务可调整"));
+  assert.ok(html.includes("退出动作模式"));
+});
+
+test("renderComposerActionBarMarkup 在 chat 模式下会渲染中性说明", () => {
+  const html = markup.renderComposerActionBarMarkup(
+    {
+      mode: "chat",
+      review: {
+        enabled: true,
+        reason: "",
+      },
+      steer: {
+        enabled: true,
+        reason: "",
+      },
+    },
+    utils,
+  );
+
+  assert.ok(html.includes("选择一种显式动作模式，或继续普通发送。"));
+  assert.ok(!html.includes("退出动作模式"));
+});
+
 function createStoreStub({
   assistantLabel,
   latestTurnMessage,

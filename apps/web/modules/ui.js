@@ -1,4 +1,5 @@
 import {
+  renderComposerActionBarMarkup,
   renderHistoryLoadingState,
   renderStoredSummaryState,
   renderThreadRiskBannerMarkup,
@@ -7,6 +8,20 @@ import {
 } from "./ui-markup.js";
 import { requiresAuthentication, requiresLocalBrowserForChatgptLogin } from "./auth.js";
 import { buildWorkspaceNote, isWorkspaceLocked, normalizeWorkspacePath } from "./session-workspace.js";
+
+const DEFAULT_COMPOSER_PLACEHOLDER = "直接输入你的目标、约束和注意事项，例如：继续把这个界面做成员工可用版本，并优先优化输入体验";
+
+const COMPOSER_PLACEHOLDERS = {
+  chat: DEFAULT_COMPOSER_PLACEHOLDER,
+  review: "补充你希望重点审查的内容，例如：优先看回归风险和缺失测试",
+  steer: "补充你希望当前执行如何调整，例如：先收紧范围，只处理 Web 回归",
+};
+
+const COMPOSER_SUBMIT_LABELS = {
+  chat: "发送给 Themis",
+  review: "提交 Review",
+  steer: "发送 Steer",
+};
 
 export function createRenderer(app) {
   const { dom, store, utils } = app;
@@ -1014,7 +1029,13 @@ export function createRenderer(app) {
 
   function renderComposer() {
     const thread = store.getActiveThread();
+    const actionBarState = store.resolveComposerActionBarState(thread);
     dom.goalInput.value = mergeComposerDraft(thread);
+    dom.goalInput.placeholder = COMPOSER_PLACEHOLDERS[actionBarState.mode] ?? DEFAULT_COMPOSER_PLACEHOLDER;
+    dom.submitButton.textContent = COMPOSER_SUBMIT_LABELS[actionBarState.mode] ?? COMPOSER_SUBMIT_LABELS.chat;
+    if (dom.composerActionBar) {
+      dom.composerActionBar.innerHTML = renderComposerActionBarMarkup(actionBarState, utils);
+    }
     utils.autoResizeTextarea(dom.goalInput);
     renderComposerAuthNote();
   }

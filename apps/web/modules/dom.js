@@ -8,6 +8,7 @@ export function createDom() {
     sidebarCollapseButton: document.getElementById("sidebar-collapse-button"),
     sidebarResizeHandle: document.getElementById("sidebar-resize-handle"),
     workspaceSidebarToggle: document.getElementById("workspace-sidebar-toggle"),
+    composerActionBar: document.getElementById("composer-action-bar"),
     form: document.getElementById("task-form"),
     goalInput: document.getElementById("goal-input"),
     submitButton: document.getElementById("submit-button"),

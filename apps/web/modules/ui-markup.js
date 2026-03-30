@@ -62,6 +62,37 @@ export function renderThreadRiskBannerMarkup(riskState, utils) {
   `;
 }
 
+export function renderComposerActionBarMarkup(actionBarState, utils) {
+  const state = normalizeComposerActionBarState(actionBarState);
+  const modeLabel = resolveComposerModeLabel(state.mode);
+  const modeCopy = resolveComposerActionBarCopy(state);
+  const reviewButton = renderComposerModeButton("review", "提交 Review", state.review, state.mode, utils);
+  const steerButton = renderComposerModeButton("steer", "发送 Steer", state.steer, state.mode, utils);
+  const exitMarkup = state.mode !== "chat"
+    ? `
+      <div class="composer-action-bar-exit">
+        <button type="button" class="toolbar-button composer-mode-exit-button" data-composer-mode-action="chat">
+          退出动作模式
+        </button>
+      </div>
+    `
+    : "";
+
+  return `
+    <section class="composer-action-bar" aria-label="显式动作模式" data-composer-mode="${utils.escapeHtml(state.mode)}">
+      <div class="composer-action-bar-copy">
+        <p class="composer-action-bar-status">${utils.escapeHtml(modeLabel)}</p>
+        <p class="composer-action-bar-message">${utils.escapeHtml(modeCopy)}</p>
+      </div>
+      <div class="composer-action-bar-controls">
+        ${reviewButton}
+        ${steerButton}
+      </div>
+      ${exitMarkup}
+    </section>
+  `;
+}
+
 export function renderTurnMarkup(turn, index, { thread = null, store, utils }) {
   const assistantLabel = store.resolveAssistantDisplayLabel(turn.options);
   const assistantMessages = store.getVisibleAssistantMessages(turn);
@@ -111,6 +142,84 @@ export function renderTurnMarkup(turn, index, { thread = null, store, utils }) {
         ${resultMarkup}
       </article>
     </section>
+  `;
+}
+
+function normalizeComposerActionBarState(actionBarState) {
+  return {
+    mode: normalizeComposerMode(actionBarState?.mode),
+    review: normalizeComposerActionOption(actionBarState?.review),
+    steer: normalizeComposerActionOption(actionBarState?.steer),
+  };
+}
+
+function normalizeComposerMode(mode) {
+  if (mode === "review" || mode === "steer" || mode === "chat") {
+    return mode;
+  }
+
+  return "chat";
+}
+
+function normalizeComposerActionOption(option) {
+  return {
+    enabled: Boolean(option?.enabled),
+    reason: typeof option?.reason === "string" ? option.reason : "",
+  };
+}
+
+function resolveComposerModeLabel(mode) {
+  if (mode === "review") {
+    return "当前模式：Review";
+  }
+
+  if (mode === "steer") {
+    return "当前模式：Steer";
+  }
+
+  return "当前模式：普通发送";
+}
+
+function resolveComposerActionBarCopy(actionBarState) {
+  if (actionBarState.mode === "review") {
+    return "将对当前会话最近一轮已收口结果发起 review";
+  }
+
+  if (actionBarState.mode === "steer") {
+    return "将把这条调整意见发给当前执行中的任务";
+  }
+
+  const disabledReasons = [actionBarState.review, actionBarState.steer]
+    .filter((option) => !option.enabled && option.reason)
+    .map((option) => option.reason);
+
+  if (disabledReasons.length) {
+    return disabledReasons.join(" ");
+  }
+
+  return "选择一种显式动作模式，或继续普通发送。";
+}
+
+function renderComposerModeButton(mode, label, option, activeMode, utils) {
+  const active = activeMode === mode;
+  const disabledReasonId = option.reason ? `composer-${mode}-reason` : "";
+
+  return `
+    <div class="composer-mode-card">
+      <button
+        type="button"
+        class="toolbar-button composer-mode-button ${active ? "active" : ""}"
+        data-composer-mode-button="${utils.escapeHtml(mode)}"
+        aria-pressed="${active ? "true" : "false"}"
+        ${option.enabled ? "" : "disabled"}
+        ${disabledReasonId ? `aria-describedby="${disabledReasonId}"` : ""}
+      >
+        ${utils.escapeHtml(label)}
+      </button>
+      ${option.reason
+        ? `<p class="composer-mode-reason" id="${disabledReasonId}">${utils.escapeHtml(option.reason)}</p>`
+        : ""}
+    </div>
   `;
 }
 

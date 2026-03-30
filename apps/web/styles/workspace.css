@@ -1012,6 +1012,71 @@
   border-bottom: 1px solid var(--line);
 }
 
+.composer-action-bar {
+  max-width: 920px;
+  margin: 0 auto 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: var(--shadow-sm);
+  display: grid;
+  gap: 12px;
+}
+
+.composer-action-bar-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.composer-action-bar-status {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.composer-action-bar-message {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.composer-action-bar-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.composer-mode-card {
+  display: grid;
+  gap: 6px;
+}
+
+.composer-mode-button {
+  width: 100%;
+}
+
+.composer-mode-button.active {
+  border-color: #111111;
+  background: #111111;
+  color: #ffffff;
+}
+
+.composer-mode-reason {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.composer-action-bar-exit {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .composer-panel {
   padding: 0 24px 24px;
 }
@@ -1108,6 +1173,7 @@
 
 @media (max-width: 920px) {
   .workspace-header,
+  .composer-action-bar,
   .composer-panel {
     margin-left: 0;
     margin-right: 0;
@@ -1167,6 +1233,10 @@
   .composer-footer {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .composer-action-bar-controls {
+    grid-template-columns: 1fr;
   }
 
   .settings-modal-body {
@@ -1258,6 +1328,14 @@
 
   .composer {
     bottom: 12px;
+  }
+
+  .composer-action-bar-exit {
+    justify-content: flex-start;
+  }
+
+  .composer-mode-exit-button {
+    width: 100%;
   }
 }
 
