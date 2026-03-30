@@ -5,7 +5,14 @@ import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { appendTaskReplyQuotaFooter } from "../core/task-reply-quota.js";
-import { parseRuntimeEngine, type TaskRequest, type TaskResult, type TaskRuntimeFacade, type TaskRuntimeRegistry } from "../types/index.js";
+import {
+  InvalidTaskRuntimeSelectionError,
+  resolveRequestedTaskRuntime,
+  type TaskRequest,
+  type TaskResult,
+  type TaskRuntimeFacade,
+  type TaskRuntimeRegistry,
+} from "../types/index.js";
 import type { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { appendWebAuditEvent, resolveRemoteIp } from "./http-audit.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
@@ -301,32 +308,18 @@ function resolveTaskRuntimeForHttpRequest(
   runtimeRegistry: TaskRuntimeRegistry,
   request: TaskRequest,
 ): TaskRuntimeFacade {
-  const requestedValue = readRequestedRuntimeEngine(request);
-
-  if (requestedValue === undefined) {
-    return runtimeRegistry.defaultRuntime;
-  }
-
-  const parsedEngine = parseRuntimeEngine(requestedValue);
-
-  if (!parsedEngine) {
-    throw new InvalidTaskRuntimeSelectionError(`Invalid runtimeEngine: ${String(requestedValue)}`);
-  }
-
-  const selectedRuntime = runtimeRegistry.runtimes?.[parsedEngine];
-
-  if (!selectedRuntime) {
-    throw new InvalidTaskRuntimeSelectionError(`Requested runtimeEngine is not enabled: ${parsedEngine}`);
-  }
-
-  return selectedRuntime;
+  return resolveRequestedTaskRuntime(runtimeRegistry, readRequestedRuntimeEngine(request));
 }
 
-function readRequestedRuntimeEngine(request: TaskRequest): string | undefined {
+function readRequestedRuntimeEngine(request: TaskRequest): string | null | undefined {
   const options = request.options as { runtimeEngine?: unknown } | undefined;
 
   if (!options || !("runtimeEngine" in options)) {
     return undefined;
+  }
+
+  if (options.runtimeEngine === null) {
+    return null;
   }
 
   return typeof options.runtimeEngine === "string"
@@ -356,5 +349,3 @@ function resolveTaskHandlerErrorStatusCode(error: unknown, hasNormalizedRequest:
 function resolveRuntimeStore(runtime: TaskRuntimeFacade): SqliteCodexSessionRegistry {
   return runtime.getRuntimeStore() as SqliteCodexSessionRegistry;
 }
-
-class InvalidTaskRuntimeSelectionError extends Error {}

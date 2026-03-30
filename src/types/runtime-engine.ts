@@ -83,6 +83,8 @@ export interface TaskRuntimeRegistry {
   runtimes?: Partial<Record<RuntimeEngine, TaskRuntimeFacade>>;
 }
 
+export class InvalidTaskRuntimeSelectionError extends Error {}
+
 export function parseRuntimeEngine(value: string | undefined | null): RuntimeEngine | null {
   if (value === "sdk" || value === "app-server") {
     return value;
@@ -105,4 +107,27 @@ export function resolveTaskRuntime(
     return registry.defaultRuntime;
   }
   return registry.runtimes?.[requested] ?? registry.defaultRuntime;
+}
+
+export function resolveRequestedTaskRuntime(
+  registry: TaskRuntimeRegistry,
+  requestedValue: string | undefined | null,
+): TaskRuntimeFacade {
+  if (requestedValue === undefined || requestedValue === null) {
+    return registry.defaultRuntime;
+  }
+
+  const parsedEngine = parseRuntimeEngine(requestedValue);
+
+  if (!parsedEngine) {
+    throw new InvalidTaskRuntimeSelectionError(`Invalid runtimeEngine: ${String(requestedValue)}`);
+  }
+
+  const selectedRuntime = registry.runtimes?.[parsedEngine];
+
+  if (!selectedRuntime) {
+    throw new InvalidTaskRuntimeSelectionError(`Requested runtimeEngine is not enabled: ${parsedEngine}`);
+  }
+
+  return selectedRuntime;
 }

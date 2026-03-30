@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  InvalidTaskRuntimeSelectionError,
   parseRuntimeEngine,
+  resolveRequestedTaskRuntime,
   resolveTaskRuntime,
   resolveRuntimeEngine,
 } from "./runtime-engine.js";
@@ -70,6 +72,78 @@ test("resolveTaskRuntime 会在未注册时回退 defaultRuntime", () => {
       "app-server",
     ),
     defaultRuntime,
+  );
+});
+
+test("resolveRequestedTaskRuntime 在未显式请求时返回 defaultRuntime", () => {
+  const defaultRuntime = createRuntime("default");
+  const otherRuntime = createRuntime("other");
+
+  assert.equal(
+    resolveRequestedTaskRuntime(
+      {
+        defaultRuntime,
+        runtimes: {
+          sdk: otherRuntime,
+        },
+      },
+      undefined,
+    ),
+    defaultRuntime,
+  );
+  assert.equal(
+    resolveRequestedTaskRuntime(
+      {
+        defaultRuntime,
+        runtimes: {
+          sdk: otherRuntime,
+        },
+      },
+      null,
+    ),
+    defaultRuntime,
+  );
+});
+
+test("resolveRequestedTaskRuntime 在显式请求未启用 runtime 时抛 InvalidTaskRuntimeSelectionError", () => {
+  const defaultRuntime = createRuntime("default");
+
+  assert.throws(
+    () => resolveRequestedTaskRuntime(
+      {
+        defaultRuntime,
+        runtimes: {
+          sdk: createRuntime("sdk"),
+        },
+      },
+      "app-server",
+    ),
+    (error) => {
+      assert.ok(error instanceof InvalidTaskRuntimeSelectionError);
+      assert.match(error.message, /Requested runtimeEngine is not enabled: app-server/);
+      return true;
+    },
+  );
+});
+
+test("resolveRequestedTaskRuntime 在显式请求非法 runtime 时抛 InvalidTaskRuntimeSelectionError", () => {
+  const defaultRuntime = createRuntime("default");
+
+  assert.throws(
+    () => resolveRequestedTaskRuntime(
+      {
+        defaultRuntime,
+        runtimes: {
+          sdk: createRuntime("sdk"),
+        },
+      },
+      "bad-runtime",
+    ),
+    (error) => {
+      assert.ok(error instanceof InvalidTaskRuntimeSelectionError);
+      assert.match(error.message, /Invalid runtimeEngine: bad-runtime/);
+      return true;
+    },
   );
 });
 
