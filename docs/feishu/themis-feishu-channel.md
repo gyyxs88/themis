@@ -1,6 +1,6 @@
 # Themis 飞书渠道说明
 
-更新日期：2026-03-29
+更新日期：2026-03-30
 
 ## 当前实现
 
@@ -22,8 +22,12 @@ Themis 已接入飞书长连接渠道，特点如下：
 - 普通任务回复会优先按飞书 `post` 富文本发送，尽量渲染标题、列表、加粗、代码块和外链
 - 指向本地绝对路径或相对仓库路径的 Markdown 链接，不会在飞书里保留为超链接，而是降级成普通代码样式文本
 - 失败、异常和取消会直接落到当前最后一条占位消息上
+- `task.action_required` 会转成移动端友好的 waiting action 文本，直接带出 actionId、命令提示和当前会话 / 线程摘要
+- 状态类 `task.progress` 会额外发出任务状态摘要，不会打断原来的 `处理中...` 占位链
 - `/new` 会继承当前激活会话的 `workspacePath`（只继承工作区字段）
-- `/current` 会展示当前会话 ID 与当前会话工作区
+- `/sessions`、`/use`、`/current` 会展示当前会话与 native thread 摘要，`/use` 切换成功后会自动回显当前会话状态
+- 已支持 `/review <指令>`、`/steer <指令>` 对当前会话发起最小控制动作
+- `/current` 会展示当前会话 ID、工作区、principal、认证账号、最近任务状态和 native thread 摘要
 
 ## 配置方式
 
@@ -171,6 +175,27 @@ infra/local/themis.db
 - 当前会话 ID
 - 当前会话工作区（未设置时显示回退到 Themis 启动目录）
 - 当前 principal 和当前生效认证账号
+- 最近任务状态
+- 当前 native thread 摘要（threadId、状态、turn 数）
+
+### `/review <指令>`
+
+对当前激活会话发起 Review。
+
+当前实现会自动按会话选择 runtime；如果当前会话已经绑定 app-server thread，成功后会回显：
+
+- 当前会话 ID
+- review thread id
+- review turn id
+
+### `/steer <指令>`
+
+对当前激活会话的当前活跃 turn 发送 Steer。
+
+当前实现会自动按会话选择 runtime；如果当前会话已经绑定 app-server thread，成功后会回显：
+
+- 当前会话 ID
+- steer 后返回的 turn id
 
 ### `/workspace [绝对目录]`（别名：`/ws`）
 
@@ -299,6 +324,13 @@ infra/local/themis.db
 - 主额度剩余百分比
 - 次额度剩余百分比
 - 附加 credits
+
+## Waiting Action 与任务状态表达
+
+- `task.action_required` 到达时，飞书会输出“等待你处理”的摘要消息，并直接给出 `/approve`、`/deny` 或 `/reply` 的命令提示。
+- waiting action 摘要会同时带出当前 `sessionId` 与 native thread 摘要，减少移动端来回切 `/current` 的成本。
+- action 提交后的 `running / restoring / completed / failed` 这类状态变化，会额外落一条状态摘要消息。
+- 状态摘要不会打断原有的 `处理中...` 占位链路；正文流和状态流会分开表达。
 
 ## 普通消息行为
 

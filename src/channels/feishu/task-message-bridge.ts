@@ -21,6 +21,7 @@ export const DEFAULT_FEISHU_PROGRESS_FLUSH_TIMEOUT_MS = 60_000;
 
 export class FeishuTaskMessageBridge {
   private readonly deliveredProgress = new Map<string, string>();
+  private readonly deliveredStatus = new Map<string, string>();
   private readonly createText: (text: string) => Promise<FeishuMessageMutationResponse>;
   private readonly updateText: (messageId: string, text: string) => Promise<FeishuMessageMutationResponse>;
   private readonly sendText: (text: string) => Promise<void>;
@@ -67,6 +68,26 @@ export class FeishuTaskMessageBridge {
 
   private async deliverProgress(message: FeishuDeliveryMessage): Promise<void> {
     const metadata = asRecord(message.metadata);
+    const surfaceKind = normalizeText(metadata?.feishuSurfaceKind);
+
+    if (surfaceKind === "status") {
+      const text = resolveDeliveryText(message, metadata);
+
+      if (!text) {
+        return;
+      }
+
+      const previous = this.deliveredStatus.get(message.requestId);
+
+      if (previous === text) {
+        return;
+      }
+
+      this.deliveredStatus.set(message.requestId, text);
+      await this.sendStandaloneMessage(text);
+      return;
+    }
+
     const itemType = normalizeText(metadata?.itemType);
     const threadEventType = normalizeText(metadata?.threadEventType);
 

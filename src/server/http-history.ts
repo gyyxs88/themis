@@ -1,8 +1,7 @@
 import type { ServerResponse } from "node:http";
-import { resolveStoredSessionThreadReference } from "../core/session-thread-reference.js";
+import { readSessionNativeThreadSummary } from "../core/native-thread-summary.js";
 import type { SqliteCodexSessionRegistry } from "../storage/index.js";
-import type { RuntimeEngine, TaskRuntimeRegistry, TaskRuntimeThreadSnapshot } from "../types/index.js";
-import { resolveTaskRuntime } from "../types/index.js";
+import type { TaskRuntimeRegistry } from "../types/index.js";
 import { writeJson } from "./http-responses.js";
 
 export function handleHistorySessions(
@@ -86,56 +85,17 @@ async function readNativeThreadSummary(
   sessionId: string,
   runtimeRegistry?: TaskRuntimeRegistry,
 ): Promise<{ threadId: string; preview?: string; turnCount: number } | null> {
-  if (!runtimeRegistry) {
-    return null;
-  }
+  const summary = await readSessionNativeThreadSummary(store, sessionId, runtimeRegistry);
 
-  const reference = resolveSessionThreadReference(store, sessionId);
-
-  if (reference.engine !== "app-server" || !reference.threadId) {
-    return null;
-  }
-
-  const runtime = resolveTaskRuntime(runtimeRegistry, reference.engine);
-
-  if (typeof runtime.readThreadSnapshot !== "function") {
-    return null;
-  }
-
-  try {
-    const snapshot = await runtime.readThreadSnapshot({
-      threadId: reference.threadId,
-      includeTurns: true,
-    });
-
-    return normalizeNativeThreadSummary(snapshot);
-  } catch {
-    return null;
-  }
-}
-
-function normalizeNativeThreadSummary(
-  snapshot: TaskRuntimeThreadSnapshot | null,
-): { threadId: string; preview?: string; turnCount: number } | null {
-  if (!snapshot) {
+  if (!summary) {
     return null;
   }
 
   return {
-    threadId: snapshot.threadId,
-    ...(snapshot.preview ? { preview: snapshot.preview } : {}),
-    turnCount: snapshot.turnCount,
+    threadId: summary.threadId,
+    ...(summary.preview ? { preview: summary.preview } : {}),
+    turnCount: summary.turnCount,
   };
-}
-
-function resolveSessionThreadReference(
-  store: SqliteCodexSessionRegistry,
-  sessionId: string,
-): {
-  engine: RuntimeEngine | null;
-  threadId: string | null;
-} {
-  return resolveStoredSessionThreadReference(store, sessionId);
 }
 
 function normalizeText(value: string | undefined | null): string | null {

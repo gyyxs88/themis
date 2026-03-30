@@ -83,7 +83,6 @@ export class FeishuAdapter implements ChannelAdapter<FeishuTaskPayload> {
 
   async handleEvent(event: TaskEvent): Promise<void> {
     const payload = isRecord(event.payload) ? event.payload : undefined;
-    const itemType = normalizeText(typeof payload?.itemType === "string" ? payload.itemType : undefined);
 
     if (event.type === "task.action_required") {
       await this.deliver({
@@ -92,12 +91,12 @@ export class FeishuAdapter implements ChannelAdapter<FeishuTaskPayload> {
         taskId: event.taskId,
         title: event.type,
         text: resolveActionRequiredText(event, payload),
-        ...(payload ? { metadata: payload } : {}),
+        ...(payload ? { metadata: { ...payload, status: event.status } } : {}),
       });
       return;
     }
 
-    if (event.type !== "task.progress" || itemType !== "agent_message") {
+    if (event.type !== "task.progress") {
       return;
     }
 
@@ -107,7 +106,10 @@ export class FeishuAdapter implements ChannelAdapter<FeishuTaskPayload> {
       taskId: event.taskId,
       title: event.type,
       text: event.message ?? `Task status changed to ${event.status}.`,
-      ...(payload ? { metadata: payload } : {}),
+      metadata: {
+        ...(payload ?? {}),
+        status: event.status,
+      },
     });
   }
 

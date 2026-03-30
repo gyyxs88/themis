@@ -247,6 +247,91 @@ test("/current 在未设置工作区时显示回退文案", async () => {
   }
 });
 
+test("/current 会显示当前会话的 native thread 摘要", async () => {
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      taskRuntimeCalls,
+    }) => ({
+      ...createTaskRuntimeDouble({
+        engine: "app-server",
+        runtimeStore,
+        identityService,
+        principalSkillsService,
+        taskRuntimeCalls,
+      }),
+      readThreadSnapshot: async ({ threadId }) => ({
+        threadId,
+        preview: "ship mobile session summary",
+        status: "running",
+        cwd: "/workspace/themis",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        turnCount: 6,
+        turns: [],
+      }),
+      async runTask(request, hooks = {}) {
+        taskRuntimeCalls.appServer += 1;
+        const sessionId = request.channelContext.channelSessionKey ?? "session-current-thread";
+        const storedRequest = {
+          ...request,
+          channelContext: {
+            ...request.channelContext,
+            sessionId,
+          },
+        };
+        runtimeStore.upsertTurnFromRequest(storedRequest, request.taskId ?? "task-current-thread");
+        runtimeStore.saveSession({
+          sessionId,
+          threadId: "thread-current-1",
+          createdAt: request.createdAt,
+          updatedAt: request.createdAt,
+        });
+
+        const result: TaskResult = {
+          taskId: request.taskId ?? "task-current-thread",
+          requestId: request.requestId,
+          status: "completed",
+          summary: request.goal,
+          output: request.goal,
+          structuredOutput: {
+            session: {
+              engine: "app-server",
+              threadId: "thread-current-1",
+            },
+          },
+          completedAt: new Date().toISOString(),
+        };
+
+        const finalized = hooks.finalizeResult ? await hooks.finalizeResult(request, result) : result;
+        runtimeStore.completeTaskTurn({
+          request: storedRequest,
+          result: finalized,
+          sessionMode: "resumed",
+          threadId: "thread-current-1",
+        });
+        return finalized;
+      },
+    }),
+  } as FeishuHarnessConfig);
+
+  try {
+    await harness.handleIncomingText("先创建一条 app-server 会话");
+    harness.takeMessages();
+    await harness.handleCommand("current", []);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /thread-current-1/);
+    assert.match(message, /ship mobile session summary/);
+    assert.match(message, /任务状态：completed/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("/settings 只返回下一层配置项", async () => {
   const harness = createHarness();
 
@@ -970,6 +1055,356 @@ test("飞书收到 task.action_required 时会提示命令式回复", async () =
     const messages = harness.takeMessages();
     assert.ok(messages.some((message) => /Allow command\?/.test(message)));
     assert.ok(messages.some((message) => /\/approve approval-1/.test(message)));
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/use 成功后会回显切换后的会话状态和线程摘要", async () => {
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      taskRuntimeCalls,
+    }) => ({
+      ...createTaskRuntimeDouble({
+        engine: "app-server",
+        runtimeStore,
+        identityService,
+        principalSkillsService,
+        taskRuntimeCalls,
+      }),
+      readThreadSnapshot: async ({ threadId }) => ({
+        threadId,
+        preview: threadId === "thread-switch-a" ? "session A preview" : "session B preview",
+        status: "idle",
+        cwd: "/workspace/themis",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        turnCount: 2,
+        turns: [],
+      }),
+      async runTask(request, hooks = {}) {
+        taskRuntimeCalls.appServer += 1;
+        const sessionId = request.channelContext.channelSessionKey ?? "session-switch-fallback";
+        const threadId = /第一条/.test(request.goal) ? "thread-switch-a" : "thread-switch-b";
+        const storedRequest = {
+          ...request,
+          channelContext: {
+            ...request.channelContext,
+            sessionId,
+          },
+        };
+        runtimeStore.upsertTurnFromRequest(storedRequest, request.taskId ?? `task-${threadId}`);
+        runtimeStore.saveSession({
+          sessionId,
+          threadId,
+          createdAt: request.createdAt,
+          updatedAt: request.createdAt,
+        });
+
+        const result: TaskResult = {
+          taskId: request.taskId ?? `task-${threadId}`,
+          requestId: request.requestId,
+          status: "completed",
+          summary: request.goal,
+          output: request.goal,
+          structuredOutput: {
+            session: {
+              engine: "app-server",
+              threadId,
+            },
+          },
+          completedAt: new Date().toISOString(),
+        };
+
+        const finalized = hooks.finalizeResult ? await hooks.finalizeResult(request, result) : result;
+        runtimeStore.completeTaskTurn({
+          request: storedRequest,
+          result: finalized,
+          sessionMode: "resumed",
+          threadId,
+        });
+        return finalized;
+      },
+    }),
+  } as FeishuHarnessConfig);
+
+  try {
+    await harness.handleIncomingText("第一条会话");
+    const firstSessionId = harness.getCurrentSessionId();
+    harness.takeMessages();
+
+    await harness.handleCommand("new", []);
+    harness.takeMessages();
+    await harness.handleIncomingText("第二条会话");
+    harness.takeMessages();
+
+    assert.ok(firstSessionId);
+    await harness.handleCommand("use", [firstSessionId]);
+
+    const messages = harness.takeMessages().join("\n");
+    assert.match(messages, new RegExp(`已切换到会话：${firstSessionId}`));
+    assert.match(messages, /当前会话/);
+    assert.match(messages, /thread-switch-a/);
+    assert.match(messages, /session A preview/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书收到 task.action_required 时会输出移动端 waiting action 表达和线程摘要", async () => {
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      actionBridge,
+      taskRuntimeCalls,
+    }) => ({
+      ...createTaskRuntimeDouble({
+        engine: "app-server",
+        runtimeStore,
+        identityService,
+        principalSkillsService,
+        taskRuntimeCalls,
+      }),
+      readThreadSnapshot: async () => ({
+        threadId: "thread-feishu-mobile-action-1",
+        preview: "review current diff",
+        status: "running",
+        cwd: "/workspace/themis",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        turnCount: 3,
+        turns: [],
+      }),
+      async runTask(request, hooks = {}) {
+        taskRuntimeCalls.appServer += 1;
+        const sessionId = request.channelContext.channelSessionKey ?? "session-feishu-mobile-action";
+        const taskId = request.taskId ?? "task-feishu-mobile-action";
+        const requestId = request.requestId;
+
+        runtimeStore.saveSession({
+          sessionId,
+          threadId: "thread-feishu-mobile-action-1",
+          createdAt: request.createdAt,
+          updatedAt: request.createdAt,
+        });
+
+        actionBridge.register({
+          taskId,
+          requestId,
+          actionId: "approval-mobile-1",
+          actionType: "approval",
+          prompt: "Allow command?",
+          choices: ["approve", "deny"],
+          scope: {
+            sourceChannel: "feishu",
+            userId: request.user.userId,
+            ...(sessionId ? { sessionId } : {}),
+          },
+        });
+
+        await hooks.onEvent?.({
+          eventId: "event-feishu-mobile-action-1",
+          taskId,
+          requestId,
+          type: "task.action_required",
+          status: "waiting",
+          message: "Allow command?",
+          payload: {
+            actionId: "approval-mobile-1",
+            actionType: "approval",
+            prompt: "Allow command?",
+            choices: ["approve", "deny"],
+          },
+          timestamp: new Date().toISOString(),
+        });
+
+        return {
+          taskId,
+          requestId,
+          status: "cancelled",
+          summary: "cancel after waiting action",
+          output: "cancel after waiting action",
+          structuredOutput: {
+            session: {
+              engine: "app-server",
+              threadId: "thread-feishu-mobile-action-1",
+            },
+          },
+          completedAt: new Date().toISOString(),
+        };
+      },
+    }),
+  } as FeishuHarnessConfig);
+
+  try {
+    await harness.handleIncomingText("请执行移动端 waiting action 测试");
+
+    const messages = harness.takeMessages().join("\n");
+    assert.match(messages, /等待你处理/);
+    assert.match(messages, /approval-mobile-1/);
+    assert.match(messages, /thread-feishu-mobile-action-1/);
+    assert.match(messages, /review current diff/);
+    assert.match(messages, /\/approve approval-mobile-1/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/review <指令> 会对当前会话发起 review", async () => {
+  const reviewCalls: Array<{ sessionId: string; instructions: string }> = [];
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      taskRuntimeCalls,
+    }) => ({
+      ...createTaskRuntimeDouble({
+        engine: "app-server",
+        runtimeStore,
+        identityService,
+        principalSkillsService,
+        taskRuntimeCalls,
+      }),
+      startReview: async (request) => {
+        reviewCalls.push(request);
+        return {
+          reviewThreadId: "review-thread-1",
+          turnId: "review-turn-1",
+        };
+      },
+      async runTask(request, hooks = {}) {
+        taskRuntimeCalls.appServer += 1;
+        const sessionId = request.channelContext.channelSessionKey ?? "session-review";
+        const storedRequest = {
+          ...request,
+          channelContext: {
+            ...request.channelContext,
+            sessionId,
+          },
+        };
+        runtimeStore.upsertTurnFromRequest(storedRequest, request.taskId ?? "task-review");
+
+        const result: TaskResult = {
+          taskId: request.taskId ?? "task-review",
+          requestId: request.requestId,
+          status: "completed",
+          summary: request.goal,
+          output: request.goal,
+          structuredOutput: {
+            session: {
+              engine: "app-server",
+              threadId: "thread-review-1",
+            },
+          },
+          completedAt: new Date().toISOString(),
+        };
+        const finalized = hooks.finalizeResult ? await hooks.finalizeResult(request, result) : result;
+        runtimeStore.completeTaskTurn({
+          request: storedRequest,
+          result: finalized,
+          sessionMode: "resumed",
+          threadId: "thread-review-1",
+        });
+        return finalized;
+      },
+    }),
+  } as FeishuHarnessConfig);
+
+  try {
+    await harness.handleIncomingText("先建立一条可 review 会话");
+    harness.takeMessages();
+    await harness.handleCommand("review", ["请只检查回归风险"]);
+
+    assert.deepEqual(reviewCalls, [{
+      sessionId: harness.getCurrentSessionId() ?? "",
+      instructions: "请只检查回归风险",
+    }]);
+    assert.match(harness.takeSingleMessage(), /已发起 Review/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/steer <指令> 会向当前会话发送 steer", async () => {
+  const steerCalls: Array<{ sessionId: string; message: string; turnId?: string }> = [];
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      taskRuntimeCalls,
+    }) => ({
+      ...createTaskRuntimeDouble({
+        engine: "app-server",
+        runtimeStore,
+        identityService,
+        principalSkillsService,
+        taskRuntimeCalls,
+      }),
+      steerTurn: async (request) => {
+        steerCalls.push(request);
+        return {
+          turnId: "turn-steer-1",
+        };
+      },
+      async runTask(request, hooks = {}) {
+        taskRuntimeCalls.appServer += 1;
+        const sessionId = request.channelContext.channelSessionKey ?? "session-steer";
+        const storedRequest = {
+          ...request,
+          channelContext: {
+            ...request.channelContext,
+            sessionId,
+          },
+        };
+        runtimeStore.upsertTurnFromRequest(storedRequest, request.taskId ?? "task-steer");
+
+        const result: TaskResult = {
+          taskId: request.taskId ?? "task-steer",
+          requestId: request.requestId,
+          status: "completed",
+          summary: request.goal,
+          output: request.goal,
+          structuredOutput: {
+            session: {
+              engine: "app-server",
+              threadId: "thread-steer-1",
+            },
+          },
+          completedAt: new Date().toISOString(),
+        };
+        const finalized = hooks.finalizeResult ? await hooks.finalizeResult(request, result) : result;
+        runtimeStore.completeTaskTurn({
+          request: storedRequest,
+          result: finalized,
+          sessionMode: "resumed",
+          threadId: "thread-steer-1",
+        });
+        return finalized;
+      },
+    }),
+  } as FeishuHarnessConfig);
+
+  try {
+    await harness.handleIncomingText("先建立一条可 steer 会话");
+    harness.takeMessages();
+    await harness.handleCommand("steer", ["请先收窄到测试和回归验证"]);
+
+    assert.deepEqual(steerCalls, [{
+      sessionId: harness.getCurrentSessionId() ?? "",
+      message: "请先收窄到测试和回归验证",
+    }]);
+    assert.match(harness.takeSingleMessage(), /已发送 Steer/);
   } finally {
     harness.cleanup();
   }

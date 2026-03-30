@@ -89,6 +89,29 @@ test("静默超时会补发缓存 progress，并保留新的处理中占位", as
   ]);
 });
 
+test("状态类 progress 会单独发出状态摘要，不打断处理中占位", async () => {
+  const operations: string[] = [];
+  let nextMessageId = 1;
+  const bridge = createBridge(operations, () => `message-${nextMessageId++}`);
+
+  await bridge.prepareResponseSlot();
+  await bridge.deliver({
+    kind: "event",
+    requestId: "req-status-1",
+    title: "task.progress",
+    text: "## 系统继续处理中\n会话：session-1\n第一轮审批已提交，任务继续执行中。",
+    metadata: {
+      feishuSurfaceKind: "status",
+      status: "running",
+    },
+  });
+
+  assert.deepEqual(operations, [
+    "create:处理中...",
+    "create:## 系统继续处理中\n会话：session-1\n第一轮审批已提交，任务继续执行中。",
+  ]);
+});
+
 test("normalizeComparableReply 会忽略尾部额度信息", () => {
   assert.equal(
     normalizeComparableReply("正文\n\n额度剩余：5h 87%｜1w 95%"),
