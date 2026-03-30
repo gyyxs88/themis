@@ -68,6 +68,10 @@ export function createComposerActions(app, streamActions) {
 
     dom.form.addEventListener("submit", handleSubmit);
 
+    if (dom.composerActionBar?.addEventListener) {
+      dom.composerActionBar.addEventListener("click", handleComposerActionBarClick);
+    }
+
     if (dom.conversation?.addEventListener) {
       dom.conversation.addEventListener("click", handleConversationActionClick);
       dom.conversation.addEventListener("submit", handleConversationActionSubmit);
@@ -133,6 +137,13 @@ export function createComposerActions(app, streamActions) {
     if (!currentTurn && latestTurn?.state === "waiting" && latestTurn.pendingAction) {
       store.setTransientStatus(thread.id, "当前等待中的 action 需要在 turn 卡片里显式提交。");
       app.renderer.renderAll();
+      return;
+    }
+
+    const activeComposerMode = resolveActiveComposerMode(thread);
+
+    if (activeComposerMode) {
+      await submitActiveComposerMode(thread, currentTurn, activeComposerMode);
       return;
     }
 
@@ -560,7 +571,7 @@ export function createComposerActions(app, streamActions) {
       if (store.getActiveThread()?.id === thread.id) {
         dom.goalInput.focus();
       }
-      return;
+      return { ok: false };
     }
 
     try {
@@ -574,12 +585,12 @@ export function createComposerActions(app, streamActions) {
       } else {
         store.setTransientStatus(thread.id, `暂不支持指令：/${specialAction.mode}`);
         app.renderer.renderAll();
-        return;
+        return { ok: false };
       }
     } catch (error) {
       store.setTransientStatus(thread.id, error?.message ?? "提交 action 失败");
       app.renderer.renderAll();
-      return;
+      return { ok: false };
     }
 
     thread.draftGoal = "";
@@ -589,6 +600,81 @@ export function createComposerActions(app, streamActions) {
     store.touchThread(thread.id);
     store.saveState();
     app.renderer.renderAll(shouldScrollThread(thread.id));
+
+    return { ok: true };
+  }
+
+  async function submitActiveComposerMode(thread, currentTurn, mode = null) {
+    const resolvedMode = mode === "review" || mode === "steer"
+      ? mode
+      : resolveActiveComposerMode(thread);
+
+    if (!resolvedMode) {
+      return { ok: false };
+    }
+
+    const submission = await submitSpecialAction(thread, currentTurn, {
+      mode: resolvedMode,
+      value: mergeDraftContent(thread.draftGoal, thread.draftContext),
+    });
+
+    if (!submission.ok) {
+      return submission;
+    }
+
+    store.setThreadComposerMode(thread.id, "chat");
+    app.renderer.renderAll(shouldScrollThread(thread.id));
+
+    return submission;
+  }
+
+  function handleComposerActionBarClick(event) {
+    const composerModeButton = event.target?.closest?.("[data-composer-mode-button]");
+
+    if (!composerModeButton) {
+      return;
+    }
+
+    const targetMode = typeof composerModeButton.dataset?.composerModeButton === "string"
+      ? composerModeButton.dataset.composerModeButton
+      : "";
+
+    if (targetMode !== "review" && targetMode !== "steer" && targetMode !== "chat") {
+      return;
+    }
+
+    const thread = store.getActiveThread();
+
+    if (!thread) {
+      return;
+    }
+
+    if (targetMode !== "chat") {
+      const actionBarState = store.resolveComposerActionBarState(thread);
+      const targetOption = targetMode === "review" ? actionBarState.review : actionBarState.steer;
+
+      if (!targetOption?.enabled) {
+        if (targetOption?.reason) {
+          store.setTransientStatus(thread.id, targetOption.reason);
+        }
+
+        app.renderer.renderAll();
+        return;
+      }
+    }
+
+    const nextMode = targetMode === "chat"
+      ? "chat"
+      : thread.composerMode === targetMode
+        ? "chat"
+        : targetMode;
+
+    if (thread.composerMode === nextMode) {
+      return;
+    }
+
+    store.setThreadComposerMode(thread.id, nextMode);
+    app.renderer.renderAll();
   }
 
   async function submitActionRequest(payload) {
@@ -875,6 +961,16 @@ export function createComposerActions(app, streamActions) {
     return null;
   }
 
+  function resolveActiveComposerMode(thread) {
+    const mode = typeof thread?.composerMode === "string" ? thread.composerMode : "";
+
+    if (mode === "review" || mode === "steer") {
+      return mode;
+    }
+
+    return null;
+  }
+
   function resolveSteerTurn(thread, currentTurn) {
     if (app.runtime.activeRunRef?.threadId === thread.id && currentTurn) {
       return currentTurn;
@@ -906,6 +1002,8 @@ export function createComposerActions(app, streamActions) {
   return {
     bindComposerControls,
     bindLifecycleEvents,
+    resolveActiveComposerMode,
+    submitActiveComposerMode,
     submitWaitingAction,
   };
 }

@@ -35,6 +35,196 @@ test("waiting action 只允许当前会话提交，切换线程后会阻止串�
   }
 });
 
+test("点击动作条 Review 会进入 review mode 且保留草稿", async () => {
+  const harness = createComposerHarness({
+    activeThreadId: "thread-a",
+    activeTurnState: "completed",
+    activeTurnAction: null,
+    activeThreadDraftGoal: "保留的草稿",
+    activeThreadDraftContext: "保留的补充",
+    activeThreadComposerMode: "chat",
+  });
+
+  try {
+    const { app, dom, activeThread, renderCalls } = harness;
+    const actions = createComposerActions(app, {});
+    actions.bindComposerControls();
+
+    await dom.composerActionBar.listeners.click[0]({
+      target: {
+        closest(selector) {
+          if (selector === "[data-composer-mode-button]") {
+            return {
+              dataset: {
+                composerModeButton: "review",
+              },
+              disabled: false,
+            };
+          }
+
+          return null;
+        },
+      },
+    });
+
+    assert.equal(activeThread.composerMode, "review");
+    assert.equal(activeThread.draftGoal, "保留的草稿");
+    assert.equal(activeThread.draftContext, "保留的补充");
+    assert.equal(app.store.transientStatus, null);
+    assert.ok(renderCalls.length > 0);
+  } finally {
+    harness.restore();
+  }
+});
+
+test("点击已选中的 Review 再点一次会回到 chat", async () => {
+  const harness = createComposerHarness({
+    activeThreadId: "thread-a",
+    activeTurnState: "completed",
+    activeTurnAction: null,
+    activeThreadDraftGoal: "保留的草稿",
+    activeThreadDraftContext: "保留的补充",
+    activeThreadComposerMode: "review",
+  });
+
+  try {
+    const { app, dom, activeThread } = harness;
+    const actions = createComposerActions(app, {});
+    actions.bindComposerControls();
+
+    await dom.composerActionBar.listeners.click[0]({
+      target: {
+        closest(selector) {
+          if (selector === "[data-composer-mode-button]") {
+            return {
+              dataset: {
+                composerModeButton: "review",
+              },
+              disabled: false,
+            };
+          }
+
+          return null;
+        },
+      },
+    });
+
+    assert.equal(activeThread.composerMode, "chat");
+    assert.equal(activeThread.draftGoal, "保留的草稿");
+    assert.equal(activeThread.draftContext, "保留的补充");
+  } finally {
+    harness.restore();
+  }
+});
+
+test("disabled mode 点击不会切换，只会写 transientStatus", async () => {
+  const harness = createComposerHarness({
+    activeThreadId: "thread-a",
+    activeTurnState: "running",
+    activeTurnAction: null,
+    activeThreadDraftGoal: "保留的草稿",
+    activeThreadDraftContext: "保留的补充",
+    activeThreadComposerMode: "chat",
+  });
+
+  try {
+    const { app, dom, activeThread, renderCalls } = harness;
+    const actions = createComposerActions(app, {});
+    actions.bindComposerControls();
+
+    await dom.composerActionBar.listeners.click[0]({
+      target: {
+        closest(selector) {
+          if (selector === "[data-composer-mode-button]") {
+            return {
+              dataset: {
+                composerModeButton: "review",
+              },
+              disabled: true,
+            };
+          }
+
+          return null;
+        },
+      },
+    });
+
+    assert.equal(activeThread.composerMode, "chat");
+    assert.equal(activeThread.draftGoal, "保留的草稿");
+    assert.equal(activeThread.draftContext, "保留的补充");
+    assert.equal(app.store.transientStatus?.threadId, activeThread.id);
+    assert.match(app.store.transientStatus?.text ?? "", /当前还没有可审查的已收口结果/);
+    assert.ok(renderCalls.length > 0);
+  } finally {
+    harness.restore();
+  }
+});
+
+test("submitActiveComposerMode() 在 review 成功后会走 actions endpoint，并自动退出到 chat", async () => {
+  const harness = createComposerHarness({
+    activeThreadId: "thread-a",
+    activeTurnState: "completed",
+    activeTurnAction: null,
+    activeThreadDraftGoal: "请 review 这份变更",
+    activeThreadDraftContext: "关注回归风险",
+    activeThreadComposerMode: "review",
+  });
+
+  try {
+    const { app, activeThread, activeTurn } = harness;
+    const actions = createComposerActions(app, {});
+    actions.bindComposerControls();
+
+    const result = await actions.submitActiveComposerMode(activeThread, activeTurn, "review");
+
+    assert.deepEqual(result, { ok: true });
+    assert.equal(app.runtime.submitActionCalls.length, 1);
+    assert.deepEqual(app.runtime.submitActionCalls[0], {
+      mode: "review",
+      sessionId: "thread-a",
+      instructions: "请 review 这份变更\n\n补充要求：\n关注回归风险",
+    });
+    assert.equal(activeThread.composerMode, "chat");
+    assert.equal(activeThread.draftGoal, "");
+    assert.equal(activeThread.draftContext, "");
+    assert.equal(app.dom.goalInput.value, "");
+  } finally {
+    harness.restore();
+  }
+});
+
+test("steer 失败后保留 mode 和输入", async () => {
+  const harness = createComposerHarness({
+    activeThreadId: "thread-a",
+    activeTurnState: "running",
+    activeTurnAction: null,
+    activeThreadDraftGoal: "先把范围收紧",
+    activeThreadDraftContext: "只处理 Web 回归",
+    activeThreadComposerMode: "steer",
+    submitActionError: new Error("网关超时"),
+  });
+
+  try {
+    const { app, activeThread, activeTurn } = harness;
+    const actions = createComposerActions(app, {});
+    actions.bindComposerControls();
+    app.dom.goalInput.value = "先把范围收紧";
+
+    const result = await actions.submitActiveComposerMode(activeThread, activeTurn, "steer");
+
+    assert.deepEqual(result, { ok: false });
+    assert.equal(app.runtime.submitActionCalls.length, 1);
+    assert.equal(activeThread.composerMode, "steer");
+    assert.equal(activeThread.draftGoal, "先把范围收紧");
+    assert.equal(activeThread.draftContext, "只处理 Web 回归");
+    assert.equal(app.dom.goalInput.value, "先把范围收紧");
+    assert.equal(app.store.transientStatus?.threadId, activeThread.id);
+    assert.match(app.store.transientStatus?.text ?? "", /网关超时/);
+  } finally {
+    harness.restore();
+  }
+});
+
 test("approval waiting action 不再从 composer 草稿里隐式提交", async () => {
   const harness = createComposerHarness({
     activeThreadId: "thread-a",
@@ -832,6 +1022,7 @@ function createComposerHarness(options = {}) {
     title: "线程 A",
     draftGoal: options.activeThreadDraftGoal ?? "",
     draftContext: options.activeThreadDraftContext ?? "",
+    composerMode: options.activeThreadComposerMode ?? "chat",
     historyNeedsRehydrate: options.activeThreadHistoryNeedsRehydrate ?? false,
   });
   const activeThread = options.activeThreadId === "thread-b"
@@ -840,6 +1031,7 @@ function createComposerHarness(options = {}) {
       title: "线程 B",
       draftGoal: options.activeThreadDraftGoal ?? "",
       draftContext: options.activeThreadDraftContext ?? "",
+      composerMode: options.activeThreadComposerMode ?? "chat",
     })
     : waitingThread;
   const activeTurn = createTurnRecord({
@@ -998,6 +1190,72 @@ function createComposerHarness(options = {}) {
     resolveEffectiveSettings() {
       return {};
     },
+    resolveComposerActionBarState(thread) {
+      const latestTurn = Array.isArray(thread?.turns) ? thread.turns.at(-1) : null;
+
+      if (!latestTurn || latestTurn.state === "waiting") {
+        return {
+          mode: thread?.composerMode ?? "chat",
+          review: {
+            enabled: false,
+            reason: "当前还没有可审查的已收口结果",
+          },
+          steer: {
+            enabled: false,
+            reason: "当前没有执行中的任务可调整",
+          },
+        };
+      }
+
+      if (latestTurn.state === "running") {
+        return {
+          mode: thread?.composerMode ?? "chat",
+          review: {
+            enabled: false,
+            reason: "当前还没有可审查的已收口结果",
+          },
+          steer: {
+            enabled: true,
+            reason: "",
+          },
+        };
+      }
+
+      if (latestTurn.state === "completed" || latestTurn.state === "failed" || latestTurn.state === "cancelled") {
+        return {
+          mode: thread?.composerMode ?? "chat",
+          review: {
+            enabled: true,
+            reason: "",
+          },
+          steer: {
+            enabled: false,
+            reason: "当前没有执行中的任务可调整",
+          },
+        };
+      }
+
+      return {
+        mode: thread?.composerMode ?? "chat",
+        review: {
+          enabled: false,
+          reason: "当前还没有可审查的已收口结果",
+        },
+        steer: {
+          enabled: false,
+          reason: "当前没有执行中的任务可调整",
+        },
+      };
+    },
+    setThreadComposerMode(threadId, mode) {
+      const thread = threads.find((entry) => entry.id === threadId);
+
+      if (!thread) {
+        return;
+      }
+
+      thread.composerMode = mode;
+    },
     buildTaskOptions() {
       return undefined;
     },
@@ -1015,6 +1273,7 @@ function createComposerHarness(options = {}) {
     form: createEventHost("form"),
     cancelButton: createEventHost("cancel-button"),
     conversation: createEventHost("conversation"),
+    composerActionBar: createEventHost("composer-action-bar"),
     assistantLanguageStyleInput: createValueHost(""),
     assistantMbtiInput: createValueHost(""),
     assistantStyleNotesInput: createValueHost(""),
@@ -1090,12 +1349,20 @@ function createComposerHarness(options = {}) {
   };
 }
 
-function createThreadRecord({ id, title, draftGoal = "", draftContext = "", historyNeedsRehydrate = false }) {
+function createThreadRecord({
+  id,
+  title,
+  draftGoal = "",
+  draftContext = "",
+  composerMode = "chat",
+  historyNeedsRehydrate = false,
+}) {
   return {
     id,
     title,
     draftGoal,
     draftContext,
+    composerMode,
     settings: {},
     historyNeedsRehydrate,
     turns: [],
