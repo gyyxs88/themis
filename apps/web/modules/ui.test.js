@@ -115,13 +115,84 @@ test("renderThreadControlPanel 会渲染主视图 conversationId、折叠详情�
   assert.equal(harness.dom.threadControlStatus.textContent, "等待处理中的 action");
   assert.equal(harness.dom.threadControlConversationId.textContent, "conversation-123");
   assert.ok(harness.dom.threadControlSource.innerHTML.includes("已接入"));
-  assert.ok(harness.dom.threadControlDetails.innerHTML.includes("<details"));
-  assert.ok(harness.dom.threadControlDetails.innerHTML.includes("<summary>查看详情</summary>"));
-  assert.ok(harness.dom.threadControlDetails.innerHTML.includes("conversation-123"));
+  assert.equal(harness.dom.threadControlDetails.open, false);
+  assert.equal(harness.dom.threadControlDetails.innerHTML, "static-shell");
+  assert.ok(harness.dom.threadControlDetailsBody.innerHTML.includes("conversation-123"));
   assert.equal(harness.dom.threadControlPanel.hidden, false);
   assert.equal(harness.dom.threadControlJoinPanel.hidden, false);
   assert.equal(harness.dom.threadControlJoinToggle.getAttribute("aria-expanded"), "true");
   assert.equal(harness.dom.conversationLinkInput.value, "user-pasted-id");
+});
+
+test("renderThreadControlPanel 在空态隐藏后再显示时不会删除静态骨架，且内容可以重新更新", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    threadControlState: {
+      status: { kind: "idle", label: "当前空闲" },
+      source: { kind: "standard", label: "普通会话" },
+      conversationId: "conversation-a",
+      joinHint: "hint-a",
+      details: [{ label: "conversationId", value: "conversation-a" }],
+    },
+  });
+
+  harness.renderer.renderThreadControlPanel();
+  harness.store.getActiveThread = () => null;
+  harness.renderer.renderThreadControlPanel();
+
+  assert.equal(harness.dom.threadControlPanel.hidden, true);
+  assert.equal(harness.dom.threadControlPanel.innerHTML, "static-shell");
+
+  harness.store.getActiveThread = () => harness.thread;
+  harness.store.resolveThreadControlState = () => ({
+    status: { kind: "running", label: "正在执行" },
+    source: { kind: "attached", label: "已接入" },
+    conversationId: "conversation-b",
+    joinHint: "hint-b",
+    details: [{ label: "conversationId", value: "conversation-b" }],
+  });
+  harness.renderer.renderThreadControlPanel();
+
+  assert.equal(harness.dom.threadControlStatus.textContent, "正在执行");
+  assert.equal(harness.dom.threadControlConversationId.textContent, "conversation-b");
+  assert.ok(harness.dom.threadControlDetailsBody.innerHTML.includes("conversation-b"));
+});
+
+test("renderThreadControlPanel 重渲染时保留 details 展开态，并只更新 body 内容", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    threadControlState: {
+      status: { kind: "idle", label: "当前空闲" },
+      source: { kind: "standard", label: "普通会话" },
+      conversationId: "conversation-a",
+      joinHint: "hint-a",
+      details: [{ label: "conversationId", value: "conversation-a" }],
+    },
+  });
+
+  harness.dom.threadControlDetails.open = true;
+  const originalDetailsNode = harness.dom.threadControlDetails;
+  harness.renderer.renderThreadControlPanel();
+  harness.store.resolveThreadControlState = () => ({
+    status: { kind: "syncing", label: "正在同步" },
+    source: { kind: "fork", label: "fork" },
+    conversationId: "conversation-b",
+    joinHint: "hint-b",
+    details: [{ label: "conversationId", value: "conversation-b" }],
+  });
+  harness.renderer.renderThreadControlPanel();
+
+  assert.equal(harness.dom.threadControlDetails, originalDetailsNode);
+  assert.equal(harness.dom.threadControlDetails.open, true);
+  assert.ok(harness.dom.threadControlDetailsBody.innerHTML.includes("conversation-b"));
 });
 
 function createHarness({ actionBarState, threadControlState = null, runtime = {} }) {
@@ -143,7 +214,8 @@ function createHarness({ actionBarState, threadControlState = null, runtime = {}
     threadControlStatus: createTextStub(),
     threadControlConversationId: createTextStub(),
     threadControlSource: createTextStub(),
-    threadControlDetails: createTextStub(),
+    threadControlDetails: createDetailsStub(),
+    threadControlDetailsBody: createTextStub(),
     threadControlJoinHint: createTextStub(),
     threadControlJoinToggle: createButtonStub(),
     threadControlJoinPanel: createPanelStub(true),
@@ -372,6 +444,8 @@ function createHarness({ actionBarState, threadControlState = null, runtime = {}
   return {
     dom,
     renderer,
+    store,
+    thread,
   };
 }
 
@@ -432,7 +506,7 @@ function createButtonStub() {
 function createPanelStub(hidden = false) {
   return {
     hidden,
-    innerHTML: "",
+    innerHTML: "static-shell",
     attributes: {},
     classList: {
       add() {},
@@ -450,6 +524,13 @@ function createPanelStub(hidden = false) {
     getAttribute(name) {
       return this.attributes[name];
     },
+  };
+}
+
+function createDetailsStub() {
+  return {
+    ...createPanelStub(false),
+    open: false,
   };
 }
 

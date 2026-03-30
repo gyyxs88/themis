@@ -25,6 +25,7 @@ export function createDom() {
     threadControlConversationId: document.getElementById("thread-control-conversation-id"),
     threadControlSource: document.getElementById("thread-control-source"),
     threadControlDetails: document.getElementById("thread-control-details"),
+    threadControlDetailsBody: document.getElementById("thread-control-details-body"),
     threadControlJoinHint: document.getElementById("thread-control-join-hint"),
     threadControlJoinToggle: document.getElementById("thread-control-join-toggle"),
     threadControlJoinPanel: document.getElementById("thread-control-join-panel"),

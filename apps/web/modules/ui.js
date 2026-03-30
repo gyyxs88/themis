@@ -175,7 +175,6 @@ export function createRenderer(app) {
     const joinOpen = Boolean(app.runtime.threadControlJoinOpen);
 
     if (!thread || !threadControlState) {
-      dom.threadControlPanel.innerHTML = "";
       dom.threadControlPanel.hidden = true;
       dom.threadControlPanel.classList.add("hidden");
       dom.threadControlPanel.setAttribute("aria-hidden", "true");
@@ -185,14 +184,7 @@ export function createRenderer(app) {
     dom.threadControlStatus.textContent = threadControlState.status?.label || "当前空闲";
     dom.threadControlConversationId.textContent = threadControlState.conversationId || "";
     dom.threadControlSource.innerHTML = renderThreadControlSourceMarkup(threadControlState, utils);
-    dom.threadControlDetails.innerHTML = `
-      <details class="thread-control-details-disclosure">
-        <summary>查看详情</summary>
-        <div class="thread-control-details-body">
-          ${renderThreadControlDetailsMarkup(threadControlState, utils)}
-        </div>
-      </details>
-    `;
+    dom.threadControlDetailsBody.innerHTML = renderThreadControlDetailsMarkup(threadControlState, utils);
     dom.threadControlJoinHint.textContent = threadControlState.joinHint || "";
     dom.conversationLinkNote.textContent = threadControlState.joinHint || "";
     dom.threadControlJoinPanel.hidden = !joinOpen;
