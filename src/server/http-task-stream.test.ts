@@ -968,6 +968,184 @@ test("handleTaskStream 在 pending action resolve 后再次 close 会恢复 CLIE
   }
 });
 
+test("handleTaskStream 在连续两轮 task.action_required 下会把恢复窗口滚到第二轮", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-http-task-stream-double-recovery-window-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: root,
+    runtimeStore,
+  });
+  const authRuntime = createAuthRuntime({
+    authenticated: false,
+    requiresOpenaiAuth: false,
+  });
+  const actionBridge = new AppServerActionBridge();
+  const request = createTaskStreamRequest({
+    goal: "请检查连续 action 恢复窗口",
+    sessionId: "session-task-stream-double-recovery-window",
+  });
+  let capturedTaskId = "";
+  let capturedRequestId = "";
+  let abortMessage: string | null = null;
+  let firstActionReady!: () => void;
+  let secondActionReady!: () => void;
+  const firstActionObserved = new Promise<void>((resolve) => {
+    firstActionReady = resolve;
+  });
+  const secondActionObserved = new Promise<void>((resolve) => {
+    secondActionReady = resolve;
+  });
+  let firstCloseDone = false;
+  const response = createTaskStreamResponse(({ chunk }) => {
+    const line = parseNdjson(String(chunk))[0];
+
+    if (line?.title === "task.action_required" && line?.metadata && typeof line.metadata === "object") {
+      const actionId = String((line.metadata as { actionId?: string }).actionId ?? "");
+
+      if (actionId === "approval-window-1" && !firstCloseDone) {
+        firstCloseDone = true;
+        queueMicrotask(() => {
+          request.emit("close");
+        });
+      }
+    }
+  });
+
+  try {
+    (runtime as CodexTaskRuntime & {
+      runTask: CodexTaskRuntime["runTask"];
+    }).runTask = async (taskRequest, hooks = {}) => {
+      const { onEvent, signal } = hooks;
+      assert.ok(signal);
+      capturedTaskId = taskRequest.taskId ?? "task-stream-double-recovery-window";
+      capturedRequestId = taskRequest.requestId;
+
+      signal.addEventListener("abort", () => {
+        abortMessage = signal.reason instanceof Error
+          ? signal.reason.message
+          : String(signal.reason);
+      }, { once: true });
+
+      const firstAction = actionBridge.register({
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        actionId: "approval-window-1",
+        actionType: "approval",
+        prompt: "Need approval 1",
+      });
+      const firstSubmission = actionBridge.waitForSubmission(capturedTaskId, capturedRequestId, firstAction.actionId);
+      assert.ok(firstSubmission);
+
+      await onEvent?.({
+        eventId: "event-window-action-1",
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        type: "task.action_required",
+        status: "waiting",
+        message: "Need approval 1",
+        payload: {
+          actionId: firstAction.actionId,
+          actionType: firstAction.actionType,
+        },
+        timestamp: "2026-03-30T11:00:00.000Z",
+      });
+      firstActionReady();
+
+      await firstSubmission;
+
+      await onEvent?.({
+        eventId: "event-window-running-1",
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        type: "task.started",
+        status: "running",
+        message: "继续处理中",
+        timestamp: "2026-03-30T11:00:01.000Z",
+      });
+
+      const secondAction = actionBridge.register({
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        actionId: "approval-window-2",
+        actionType: "approval",
+        prompt: "Need approval 2",
+      });
+      const secondSubmission = actionBridge.waitForSubmission(capturedTaskId, capturedRequestId, secondAction.actionId);
+      assert.ok(secondSubmission);
+
+      await onEvent?.({
+        eventId: "event-window-action-2",
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        type: "task.action_required",
+        status: "waiting",
+        message: "Need approval 2",
+        payload: {
+          actionId: secondAction.actionId,
+          actionType: secondAction.actionType,
+        },
+        timestamp: "2026-03-30T11:00:02.000Z",
+      });
+      secondActionReady();
+
+      const secondPayload = await secondSubmission;
+
+      return {
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        status: "completed",
+        summary: `已处理 ${secondPayload.decision}`,
+        completedAt: "2026-03-30T11:00:03.000Z",
+      };
+    };
+
+    const streamPromise = handleTaskStream(
+      request as unknown as import("node:http").IncomingMessage,
+      response as unknown as import("node:http").ServerResponse,
+      runtime,
+      {
+        defaultRuntime: runtime,
+      },
+      authRuntime,
+      actionBridge,
+      5_000,
+    );
+
+    await firstActionObserved;
+    assert.equal(abortMessage, null);
+    assert.ok(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-window-1"));
+
+    assert.equal(actionBridge.resolve({
+      taskId: capturedTaskId,
+      requestId: capturedRequestId,
+      actionId: "approval-window-1",
+      decision: "approve",
+    }), true);
+
+    await secondActionObserved;
+    response.emit("close");
+
+    assert.equal(abortMessage, null);
+    assert.equal(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-window-1"), null);
+    assert.ok(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-window-2"));
+
+    assert.equal(actionBridge.resolve({
+      taskId: capturedTaskId,
+      requestId: capturedRequestId,
+      actionId: "approval-window-2",
+      decision: "approve",
+    }), true);
+
+    await streamPromise;
+
+    assert.equal(abortMessage, null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("handleTaskStream 仅收到无 bridge pending action 的 task.action_required 时 close 仍会触发 CLIENT_DISCONNECTED", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-http-task-stream-non-bridge-action-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
