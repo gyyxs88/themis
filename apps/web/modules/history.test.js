@@ -147,6 +147,77 @@ test("ensureThreadHistoryLoaded 在服务端进入新的 waiting action 时会�
   }
 });
 
+test("attachConversationById 会在新建、standard 和 fork 分支里保留正确的 threadOrigin，并切换 activeThread", async () => {
+  const scenarios = [
+    {
+      conversationId: "conversation-new",
+      expectedOrigin: "attached",
+      setup(app) {
+        return {
+          beforeThreadId: app.store.getActiveThread()?.id ?? null,
+        };
+      },
+    },
+    {
+      conversationId: "conversation-standard",
+      expectedOrigin: "attached",
+      setup(app) {
+        const beforeThread = app.store.createThread();
+        beforeThread.id = "thread-before-standard";
+        const targetThread = app.store.createThread();
+        targetThread.id = "conversation-standard";
+        targetThread.threadOrigin = "standard";
+        app.store.state.threads = [beforeThread, targetThread];
+        app.store.state.activeThreadId = beforeThread.id;
+        app.store.saveState();
+
+        return {
+          beforeThreadId: beforeThread.id,
+        };
+      },
+    },
+    {
+      conversationId: "conversation-fork",
+      expectedOrigin: "fork",
+      setup(app) {
+        const beforeThread = app.store.createThread();
+        beforeThread.id = "thread-before-fork";
+        const targetThread = app.store.createThread({
+          threadOrigin: "fork",
+        });
+        targetThread.id = "conversation-fork";
+        app.store.state.threads = [beforeThread, targetThread];
+        app.store.state.activeThreadId = beforeThread.id;
+        app.store.saveState();
+
+        return {
+          beforeThreadId: beforeThread.id,
+        };
+      },
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const harness = createAttachHarness();
+
+    try {
+      const { app, history } = harness;
+      const { beforeThreadId } = scenario.setup(app);
+
+      const result = await history.attachConversationById(scenario.conversationId);
+
+      assert.equal(result.thread.id, scenario.conversationId);
+      assert.equal(result.thread.threadOrigin, scenario.expectedOrigin);
+      assert.equal(app.store.state.activeThreadId, scenario.conversationId);
+      assert.equal(app.store.getActiveThread()?.id, scenario.conversationId);
+      assert.equal(app.store.getActiveThread()?.threadOrigin, scenario.expectedOrigin);
+      assert.notEqual(beforeThreadId, app.store.state.activeThreadId);
+    } finally {
+      harness.restore();
+    }
+  }
+});
+
 function createHistoryHarness(options = {}) {
   const storageKey = "themis-history-test";
   const storage = createLocalStorageMock();
@@ -256,6 +327,80 @@ function createHistoryHarness(options = {}) {
     get loadThreadSettingsCalls() {
       return loadThreadSettingsCalls;
     },
+    restore() {
+      globalThis.fetch = originalFetch;
+      if (originalLocalStorage === undefined) {
+        Reflect.deleteProperty(globalThis, "localStorage");
+      } else {
+        globalThis.localStorage = originalLocalStorage;
+      }
+    },
+  };
+}
+
+function createAttachHarness() {
+  const storageKey = "themis-history-attach-test";
+  const storage = createLocalStorageMock();
+  const originalLocalStorage = globalThis.localStorage;
+  const originalFetch = globalThis.fetch;
+  globalThis.localStorage = storage;
+
+  const app = {
+    constants: {
+      MAX_THREAD_COUNT: 20,
+      STORAGE_KEY: storageKey,
+    },
+    utils: {
+      ...utils,
+      safeReadJson: async (response) => response.json(),
+    },
+    runtime: {
+      historySyncBusy: false,
+      historyHydratingThreadId: null,
+    },
+    renderer: {
+      renderAll() {},
+    },
+    sessionSettings: {
+      async loadThreadSettings() {},
+    },
+  };
+
+  app.store = createStore(app);
+  app.store.saveState();
+
+  globalThis.fetch = async (url) => {
+    const conversationId = decodeURIComponent(String(url).split("/").at(-1) ?? "");
+
+    assert.equal(url, `/api/history/sessions/${encodeURIComponent(conversationId)}`);
+
+    return new Response(JSON.stringify({
+      session: {
+        sessionId: conversationId,
+        threadId: `server-thread-${conversationId}`,
+        createdAt: "2026-03-29T00:00:00.000Z",
+        updatedAt: "2026-03-29T00:01:00.000Z",
+        turnCount: 0,
+        latestTurn: {
+          goal: `目标 ${conversationId}`,
+          status: "completed",
+          summary: `目标 ${conversationId}`,
+          codexThreadId: `server-thread-${conversationId}`,
+          updatedAt: "2026-03-29T00:01:00.000Z",
+        },
+      },
+      turns: [],
+    }), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+  };
+
+  return {
+    app,
+    history: createHistoryController(app),
     restore() {
       globalThis.fetch = originalFetch;
       if (originalLocalStorage === undefined) {
