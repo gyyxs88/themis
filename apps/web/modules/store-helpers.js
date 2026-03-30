@@ -517,6 +517,50 @@ export function createStoreHelpers({ app, getState, saveState }) {
     };
   }
 
+  function resolveThreadControlState(thread) {
+    const latestTurn = Array.isArray(thread?.turns) ? thread.turns.at(-1) : null;
+    const waiting = Boolean(latestTurn?.state === "waiting" && latestTurn?.pendingAction);
+    const syncing = Boolean(
+      latestTurn?.submittedPendingActionId
+      || (thread?.historyNeedsRehydrate && app.runtime.restoredActionHydrationThreadId === thread?.id),
+    );
+    const running = Boolean(latestTurn?.state === "running" || latestTurn?.state === "queued");
+    const sourceKind = thread?.threadOrigin === "fork"
+      ? "fork"
+      : thread?.threadOrigin === "attached"
+        ? "attached"
+        : "standard";
+    const sourceLabel = sourceKind === "fork"
+      ? "fork"
+      : sourceKind === "attached"
+        ? "已接入"
+        : "普通会话";
+    const status = waiting
+      ? { kind: "waiting", label: "等待处理中的 action" }
+      : syncing
+        ? { kind: "syncing", label: "正在同步" }
+        : running
+          ? { kind: "running", label: "正在执行" }
+          : { kind: "idle", label: "当前空闲" };
+
+    return {
+      status,
+      source: {
+        kind: sourceKind,
+        label: sourceLabel,
+      },
+      conversationId: thread?.id ?? "",
+      joinHint: waiting || syncing || running
+        ? "切走后只是离开当前线程视图，不会改变目标线程真实执行状态。"
+        : "把飞书 /current 或其他渠道拿到的 conversationId 粘贴到这里，就能切到同一条统一会话。",
+      details: [
+        { label: "conversationId", value: thread?.id ?? "" },
+        ...(thread?.serverThreadId ? [{ label: "serverThreadId", value: thread.serverThreadId }] : []),
+        { label: "来源", value: sourceLabel },
+      ],
+    };
+  }
+
   function hasRecoverableServerState(thread, turn) {
     return Boolean(
       thread?.serverHistoryAvailable
@@ -996,6 +1040,7 @@ export function createStoreHelpers({ app, getState, saveState }) {
     resolveTopRiskState,
     resolveTurnActionState,
     resolveComposerActionBarState,
+    resolveThreadControlState,
     describeBootstrapLabel,
     threadStatus,
     latestTurnMessage,

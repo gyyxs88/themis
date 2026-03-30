@@ -86,6 +86,93 @@ test("composerMode 会在线程模型中默认回退为 chat", () => {
   assert.equal(normalizedState.threads[1].composerMode, "review");
 });
 
+test("threadOrigin 会在模型层默认回退为 standard，并在线程控制派生里输出来源标签和状态摘要", () => {
+  const models = createStoreModelHelpers();
+  const created = models.createThread();
+  const normalized = models.normalizeState({
+    activeThreadId: "conversation-1",
+    threads: [
+      {
+        id: "conversation-1",
+        title: "已接入线程",
+        threadOrigin: "attached",
+        serverThreadId: "server-thread-1",
+        turns: [
+          {
+            id: "turn-1",
+            goal: "running turn",
+            inputText: "",
+            state: "running",
+            assistantMessages: [],
+            steps: [],
+            result: null,
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(created.threadOrigin, "standard");
+  assert.equal(normalized.threads[0].threadOrigin, "attached");
+
+  const app = createAppHarness();
+  const helpers = createStoreHelpers({
+    app,
+    getState: () => normalized,
+    saveState() {},
+  });
+
+  assert.deepEqual(helpers.resolveThreadControlState(normalized.threads[0]), {
+    status: { kind: "running", label: "正在执行" },
+    source: { kind: "attached", label: "已接入" },
+    conversationId: "conversation-1",
+    joinHint: "切走后只是离开当前线程视图，不会改变目标线程真实执行状态。",
+    details: [
+      { label: "conversationId", value: "conversation-1" },
+      { label: "serverThreadId", value: "server-thread-1" },
+      { label: "来源", value: "已接入" },
+    ],
+  });
+});
+
+test("resolveThreadControlState 会按 waiting 和 recovery 提升状态摘要优先级", () => {
+  const thread = createThreadRecord({
+    id: "conversation-priority",
+    title: "优先级线程",
+    threadOrigin: "fork",
+    historyNeedsRehydrate: false,
+  });
+  const turn = createTurnRecord({
+    id: "turn-priority",
+    state: "waiting",
+    pendingAction: {
+      actionId: "approval-1",
+      actionType: "approval",
+      prompt: "Need approval",
+    },
+    submittedPendingActionId: null,
+  });
+  thread.turns.push(turn);
+
+  const app = createAppHarness();
+  const helpers = createStoreHelpers({
+    app,
+    getState: () => ({ activeThreadId: thread.id, threads: [thread] }),
+    saveState() {},
+  });
+
+  assert.equal(helpers.resolveThreadControlState(thread).status.label, "等待处理中的 action");
+  assert.equal(helpers.resolveThreadControlState(thread).source.label, "fork");
+
+  turn.pendingAction = null;
+  turn.submittedPendingActionId = "approval-1";
+  assert.equal(helpers.resolveThreadControlState(thread).status.label, "正在同步");
+
+  turn.submittedPendingActionId = null;
+  turn.state = "completed";
+  assert.equal(helpers.resolveThreadControlState(thread).status.label, "当前空闲");
+});
+
 test("resolveComposerActionBarState 在 completed / failed / cancelled 终态时只开启 review", () => {
   const steerDisabledReason = "当前没有执行中的任务可调整";
   const helpers = createStoreHelpers({

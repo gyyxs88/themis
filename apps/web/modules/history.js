@@ -164,11 +164,17 @@ export function createHistoryController(app) {
     let thread = app.store.getThreadById(normalizedConversationId);
 
     if (!thread) {
-      thread = app.store.createThread();
+      thread = app.store.createThread({
+        threadOrigin: "attached",
+      });
       thread.id = normalizedConversationId;
       thread.title = `会话 ${normalizedConversationId.slice(0, 12)}`;
       thread.historyHydrated = true;
       app.store.state.threads.unshift(thread);
+    }
+
+    if (thread.threadOrigin !== "fork") {
+      thread.threadOrigin = "attached";
     }
 
     app.store.state.activeThreadId = thread.id;

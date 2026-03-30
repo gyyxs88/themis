@@ -33,6 +33,7 @@ export function createStoreModelHelpers() {
       draftGoal: "",
       draftContext: "",
       composerMode: normalizeComposerMode(options.composerMode),
+      threadOrigin: normalizeThreadOrigin(options.threadOrigin),
       settings: normalizeThreadSettings(settings),
       serverThreadId: null,
       bootstrapTranscript: "",
@@ -110,6 +111,7 @@ export function createStoreModelHelpers() {
       draftGoal: typeof thread.draftGoal === "string" ? thread.draftGoal : "",
       draftContext: typeof thread.draftContext === "string" ? thread.draftContext : "",
       composerMode: normalizeComposerMode(thread.composerMode),
+      threadOrigin: normalizeThreadOrigin(thread.threadOrigin),
       settings: normalizeThreadSettings(thread.settings),
       serverThreadId: typeof thread.serverThreadId === "string" ? thread.serverThreadId : null,
       bootstrapTranscript: typeof thread.bootstrapTranscript === "string" ? thread.bootstrapTranscript : "",
@@ -277,6 +279,14 @@ export function createStoreModelHelpers() {
     };
   }
 
+  function normalizeThreadOrigin(value) {
+    if (value === "fork" || value === "attached") {
+      return value;
+    }
+
+    return "standard";
+  }
+
   function normalizeBootstrapMode(value) {
     if (value === "session-transcript" || value === "local-transcript") {
       return value;
@@ -303,6 +313,7 @@ export function createStoreModelHelpers() {
     createInitialState,
     createTurn,
     normalizeState,
+    normalizeThreadOrigin,
     normalizeBootstrapMode,
     normalizeComposerMode,
   };
