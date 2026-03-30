@@ -13,6 +13,7 @@ import { AppServerTaskRuntime } from "./app-server-task-runtime.js";
 
 interface SessionDoubleState {
   initialized: number;
+  factoryCalls: number;
   started: Array<{ cwd: string }>;
   resumed: Array<{ threadId: string; cwd: string }>;
   reviews: Array<{ threadId: string; instructions: string }>;
@@ -79,6 +80,7 @@ function createSessionFactory(overrides: {
 } {
   const state: SessionDoubleState = {
     initialized: 0,
+    factoryCalls: 0,
     started: [],
     resumed: [],
     reviews: [],
@@ -93,7 +95,10 @@ function createSessionFactory(overrides: {
 
   return {
     state,
-    sessionFactory: async (): Promise<AppServerTaskRuntimeSession> => ({
+    sessionFactory: async (): Promise<AppServerTaskRuntimeSession> => {
+      state.factoryCalls += 1;
+
+      return {
       initialize: async () => {
         state.initialized += 1;
       },
@@ -161,7 +166,8 @@ function createSessionFactory(overrides: {
           message: error instanceof Error ? error.message : String(error),
         });
       },
-    }),
+      };
+    },
   };
 }
 
@@ -643,6 +649,7 @@ test("AppServerTaskRuntime 会阻止历史 sdk 会话在 startReview 时接入 a
       instructions: "should stay on delete gate",
     }), /可用的 app-server thread/);
 
+    assert.equal(state.factoryCalls, 0);
     assert.equal(state.initialized, 0);
     assert.equal(state.reviews.length, 0);
   } finally {
