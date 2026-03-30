@@ -400,6 +400,8 @@ export function createStoreHelpers({ app, getState, saveState }) {
       return null;
     }
 
+    const latestTurn = Array.isArray(thread?.turns) ? thread.turns.at(-1) : null;
+
     if (turn.state === "waiting") {
       const pendingAction = turn.pendingAction ?? {};
 
@@ -425,7 +427,11 @@ export function createStoreHelpers({ app, getState, saveState }) {
       };
     }
 
-    if (thread?.historyNeedsRehydrate && app.runtime.restoredActionHydrationThreadId === thread.id) {
+    if (
+      thread?.historyNeedsRehydrate
+      && app.runtime.restoredActionHydrationThreadId === thread.id
+      && latestTurn?.id === turn.id
+    ) {
       return {
         kind: "rehydrating",
         heading: "状态同步中",

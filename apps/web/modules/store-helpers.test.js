@@ -224,6 +224,38 @@ test("resolveTurnActionState 会把 waiting error 和恢复态映射成 turn 卡
   });
 });
 
+test("resolveTurnActionState 只会把当前恢复中的最新 turn 视为 generic recovery", () => {
+  const thread = createThreadRecord({
+    id: "thread-generic-recovery",
+    title: "恢复会话",
+    historyNeedsRehydrate: true,
+    turns: [
+      createTurnRecord({
+        id: "turn-old",
+        state: "completed",
+      }),
+      createTurnRecord({
+        id: "turn-latest",
+        state: "running",
+      }),
+    ],
+  });
+  const app = createAppHarness();
+  app.runtime.restoredActionHydrationThreadId = "thread-generic-recovery";
+  const helpers = createStoreHelpers({
+    app,
+    getState: () => ({ activeThreadId: thread.id, threads: [thread] }),
+    saveState() {},
+  });
+
+  assert.equal(helpers.resolveTurnActionState(thread, thread.turns[0]), null);
+  assert.deepEqual(helpers.resolveTurnActionState(thread, thread.turns[1]), {
+    kind: "rehydrating",
+    heading: "状态同步中",
+    prompt: "浏览器刚恢复这个会话，正在向服务端同步上一轮任务的真实状态。",
+  });
+});
+
 test("repairInterruptedTurns 会把刷新后残留的 waiting action turn 标记为已中断", () => {
   const state = {
     threads: [
