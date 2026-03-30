@@ -351,6 +351,8 @@ export function createStoreHelpers({ app, getState, saveState }) {
     if (latestTurn?.submittedPendingActionId) {
       return {
         kind: "rehydrating-current",
+        threadId: activeThread.id,
+        turnId: latestTurn?.id ?? null,
         message: "当前会话正在同步上一轮 action 后续状态",
         actionKind: "focus-turn",
         actionLabel: "查看当前 turn",
@@ -361,6 +363,8 @@ export function createStoreHelpers({ app, getState, saveState }) {
     if (activeThread.historyNeedsRehydrate && app.runtime.restoredActionHydrationThreadId === activeThread.id) {
       return {
         kind: "rehydrating-current",
+        threadId: activeThread.id,
+        turnId: latestTurn?.id ?? null,
         message: "当前会话正在同步上一轮任务的真实状态",
         actionKind: "focus-turn",
         actionLabel: "查看当前 turn",

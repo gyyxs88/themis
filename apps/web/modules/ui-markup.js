@@ -235,7 +235,7 @@ function renderWaitingActionSurface(actionState, turn, thread, utils) {
     >
       <div class="turn-action-head">
         <div>
-          <p class="turn-action-kicker">等待处理</p>
+          <p class="turn-action-kicker">${utils.escapeHtml(actionState.heading || "等待处理")}</p>
           <p class="turn-action-copy">${utils.escapeHtml(actionLabel)}</p>
         </div>
         <span class="badge busy">等待中</span>
