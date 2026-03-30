@@ -71,6 +71,38 @@ function createRequest(overrides: Partial<TaskRequest> = {}): TaskRequest {
   };
 }
 
+const OPENAI_COMPAT_ENV_KEYS = [
+  "THEMIS_OPENAI_COMPAT_BASE_URL",
+  "THEMIS_OPENAI_COMPAT_API_KEY",
+  "THEMIS_OPENAI_COMPAT_MODEL",
+  "THEMIS_OPENAI_COMPAT_NAME",
+  "THEMIS_OPENAI_COMPAT_ENDPOINT_CANDIDATES",
+  "THEMIS_OPENAI_COMPAT_WIRE_API",
+  "THEMIS_OPENAI_COMPAT_SUPPORTS_WEBSOCKETS",
+  "THEMIS_OPENAI_COMPAT_MODEL_CATALOG_JSON",
+] as const;
+
+function withClearedOpenAICompatEnv<T>(fn: () => T): T {
+  const savedEnv = new Map<string, string | undefined>();
+
+  for (const key of OPENAI_COMPAT_ENV_KEYS) {
+    savedEnv.set(key, process.env[key]);
+    delete process.env[key];
+  }
+
+  try {
+    return fn();
+  } finally {
+    for (const [key, value] of savedEnv) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 test("第三方模型未声明 search tool 时会阻止带联网搜索的请求", () => {
   const workingDirectory = mkdtempSync(join(tmpdir(), "themis-runtime-constraints-"));
   const registry = new SqliteCodexSessionRegistry({
@@ -134,207 +166,213 @@ test("第三方模型未声明图片输入时会阻止图片附件请求", () =>
 });
 
 test("CodexTaskRuntime 构造时会为现有 auth account 预建 session store，并在 auth 请求中复用", () => {
-  const workingDirectory = mkdtempSync(join(tmpdir(), "themis-runtime-auth-store-"));
-  const registry = new SqliteCodexSessionRegistry({
-    databaseFile: join(workingDirectory, "infra/local/themis.db"),
-  });
-
-  registry.saveAuthAccount({
-    accountId: "acct-1",
-    label: "账户一",
-    accountEmail: "acct-1@example.com",
-    codexHome: join(workingDirectory, "infra/local/codex-auth/acct-1"),
-    isActive: true,
-    createdAt: "2026-03-30T00:00:00.000Z",
-    updatedAt: "2026-03-30T00:00:00.000Z",
-  });
-
-  const records = createRecordingSessionStoreFactoryRecords();
-  const runtime = new CodexTaskRuntime({
-    workingDirectory,
-    runtimeStore: registry,
-    createSessionStore: records.createSessionStore,
-  });
-
-  try {
-    assert.equal(records.calls.length, 1);
-    assert.equal(records.calls[0]?.sessionIdNamespace, "auth:acct-1");
-    assert.equal(records.calls[0]?.sessionRegistry, registry);
-    assert.ok(records.calls[0]?.codex);
-    assert.equal(records.calls.length, 1);
-
-    const target = (runtime as unknown as {
-      resolveRuntimeTarget(request: TaskRequest, allowUnsupportedThirdPartyModel?: boolean): {
-        accessMode: "auth" | "third-party";
-        authAccountId: string | null;
-        providerId: string | null;
-        providerConfig: OpenAICompatibleProviderConfig | null;
-        sessionStore: CodexThreadSessionStore;
-      };
-    }).resolveRuntimeTarget(createRequest({
-      requestId: "req-auth-runtime-1",
-      taskId: "task-auth-runtime-1",
-    }));
-
-    assert.equal(target.accessMode, "auth");
-    assert.equal(target.authAccountId, "acct-1");
-    assert.equal(target.sessionStore, records.calls[0]?.store);
-    assert.equal(records.calls.length, 1);
-  } finally {
-    rmSync(workingDirectory, { recursive: true, force: true });
-  }
-});
-
-test("resetProviderRuntime 会在 reloadProviderConfig 后按新配置重建第三方 session store", () => {
-  const workingDirectory = mkdtempSync(join(tmpdir(), "themis-runtime-provider-reload-"));
-  const registry = new SqliteCodexSessionRegistry({
-    databaseFile: join(workingDirectory, "infra/local/themis.db"),
-  });
-
-  addOpenAICompatibleProvider(workingDirectory, {
-    id: "gateway-a",
-    name: "Gateway A",
-    baseUrl: "https://gateway-a.example.com/v1",
-    apiKey: "sk-test-a",
-  }, registry);
-
-  addOpenAICompatibleProviderModel(workingDirectory, {
-    providerId: "gateway-a",
-    model: "gpt-5.4",
-    setAsDefault: true,
-  }, registry);
-
-  const records = createRecordingSessionStoreFactoryRecords();
-  const runtime = new CodexTaskRuntime({
-    workingDirectory,
-    runtimeStore: registry,
-    createSessionStore: records.createSessionStore,
-  });
-
-  try {
-    const initialGatewayACalls = records.calls.filter((entry) => entry.sessionIdNamespace === "third-party:gateway-a");
-    const initialGatewayAStore = initialGatewayACalls[0]?.store;
-
-    assert.equal(initialGatewayACalls.length, 1);
-
-    addOpenAICompatibleProvider(workingDirectory, {
-      id: "gateway-b",
-      name: "Gateway B",
-      baseUrl: "https://gateway-b.example.com/v1",
-      apiKey: "sk-test-b",
-    }, registry);
-
-    addOpenAICompatibleProviderModel(workingDirectory, {
-      providerId: "gateway-b",
-      model: "gpt-5.4",
-      setAsDefault: true,
-    }, registry);
-
-    runtime.reloadProviderConfig();
-
-    const gatewayACalls = records.calls.filter((entry) => entry.sessionIdNamespace === "third-party:gateway-a");
-    const gatewayBCalls = records.calls.filter((entry) => entry.sessionIdNamespace === "third-party:gateway-b");
-
-    assert.equal(gatewayACalls.length, 2);
-    assert.equal(gatewayBCalls.length, 1);
-    assert.notEqual(gatewayACalls[0]?.store, gatewayACalls[1]?.store);
-    assert.equal(gatewayACalls[0]?.store, initialGatewayAStore);
-
-    const target = (runtime as unknown as {
-      resolveRuntimeTarget(request: TaskRequest, allowUnsupportedThirdPartyModel?: boolean): {
-        accessMode: "auth" | "third-party";
-        authAccountId: string | null;
-        providerId: string | null;
-        providerConfig: OpenAICompatibleProviderConfig | null;
-        sessionStore: CodexThreadSessionStore;
-      };
-    }).resolveRuntimeTarget(createRequest({
-      requestId: "req-third-party-runtime-reload",
-      taskId: "task-third-party-runtime-reload",
-      options: {
-        accessMode: "third-party",
-        thirdPartyProviderId: "gateway-b",
-        model: "gpt-5.4",
-      },
-    }));
-
-    assert.equal(target.providerId, "gateway-b");
-    assert.equal(target.sessionStore, gatewayBCalls[0]?.store);
-  } finally {
-    rmSync(workingDirectory, { recursive: true, force: true });
-  }
-});
-
-test("resolveRuntimeTarget 首次命中后补建 auth session store，并在同账号下复用", () => {
-  const workingDirectory = mkdtempSync(join(tmpdir(), "themis-runtime-auth-lazy-store-"));
-  const registry = new SqliteCodexSessionRegistry({
-    databaseFile: join(workingDirectory, "infra/local/themis.db"),
-  });
-  const records = createRecordingSessionStoreFactoryRecords();
-  const runtime = new CodexTaskRuntime({
-    workingDirectory,
-    runtimeStore: registry,
-    createSessionStore: records.createSessionStore,
-  });
-
-  try {
-    const initialCallCount = records.calls.length;
-    const defaultAuthCall = records.calls.slice(0, initialCallCount).find((entry) => entry.sessionIdNamespace?.startsWith("auth:"));
-
-    assert.equal(records.calls.filter((entry) => entry.sessionIdNamespace === "auth:managed-2").length, 0);
+  withClearedOpenAICompatEnv(() => {
+    const workingDirectory = mkdtempSync(join(tmpdir(), "themis-runtime-auth-store-"));
+    const registry = new SqliteCodexSessionRegistry({
+      databaseFile: join(workingDirectory, "infra/local/themis.db"),
+    });
 
     registry.saveAuthAccount({
-      accountId: "managed-2",
-      label: "账户二",
-      accountEmail: "managed-2@example.com",
-      codexHome: join(workingDirectory, "infra/local/codex-auth/managed-2"),
-      isActive: false,
+      accountId: "acct-1",
+      label: "账户一",
+      accountEmail: "acct-1@example.com",
+      codexHome: join(workingDirectory, "infra/local/codex-auth/acct-1"),
+      isActive: true,
       createdAt: "2026-03-30T00:00:00.000Z",
       updatedAt: "2026-03-30T00:00:00.000Z",
     });
 
-    const runtimeAsTestDouble = runtime as unknown as {
-      resolveRuntimeTarget(request: TaskRequest, allowUnsupportedThirdPartyModel?: boolean): {
-        accessMode: "auth" | "third-party";
-        authAccountId: string | null;
-        providerId: string | null;
-        providerConfig: OpenAICompatibleProviderConfig | null;
-        sessionStore: CodexThreadSessionStore;
-      };
-    };
+    const records = createRecordingSessionStoreFactoryRecords();
+    const runtime = new CodexTaskRuntime({
+      workingDirectory,
+      runtimeStore: registry,
+      createSessionStore: records.createSessionStore,
+    });
 
-    const firstTarget = runtimeAsTestDouble.resolveRuntimeTarget(createRequest({
-      requestId: "req-auth-lazy-1",
-      taskId: "task-auth-lazy-1",
-      options: {
-        authAccountId: "managed-2",
-      },
-    }));
-    const secondTarget = runtimeAsTestDouble.resolveRuntimeTarget(createRequest({
-      requestId: "req-auth-lazy-2",
-      taskId: "task-auth-lazy-2",
-      options: {
-        authAccountId: "managed-2",
-      },
-    }));
+    try {
+      assert.equal(records.calls.length, 1);
+      assert.equal(records.calls[0]?.sessionIdNamespace, "auth:acct-1");
+      assert.equal(records.calls[0]?.sessionRegistry, registry);
+      assert.ok(records.calls[0]?.codex);
+      assert.equal(records.calls.length, 1);
 
-    const managed2Calls = records.calls.filter((entry) => entry.sessionIdNamespace === "auth:managed-2");
+      const target = (runtime as unknown as {
+        resolveRuntimeTarget(request: TaskRequest, allowUnsupportedThirdPartyModel?: boolean): {
+          accessMode: "auth" | "third-party";
+          authAccountId: string | null;
+          providerId: string | null;
+          providerConfig: OpenAICompatibleProviderConfig | null;
+          sessionStore: CodexThreadSessionStore;
+        };
+      }).resolveRuntimeTarget(createRequest({
+        requestId: "req-auth-runtime-1",
+        taskId: "task-auth-runtime-1",
+      }));
 
-    assert.equal(managed2Calls.length, 1);
-    assert.equal(records.calls.length, initialCallCount + 1);
-    assert.equal(managed2Calls[0]?.sessionRegistry, registry);
-    assert.ok(managed2Calls[0]?.codex);
-    if (defaultAuthCall) {
-      assert.notEqual(managed2Calls[0]?.codex, defaultAuthCall.codex);
+      assert.equal(target.accessMode, "auth");
+      assert.equal(target.authAccountId, "acct-1");
+      assert.equal(target.sessionStore, records.calls[0]?.store);
+      assert.equal(records.calls.length, 1);
+    } finally {
+      rmSync(workingDirectory, { recursive: true, force: true });
     }
-    assert.equal(firstTarget.authAccountId, "managed-2");
-    assert.equal(secondTarget.authAccountId, "managed-2");
-    assert.equal(firstTarget.sessionStore, managed2Calls[0]?.store);
-    assert.equal(secondTarget.sessionStore, managed2Calls[0]?.store);
-    assert.equal(records.calls.length, initialCallCount + 1);
-  } finally {
-    rmSync(workingDirectory, { recursive: true, force: true });
-  }
+  });
+});
+
+test("resetProviderRuntime 会在 reloadProviderConfig 后按新配置重建第三方 session store", () => {
+  withClearedOpenAICompatEnv(() => {
+    const workingDirectory = mkdtempSync(join(tmpdir(), "themis-runtime-provider-reload-"));
+    const registry = new SqliteCodexSessionRegistry({
+      databaseFile: join(workingDirectory, "infra/local/themis.db"),
+    });
+
+    addOpenAICompatibleProvider(workingDirectory, {
+      id: "gateway-a",
+      name: "Gateway A",
+      baseUrl: "https://gateway-a.example.com/v1",
+      apiKey: "sk-test-a",
+    }, registry);
+
+    addOpenAICompatibleProviderModel(workingDirectory, {
+      providerId: "gateway-a",
+      model: "gpt-5.4",
+      setAsDefault: true,
+    }, registry);
+
+    const records = createRecordingSessionStoreFactoryRecords();
+    const runtime = new CodexTaskRuntime({
+      workingDirectory,
+      runtimeStore: registry,
+      createSessionStore: records.createSessionStore,
+    });
+
+    try {
+      const initialGatewayACalls = records.calls.filter((entry) => entry.sessionIdNamespace === "third-party:gateway-a");
+      const initialGatewayAStore = initialGatewayACalls[0]?.store;
+
+      assert.equal(initialGatewayACalls.length, 1);
+
+      addOpenAICompatibleProvider(workingDirectory, {
+        id: "gateway-b",
+        name: "Gateway B",
+        baseUrl: "https://gateway-b.example.com/v1",
+        apiKey: "sk-test-b",
+      }, registry);
+
+      addOpenAICompatibleProviderModel(workingDirectory, {
+        providerId: "gateway-b",
+        model: "gpt-5.4",
+        setAsDefault: true,
+      }, registry);
+
+      runtime.reloadProviderConfig();
+
+      const gatewayACalls = records.calls.filter((entry) => entry.sessionIdNamespace === "third-party:gateway-a");
+      const gatewayBCalls = records.calls.filter((entry) => entry.sessionIdNamespace === "third-party:gateway-b");
+
+      assert.equal(gatewayACalls.length, 2);
+      assert.equal(gatewayBCalls.length, 1);
+      assert.notEqual(gatewayACalls[0]?.store, gatewayACalls[1]?.store);
+      assert.equal(gatewayACalls[0]?.store, initialGatewayAStore);
+
+      const target = (runtime as unknown as {
+        resolveRuntimeTarget(request: TaskRequest, allowUnsupportedThirdPartyModel?: boolean): {
+          accessMode: "auth" | "third-party";
+          authAccountId: string | null;
+          providerId: string | null;
+          providerConfig: OpenAICompatibleProviderConfig | null;
+          sessionStore: CodexThreadSessionStore;
+        };
+      }).resolveRuntimeTarget(createRequest({
+        requestId: "req-third-party-runtime-reload",
+        taskId: "task-third-party-runtime-reload",
+        options: {
+          accessMode: "third-party",
+          thirdPartyProviderId: "gateway-b",
+          model: "gpt-5.4",
+        },
+      }));
+
+      assert.equal(target.providerId, "gateway-b");
+      assert.equal(target.sessionStore, gatewayBCalls[0]?.store);
+    } finally {
+      rmSync(workingDirectory, { recursive: true, force: true });
+    }
+  });
+});
+
+test("resolveRuntimeTarget 首次命中后补建 auth session store，并在同账号下复用", () => {
+  withClearedOpenAICompatEnv(() => {
+    const workingDirectory = mkdtempSync(join(tmpdir(), "themis-runtime-auth-lazy-store-"));
+    const registry = new SqliteCodexSessionRegistry({
+      databaseFile: join(workingDirectory, "infra/local/themis.db"),
+    });
+    const records = createRecordingSessionStoreFactoryRecords();
+    const runtime = new CodexTaskRuntime({
+      workingDirectory,
+      runtimeStore: registry,
+      createSessionStore: records.createSessionStore,
+    });
+
+    try {
+      const initialCallCount = records.calls.length;
+      const defaultAuthCall = records.calls.slice(0, initialCallCount).find((entry) => entry.sessionIdNamespace?.startsWith("auth:"));
+
+      assert.equal(records.calls.filter((entry) => entry.sessionIdNamespace === "auth:managed-2").length, 0);
+
+      registry.saveAuthAccount({
+        accountId: "managed-2",
+        label: "账户二",
+        accountEmail: "managed-2@example.com",
+        codexHome: join(workingDirectory, "infra/local/codex-auth/managed-2"),
+        isActive: false,
+        createdAt: "2026-03-30T00:00:00.000Z",
+        updatedAt: "2026-03-30T00:00:00.000Z",
+      });
+
+      const runtimeAsTestDouble = runtime as unknown as {
+        resolveRuntimeTarget(request: TaskRequest, allowUnsupportedThirdPartyModel?: boolean): {
+          accessMode: "auth" | "third-party";
+          authAccountId: string | null;
+          providerId: string | null;
+          providerConfig: OpenAICompatibleProviderConfig | null;
+          sessionStore: CodexThreadSessionStore;
+        };
+      };
+
+      const firstTarget = runtimeAsTestDouble.resolveRuntimeTarget(createRequest({
+        requestId: "req-auth-lazy-1",
+        taskId: "task-auth-lazy-1",
+        options: {
+          authAccountId: "managed-2",
+        },
+      }));
+      const secondTarget = runtimeAsTestDouble.resolveRuntimeTarget(createRequest({
+        requestId: "req-auth-lazy-2",
+        taskId: "task-auth-lazy-2",
+        options: {
+          authAccountId: "managed-2",
+        },
+      }));
+
+      const managed2Calls = records.calls.filter((entry) => entry.sessionIdNamespace === "auth:managed-2");
+
+      assert.equal(managed2Calls.length, 1);
+      assert.equal(records.calls.length, initialCallCount + 1);
+      assert.equal(managed2Calls[0]?.sessionRegistry, registry);
+      assert.ok(managed2Calls[0]?.codex);
+      if (defaultAuthCall) {
+        assert.notEqual(managed2Calls[0]?.codex, defaultAuthCall.codex);
+      }
+      assert.equal(firstTarget.authAccountId, "managed-2");
+      assert.equal(secondTarget.authAccountId, "managed-2");
+      assert.equal(firstTarget.sessionStore, managed2Calls[0]?.store);
+      assert.equal(secondTarget.sessionStore, managed2Calls[0]?.store);
+      assert.equal(records.calls.length, initialCallCount + 1);
+    } finally {
+      rmSync(workingDirectory, { recursive: true, force: true });
+    }
+  });
 });
 
 test("runTask 会优先使用会话绑定的工作区", async () => {
