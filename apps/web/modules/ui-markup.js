@@ -66,8 +66,8 @@ export function renderComposerActionBarMarkup(actionBarState, utils) {
   const state = normalizeComposerActionBarState(actionBarState);
   const modeLabel = resolveComposerModeLabel(state.mode);
   const modeCopy = resolveComposerActionBarCopy(state);
-  const reviewButton = renderComposerModeButton("review", "提交 Review", state.review, state.mode, utils);
-  const steerButton = renderComposerModeButton("steer", "发送 Steer", state.steer, state.mode, utils);
+  const reviewButton = renderComposerModeButton("review", "Review", state.review, state.mode, utils);
+  const steerButton = renderComposerModeButton("steer", "Steer", state.steer, state.mode, utils);
   const exitMarkup = state.mode !== "chat"
     ? `
       <div class="composer-action-bar-exit">

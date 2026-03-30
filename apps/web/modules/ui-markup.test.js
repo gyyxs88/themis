@@ -260,8 +260,10 @@ test("renderComposerActionBarMarkup 会渲染 Review / Steer 动作条与退出�
     utils,
   );
 
-  assert.ok(html.includes("Review"));
-  assert.ok(html.includes("Steer"));
+  assert.match(html, /data-composer-mode-button="review"[\s\S]*?>\s*Review\s*<\/button>/);
+  assert.match(html, /data-composer-mode-button="steer"[\s\S]*?>\s*Steer\s*<\/button>/);
+  assert.ok(!html.includes("提交 Review"));
+  assert.ok(!html.includes("发送 Steer"));
   assert.ok(html.includes('data-composer-mode-button="review"'));
   assert.ok(html.includes('data-composer-mode-button="steer"'));
   assert.ok(html.includes('aria-pressed="true"'));
