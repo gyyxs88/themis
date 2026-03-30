@@ -480,6 +480,82 @@ test("/api/tasks/stream 显式传非法 runtimeEngine 时会返回 INVALID_REQUE
   });
 });
 
+test("/api/tasks/stream 显式传 runtimeEngine 为 null 时会返回 INVALID_REQUEST 且不执行任何 runtime", async () => {
+  let defaultRuntimeRunCount = 0;
+  let sdkRunCount = 0;
+
+  await withHttpServer(async ({ baseUrl, runtimeStore, runtime }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/stream`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请检查 runtimeEngine 为 null 的情况",
+        sessionId: "session-task-stream-null-runtime",
+        options: {
+          runtimeEngine: null,
+        },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+
+    const lines = parseNdjson(await response.text());
+    assert.deepEqual(lines.map((line) => line.kind), ["error", "fatal"]);
+    assert.equal(lines[0]?.title, "INVALID_REQUEST");
+    assert.match(String(lines[0]?.text ?? ""), /Invalid runtimeEngine: null/);
+    assert.equal(defaultRuntimeRunCount, 0);
+    assert.equal(sdkRunCount, 0);
+  }, {
+    authenticated: false,
+    requiresOpenaiAuth: false,
+  }, ({ runtimeStore, runtime }) => {
+    const defaultRuntime = {
+      runTask: async (request: Parameters<CodexTaskRuntime["runTask"]>[0]) => {
+        defaultRuntimeRunCount += 1;
+        return {
+          taskId: request.taskId ?? "task-stream-null-runtime-default",
+          requestId: request.requestId,
+          status: "completed" as const,
+          summary: "default runtime should not run",
+          completedAt: "2026-03-28T09:00:01.000Z",
+        };
+      },
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => runtime.getIdentityLinkService(),
+      getPrincipalSkillsService: () => runtime.getPrincipalSkillsService(),
+    };
+
+    (runtime as CodexTaskRuntime & {
+      runTask: CodexTaskRuntime["runTask"];
+    }).runTask = async (request) => {
+      sdkRunCount += 1;
+      return {
+        taskId: request.taskId ?? "task-stream-null-runtime-sdk",
+        requestId: request.requestId,
+        status: "completed",
+        summary: "sdk runtime should not run",
+        completedAt: "2026-03-28T09:00:01.000Z",
+      };
+    };
+
+    return {
+      defaultRuntime,
+      runtimes: {
+        sdk: runtime,
+        "app-server": defaultRuntime,
+      },
+    };
+  });
+});
+
 test("/api/tasks/stream 在 runtime.runTask() 抛错时会先 ack，再 error，最后 fatal，并正常结束", async () => {
   await withHttpServer(async ({ baseUrl, runtimeStore, runtime }) => {
     const authHeaders = await createAuthenticatedWebHeaders({
