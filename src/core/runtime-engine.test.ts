@@ -91,17 +91,26 @@ test("resolveRequestedTaskRuntime 在未显式请求时返回 defaultRuntime", (
     ),
     defaultRuntime,
   );
-  assert.equal(
-    resolveRequestedTaskRuntime(
+});
+
+test("resolveRequestedTaskRuntime 在显式请求 null 时抛 InvalidTaskRuntimeSelectionError", () => {
+  const defaultRuntime = createRuntime("default");
+
+  assert.throws(
+    () => resolveRequestedTaskRuntime(
       {
         defaultRuntime,
         runtimes: {
-          sdk: otherRuntime,
+          sdk: createRuntime("sdk"),
         },
       },
       null,
     ),
-    defaultRuntime,
+    (error) => {
+      assert.ok(error instanceof InvalidTaskRuntimeSelectionError);
+      assert.match(error.message, /Invalid runtimeEngine: null/);
+      return true;
+    },
   );
 });
 

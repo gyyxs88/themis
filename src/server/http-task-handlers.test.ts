@@ -215,6 +215,122 @@ test("/api/tasks/run 传 app-server runtimeEngine 时会走 selected runtime，�
   }));
 });
 
+test("/api/tasks/run 在显式传非法 runtimeEngine 时返回 400，且不会落到 default runtime", async () => {
+  let defaultRunCount = 0;
+
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/run`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请检查非法 runtime",
+        sessionId: "session-task-run-invalid-runtime",
+        options: {
+          runtimeEngine: "bogus-engine",
+        },
+      }),
+    });
+
+    assert.equal(response.status, 400);
+
+    const payload = await response.json() as {
+      error?: {
+        code?: string;
+        message?: string;
+      };
+    };
+    assert.equal(payload.error?.code, "INVALID_REQUEST");
+    assert.match(payload.error?.message ?? "", /Invalid runtimeEngine: bogus-engine/);
+    assert.equal(defaultRunCount, 0);
+  }, ({ runtimeStore }) => ({
+    defaultRuntime: {
+      runTask: async () => {
+        defaultRunCount += 1;
+        throw new Error("default runtime should not be used");
+      },
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => ({}),
+      getPrincipalSkillsService: () => ({}),
+    },
+    runtimes: {
+      sdk: {
+        runTask: async () => {
+          throw new Error("sdk runtime should not be used");
+        },
+        getRuntimeStore: () => runtimeStore,
+        getIdentityLinkService: () => ({}),
+        getPrincipalSkillsService: () => ({}),
+      },
+    },
+  }));
+});
+
+test("/api/tasks/run 在显式传 null runtimeEngine 时返回 400，且不会落到 default runtime", async () => {
+  let defaultRunCount = 0;
+
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/run`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请检查 null runtime",
+        sessionId: "session-task-run-null-runtime",
+        options: {
+          runtimeEngine: null,
+        },
+      }),
+    });
+
+    assert.equal(response.status, 400);
+
+    const payload = await response.json() as {
+      error?: {
+        code?: string;
+        message?: string;
+      };
+    };
+    assert.equal(payload.error?.code, "INVALID_REQUEST");
+    assert.match(payload.error?.message ?? "", /Invalid runtimeEngine: null/);
+    assert.equal(defaultRunCount, 0);
+  }, ({ runtimeStore }) => ({
+    defaultRuntime: {
+      runTask: async () => {
+        defaultRunCount += 1;
+        throw new Error("default runtime should not be used");
+      },
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => ({}),
+      getPrincipalSkillsService: () => ({}),
+    },
+    runtimes: {
+      sdk: {
+        runTask: async () => {
+          throw new Error("sdk runtime should not be used");
+        },
+        getRuntimeStore: () => runtimeStore,
+        getIdentityLinkService: () => ({}),
+        getPrincipalSkillsService: () => ({}),
+      },
+    },
+  }));
+});
+
 test("createThemisHttpServer 会拒绝使用与 base runtime 不共享 store 的 runtimeRegistry", () => {
   const root = mkdtempSync(join(tmpdir(), "themis-http-task-handlers-store-check-"));
   const runtimeStore = new SqliteCodexSessionRegistry({

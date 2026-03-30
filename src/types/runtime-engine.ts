@@ -113,7 +113,7 @@ export function resolveRequestedTaskRuntime(
   registry: TaskRuntimeRegistry,
   requestedValue: string | undefined | null,
 ): TaskRuntimeFacade {
-  if (requestedValue === undefined || requestedValue === null) {
+  if (requestedValue === undefined) {
     return registry.defaultRuntime;
   }
 

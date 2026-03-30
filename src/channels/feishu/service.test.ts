@@ -944,6 +944,51 @@ test("飞书在未传 runtimeRegistry 时也默认走内建 app-server runtime",
   }
 });
 
+test("飞书在显式非法 runtimeEngine 时不会静默回退到 default runtime", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.writeRawPrincipalTaskSettings({
+      runtimeEngine: "bogus-engine",
+    });
+
+    await harness.handleIncomingText("请检查飞书非法 runtime");
+
+    const messages = harness.takeMessages().join("\n");
+    assert.match(messages, /Invalid runtimeEngine: bogus-engine/);
+    assert.deepEqual(harness.getTaskRuntimeCalls(), {
+      sdk: 0,
+      appServer: 0,
+    });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书在显式请求未启用 runtime 时不会静默回退到 default runtime", async () => {
+  const harness = createHarness({
+    runtimeEngine: "sdk",
+    enabledRuntimeEngines: ["sdk"],
+  });
+
+  try {
+    harness.writeRawPrincipalTaskSettings({
+      runtimeEngine: "app-server",
+    });
+
+    await harness.handleIncomingText("请检查飞书未启用 runtime");
+
+    const messages = harness.takeMessages().join("\n");
+    assert.match(messages, /Requested runtimeEngine is not enabled: app-server/);
+    assert.deepEqual(harness.getTaskRuntimeCalls(), {
+      sdk: 0,
+      appServer: 0,
+    });
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("飞书收到 task.action_required 时会提示命令式回复", async () => {
   const harness = createHarness({
     runtimeEngine: "app-server",
@@ -1299,6 +1344,7 @@ type FeishuHarnessCuratedItem = { name: string; installed: boolean };
 type FeishuHarnessConfig = {
   runtimeCatalog?: CodexRuntimeCatalog;
   runtimeEngine?: "sdk" | "app-server";
+  enabledRuntimeEngines?: Array<"sdk" | "app-server">;
   omitRuntimeRegistry?: boolean;
   appServerEventsBuilder?: (request: TaskRequest) => TaskEvent[];
   appServerRuntimeFactory?: (input: {
@@ -1656,6 +1702,7 @@ function createHarness(
     appServer: 0,
   };
   const actionBridge = new AppServerActionBridge();
+  let rawPrincipalTaskSettingsOverride: Record<string, unknown> | null = null;
   const baseRuntime = createTaskRuntimeDouble({
     engine: "sdk",
     runtimeStore,
@@ -1670,6 +1717,10 @@ function createHarness(
     getPrincipalTaskSettings: (principalId?: string): PrincipalTaskSettings | null => {
       if (!principalId) {
         return null;
+      }
+
+      if (rawPrincipalTaskSettingsOverride) {
+        return rawPrincipalTaskSettingsOverride as PrincipalTaskSettings;
       }
 
       return runtimeStore.getPrincipalTaskSettings(principalId)?.settings ?? null;
@@ -1719,13 +1770,16 @@ function createHarness(
     ...(harnessConfig?.omitRuntimeRegistry
       ? {}
       : {
-        runtimeRegistry: {
-          defaultRuntime: harnessConfig?.runtimeEngine === "sdk" ? runtime : appServerRuntime,
-          runtimes: {
-            sdk: runtime,
-            "app-server": appServerRuntime,
-          },
-        },
+        runtimeRegistry: buildRuntimeRegistry({
+          defaultRuntimeEngine: harnessConfig?.runtimeEngine === "sdk" ? "sdk" : "app-server",
+          sdkRuntime: runtime,
+          appServerRuntime,
+          ...(harnessConfig?.enabledRuntimeEngines
+            ? {
+              enabledRuntimeEngines: harnessConfig.enabledRuntimeEngines,
+            }
+            : {}),
+        }),
       }),
     authRuntime: {
       listAccounts: () => accounts,
@@ -1896,6 +1950,10 @@ function createHarness(
     getStoredPrincipalTaskSettings() {
       return runtimeStore.getPrincipalTaskSettings(ensurePrincipalId())?.settings ?? null;
     },
+    writeRawPrincipalTaskSettings(settings: Record<string, unknown>) {
+      ensurePrincipalId();
+      rawPrincipalTaskSettingsOverride = { ...settings };
+    },
     async createTextMessage(chatId: string, text: string) {
       return await (service as unknown as {
         createTextMessage(targetChatId: string, value: string): Promise<unknown>;
@@ -1955,6 +2013,29 @@ function createHarness(
     cleanup() {
       rmSync(workingDirectory, { recursive: true, force: true });
     },
+  };
+}
+
+function buildRuntimeRegistry(input: {
+  enabledRuntimeEngines?: Array<"sdk" | "app-server">;
+  defaultRuntimeEngine: "sdk" | "app-server";
+  sdkRuntime: TaskRuntimeFacade;
+  appServerRuntime: TaskRuntimeFacade;
+}) {
+  const enabledRuntimeEngines = input.enabledRuntimeEngines ?? ["sdk", "app-server"];
+  const runtimes: Partial<Record<"sdk" | "app-server", TaskRuntimeFacade>> = {};
+
+  if (enabledRuntimeEngines.includes("sdk")) {
+    runtimes.sdk = input.sdkRuntime;
+  }
+
+  if (enabledRuntimeEngines.includes("app-server")) {
+    runtimes["app-server"] = input.appServerRuntime;
+  }
+
+  return {
+    defaultRuntime: input.defaultRuntimeEngine === "sdk" ? input.sdkRuntime : input.appServerRuntime,
+    runtimes,
   };
 }
 
