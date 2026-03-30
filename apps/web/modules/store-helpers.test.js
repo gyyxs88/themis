@@ -115,6 +115,24 @@ test("resolveTopRiskState 会按 waiting、当前恢复、其他恢复的优先�
     tone: "warning",
   });
 
+  state.threads[0].turns[0].pendingAction = null;
+
+  assert.deepEqual(helpers.resolveTopRiskState(state.threads[0]), {
+    kind: "rehydrating-current",
+    threadId: "thread-current",
+    turnId: "turn-current",
+    message: "当前会话正在同步上一轮任务的真实状态",
+    actionKind: "focus-turn",
+    actionLabel: "查看当前 turn",
+    tone: "neutral",
+  });
+
+  state.threads[0].turns[0].pendingAction = {
+    actionId: "action-current",
+    actionType: "user-input",
+    prompt: "请补充信息",
+    choices: ["继续", "取消"],
+  };
   state.threads[0].turns[0].state = "running";
   state.threads[0].turns[0].pendingAction = null;
   state.threads[0].turns[0].submittedPendingActionId = "action-current";
@@ -185,6 +203,7 @@ test("resolveTurnActionState 会把 waiting error 和恢复态映射成 turn 卡
       prompt: "请补充信息",
       choices: ["继续", "取消"],
     },
+    pendingActionInputText: "已填写的内容",
     pendingActionError: "提交失败，请重试",
     pendingActionSubmitting: false,
   });
@@ -205,11 +224,17 @@ test("resolveTurnActionState 会把 waiting error 和恢复态映射成 turn 卡
     choices: ["继续", "取消"],
     errorMessage: "提交失败，请重试",
     submitting: false,
-    inputText: "",
+    inputText: "已填写的内容",
+  });
+
+  turn.pendingAction = null;
+  assert.deepEqual(helpers.resolveTurnActionState(thread, turn), {
+    kind: "rehydrating",
+    heading: "状态同步中",
+    prompt: "浏览器刚恢复这个会话，正在向服务端同步上一轮任务的真实状态。",
   });
 
   turn.state = "running";
-  turn.pendingAction = null;
   turn.submittedPendingActionId = "action-1";
   turn.pendingActionError = "";
 
@@ -456,6 +481,7 @@ function createTurnRecord(overrides = {}) {
     id: "turn-default",
     state: "queued",
     pendingAction: null,
+    pendingActionInputText: "",
     pendingActionError: "",
     pendingActionSubmitting: false,
     submittedPendingActionId: null,

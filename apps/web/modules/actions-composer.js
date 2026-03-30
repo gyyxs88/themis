@@ -118,11 +118,6 @@ export function createComposerActions(app, streamActions) {
 
     const currentTurn = store.getActiveTurn();
     const latestTurn = thread.turns.at(-1) ?? null;
-    const restoredWaitingTurn = !currentTurn
-      && latestTurn?.state === "waiting"
-      && latestTurn.pendingAction
-      ? latestTurn
-      : null;
 
     if (currentTurn?.state === "waiting" && currentTurn.pendingAction) {
       if (app.runtime.activeRunRef?.threadId !== thread.id) {
@@ -135,10 +130,9 @@ export function createComposerActions(app, streamActions) {
       return;
     }
 
-    if (restoredWaitingTurn) {
-      await submitWaitingAction(thread, restoredWaitingTurn, {}, {
-        restoredFromHistory: true,
-      });
+    if (!currentTurn && latestTurn?.state === "waiting" && latestTurn.pendingAction) {
+      store.setTransientStatus(thread.id, "当前等待中的 action 需要在 turn 卡片里显式提交。");
+      app.renderer.renderAll();
       return;
     }
 
@@ -174,28 +168,6 @@ export function createComposerActions(app, streamActions) {
       });
       return;
     }
-
-    const submitButton = event.target.closest("[data-waiting-action-submit]");
-
-    if (!submitButton) {
-      return;
-    }
-
-    const form = submitButton.closest("form[data-turn-action-kind=\"waiting\"]");
-
-    if (!form) {
-      return;
-    }
-
-    const { thread, turn } = resolveConversationWaitingActionTarget(submitButton);
-
-    if (!thread || !turn) {
-      return;
-    }
-
-    await submitWaitingAction(thread, turn, {
-      inputText: readWaitingActionInputText(form),
-    });
   }
 
   async function handleConversationActionSubmit(event) {
@@ -414,6 +386,9 @@ export function createComposerActions(app, streamActions) {
 
     turn.pendingActionError = "";
     turn.pendingActionSubmitting = true;
+    if (actionType === "user-input") {
+      turn.pendingActionInputText = resolvedSubmission.inputText;
+    }
     store.touchThread(thread.id);
     store.saveState();
     app.renderer.renderAll(shouldScrollThread(thread.id));
@@ -445,12 +420,18 @@ export function createComposerActions(app, streamActions) {
       app.utils.autoResizeTextarea(dom.goalInput);
     }
 
+    if (actionType === "user-input") {
+      turn.pendingActionInputText = "";
+    }
+
     store.syncThreadStoredState(thread, turn);
     store.touchThread(thread.id);
     store.saveState();
     app.renderer.renderAll(shouldScrollThread(thread.id));
 
-    if (options.restoredFromHistory && typeof app.history?.ensureThreadHistoryLoaded === "function") {
+    const restoredFromHistory = options.restoredFromHistory ?? !isActiveWaitingTurn(thread.id, turn.id);
+
+    if (restoredFromHistory && typeof app.history?.ensureThreadHistoryLoaded === "function") {
       void continueRestoredActionHydration(thread.id);
     }
   }
@@ -471,23 +452,13 @@ export function createComposerActions(app, streamActions) {
 
         return {
           ok: false,
-          message: "当前临时只支持 approve / deny，等卡片按钮接上后再走显式按钮。",
-        };
-      }
-
-      const draftDecision = normalizeApprovalDecision(mergeDraftContent(thread.draftGoal, thread.draftContext));
-
-      if (draftDecision) {
-        return {
-          ok: true,
-          decision: draftDecision,
-          consumedComposerDraft: true,
+          message: "请直接在 turn 卡片上点批准或拒绝。",
         };
       }
 
       return {
         ok: false,
-        message: "当前临时只支持 approve / deny，等卡片按钮接上后再走显式按钮。",
+        message: "请直接在 turn 卡片上点批准或拒绝。",
       };
     }
 
@@ -502,19 +473,9 @@ export function createComposerActions(app, streamActions) {
         };
       }
 
-      const draftInputText = mergeDraftContent(thread.draftGoal, thread.draftContext).trim();
-
-      if (draftInputText) {
-        return {
-          ok: true,
-          inputText: draftInputText,
-          consumedComposerDraft: true,
-        };
-      }
-
       return {
         ok: false,
-        focusGoalInput: true,
+        message: "请直接在 turn 卡片的输入框里填写回复。",
       };
     }
 
@@ -583,7 +544,15 @@ export function createComposerActions(app, streamActions) {
       return token;
     }
 
+    if (token === "reject") {
+      return "deny";
+    }
+
     return "";
+  }
+
+  function isActiveWaitingTurn(threadId, turnId) {
+    return app.runtime.activeRunRef?.threadId === threadId && app.runtime.activeRunRef?.turnId === turnId;
   }
 
   async function submitSpecialAction(thread, currentTurn, specialAction) {

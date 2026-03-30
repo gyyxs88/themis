@@ -74,6 +74,98 @@ test("renderTurnMarkup 会在 waiting action 时渲染按钮和 inline error", (
   assert.ok(html.includes("assistant-summary"));
 });
 
+test("renderTurnMarkup 会把 user-input waiting 卡片渲染成真正的 submit 表单", () => {
+  const thread = {
+    id: "thread-user-input",
+    title: "输入会话",
+  };
+  const turn = {
+    id: "turn-user-input",
+    goal: "请补充说明",
+    inputText: "",
+    state: "waiting",
+    options: {},
+    pendingAction: {
+      actionId: "action-user-input",
+      actionType: "user-input",
+      prompt: "请输入回复",
+    },
+    pendingActionError: "",
+    pendingActionSubmitting: false,
+    assistantMessages: [],
+    steps: [],
+    result: null,
+  };
+  const store = createStoreStub({
+    assistantLabel: "Themis Assistant",
+    latestTurnMessage: "等待处理中的摘要",
+    resolveTurnActionState() {
+      return {
+        kind: "waiting",
+        heading: "等待输入",
+        actionType: "user-input",
+        prompt: "请输入回复",
+        choices: [],
+        errorMessage: "",
+        submitting: false,
+        inputText: "已填写的内容",
+      };
+    },
+  });
+
+  const html = markup.renderTurnMarkup(turn, 1, { thread, store, utils });
+
+  assert.ok(html.includes('<form class="turn-action-input-form"'));
+  assert.ok(html.includes('type="submit"'));
+  assert.ok(html.includes("已填写的内容"));
+});
+
+test("renderTurnMarkup 会把 reject 规范成 deny 再渲染", () => {
+  const thread = {
+    id: "thread-approval",
+    title: "审批会话",
+  };
+  const turn = {
+    id: "turn-approval",
+    goal: "请审批",
+    inputText: "",
+    state: "waiting",
+    options: {},
+    pendingAction: {
+      actionId: "action-approval",
+      actionType: "approval",
+      prompt: "是否批准这次变更？",
+      choices: ["approve", "reject"],
+    },
+    pendingActionError: "",
+    pendingActionSubmitting: false,
+    assistantMessages: [],
+    steps: [],
+    result: null,
+  };
+  const store = createStoreStub({
+    assistantLabel: "Themis Assistant",
+    latestTurnMessage: "等待处理中的摘要",
+    resolveTurnActionState() {
+      return {
+        kind: "waiting",
+        heading: "等待审批",
+        actionType: "approval",
+        prompt: "是否批准这次变更？",
+        choices: ["approve", "reject"],
+        errorMessage: "",
+        submitting: false,
+        inputText: "",
+      };
+    },
+  });
+
+  const html = markup.renderTurnMarkup(turn, 1, { thread, store, utils });
+
+  assert.ok(html.includes('data-waiting-action-decision="deny"'));
+  assert.ok(html.includes("拒绝"));
+});
+
 test("renderTurnMarkup 会在 recovery card 出现时保留 assistant stream 和最终结果区块", () => {
   const thread = {
     id: "thread-recovery",

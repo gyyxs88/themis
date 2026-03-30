@@ -336,7 +336,7 @@ export function createStoreHelpers({ app, getState, saveState }) {
 
     const latestTurn = Array.isArray(activeThread.turns) ? activeThread.turns.at(-1) : null;
 
-    if (latestTurn?.state === "waiting") {
+    if (latestTurn?.state === "waiting" && latestTurn.pendingAction) {
       return {
         kind: "waiting",
         threadId: activeThread.id,
@@ -406,7 +406,7 @@ export function createStoreHelpers({ app, getState, saveState }) {
 
     const latestTurn = Array.isArray(thread?.turns) ? thread.turns.at(-1) : null;
 
-    if (turn.state === "waiting") {
+    if (turn.state === "waiting" && turn.pendingAction) {
       const pendingAction = turn.pendingAction ?? {};
 
       return {
@@ -419,7 +419,7 @@ export function createStoreHelpers({ app, getState, saveState }) {
           : [],
         errorMessage: typeof turn.pendingActionError === "string" ? turn.pendingActionError : "",
         submitting: Boolean(turn.pendingActionSubmitting),
-        inputText: "",
+        inputText: typeof turn.pendingActionInputText === "string" ? turn.pendingActionInputText : "",
       };
     }
 

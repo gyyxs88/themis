@@ -208,10 +208,9 @@ function renderWaitingActionSurface(actionState, turn, thread, utils) {
           placeholder="请输入回复">${utils.escapeHtml(actionState.inputText || "")}</textarea>
         <div class="turn-action-input-footer">
           <button
-            type="button"
+            type="submit"
             class="primary-button turn-action-submit"
             data-turn-action-kind="waiting"
-            data-waiting-action-submit="true"
             data-waiting-action-type="${utils.escapeHtml(actionType)}"
             data-turn-id="${utils.escapeHtml(turn.id)}"
             ${threadId ? `data-thread-id="${utils.escapeHtml(threadId)}"` : ""}
@@ -280,7 +279,7 @@ function resolveApprovalChoices(choices) {
     }
 
     if (normalized === "deny" || normalized === "reject") {
-      return { decision, label: "拒绝" };
+      return { decision: "deny", label: "拒绝" };
     }
 
     return { decision, label: decision };
