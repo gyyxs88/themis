@@ -234,7 +234,6 @@ test("/api/tasks/run 在未显式传 runtimeEngine 时会走 default runtime", a
       body: JSON.stringify({
         goal: "请检查 run default runtime",
         sessionId: "session-task-run-default-runtime",
-        options: {},
       }),
     });
 
