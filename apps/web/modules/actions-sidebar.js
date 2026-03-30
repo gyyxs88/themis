@@ -231,6 +231,7 @@ export function createSidebarActions(app) {
         settings: inheritWorkspaceSettings(activeThread),
       });
 
+      app.runtime.threadControlJoinOpen = false;
       store.clearTransientStatus();
       const inheritedWorkspacePath = typeof nextThread.settings.workspacePath === "string"
         ? nextThread.settings.workspacePath.trim()
@@ -285,6 +286,7 @@ export function createSidebarActions(app) {
       ...store.state,
       activeThreadId: threadId,
     };
+    app.runtime.threadControlJoinOpen = false;
     store.clearTransientStatus();
     store.saveState();
     app.renderer.renderAll(scrollToBottom);

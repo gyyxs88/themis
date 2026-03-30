@@ -24,6 +24,7 @@ export function createSessionActions(app) {
       }
 
       fork.title = buildForkTitle(source.title);
+      fork.threadOrigin = "fork";
       fork.settings = {
         ...store.createDefaultThreadSettings(),
         ...source.settings,
@@ -48,6 +49,7 @@ export function createSessionActions(app) {
       );
       store.saveState();
       void app.sessionSettings.persistThreadSettings(fork.id, fork.settings, { quiet: true });
+      app.runtime.threadControlJoinOpen = false;
       app.runtime.workspaceToolsOpen = false;
       app.renderer.renderAll(true);
       dom.goalInput.focus();
@@ -83,6 +85,7 @@ export function createSessionActions(app) {
       }
 
       dom.conversationLinkInput.value = "";
+      app.runtime.threadControlJoinOpen = false;
       app.runtime.workspaceToolsOpen = false;
       app.renderer.renderAll(true);
       dom.goalInput.focus();

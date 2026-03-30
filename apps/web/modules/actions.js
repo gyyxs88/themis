@@ -111,6 +111,16 @@ export function createActions(app) {
       await sessionActions.handleForkSession();
     });
 
+    dom.threadControlJoinToggle.addEventListener("click", () => {
+      const nextOpen = !app.runtime.threadControlJoinOpen;
+      app.runtime.threadControlJoinOpen = nextOpen;
+      app.renderer.renderAll();
+
+      if (nextOpen) {
+        dom.conversationLinkInput.focus();
+      }
+    });
+
     dom.resetPrincipalButton.addEventListener("click", async () => {
       await sessionActions.handleResetPrincipalState();
     });
