@@ -318,6 +318,10 @@ function readRequestedRuntimeEngine(request: TaskRequest): string | null | undef
     return undefined;
   }
 
+  if (options.runtimeEngine === undefined) {
+    return undefined;
+  }
+
   if (options.runtimeEngine === null) {
     return null;
   }

@@ -215,6 +215,71 @@ test("/api/tasks/run 传 app-server runtimeEngine 时会走 selected runtime，�
   }));
 });
 
+test("/api/tasks/run 在未显式传 runtimeEngine 时会走 default runtime", async () => {
+  let defaultRunCount = 0;
+  let appServerRunCount = 0;
+
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/run`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请检查 run default runtime",
+        sessionId: "session-task-run-default-runtime",
+        options: {},
+      }),
+    });
+
+    assert.equal(response.status, 200);
+
+    const payload = await response.json() as {
+      result?: {
+        status?: string;
+        summary?: string;
+      };
+    };
+    assert.equal(payload.result?.status, "completed");
+    assert.equal(payload.result?.summary, "default runtime selected");
+    assert.equal(defaultRunCount, 1);
+    assert.equal(appServerRunCount, 0);
+  }, ({ runtimeStore }) => ({
+    defaultRuntime: {
+      runTask: async (request) => {
+        defaultRunCount += 1;
+        return {
+          taskId: request.taskId ?? "task-run-default-runtime",
+          requestId: request.requestId,
+          status: "completed",
+          summary: "default runtime selected",
+          completedAt: "2026-03-30T04:00:00.000Z",
+        };
+      },
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => ({}),
+      getPrincipalSkillsService: () => ({}),
+    },
+    runtimes: {
+      "app-server": {
+        runTask: async () => {
+          appServerRunCount += 1;
+          throw new Error("selected runtime should not be used");
+        },
+        getRuntimeStore: () => runtimeStore,
+        getIdentityLinkService: () => ({}),
+        getPrincipalSkillsService: () => ({}),
+      },
+    },
+  }));
+});
+
 test("/api/tasks/run 在显式传非法 runtimeEngine 时返回 400，且不会落到 default runtime", async () => {
   let defaultRunCount = 0;
 
