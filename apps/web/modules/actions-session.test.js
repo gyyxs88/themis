@@ -156,7 +156,7 @@ test("handleJoinConversation 成功后会 attach、清空输入、收起 join pa
   assert.equal(harness.goalInputFocusCount.count, 1);
 });
 
-test("handleJoinConversation 失败后会保留输入和展开态，并继续抛错", async () => {
+test("handleJoinConversation 失败后会保留输入和展开态，并给当前线程写 transient status", async () => {
   const harness = createSessionHarness({
     attachConversationById: async () => {
       throw new Error("join failed");
@@ -165,10 +165,35 @@ test("handleJoinConversation 失败后会保留输入和展开态，并继续抛
   const actions = createSessionActions(harness.app);
 
   harness.app.dom.conversationLinkInput.value = "conversation-target-1";
-  await assert.rejects(() => actions.handleJoinConversation(), /join failed/);
+  await actions.handleJoinConversation();
 
   assert.equal(harness.app.dom.conversationLinkInput.value, "conversation-target-1");
   assert.equal(harness.app.runtime.threadControlJoinOpen, true);
+  assert.equal(harness.app.store.transientStatus?.threadId, "thread-source-1");
+  assert.equal(harness.app.store.transientStatus?.text, "join failed");
+});
+
+test("handleJoinConversation 在 attach 先切到目标线程再失败时，会把错误提示写到目标线程", async () => {
+  const harness = createSessionHarness({
+    attachConversationById: async (rawConversationId) => {
+      harness.attachConversationCalls.push(rawConversationId);
+      harness.app.store.state = {
+        ...harness.app.store.state,
+        activeThreadId: "conversation-target-1",
+        threads: [harness.conversationThread, ...harness.app.store.state.threads],
+      };
+      throw new Error("target thread failed");
+    },
+  });
+  const actions = createSessionActions(harness.app);
+
+  harness.app.dom.conversationLinkInput.value = "conversation-target-1";
+  await actions.handleJoinConversation();
+
+  assert.equal(harness.app.dom.conversationLinkInput.value, "conversation-target-1");
+  assert.equal(harness.app.runtime.threadControlJoinOpen, true);
+  assert.equal(harness.app.store.transientStatus?.threadId, "conversation-target-1");
+  assert.equal(harness.app.store.transientStatus?.text, "target thread failed");
 });
 
 function createSessionHarness(options = {}) {
@@ -297,6 +322,7 @@ function createSessionHarness(options = {}) {
   return {
     app,
     attachConversationCalls,
+    conversationThread,
     goalInputFocusCount,
     renderAllCalls,
   };

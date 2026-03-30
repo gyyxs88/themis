@@ -89,6 +89,17 @@ export function createSessionActions(app) {
       app.runtime.workspaceToolsOpen = false;
       app.renderer.renderAll(true);
       dom.goalInput.focus();
+    } catch (error) {
+      const targetThread = store.getThreadById(rawConversationId) ?? store.getActiveThread();
+
+      if (targetThread) {
+        store.setTransientStatus(
+          targetThread.id,
+          error instanceof Error && error.message.trim()
+            ? error.message
+            : "接入 conversation 失败，请重试。",
+        );
+      }
     } finally {
       app.runtime.sessionControlBusy = false;
       app.renderer.renderAll();
