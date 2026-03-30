@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import type { RuntimeEngine, TaskRuntimeForkedThread } from "../types/index.js";
 
-const CODEX_SESSION_ROOT = resolve(homedir(), ".codex/sessions");
+const THEMIS_TEST_CODEX_SESSION_ROOT_ENV = "THEMIS_TEST_CODEX_SESSION_ROOT";
 const THEMIS_PROMPT_PREFIX = "You are running inside Themis";
 const MAX_FORK_TURNS = 24;
 const MAX_FORK_CHARS = 24000;
@@ -49,7 +49,7 @@ export async function buildForkContextFromThread(
 
   const sessionFile = await findThreadSessionFile(
     normalizedThreadId,
-    options.sessionRoot ?? CODEX_SESSION_ROOT,
+    options.sessionRoot ?? resolveCodexSessionRoot(),
   );
 
   if (!sessionFile) {
@@ -145,6 +145,16 @@ async function walkForThreadFile(directory: string, threadId: string, depth: num
   }
 
   return null;
+}
+
+function resolveCodexSessionRoot(): string {
+  const overrideRoot = process.env[THEMIS_TEST_CODEX_SESSION_ROOT_ENV]?.trim();
+
+  if (overrideRoot) {
+    return resolve(overrideRoot);
+  }
+
+  return resolve(homedir(), ".codex/sessions");
 }
 
 function extractThemisSessionTurns(raw: string): ParsedSessionTurn[] {

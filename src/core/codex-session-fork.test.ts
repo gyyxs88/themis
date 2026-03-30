@@ -51,6 +51,36 @@ test("buildForkContextFromThread 找不到 thread 对应文件时返回 null", a
   }
 });
 
+test("buildForkContextFromThread 会读取测试环境变量指定的 session root", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-fork-env-"));
+  const nested = join(root, "2026", "03");
+  const previousSessionRoot = process.env.THEMIS_TEST_CODEX_SESSION_ROOT;
+  mkdirSync(nested, { recursive: true });
+  writeFileSync(join(nested, "session-thread-env-1.jsonl"), [
+    responseItem("user", themisPrompt("验证环境变量 root", "只读临时目录")),
+    responseItem("assistant", "environment fallback reply"),
+  ].join("\n"), "utf8");
+
+  try {
+    process.env.THEMIS_TEST_CODEX_SESSION_ROOT = root;
+
+    const result = await buildForkContextFromThread("thread-env-1");
+
+    assert.ok(result);
+    assert.equal(result?.sourceThreadId, "thread-env-1");
+    assert.equal(result?.includedTurns, 1);
+    assert.match(result?.historyContext ?? "", /验证环境变量 root/);
+    assert.match(result?.historyContext ?? "", /只读临时目录/);
+  } finally {
+    if (previousSessionRoot === undefined) {
+      delete process.env.THEMIS_TEST_CODEX_SESSION_ROOT;
+    } else {
+      process.env.THEMIS_TEST_CODEX_SESSION_ROOT = previousSessionRoot;
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("buildPreferredForkContext 在 app-server 下优先使用原生 thread/fork", async () => {
   const calls: string[] = [];
 

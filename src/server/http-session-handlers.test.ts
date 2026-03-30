@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
@@ -47,18 +47,13 @@ function themisPrompt(goal: string, inputText?: string): string {
   ].join("\n");
 }
 
-function createTranscriptFixture(threadId: string): string {
-  const sessionRoot = join(homedir(), ".codex", "sessions");
-  mkdirSync(sessionRoot, { recursive: true });
-  const fixtureRoot = mkdtempSync(join(sessionRoot, "themis-sdk-fork-delete-gate-"));
-  const nested = join(fixtureRoot, "2026", "03");
+function createTranscriptFixture(sessionRoot: string, threadId: string): void {
+  const nested = join(sessionRoot, "2026", "03");
   mkdirSync(nested, { recursive: true });
   writeFileSync(join(nested, `session-${threadId}.jsonl`), [
     responseItem("user", themisPrompt("验证 sdk replay fallback", "只在 optimistic 条件缺失时回退")),
     responseItem("assistant", "assistant reply for fallback"),
   ].join("\n"), "utf8");
-
-  return fixtureRoot;
 }
 
 async function withHttpServer(
@@ -400,9 +395,13 @@ test("POST /api/sessions/fork-context 在历史 sdk 会话且 optimistic 条件�
 test("POST /api/sessions/fork-context 在历史 sdk 会话且 optimistic 条件不具备时会回到 replay fallback", async () => {
   const sessionId = "session-sdk-fallback-1";
   const sourceThreadId = "thread-sdk-fallback-1";
-  const transcriptRoot = createTranscriptFixture(sourceThreadId);
+  const previousSessionRoot = process.env.THEMIS_TEST_CODEX_SESSION_ROOT;
+  const transcriptRoot = mkdtempSync(join(tmpdir(), "themis-sdk-fork-delete-gate-"));
 
   try {
+    process.env.THEMIS_TEST_CODEX_SESSION_ROOT = transcriptRoot;
+    createTranscriptFixture(transcriptRoot, sourceThreadId);
+
     await withHttpServer(async ({ baseUrl, runtimeStore, authHeaders }) => {
       const request = buildTaskRequest({
         sessionId,
@@ -463,8 +462,26 @@ test("POST /api/sessions/fork-context 在历史 sdk 会话且 optimistic 条件�
         getIdentityLinkService: () => ({}),
         getPrincipalSkillsService: () => ({}),
       },
+      runtimes: {
+        "app-server": {
+          runTask: async () => {
+            throw new Error("app-server runTask should not run");
+          },
+          getRuntimeStore: () => runtimeStore,
+          getIdentityLinkService: () => ({}),
+          getPrincipalSkillsService: () => ({}),
+          forkThread: async () => {
+            throw new Error("app-server forkThread should not run without targetSessionId");
+          },
+        },
+      },
     }));
   } finally {
+    if (previousSessionRoot === undefined) {
+      delete process.env.THEMIS_TEST_CODEX_SESSION_ROOT;
+    } else {
+      process.env.THEMIS_TEST_CODEX_SESSION_ROOT = previousSessionRoot;
+    }
     rmSync(transcriptRoot, { recursive: true, force: true });
   }
 });
