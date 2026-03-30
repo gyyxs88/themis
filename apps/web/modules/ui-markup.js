@@ -71,7 +71,7 @@ export function renderComposerActionBarMarkup(actionBarState, utils) {
   const exitMarkup = state.mode !== "chat"
     ? `
       <div class="composer-action-bar-exit">
-        <button type="button" class="toolbar-button composer-mode-exit-button" data-composer-mode-action="chat">
+        <button type="button" class="toolbar-button composer-mode-exit-button" data-composer-mode-button="chat">
           退出动作模式
         </button>
       </div>

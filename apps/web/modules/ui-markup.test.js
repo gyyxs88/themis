@@ -266,6 +266,8 @@ test("renderComposerActionBarMarkup 会渲染 Review / Steer 动作条与退出�
   assert.ok(!html.includes("发送 Steer"));
   assert.ok(html.includes('data-composer-mode-button="review"'));
   assert.ok(html.includes('data-composer-mode-button="steer"'));
+  assert.ok(html.includes('data-composer-mode-button="chat"'));
+  assert.ok(!html.includes('data-composer-mode-action="chat"'));
   assert.ok(html.includes('aria-pressed="true"'));
   assert.ok(html.includes("当前没有执行中的任务可调整"));
   assert.ok(html.includes("退出动作模式"));

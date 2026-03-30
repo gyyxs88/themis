@@ -1030,11 +1030,15 @@ export function createRenderer(app) {
   function renderComposer() {
     const thread = store.getActiveThread();
     const actionBarState = store.resolveComposerActionBarState(thread);
+    const effectiveComposerMode = resolveEffectiveComposerMode(actionBarState);
     dom.goalInput.value = mergeComposerDraft(thread);
-    dom.goalInput.placeholder = COMPOSER_PLACEHOLDERS[actionBarState.mode] ?? DEFAULT_COMPOSER_PLACEHOLDER;
-    dom.submitButton.textContent = COMPOSER_SUBMIT_LABELS[actionBarState.mode] ?? COMPOSER_SUBMIT_LABELS.chat;
+    dom.goalInput.placeholder = COMPOSER_PLACEHOLDERS[effectiveComposerMode] ?? DEFAULT_COMPOSER_PLACEHOLDER;
+    dom.submitButton.textContent = COMPOSER_SUBMIT_LABELS[effectiveComposerMode] ?? COMPOSER_SUBMIT_LABELS.chat;
     if (dom.composerActionBar) {
-      dom.composerActionBar.innerHTML = renderComposerActionBarMarkup(actionBarState, utils);
+      dom.composerActionBar.innerHTML = renderComposerActionBarMarkup({
+        ...actionBarState,
+        mode: effectiveComposerMode,
+      }, utils);
     }
     utils.autoResizeTextarea(dom.goalInput);
     renderComposerAuthNote();
@@ -1263,6 +1267,20 @@ export function createRenderer(app) {
     }
 
     return `${goal}\n\n补充要求：\n${context}`;
+  }
+
+  function resolveEffectiveComposerMode(actionBarState) {
+    const mode = actionBarState?.mode;
+
+    if (mode === "review" && actionBarState.review?.enabled) {
+      return "review";
+    }
+
+    if (mode === "steer" && actionBarState.steer?.enabled) {
+      return "steer";
+    }
+
+    return "chat";
   }
 
   function renderConversationLinkState(thread) {
