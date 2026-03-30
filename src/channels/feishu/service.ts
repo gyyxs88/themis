@@ -6,6 +6,8 @@ import { AppServerTaskRuntime } from "../../core/app-server-task-runtime.js";
 import type { CodexRuntimeCatalog } from "../../core/codex-app-server.js";
 import { CodexAuthRuntime } from "../../core/codex-auth.js";
 import { CodexTaskRuntime } from "../../core/codex-runtime.js";
+import { readSessionNativeThreadSummary } from "../../core/native-thread-summary.js";
+import { resolveStoredSessionThreadReference } from "../../core/session-thread-reference.js";
 import {
   isPrincipalTaskSettingsEmpty,
   mergePrincipalTaskSettings,
@@ -26,6 +28,7 @@ import {
   type TaskRuntimeFacade,
   type TaskRuntimeRegistry,
   type WebSearchMode,
+  resolveTaskRuntime,
   resolveRequestedTaskRuntime,
 } from "../../types/index.js";
 import { FeishuAdapter } from "./adapter.js";
@@ -36,7 +39,12 @@ import {
   FeishuTaskMessageBridge,
   type FeishuMessageMutationResponse,
 } from "./task-message-bridge.js";
-import type { FeishuTaskPayload } from "./types.js";
+import {
+  renderFeishuCurrentSessionSurface,
+  renderFeishuTaskStatusSurface,
+  renderFeishuWaitingActionSurface,
+} from "./mobile-surface.js";
+import type { FeishuDeliveryMessage, FeishuTaskPayload } from "./types.js";
 
 type FeishuMessageReceiveEvent = Parameters<NonNullable<EventHandles["im.message.receive_v1"]>>[0];
 
@@ -311,6 +319,12 @@ export class FeishuChannelService {
       case "current":
         await this.sendCurrentSession(context.chatId, context);
         return;
+      case "review":
+        await this.startReview(command.args, context);
+        return;
+      case "steer":
+        await this.steerCurrentSession(command.args, context);
+        return;
       case "workspace":
       case "ws":
         await this.handleWorkspaceCommand(command.args, context);
@@ -378,7 +392,8 @@ export class FeishuChannelService {
     const adapter = new FeishuAdapter({
       deliver: async (message) => {
         try {
-          await bridge.deliver(message);
+          const enriched = await this.decorateDeliveryMessageForMobile(message, sessionId);
+          await bridge.deliver(enriched);
         } catch (error) {
           this.logger.error(`[themis/feishu] 推送任务消息失败：${toErrorMessage(error)}`);
         }
@@ -416,6 +431,72 @@ export class FeishuChannelService {
     } finally {
       taskLease.release();
     }
+  }
+
+  private async decorateDeliveryMessageForMobile(
+    message: FeishuDeliveryMessage,
+    sessionId: string,
+  ): Promise<FeishuDeliveryMessage> {
+    const sessionState = await this.readFeishuMobileSessionState(sessionId);
+
+    if (message.kind === "event" && message.title === "task.action_required") {
+      const metadata = asRecord(message.metadata);
+      const actionId = normalizeText(metadata?.actionId);
+      const actionType = normalizePendingActionType(metadata?.actionType);
+      const prompt = normalizeText(metadata?.prompt) ?? normalizeText(message.text);
+
+      if (!actionId || !actionType || !prompt) {
+        return message;
+      }
+
+      return {
+        ...message,
+        text: renderFeishuWaitingActionSurface({
+          sessionId,
+          actionId,
+          actionType,
+          prompt,
+          ...(sessionState.latestStatus ? { latestStatus: sessionState.latestStatus } : {}),
+          ...(sessionState.thread !== undefined ? { thread: sessionState.thread } : {}),
+        }),
+      };
+    }
+
+    if (message.kind === "event" && shouldRenderFeishuStatusSurface(message)) {
+      return {
+        ...message,
+        text: renderFeishuTaskStatusSurface({
+          phase: resolveFeishuTaskStatusPhase(message),
+          sessionId,
+          summary: message.text,
+        }),
+        metadata: {
+          ...(asRecord(message.metadata) ?? {}),
+          feishuSurfaceKind: "status",
+        },
+      };
+    }
+
+    return message;
+  }
+
+  private async readFeishuMobileSessionState(sessionId: string): Promise<{
+    latestStatus: string | null;
+    latestSummary: string | null;
+    workspacePath: string | null;
+    thread: Awaited<ReturnType<typeof readSessionNativeThreadSummary>>;
+  }> {
+    const runtimeStore = this.runtime.getRuntimeStore();
+    const session = runtimeStore.listRecentSessions(200).find((entry) => entry.sessionId === sessionId) ?? null;
+    const thread = await readSessionNativeThreadSummary(runtimeStore, sessionId, this.runtimeRegistry);
+    const sessionSettings = this.readSessionTaskSettings(sessionId);
+
+    return {
+      latestStatus: normalizeText(session?.latestTurn.status),
+      latestSummary: normalizeText(session?.latestTurn.summary) ?? normalizeText(session?.latestTurn.goal),
+      workspacePath: normalizeText(sessionSettings.workspacePath),
+      thread,
+    };
   }
 
   private async acquireSessionTaskLease(sessionId: string): Promise<FeishuSessionTaskLease> {
@@ -1066,6 +1147,8 @@ export class FeishuChannelService {
       "/new 新建并切换到新会话",
       "/use <序号|conversationId> 切换到已有会话",
       "/current 查看当前会话",
+      "/review <指令> 对当前会话发起 Review",
+      "/steer <指令> 对当前会话发送 Steer",
       "/workspace 查看或设置当前会话工作区",
       "/settings 查看设置树",
       "/skills 查看和维护当前 principal 的 skills",
@@ -1531,15 +1614,27 @@ export class FeishuChannelService {
       return;
     }
 
+    const sessionLines = await Promise.all(sessions.map(async (session, index) => {
+      const latest = normalizeText(session.latestTurn.summary) ?? session.latestTurn.goal;
+      const currentMark = currentSessionId === session.sessionId ? "（当前）" : "";
+      const sessionState = await this.readFeishuMobileSessionState(session.sessionId);
+      const threadLine = sessionState.thread
+        ? `线程：${sessionState.thread.threadId}｜${sessionState.thread.status ?? "unknown"}｜${sessionState.thread.turnCount} turns`
+        : "";
+
+      return [
+        `${index + 1}. ${session.sessionId}${currentMark}`,
+        `状态：${session.latestTurn.status}｜更新：${formatTimestamp(session.updatedAt)}`,
+        `最近任务：${truncateText(latest, 80)}`,
+        ...(threadLine ? [threadLine] : []),
+      ].join("\n");
+    }));
+
     const lines = [
       currentSessionId ? `当前会话：${currentSessionId}` : "当前会话：未激活",
       "",
       "最近会话：",
-      ...sessions.map((session, index) => {
-        const latest = normalizeText(session.latestTurn.summary) ?? session.latestTurn.goal;
-        const currentMark = currentSessionId === session.sessionId ? "（当前）" : "";
-        return `${index + 1}. ${session.sessionId}${currentMark}\n状态：${session.latestTurn.status}｜更新：${formatTimestamp(session.updatedAt)}\n最近任务：${truncateText(latest, 80)}`;
-      }),
+      ...sessionLines,
       "",
       "使用 /use <序号|conversationId> 切换会话。",
     ];
@@ -1643,6 +1738,8 @@ export class FeishuChannelService {
       resolvedSessionId = target;
     } else if (runtimeStore.hasSessionTurn({ sessionId: target })) {
       resolvedSessionId = target;
+    } else if (runtimeStore.getSession(target)) {
+      resolvedSessionId = target;
     }
 
     if (!resolvedSessionId) {
@@ -1652,6 +1749,7 @@ export class FeishuChannelService {
 
     this.sessionStore.setActiveSessionId(toConversationKey(context), resolvedSessionId);
     await this.safeSendText(context.chatId, `已切换到会话：${resolvedSessionId}`);
+    await this.sendCurrentSession(context.chatId, context);
   }
 
   private async sendCurrentSession(chatId: string, context: FeishuIncomingContext): Promise<void> {
@@ -1669,16 +1767,128 @@ export class FeishuChannelService {
       activeAccount: this.authRuntime.getActiveAccount(),
       principalAccountId: normalizeText(settings.authAccountId),
     });
+    const sessionState = await this.readFeishuMobileSessionState(sessionId);
 
     await this.safeSendText(
       chatId,
-      [
-        `当前会话：${sessionId}`,
-        `当前会话工作区：${formatWorkspaceValue(this.readSessionTaskSettings(sessionId).workspacePath)}`,
-        `当前 principal：${principal.principalId}`,
-        `认证账号：${describePrincipalAccountCurrentValue(accountState)}`,
-      ].join("\n"),
+      renderFeishuCurrentSessionSurface({
+        sessionId,
+        workspacePath: sessionState.workspacePath,
+        principalId: principal.principalId,
+        accountLabel: describePrincipalAccountCurrentValue(accountState),
+        ...(sessionState.latestStatus ? { latestStatus: sessionState.latestStatus } : {}),
+        ...(sessionState.thread !== undefined ? { thread: sessionState.thread } : {}),
+      }),
     );
+  }
+
+  private async startReview(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const instructions = normalizeText(args.join(" "));
+
+    if (!instructions) {
+      await this.safeSendText(context.chatId, "用法：/review <指令>");
+      return;
+    }
+
+    const sessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
+
+    if (!sessionId) {
+      await this.safeSendText(context.chatId, "当前还没有激活会话。直接发消息时会自动创建，或使用 /new 手动新建。");
+      return;
+    }
+
+    const runtime = await this.selectRuntimeForSession(sessionId);
+
+    if (typeof runtime.startReview !== "function") {
+      await this.safeSendText(context.chatId, "当前会话的运行时不支持 review。");
+      return;
+    }
+
+    try {
+      const result = await runtime.startReview({
+        sessionId,
+        instructions,
+      });
+      await this.safeSendText(
+        context.chatId,
+        [
+          "已发起 Review",
+          `当前会话：${sessionId}`,
+          `Review 线程：${result.reviewThreadId}`,
+          `Turn：${result.turnId}`,
+        ].join("\n"),
+      );
+    } catch (error) {
+      await this.safeSendText(context.chatId, mapFeishuInteractiveActionErrorMessage(error));
+    }
+  }
+
+  private async steerCurrentSession(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const message = normalizeText(args.join(" "));
+
+    if (!message) {
+      await this.safeSendText(context.chatId, "用法：/steer <指令>");
+      return;
+    }
+
+    const sessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
+
+    if (!sessionId) {
+      await this.safeSendText(context.chatId, "当前还没有激活会话。直接发消息时会自动创建，或使用 /new 手动新建。");
+      return;
+    }
+
+    const runtime = await this.selectRuntimeForSession(sessionId);
+
+    if (typeof runtime.steerTurn !== "function") {
+      await this.safeSendText(context.chatId, "当前会话的运行时不支持 steer。");
+      return;
+    }
+
+    try {
+      const result = await runtime.steerTurn({
+        sessionId,
+        message,
+      });
+      await this.safeSendText(
+        context.chatId,
+        [
+          "已发送 Steer",
+          `当前会话：${sessionId}`,
+          `Turn：${result.turnId}`,
+        ].join("\n"),
+      );
+    } catch (error) {
+      await this.safeSendText(context.chatId, mapFeishuInteractiveActionErrorMessage(error));
+    }
+  }
+
+  private async selectRuntimeForSession(sessionId: string): Promise<TaskRuntimeFacade> {
+    const runtimeStore = this.runtime.getRuntimeStore();
+    const reference = resolveStoredSessionThreadReference(runtimeStore, sessionId);
+
+    if (reference.engine) {
+      return resolveTaskRuntime(this.runtimeRegistry, reference.engine);
+    }
+
+    const storedThreadId = normalizeText(runtimeStore.getSession(sessionId)?.threadId);
+    const appServerRuntime = this.runtimeRegistry.runtimes?.["app-server"];
+
+    if (storedThreadId && appServerRuntime?.readThreadSnapshot) {
+      try {
+        const snapshot = await appServerRuntime.readThreadSnapshot({
+          threadId: storedThreadId,
+        });
+
+        if (snapshot) {
+          return appServerRuntime;
+        }
+      } catch {
+        // 继续回退到默认 runtime，由后续能力检查给出明确提示。
+      }
+    }
+
+    return this.runtimeRegistry.defaultRuntime;
   }
 
   private async resetPrincipalState(args: string[], context: FeishuIncomingContext): Promise<void> {
@@ -2681,6 +2891,69 @@ function normalizePositiveInteger(value: number | undefined, fallback: number): 
   }
 
   return Math.max(1, Math.round(value));
+}
+
+function mapFeishuInteractiveActionErrorMessage(error: unknown): string {
+  const message = toErrorMessage(error);
+
+  if (
+    message === "当前会话还没有可用的 app-server thread。"
+    || message === "当前会话还没有可引导的 app-server turn。"
+    || message === "当前 app-server runtime 不支持 review/start。"
+    || message === "当前 app-server runtime 不支持 turn/steer。"
+  ) {
+    return message;
+  }
+
+  return message;
+}
+
+function normalizePendingActionType(value: unknown): "approval" | "user-input" | null {
+  return value === "approval" || value === "user-input" ? value : null;
+}
+
+function shouldRenderFeishuStatusSurface(
+  message: FeishuDeliveryMessage,
+): boolean {
+  if (message.kind !== "event" || message.title !== "task.progress") {
+    return false;
+  }
+
+  const metadata = asRecord(message.metadata);
+  const itemType = normalizeText(metadata?.itemType);
+  const threadEventType = normalizeText(metadata?.threadEventType);
+
+  if (itemType === "agent_message" && threadEventType === "item.completed") {
+    return false;
+  }
+
+  return Boolean(normalizeText(message.text));
+}
+
+function resolveFeishuTaskStatusPhase(
+  message: FeishuDeliveryMessage,
+): "running" | "action-submitted-running" | "restoring" | "completed" | "failed" {
+  const metadata = asRecord(message.metadata);
+  const status = normalizeText(metadata?.status);
+  const text = normalizeText(message.text) ?? "";
+
+  if (status === "running" && /(审批已提交|补充输入已提交|继续执行中|继续处理中|同步中)/.test(text)) {
+    return "action-submitted-running";
+  }
+
+  if (status === "running" && /(恢复|rehydrate|同步)/i.test(text)) {
+    return "restoring";
+  }
+
+  if (status === "failed") {
+    return "failed";
+  }
+
+  if (status === "completed") {
+    return "completed";
+  }
+
+  return "running";
 }
 
 function buildFeishuHttpInstance(options: {
