@@ -8,7 +8,11 @@ import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import type { TaskEvent, TaskRequest } from "../types/index.js";
 import { CodexTaskRuntime } from "./codex-runtime.js";
 import type { CodexThreadSessionStore } from "./codex-session-store.js";
-import type { OpenAICompatibleProviderConfig } from "./openai-compatible-provider.js";
+import {
+  addOpenAICompatibleProvider,
+  addOpenAICompatibleProviderModel,
+  type OpenAICompatibleProviderConfig,
+} from "./openai-compatible-provider.js";
 import type { ContextBuildResult } from "../types/context.js";
 
 function createProviderConfig(): OpenAICompatibleProviderConfig {
@@ -176,6 +180,86 @@ test("CodexTaskRuntime 构造时会为现有 auth account 预建 session store�
     assert.equal(target.authAccountId, "acct-1");
     assert.equal(target.sessionStore, records.calls[0]?.store);
     assert.equal(records.calls.length, 1);
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test("resetProviderRuntime 会在 reloadProviderConfig 后按新配置重建第三方 session store", () => {
+  const workingDirectory = mkdtempSync(join(tmpdir(), "themis-runtime-provider-reload-"));
+  const registry = new SqliteCodexSessionRegistry({
+    databaseFile: join(workingDirectory, "infra/local/themis.db"),
+  });
+
+  addOpenAICompatibleProvider(workingDirectory, {
+    id: "gateway-a",
+    name: "Gateway A",
+    baseUrl: "https://gateway-a.example.com/v1",
+    apiKey: "sk-test-a",
+  }, registry);
+
+  addOpenAICompatibleProviderModel(workingDirectory, {
+    providerId: "gateway-a",
+    model: "gpt-5.4",
+    setAsDefault: true,
+  }, registry);
+
+  const records = createRecordingSessionStoreFactoryRecords();
+  const runtime = new CodexTaskRuntime({
+    workingDirectory,
+    runtimeStore: registry,
+    createSessionStore: records.createSessionStore,
+  });
+
+  try {
+    const initialGatewayACalls = records.calls.filter((entry) => entry.sessionIdNamespace === "third-party:gateway-a");
+    const initialGatewayAStore = initialGatewayACalls[0]?.store;
+
+    assert.equal(initialGatewayACalls.length, 1);
+
+    addOpenAICompatibleProvider(workingDirectory, {
+      id: "gateway-b",
+      name: "Gateway B",
+      baseUrl: "https://gateway-b.example.com/v1",
+      apiKey: "sk-test-b",
+    }, registry);
+
+    addOpenAICompatibleProviderModel(workingDirectory, {
+      providerId: "gateway-b",
+      model: "gpt-5.4",
+      setAsDefault: true,
+    }, registry);
+
+    runtime.reloadProviderConfig();
+
+    const gatewayACalls = records.calls.filter((entry) => entry.sessionIdNamespace === "third-party:gateway-a");
+    const gatewayBCalls = records.calls.filter((entry) => entry.sessionIdNamespace === "third-party:gateway-b");
+
+    assert.equal(gatewayACalls.length, 2);
+    assert.equal(gatewayBCalls.length, 1);
+    assert.notEqual(gatewayACalls[0]?.store, gatewayACalls[1]?.store);
+    assert.equal(gatewayACalls[0]?.store, initialGatewayAStore);
+
+    const target = (runtime as unknown as {
+      resolveRuntimeTarget(request: TaskRequest, allowUnsupportedThirdPartyModel?: boolean): {
+        accessMode: "auth" | "third-party";
+        authAccountId: string | null;
+        providerId: string | null;
+        providerConfig: OpenAICompatibleProviderConfig | null;
+        sessionStore: CodexThreadSessionStore;
+      };
+    }).resolveRuntimeTarget(createRequest({
+      requestId: "req-third-party-runtime-reload",
+      taskId: "task-third-party-runtime-reload",
+      options: {
+        accessMode: "third-party",
+        thirdPartyProviderId: "gateway-b",
+        model: "gpt-5.4",
+      },
+    }));
+
+    assert.equal(target.providerId, "gateway-b");
+    assert.equal(target.sessionStore, gatewayBCalls[0]?.store);
   } finally {
     rmSync(workingDirectory, { recursive: true, force: true });
   }
