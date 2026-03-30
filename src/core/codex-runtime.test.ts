@@ -194,6 +194,9 @@ test("resolveRuntimeTarget 首次命中后补建 auth session store，并在同�
   });
 
   try {
+    const initialCallCount = records.calls.length;
+    const defaultAuthCall = records.calls.slice(0, initialCallCount).find((entry) => entry.sessionIdNamespace?.startsWith("auth:"));
+
     assert.equal(records.calls.filter((entry) => entry.sessionIdNamespace === "auth:managed-2").length, 0);
 
     registry.saveAuthAccount({
@@ -234,10 +237,17 @@ test("resolveRuntimeTarget 首次命中后补建 auth session store，并在同�
     const managed2Calls = records.calls.filter((entry) => entry.sessionIdNamespace === "auth:managed-2");
 
     assert.equal(managed2Calls.length, 1);
+    assert.equal(records.calls.length, initialCallCount + 1);
+    assert.equal(managed2Calls[0]?.sessionRegistry, registry);
+    assert.ok(managed2Calls[0]?.codex);
+    if (defaultAuthCall) {
+      assert.notEqual(managed2Calls[0]?.codex, defaultAuthCall.codex);
+    }
     assert.equal(firstTarget.authAccountId, "managed-2");
     assert.equal(secondTarget.authAccountId, "managed-2");
     assert.equal(firstTarget.sessionStore, managed2Calls[0]?.store);
     assert.equal(secondTarget.sessionStore, managed2Calls[0]?.store);
+    assert.equal(records.calls.length, initialCallCount + 1);
   } finally {
     rmSync(workingDirectory, { recursive: true, force: true });
   }
