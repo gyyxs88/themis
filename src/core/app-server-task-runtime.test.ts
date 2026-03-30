@@ -590,6 +590,66 @@ test("AppServerTaskRuntime 在旧 sdk 会话首次切 app-server 且 startThread
   }
 });
 
+test("AppServerTaskRuntime 会阻止历史 sdk 会话在 startReview 时接入 app-server thread", async () => {
+  const { state, sessionFactory } = createSessionFactory();
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    fixture.runtimeStore.saveSession({
+      sessionId: "web-session-sdk-review-1",
+      threadId: "thread-sdk-review-1",
+      createdAt: "2026-03-29T11:20:00.000Z",
+      updatedAt: "2026-03-29T11:20:00.000Z",
+    });
+    fixture.runtimeStore.upsertTurnFromRequest({
+      requestId: "req-sdk-review-1",
+      taskId: "task-sdk-review-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "completed sdk turn",
+      channelContext: { sessionId: "web-session-sdk-review-1" },
+      createdAt: "2026-03-29T11:19:00.000Z",
+    }, "task-sdk-review-1");
+    fixture.runtimeStore.completeTaskTurn({
+      request: {
+        requestId: "req-sdk-review-1",
+        taskId: "task-sdk-review-1",
+        sourceChannel: "web",
+        user: { userId: "webui" },
+        goal: "completed sdk turn",
+        channelContext: { sessionId: "web-session-sdk-review-1" },
+        createdAt: "2026-03-29T11:19:00.000Z",
+      },
+      result: {
+        taskId: "task-sdk-review-1",
+        requestId: "req-sdk-review-1",
+        status: "completed",
+        summary: "sdk completed",
+        structuredOutput: {
+          session: {
+            sessionId: "web-session-sdk-review-1",
+            threadId: "thread-sdk-review-1",
+            engine: "sdk",
+          },
+        },
+        completedAt: "2026-03-29T11:19:30.000Z",
+      },
+      sessionMode: "resumed",
+      threadId: "thread-sdk-review-1",
+    });
+
+    await assert.rejects(async () => await fixture.runtime.startReview({
+      sessionId: "web-session-sdk-review-1",
+      instructions: "should stay on delete gate",
+    }), /可用的 app-server thread/);
+
+    assert.equal(state.initialized, 0);
+    assert.equal(state.reviews.length, 0);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("AppServerTaskRuntime 支持 review/start 与 turn/steer 最小入口", async () => {
   const { state, sessionFactory } = createSessionFactory();
   const fixture = createRuntimeFixture({ sessionFactory });
