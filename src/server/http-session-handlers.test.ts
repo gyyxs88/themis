@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
@@ -16,6 +16,49 @@ interface TestServerContext {
   runtimeStore: SqliteCodexSessionRegistry;
   runtime: CodexTaskRuntime;
   authHeaders: Record<string, string>;
+}
+
+function responseItem(role: "user" | "assistant", text: string): string {
+  return JSON.stringify({
+    type: "response_item",
+    payload: {
+      type: "message",
+      role,
+      content: [
+        {
+          type: role === "assistant" ? "output_text" : "input_text",
+          text,
+        },
+      ],
+    },
+  });
+}
+
+function themisPrompt(goal: string, inputText?: string): string {
+  return [
+    "You are running inside Themis",
+    "",
+    "Goal:",
+    goal,
+    ...(inputText ? ["", "Additional context:", inputText] : []),
+    "",
+    "Response guidance:",
+    "- keep going",
+  ].join("\n");
+}
+
+function createTranscriptFixture(threadId: string): string {
+  const sessionRoot = join(homedir(), ".codex", "sessions");
+  mkdirSync(sessionRoot, { recursive: true });
+  const fixtureRoot = mkdtempSync(join(sessionRoot, "themis-sdk-fork-delete-gate-"));
+  const nested = join(fixtureRoot, "2026", "03");
+  mkdirSync(nested, { recursive: true });
+  writeFileSync(join(nested, `session-${threadId}.jsonl`), [
+    responseItem("user", themisPrompt("验证 sdk replay fallback", "只在 optimistic 条件缺失时回退")),
+    responseItem("assistant", "assistant reply for fallback"),
+  ].join("\n"), "utf8");
+
+  return fixtureRoot;
 }
 
 async function withHttpServer(
@@ -350,8 +393,80 @@ test("POST /api/sessions/fork-context 在历史 sdk 会话且 optimistic 条件�
           threadId: "thread-sdk-child-1",
         }),
       },
-    },
-  }));
+      },
+    }));
+});
+
+test("POST /api/sessions/fork-context 在历史 sdk 会话且 optimistic 条件不具备时会回到 replay fallback", async () => {
+  const sessionId = "session-sdk-fallback-1";
+  const sourceThreadId = "thread-sdk-fallback-1";
+  const transcriptRoot = createTranscriptFixture(sourceThreadId);
+
+  try {
+    await withHttpServer(async ({ baseUrl, runtimeStore, authHeaders }) => {
+      const request = buildTaskRequest({
+        sessionId,
+        requestId: "req-sdk-fallback-1",
+        taskId: "task-sdk-fallback-1",
+        createdAt: "2026-03-30T14:00:00.000Z",
+      });
+
+      runtimeStore.upsertTurnFromRequest(request, request.taskId!);
+      runtimeStore.completeTaskTurn({
+        request,
+        result: buildTaskResult({
+          requestId: request.requestId,
+          taskId: request.taskId!,
+          completedAt: "2026-03-30T14:00:30.000Z",
+          structuredOutput: {
+            session: {
+              sessionId,
+              threadId: sourceThreadId,
+              engine: "sdk",
+            },
+          },
+        }),
+        sessionMode: "resumed",
+        threadId: sourceThreadId,
+      });
+
+      const response = await fetch(`${baseUrl}/api/sessions/fork-context`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...authHeaders,
+        },
+        body: JSON.stringify({
+          sessionId,
+        }),
+      });
+
+      assert.equal(response.status, 200);
+      const payload = await response.json() as {
+        strategy?: string;
+        sourceThreadId?: string;
+        includedTurns?: number;
+        historyContext?: string;
+      };
+
+      assert.equal(payload.strategy, "session-transcript");
+      assert.equal(payload.sourceThreadId, sourceThreadId);
+      assert.equal(payload.includedTurns, 1);
+      assert.match(payload.historyContext ?? "", /验证 sdk replay fallback/);
+      assert.match(payload.historyContext ?? "", /只在 optimistic 条件缺失时回退/);
+    }, ({ runtimeStore }) => ({
+      defaultRuntime: {
+        runTask: async () => {
+          throw new Error("default runtime should not run");
+        },
+        getRuntimeStore: () => runtimeStore,
+        getIdentityLinkService: () => ({}),
+        getPrincipalSkillsService: () => ({}),
+      },
+    }));
+  } finally {
+    rmSync(transcriptRoot, { recursive: true, force: true });
+  }
 });
 
 function buildTaskRequest(overrides: {
