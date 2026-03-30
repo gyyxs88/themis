@@ -265,27 +265,36 @@ export function createSidebarActions(app) {
       dom.goalInput.focus();
     });
 
-    dom.threadList.addEventListener("click", async (event) => {
+    dom.threadList.addEventListener("click", (event) => {
       const button = event.target.closest("[data-thread-id]");
 
-      if (!button || app.runtime.sessionControlBusy) {
+      if (!button) {
         return;
       }
 
-      store.state = {
-        ...store.state,
-        activeThreadId: button.dataset.threadId,
-      };
-      store.clearTransientStatus();
-      store.saveState();
-      app.renderer.renderAll(true);
-      app.layout.closeMobileSidebar();
-      await app.history.ensureThreadHistoryLoaded(button.dataset.threadId);
-      await app.sessionSettings.loadThreadSettings(button.dataset.threadId, { quiet: true });
+      void activateThread(button.dataset.threadId);
     });
   }
 
+  async function activateThread(threadId, { scrollToBottom = true } = {}) {
+    if (!threadId || app.runtime.sessionControlBusy) {
+      return;
+    }
+
+    store.state = {
+      ...store.state,
+      activeThreadId: threadId,
+    };
+    store.clearTransientStatus();
+    store.saveState();
+    app.renderer.renderAll(scrollToBottom);
+    app.layout.closeMobileSidebar();
+    await app.history.ensureThreadHistoryLoaded(threadId);
+    await app.sessionSettings.loadThreadSettings(threadId, { quiet: true });
+  }
+
   return {
+    activateThread,
     bindSettingsControls,
     bindSidebarControls,
   };

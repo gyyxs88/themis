@@ -17,6 +17,7 @@ export function createActions(app) {
     sidebarActions.bindSettingsControls();
     composerActions.bindComposerControls();
     sidebarActions.bindSidebarControls();
+    bindThreadRiskBannerControls();
     app.auth.bindControls();
     app.modeSwitch.bindControls();
     app.thirdPartyEditor.bindControls();
@@ -31,6 +32,31 @@ export function createActions(app) {
     void app.identity.load({ quiet: true });
     void app.runtimeConfig.load();
     void app.sessionSettings.loadThreadSettings(store.state.activeThreadId, { quiet: true });
+  }
+
+  function bindThreadRiskBannerControls() {
+    dom.threadRiskBanner.addEventListener("click", (event) => {
+      const actionButton = event.target.closest("[data-risk-banner-action]");
+
+      if (!actionButton) {
+        return;
+      }
+
+      const actionKind = actionButton.dataset.riskBannerAction;
+      const threadId = actionButton.dataset.threadId ?? "";
+      const turnId = actionButton.dataset.turnId ?? "";
+
+      if (actionKind === "open-thread") {
+        void sidebarActions.activateThread(threadId);
+        return;
+      }
+
+      if (actionKind === "focus-turn" && turnId) {
+        document.getElementById(`turn-anchor-${turnId}`)?.scrollIntoView({
+          block: "start",
+        });
+      }
+    });
   }
 
   function bindWorkspaceControls() {

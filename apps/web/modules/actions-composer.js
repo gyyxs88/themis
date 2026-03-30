@@ -67,6 +67,11 @@ export function createComposerActions(app, streamActions) {
     });
 
     dom.form.addEventListener("submit", handleSubmit);
+
+    if (dom.conversation?.addEventListener) {
+      dom.conversation.addEventListener("click", handleConversationActionClick);
+      dom.conversation.addEventListener("submit", handleConversationActionSubmit);
+    }
   }
 
   function bindLifecycleEvents() {
@@ -152,6 +157,65 @@ export function createComposerActions(app, streamActions) {
     }
 
     await submitThread(thread);
+  }
+
+  async function handleConversationActionClick(event) {
+    const decisionButton = event.target.closest("[data-waiting-action-decision]");
+
+    if (decisionButton) {
+      const { thread, turn } = resolveConversationWaitingActionTarget(decisionButton);
+
+      if (!thread || !turn) {
+        return;
+      }
+
+      await submitWaitingAction(thread, turn, {
+        decision: decisionButton.dataset.waitingActionDecision,
+      });
+      return;
+    }
+
+    const submitButton = event.target.closest("[data-waiting-action-submit]");
+
+    if (!submitButton) {
+      return;
+    }
+
+    const form = submitButton.closest("form[data-turn-action-kind=\"waiting\"]");
+
+    if (!form) {
+      return;
+    }
+
+    const { thread, turn } = resolveConversationWaitingActionTarget(form);
+
+    if (!thread || !turn) {
+      return;
+    }
+
+    await submitWaitingAction(thread, turn, {
+      inputText: readWaitingActionInputText(form),
+    });
+  }
+
+  async function handleConversationActionSubmit(event) {
+    const form = event.target.closest("form[data-turn-action-kind=\"waiting\"]");
+
+    if (!form) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const { thread, turn } = resolveConversationWaitingActionTarget(form);
+
+    if (!thread || !turn) {
+      return;
+    }
+
+    await submitWaitingAction(thread, turn, {
+      inputText: readWaitingActionInputText(form),
+    });
   }
 
   function requestInterruptSubmit(thread) {
@@ -458,6 +522,40 @@ export function createComposerActions(app, streamActions) {
       ok: false,
       message: `暂不支持等待中的 action 类型：${actionType}`,
     };
+  }
+
+  function resolveConversationWaitingActionTarget(element) {
+    const threadId = typeof element?.dataset?.threadId === "string" ? element.dataset.threadId : "";
+    const turnId = typeof element?.dataset?.turnId === "string" ? element.dataset.turnId : "";
+
+    if (!threadId || !turnId) {
+      return {
+        thread: null,
+        turn: null,
+      };
+    }
+
+    const thread = store.getThreadById(threadId);
+
+    if (!thread) {
+      return {
+        thread: null,
+        turn: null,
+      };
+    }
+
+    return {
+      thread,
+      turn: store.getTurn(threadId, turnId),
+    };
+  }
+
+  function readWaitingActionInputText(form) {
+    const textarea = typeof form?.querySelector === "function"
+      ? form.querySelector("textarea")
+      : null;
+
+    return typeof textarea?.value === "string" ? textarea.value : "";
   }
 
   function normalizeApprovalDecision(value) {
