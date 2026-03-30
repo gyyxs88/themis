@@ -126,6 +126,14 @@
   font-weight: 600;
 }
 
+.thread-control-conversation-id {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-all;
+}
+
 .thread-control-actions {
   flex: 0 0 auto;
 }
@@ -133,6 +141,24 @@
 .thread-control-details,
 .thread-control-join-hint {
   color: var(--muted);
+}
+
+.thread-control-details-disclosure {
+  border: 1px solid rgba(216, 216, 221, 0.9);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.thread-control-details-disclosure summary {
+  padding: 12px 14px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.thread-control-details-body {
+  padding: 0 14px 14px;
 }
 
 .thread-control-detail-list {

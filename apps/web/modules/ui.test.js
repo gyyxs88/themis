@@ -79,7 +79,7 @@ test("renderComposer 会在持久模式不可用时回退到 chat 语义", () =>
   assert.ok(!harness.dom.composerActionBar.innerHTML.includes('active"'));
 });
 
-test("renderThreadControlPanel 会渲染状态摘要、来源标签，并在 runtime 标记下展开接入面板", () => {
+test("renderThreadControlPanel 会渲染主视图 conversationId、折叠详情，并且不回填接入输入框", () => {
   const harness = createHarness({
     actionBarState: {
       mode: "chat",
@@ -109,14 +109,19 @@ test("renderThreadControlPanel 会渲染状态摘要、来源标签，并在 run
   });
 
   assert.equal(typeof harness.renderer.renderThreadControlPanel, "function");
+  harness.dom.conversationLinkInput.value = "user-pasted-id";
   harness.renderer.renderThreadControlPanel();
 
   assert.equal(harness.dom.threadControlStatus.textContent, "等待处理中的 action");
+  assert.equal(harness.dom.threadControlConversationId.textContent, "conversation-123");
   assert.ok(harness.dom.threadControlSource.innerHTML.includes("已接入"));
+  assert.ok(harness.dom.threadControlDetails.innerHTML.includes("<details"));
+  assert.ok(harness.dom.threadControlDetails.innerHTML.includes("<summary>查看详情</summary>"));
   assert.ok(harness.dom.threadControlDetails.innerHTML.includes("conversation-123"));
   assert.equal(harness.dom.threadControlPanel.hidden, false);
   assert.equal(harness.dom.threadControlJoinPanel.hidden, false);
   assert.equal(harness.dom.threadControlJoinToggle.getAttribute("aria-expanded"), "true");
+  assert.equal(harness.dom.conversationLinkInput.value, "user-pasted-id");
 });
 
 function createHarness({ actionBarState, threadControlState = null, runtime = {} }) {
@@ -136,6 +141,7 @@ function createHarness({ actionBarState, threadControlState = null, runtime = {}
     composerAuthNote: createTextStub(),
     threadControlPanel: createPanelStub(),
     threadControlStatus: createTextStub(),
+    threadControlConversationId: createTextStub(),
     threadControlSource: createTextStub(),
     threadControlDetails: createTextStub(),
     threadControlJoinHint: createTextStub(),

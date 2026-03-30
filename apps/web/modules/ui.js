@@ -183,10 +183,17 @@ export function createRenderer(app) {
     }
 
     dom.threadControlStatus.textContent = threadControlState.status?.label || "当前空闲";
+    dom.threadControlConversationId.textContent = threadControlState.conversationId || "";
     dom.threadControlSource.innerHTML = renderThreadControlSourceMarkup(threadControlState, utils);
-    dom.threadControlDetails.innerHTML = renderThreadControlDetailsMarkup(threadControlState, utils);
+    dom.threadControlDetails.innerHTML = `
+      <details class="thread-control-details-disclosure">
+        <summary>查看详情</summary>
+        <div class="thread-control-details-body">
+          ${renderThreadControlDetailsMarkup(threadControlState, utils)}
+        </div>
+      </details>
+    `;
     dom.threadControlJoinHint.textContent = threadControlState.joinHint || "";
-    dom.conversationLinkInput.value = threadControlState.conversationId || "";
     dom.conversationLinkNote.textContent = threadControlState.joinHint || "";
     dom.threadControlJoinPanel.hidden = !joinOpen;
     dom.threadControlJoinPanel.classList.toggle("hidden", !joinOpen);
