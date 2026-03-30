@@ -155,6 +155,9 @@ test("CodexTaskRuntime 构造时会为现有 auth account 预建 session store�
   try {
     assert.equal(records.calls.length, 1);
     assert.equal(records.calls[0]?.sessionIdNamespace, "auth:acct-1");
+    assert.equal(records.calls[0]?.sessionRegistry, registry);
+    assert.ok(records.calls[0]?.codex);
+    assert.equal(records.calls.length, 1);
 
     const target = (runtime as unknown as {
       resolveRuntimeTarget(request: TaskRequest, allowUnsupportedThirdPartyModel?: boolean): {
@@ -708,15 +711,20 @@ function createFailingSessionStoreDouble(runtimeStore: SqliteCodexSessionRegistr
 function createRecordingSessionStoreFactoryRecords(): {
   calls: Array<{
     sessionIdNamespace: string | undefined;
+    sessionRegistry: SqliteCodexSessionRegistry | undefined;
+    codex: unknown;
     store: CodexThreadSessionStore;
   }>;
   createSessionStore: (options: {
     sessionRegistry?: SqliteCodexSessionRegistry;
+    codex?: unknown;
     sessionIdNamespace?: string;
   }) => CodexThreadSessionStore;
 } {
   const calls: Array<{
     sessionIdNamespace: string | undefined;
+    sessionRegistry: SqliteCodexSessionRegistry | undefined;
+    codex: unknown;
     store: CodexThreadSessionStore;
   }> = [];
 
@@ -733,6 +741,8 @@ function createRecordingSessionStoreFactoryRecords(): {
 
       calls.push({
         sessionIdNamespace: options.sessionIdNamespace,
+        sessionRegistry: options.sessionRegistry,
+        codex: options.codex,
         store,
       });
 
