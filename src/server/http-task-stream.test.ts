@@ -1091,6 +1091,155 @@ test("handleTaskStream 在 pending action resolve 后再次 close 会恢复 CLIE
   }
 });
 
+test("handleTaskStream 在 approval resolve 后立刻 close 时会给第二轮 user-input 留恢复窗口", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-http-task-stream-detached-mixed-window-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: root,
+    runtimeStore,
+  });
+  const authRuntime = createAuthRuntime({
+    authenticated: false,
+    requiresOpenaiAuth: false,
+  });
+  const actionBridge = new AppServerActionBridge();
+  const request = createTaskStreamRequest({
+    goal: "请验证 detached mixed recovery grace window",
+    sessionId: "session-task-stream-detached-mixed-window",
+  });
+  const response = createTaskStreamResponse();
+  let abortMessage: string | null = null;
+  let capturedTaskId = "";
+  let capturedRequestId = "";
+  let releaseSecondAction!: () => void;
+  const secondActionGate = new Promise<void>((resolve) => {
+    releaseSecondAction = resolve;
+  });
+
+  try {
+    (runtime as CodexTaskRuntime & { runTask: CodexTaskRuntime["runTask"] }).runTask = async (taskRequest, hooks = {}) => {
+      const { onEvent, signal } = hooks;
+      assert.ok(signal);
+      capturedTaskId = taskRequest.taskId ?? "task-stream-detached-mixed-window";
+      capturedRequestId = taskRequest.requestId;
+
+      signal.addEventListener("abort", () => {
+        abortMessage = signal.reason instanceof Error ? signal.reason.message : String(signal.reason);
+      }, { once: true });
+
+      const approval = actionBridge.register({
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        actionId: "approval-detached-mixed-1",
+        actionType: "approval",
+        prompt: "Need approval 1",
+      });
+      const approvalSubmission = actionBridge.waitForSubmission(capturedTaskId, capturedRequestId, approval.actionId);
+      assert.ok(approvalSubmission);
+
+      await onEvent?.({
+        eventId: "event-detached-mixed-approval-1",
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        type: "task.action_required",
+        status: "waiting",
+        message: "Need approval 1",
+        payload: {
+          actionId: approval.actionId,
+          actionType: approval.actionType,
+        },
+        timestamp: "2026-03-31T12:00:00.000Z",
+      });
+
+      await approvalSubmission;
+      await secondActionGate;
+
+      const input = actionBridge.register({
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        actionId: "input-detached-mixed-2",
+        actionType: "user-input",
+        prompt: "Need final input",
+      });
+      const inputSubmission = actionBridge.waitForSubmission(capturedTaskId, capturedRequestId, input.actionId);
+      assert.ok(inputSubmission);
+
+      await onEvent?.({
+        eventId: "event-detached-mixed-input-2",
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        type: "task.action_required",
+        status: "waiting",
+        message: "Need final input",
+        payload: {
+          actionId: input.actionId,
+          actionType: input.actionType,
+        },
+        timestamp: "2026-03-31T12:00:01.000Z",
+      });
+
+      const inputPayload = await inputSubmission;
+      assert.equal(inputPayload.inputText, "来自飞书的恢复补充");
+
+      return {
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        status: "completed",
+        summary: "detached mixed recovery completed",
+        completedAt: "2026-03-31T12:00:02.000Z",
+      };
+    };
+    void handleTaskStream(
+      request as unknown as import("node:http").IncomingMessage,
+      response as unknown as import("node:http").ServerResponse,
+      runtime,
+      { defaultRuntime: runtime },
+      authRuntime,
+      actionBridge,
+      5_000,
+    );
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
+    });
+
+    assert.ok(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-detached-mixed-1"));
+
+    assert.equal(actionBridge.resolve({
+      taskId: capturedTaskId,
+      requestId: capturedRequestId,
+      actionId: "approval-detached-mixed-1",
+      decision: "approve",
+    }), true);
+
+    response.emit("close");
+    releaseSecondAction();
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
+    });
+
+    assert.equal(abortMessage, null);
+
+    assert.ok(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "input-detached-mixed-2"));
+
+    assert.equal(actionBridge.resolve({
+      taskId: capturedTaskId,
+      requestId: capturedRequestId,
+      actionId: "input-detached-mixed-2",
+      inputText: "来自飞书的恢复补充",
+    }), true);
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("handleTaskStream 在连续两轮 task.action_required 下会把恢复窗口滚到第二轮", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-http-task-stream-double-recovery-window-"));
   const runtimeStore = new SqliteCodexSessionRegistry({

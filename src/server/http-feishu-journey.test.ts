@@ -245,6 +245,89 @@ test("真实 Web->飞书 mixed recovery journey 在 app-server 下会走通 appr
   });
 });
 
+test("真实 Web->飞书 mixed recovery 在 approval 后立即断流时仍会通过 /use + direct-text takeover 收口", async () => {
+  await withHttpFeishuJourneyServer({
+    scenario: "approval-then-input",
+    run: async ({ baseUrl, root, runtimeStore, authHeaders, feishu }) => {
+      const sessionId = "session-web-feishu-detached-mixed-journey-1";
+      const workspace = join(root, "workspace-feishu-detached-mixed-journey");
+      seedCompletedWebOwnerPersona(runtimeStore);
+      writeWorkspaceDocs(workspace, {
+        readmeTitle: "workspace-feishu-detached-mixed-journey",
+      });
+
+      const saveWorkspaceResponse = await fetch(`${baseUrl}/api/sessions/${sessionId}/settings`, {
+        method: "PUT",
+        headers: {
+          ...authHeaders,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          settings: {
+            workspacePath: workspace,
+          },
+        }),
+      });
+      assert.equal(saveWorkspaceResponse.status, 200);
+
+      const streamResponse = await fetch(`${baseUrl}/api/tasks/stream`, {
+        method: "POST",
+        headers: {
+          ...authHeaders,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sessionId,
+          goal: "请先等待审批，再等待我补充输入，最后继续执行",
+          options: {
+            runtimeEngine: "app-server",
+          },
+        }),
+      });
+      assert.equal(streamResponse.status, 200);
+      assert.ok(streamResponse.body);
+
+      const reader = createNdjsonStreamReader(streamResponse.body!);
+      await withTimeout(
+        reader.readUntil((lines) => lines.some((line) => line.kind === "event" && line.title === "task.action_required")),
+        "missing detached mixed approval action_required",
+      );
+
+      const firstAction = await waitForHistoryActionId(baseUrl, authHeaders, sessionId, MIXED_APPROVAL_ACTION_ID);
+      assert.equal(firstAction.actionType, "approval");
+
+      await feishu.handleCommand("use", [sessionId]);
+      feishu.takeMessages();
+      const beforeTaskRuntimeCalls = feishu.getTaskRuntimeCalls();
+
+      await feishu.handleCommand("approve", [MIXED_APPROVAL_ACTION_ID]);
+      await reader.cancel();
+
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
+
+      const historyAfterCancel = await readHistoryDetail(baseUrl, authHeaders, sessionId);
+      const restoredSecondAction = extractActionRequiredFromHistoryByActionId(historyAfterCancel, MIXED_INPUT_ACTION_ID);
+      assert.ok(restoredSecondAction);
+      assert.equal(restoredSecondAction.actionType, "user-input");
+
+      await feishu.handleMessageEventText("这是 detached mixed recovery 的最终补充");
+
+      const messages = feishu.takeMessages().join("\n");
+      assert.match(messages, /已提交补充输入。/);
+      assert.deepEqual(feishu.getTaskRuntimeCalls(), beforeTaskRuntimeCalls);
+
+      const completedHistory = await waitForHistoryTurnStatus(baseUrl, authHeaders, sessionId, "completed");
+      assert.equal(completedHistory.turns?.[0]?.status, "completed");
+      assert.equal(
+        completedHistory.turns?.[0]?.events?.filter((event) => event.type === "task.action_required").length,
+        2,
+      );
+    },
+  });
+});
+
 test("Journey session respondToServerRequest 会按 request id 严格匹配当前 waiting reverse request", async () => {
   const singleState = createJourneySessionState({
     scenario: "single-user-input",
@@ -782,6 +865,10 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
           itemId: "item-app-feishu-mixed-running-1",
           text: "第一轮审批已通过，继续等待补充输入。",
         },
+      });
+
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 30);
       });
 
       const inputRequestId = "server-input-web-feishu-mixed-2";
