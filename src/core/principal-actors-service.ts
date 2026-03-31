@@ -98,6 +98,8 @@ export interface ActorTaskTakeoverSummary {
   };
 }
 
+const DISPATCH_AUTHORIZED_MEMORY_LIMIT = 5;
+
 export class PrincipalActorsService {
   private readonly registry: SqliteCodexSessionRegistry;
 
@@ -172,8 +174,9 @@ export class PrincipalActorsService {
       ...(scope.conversationId ? { conversationId: scope.conversationId } : {}),
       ...(scope.workspacePath ? { workspacePath: scope.workspacePath } : {}),
       authorizedMemory: this.registry
-        .searchPrincipalMainMemory(principalId, "", 20)
-        .filter((record) => record.status === "active"),
+        .searchPrincipalMainMemory(principalId, scope.goal, DISPATCH_AUTHORIZED_MEMORY_LIMIT * 4)
+        .filter((record) => record.status === "active")
+        .slice(0, DISPATCH_AUTHORIZED_MEMORY_LIMIT),
     };
   }
 
