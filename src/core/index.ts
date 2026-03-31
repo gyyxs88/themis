@@ -6,6 +6,7 @@ export * from "./codex-session-store.js";
 export * from "./assistant-style.js";
 export * from "./identity-link-service.js";
 export * from "./principal-persona-service.js";
+export * from "./principal-actors-service.js";
 export * from "./principal-skills-service.js";
 export * from "./web-access.js";
 export * from "./prompt.js";

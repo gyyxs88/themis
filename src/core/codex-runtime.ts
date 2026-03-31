@@ -24,6 +24,7 @@ import {
 import { buildAssistantStyleSessionPayload } from "./assistant-style.js";
 import { ConversationService } from "./conversation-service.js";
 import { IdentityLinkService } from "./identity-link-service.js";
+import { PrincipalActorsService } from "./principal-actors-service.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
 import { buildBootstrapPrompt, buildTaskPrompt } from "./prompt.js";
 import { MemoryService } from "../memory/memory-service.js";
@@ -99,6 +100,7 @@ export class CodexTaskRuntime {
   private readonly identityLinkService: IdentityLinkService;
   private readonly conversationService: ConversationService;
   private readonly principalPersonaService: PrincipalPersonaService;
+  private readonly principalActorsService: PrincipalActorsService;
   private readonly principalSkillsService: PrincipalSkillsService;
   private readonly createContextBuilder: (workingDirectory: string) => ContextBuilder;
   private readonly createMemoryService: (workingDirectory: string) => MemoryService;
@@ -119,6 +121,9 @@ export class CodexTaskRuntime {
     this.identityLinkService = new IdentityLinkService(this.runtimeStore);
     this.conversationService = new ConversationService(this.runtimeStore, this.identityLinkService);
     this.principalPersonaService = new PrincipalPersonaService(this.runtimeStore);
+    this.principalActorsService = new PrincipalActorsService({
+      registry: this.runtimeStore,
+    });
     this.principalSkillsService = options.principalSkillsService ?? new PrincipalSkillsService({
       workingDirectory: this.workingDirectory,
       registry: this.runtimeStore,
@@ -559,6 +564,10 @@ export class CodexTaskRuntime {
 
   getPrincipalPersonaService(): PrincipalPersonaService {
     return this.principalPersonaService;
+  }
+
+  getPrincipalActorsService(): PrincipalActorsService {
+    return this.principalActorsService;
   }
 
   getPrincipalSkillsService(): PrincipalSkillsService {
