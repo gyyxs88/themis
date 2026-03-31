@@ -963,8 +963,8 @@ test("handleTaskStream 在 user-input task.action_required 后 close 不会丢�
   });
 });
 
-test("handleTaskStream 在 pending action resolve 后再次 close 会恢复 CLIENT_DISCONNECTED", async () => {
-  const root = mkdtempSync(join(tmpdir(), "themis-http-task-stream-recovery-window-"));
+test("handleTaskStream 在 approval resolve 后延迟注册第二轮 user-input 时仍不会 CLIENT_DISCONNECTED", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-http-task-stream-delayed-bridge-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
@@ -978,20 +978,24 @@ test("handleTaskStream 在 pending action resolve 后再次 close 会恢复 CLIE
   });
   const actionBridge = new AppServerActionBridge();
   const request = createTaskStreamRequest({
-    goal: "请检查恢复窗口结束后再次断流",
-    sessionId: "session-task-stream-recovery-window",
+    goal: "请检查延迟注册 bridge 的恢复窗口",
+    sessionId: "session-task-stream-delayed-bridge",
   });
   const response = createTaskStreamResponse();
   let abortMessage: string | null = null;
   let capturedTaskId = "";
   let capturedRequestId = "";
-  let resolveActionReady!: () => void;
-  const actionReady = new Promise<void>((resolve) => {
-    resolveActionReady = resolve;
+  let resolveFirstActionReady!: () => void;
+  const firstActionReady = new Promise<void>((resolve) => {
+    resolveFirstActionReady = resolve;
   });
-  let resolveSubmissionObserved!: () => void;
-  const submissionObserved = new Promise<void>((resolve) => {
-    resolveSubmissionObserved = resolve;
+  let resolveSecondActionReady!: () => void;
+  const secondActionReady = new Promise<void>((resolve) => {
+    resolveSecondActionReady = resolve;
+  });
+  let releaseSecondAction!: () => void;
+  const secondActionGate = new Promise<void>((resolve) => {
+    releaseSecondAction = resolve;
   });
   let releaseCompletion!: () => void;
   const completionGate = new Promise<void>((resolve) => {
@@ -1004,7 +1008,7 @@ test("handleTaskStream 在 pending action resolve 后再次 close 会恢复 CLIE
     }).runTask = async (taskRequest, hooks = {}) => {
       const { onEvent, signal } = hooks;
       assert.ok(signal);
-      capturedTaskId = taskRequest.taskId ?? "task-stream-recovery-window";
+      capturedTaskId = taskRequest.taskId ?? "task-stream-delayed-bridge";
       capturedRequestId = taskRequest.requestId;
 
       signal.addEventListener("abort", () => {
@@ -1013,41 +1017,73 @@ test("handleTaskStream 在 pending action resolve 后再次 close 会恢复 CLIE
           : String(signal.reason);
       }, { once: true });
 
-      const action = actionBridge.register({
+      const firstAction = actionBridge.register({
         taskId: capturedTaskId,
         requestId: capturedRequestId,
-        actionId: "approval-window-1",
+        actionId: "approval-delayed-1",
         actionType: "approval",
         prompt: "Need approval",
       });
-      const submission = actionBridge.waitForSubmission(capturedTaskId, capturedRequestId, action.actionId);
-      assert.ok(submission);
+      const firstSubmission = actionBridge.waitForSubmission(capturedTaskId, capturedRequestId, firstAction.actionId);
+      assert.ok(firstSubmission);
 
       await onEvent?.({
-        eventId: "event-recovery-window-1",
+        eventId: "event-delayed-bridge-1",
         taskId: capturedTaskId,
         requestId: capturedRequestId,
         type: "task.action_required",
         status: "waiting",
         message: "Need approval",
         payload: {
-          actionId: action.actionId,
-          actionType: action.actionType,
+          actionId: firstAction.actionId,
+          actionType: firstAction.actionType,
         },
-        timestamp: "2026-03-29T09:00:00.000Z",
+        timestamp: "2026-03-31T10:00:00.000Z",
       });
-      resolveActionReady();
+      resolveFirstActionReady();
 
-      await submission;
-      resolveSubmissionObserved();
-      await completionGate;
+      await firstSubmission;
+      await secondActionGate;
+
+      const secondAction = actionBridge.register({
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        actionId: "input-delayed-bridge-2",
+        actionType: "user-input",
+        prompt: "Need more input",
+      });
+      const secondSubmission = actionBridge.waitForSubmission(capturedTaskId, capturedRequestId, secondAction.actionId);
+      assert.ok(secondSubmission);
+
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      await onEvent?.({
+        eventId: "event-delayed-bridge-2",
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        type: "task.action_required",
+        status: "waiting",
+        message: "Need more input",
+        payload: {
+          actionId: secondAction.actionId,
+          actionType: secondAction.actionType,
+        },
+        timestamp: "2026-03-31T10:00:01.000Z",
+      });
+      resolveSecondActionReady();
+
+      const secondPayload = await secondSubmission;
+      assert.equal(secondPayload.inputText, "补充来自延迟 bridge 的输入");
+      releaseCompletion();
 
       return {
         taskId: capturedTaskId,
         requestId: capturedRequestId,
-        status: signal.aborted ? "cancelled" : "completed",
-        summary: signal.aborted ? "任务已取消" : "任务已完成",
-        completedAt: "2026-03-29T09:00:02.000Z",
+        status: signal.aborted ? "cancelled" as const : "completed" as const,
+        summary: signal.aborted ? "任务已取消" : `已处理 ${secondPayload.inputText}`,
+        completedAt: "2026-03-31T10:00:02.000Z",
       };
     };
 
@@ -1063,29 +1099,43 @@ test("handleTaskStream 在 pending action resolve 后再次 close 会恢复 CLIE
       5_000,
     );
 
-    await actionReady;
-    assert.ok(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-window-1"));
+    await firstActionReady;
+    assert.ok(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-delayed-1"));
 
+    assert.equal(actionBridge.resolve({
+      taskId: capturedTaskId,
+      requestId: capturedRequestId,
+      actionId: "approval-delayed-1",
+      decision: "approve",
+    }), true);
+
+    await waitFor(() => actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-delayed-1") === null);
     response.emit("close");
+    assert.equal(abortMessage, null);
+
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        setImmediate(resolve);
+      }, 60);
+      timer.unref?.();
+    });
+    releaseSecondAction();
+
+    await secondActionReady;
+    assert.ok(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "input-delayed-bridge-2"));
     assert.equal(abortMessage, null);
 
     assert.equal(actionBridge.resolve({
       taskId: capturedTaskId,
       requestId: capturedRequestId,
-      actionId: "approval-window-1",
-      decision: "approve",
+      actionId: "input-delayed-bridge-2",
+      inputText: "补充来自延迟 bridge 的输入",
     }), true);
 
-    await submissionObserved;
-    assert.equal(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-window-1"), null);
-
-    response.emit("close");
-    assert.equal(abortMessage, "CLIENT_DISCONNECTED");
-
-    releaseCompletion();
+    await completionGate;
     await streamPromise;
 
-    assert.equal(abortMessage, "CLIENT_DISCONNECTED");
+    assert.equal(abortMessage, null);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
