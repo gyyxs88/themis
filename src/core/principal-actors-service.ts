@@ -258,7 +258,7 @@ export class PrincipalActorsService {
     const scopeId = normalizeOptionalText(input.scopeId);
     const scope = scopeId ? this.registry.getActorTaskScope(principalId, scopeId) : null;
     const actorId = scope?.actorId ?? normalizeOptionalText(input.actorId);
-    const taskId = normalizeOptionalText(input.taskId) ?? scope?.taskId;
+    const taskId = scope?.taskId ?? normalizeOptionalText(input.taskId);
 
     if (scopeId && !scope) {
       return [];

@@ -518,6 +518,72 @@ test("getActorTaskTimeline 在只传 scopeId 时会过滤掉与 scope 不匹配�
   }
 });
 
+test("getActorTaskTimeline 在传 scopeId 和冲突 taskId 时仍以 scope 元数据为准", () => {
+  const { root, registry, service } = createServiceContext();
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "Owner",
+      createdAt: "2026-03-31T11:00:00.000Z",
+      updatedAt: "2026-03-31T11:00:00.000Z",
+    });
+    registry.savePrincipalActor({
+      actorId: "actor-ops-1",
+      ownerPrincipalId: "principal-owner",
+      displayName: "阿运",
+      role: "ops-worker",
+      status: "active",
+      createdAt: "2026-03-31T11:01:00.000Z",
+      updatedAt: "2026-03-31T11:01:00.000Z",
+    });
+    registry.saveActorTaskScope({
+      scopeId: "scope-ops-1",
+      principalId: "principal-owner",
+      actorId: "actor-ops-1",
+      taskId: "task-ops-1",
+      goal: "检查生产链路",
+      status: "open",
+      createdAt: "2026-03-31T11:02:00.000Z",
+      updatedAt: "2026-03-31T11:02:00.000Z",
+    });
+    registry.appendActorRuntimeMemory({
+      runtimeMemoryId: "runtime-ops-1",
+      principalId: "principal-owner",
+      actorId: "actor-ops-1",
+      taskId: "task-ops-1",
+      scopeId: "scope-ops-1",
+      kind: "progress",
+      title: "正常记录",
+      content: "这条属于 task-ops-1。",
+      status: "active",
+      createdAt: "2026-03-31T11:03:00.000Z",
+    });
+    registry.appendActorRuntimeMemory({
+      runtimeMemoryId: "runtime-ops-polluted",
+      principalId: "principal-owner",
+      actorId: "actor-ops-1",
+      taskId: "task-ops-2",
+      scopeId: "scope-ops-1",
+      kind: "result",
+      title: "脏历史",
+      content: "这条不该被 scope-ops-1 的 timeline 读到。",
+      status: "active",
+      createdAt: "2026-03-31T11:04:00.000Z",
+    });
+
+    const timeline = service.getActorTaskTimeline({
+      principalId: "principal-owner",
+      scopeId: "scope-ops-1",
+      taskId: "task-ops-2",
+    });
+
+    assert.deepEqual(timeline.map((entry) => entry.runtimeMemoryId), ["runtime-ops-1"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("CodexTaskRuntime 会暴露 PrincipalActorsService", () => {
   const root = mkdtempSync(join(tmpdir(), "themis-principal-actors-runtime-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
