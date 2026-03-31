@@ -2354,7 +2354,7 @@ export class FeishuChannelService {
 
   private resolvePendingActionScope(context: FeishuIncomingContext): {
     sessionId: string;
-    userId: string;
+    principalId: string;
   } | null {
     const sessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
 
@@ -2362,9 +2362,11 @@ export class FeishuChannelService {
       return null;
     }
 
+    const principal = this.ensurePrincipalIdentity(context);
+
     return {
       sessionId,
-      userId: context.userId,
+      principalId: principal.principalId,
     };
   }
 }

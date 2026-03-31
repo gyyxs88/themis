@@ -87,6 +87,10 @@ function matchesScope(actionScope: TaskActionScope | undefined, expectedScope: T
     return false;
   }
 
+  if (expectedScope.principalId && actionScope?.principalId !== expectedScope.principalId) {
+    return false;
+  }
+
   if (expectedScope.userId && actionScope?.userId !== expectedScope.userId) {
     return false;
   }
