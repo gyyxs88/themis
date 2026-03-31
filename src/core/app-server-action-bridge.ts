@@ -38,6 +38,12 @@ export class AppServerActionBridge {
     return null;
   }
 
+  list(scope?: TaskActionScope) {
+    return [...this.pending.values()]
+      .map((entry) => entry.action)
+      .filter((action) => matchesScope(action.scope, scope));
+  }
+
   findBySubmission(taskId: string, requestId: string, actionId: string) {
     return this.pending.get(this.createKey(taskId, requestId, actionId))?.action ?? null;
   }

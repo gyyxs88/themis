@@ -110,3 +110,68 @@ test("AppServerActionBridge 支持丢弃未完成的 pending action", () => {
   bridge.discard("task-drop", "req-drop", "approval-drop");
   assert.equal(bridge.find("approval-drop"), null);
 });
+
+test("AppServerActionBridge list 会按 scope 返回当前会话的 pending action", () => {
+  const bridge = new AppServerActionBridge();
+
+  bridge.register({
+    taskId: "task-approval",
+    requestId: "req-approval",
+    actionId: "approval-current",
+    actionType: "approval",
+    prompt: "Allow command?",
+    scope: {
+      sourceChannel: "feishu",
+      sessionId: "session-current",
+      userId: "user-1",
+    },
+  });
+  bridge.register({
+    taskId: "task-input-current",
+    requestId: "req-input-current",
+    actionId: "reply-current",
+    actionType: "user-input",
+    prompt: "Please add details",
+    scope: {
+      sourceChannel: "feishu",
+      sessionId: "session-current",
+      userId: "user-1",
+    },
+  });
+  bridge.register({
+    taskId: "task-input-other",
+    requestId: "req-input-other",
+    actionId: "reply-other",
+    actionType: "user-input",
+    prompt: "Other session details",
+    scope: {
+      sourceChannel: "feishu",
+      sessionId: "session-other",
+      userId: "user-1",
+    },
+  });
+  bridge.register({
+    taskId: "task-input-web",
+    requestId: "req-input-web",
+    actionId: "reply-web",
+    actionType: "user-input",
+    prompt: "Web session details",
+    scope: {
+      sourceChannel: "web",
+      sessionId: "session-current",
+      userId: "user-1",
+    },
+  });
+
+  assert.deepEqual(
+    bridge.list({
+      sessionId: "session-current",
+      userId: "user-1",
+    }).map((action) => [action.actionId, action.actionType]),
+    [
+      ["approval-current", "approval"],
+      ["reply-current", "user-input"],
+      ["reply-web", "user-input"],
+    ],
+  );
+});
