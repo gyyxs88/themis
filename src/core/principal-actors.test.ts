@@ -353,6 +353,114 @@ test("savePrincipalMainMemory 会拒绝跨 principal 重挂 memoryId", () => {
   }
 });
 
+test("savePrincipalActor / savePrincipalMainMemory / saveActorTaskScope 在 changes=0 时会抛错", () => {
+  const { root, registry } = createRegistryContext();
+
+  try {
+    const noopDb = {
+      prepare(sql: string) {
+        if (
+          sql.includes("FROM themis_principal_actors") &&
+          sql.includes("WHERE owner_principal_id = ?") &&
+          sql.includes("AND actor_id = ?")
+        ) {
+          return {
+            get: () => ({ owner_principal_id: "principal-noop", actor_id: "actor-noop-1" }),
+          };
+        }
+
+        if (sql.includes("FROM themis_principal_actors") && sql.includes("WHERE actor_id = ?")) {
+          return {
+            get: () => ({ owner_principal_id: "principal-noop" }),
+          };
+        }
+
+        if (sql.includes("FROM themis_principal_main_memory") && sql.includes("WHERE memory_id = ?")) {
+          return {
+            get: () => ({ principal_id: "principal-noop" }),
+          };
+        }
+
+        if (sql.includes("FROM themis_actor_task_scopes") && sql.includes("WHERE scope_id = ?")) {
+          return {
+            get: () => ({ principal_id: "principal-noop" }),
+          };
+        }
+
+        if (sql.includes("INSERT INTO themis_principal_actors")) {
+          return {
+            run: () => ({ changes: 0 }),
+          };
+        }
+
+        if (sql.includes("INSERT INTO themis_principal_main_memory")) {
+          return {
+            run: () => ({ changes: 0 }),
+          };
+        }
+
+        if (sql.includes("INSERT INTO themis_actor_task_scopes")) {
+          return {
+            run: () => ({ changes: 0 }),
+          };
+        }
+
+        throw new Error(`Unexpected SQL in noop test: ${sql}`);
+      },
+    };
+
+    (registry as unknown as { db: typeof noopDb }).db = noopDb;
+
+    assert.throws(
+      () =>
+        registry.savePrincipalActor({
+          actorId: "actor-noop-1",
+          ownerPrincipalId: "principal-noop",
+          displayName: "阿策",
+          role: "frontend-worker",
+          status: "active",
+          createdAt: "2026-03-31T10:01:00.000Z",
+          updatedAt: "2026-03-31T10:01:00.000Z",
+        }),
+      /did not apply|changes|no-op/i,
+    );
+
+    assert.throws(
+      () =>
+        registry.savePrincipalMainMemory({
+          memoryId: "memory-noop-1",
+          principalId: "principal-noop",
+          kind: "preference",
+          title: "回答节奏",
+          summary: "先结论后展开",
+          bodyMarkdown: "先给结论，再展开分析。",
+          sourceType: "themis",
+          status: "active",
+          createdAt: "2026-03-31T10:02:00.000Z",
+          updatedAt: "2026-03-31T10:02:00.000Z",
+        }),
+      /did not apply|changes|no-op/i,
+    );
+
+    assert.throws(
+      () =>
+        registry.saveActorTaskScope({
+          scopeId: "scope-noop-1",
+          principalId: "principal-noop",
+          actorId: "actor-noop-1",
+          taskId: "task-noop-1",
+          goal: "校验 no-op",
+          status: "open",
+          createdAt: "2026-03-31T10:03:00.000Z",
+          updatedAt: "2026-03-31T10:03:00.000Z",
+        }),
+      /did not apply|changes|no-op/i,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("searchActorRuntimeMemory 会按 actorId / scopeId / query / limit 组合过滤", () => {
   const { root, registry } = createRegistryContext();
 
@@ -869,7 +977,7 @@ test("脏 legacy actor memory 数据会在升级时被 foreign_key_check 拦下"
     const inspector = new Database(databaseFile, { readonly: true });
 
     try {
-      assert.equal(inspector.pragma("user_version", { simple: true }), 13);
+      assert.equal(inspector.pragma("user_version", { simple: true }), 12);
       const actorSql = inspector
         .prepare(
           `

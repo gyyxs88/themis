@@ -1529,7 +1529,7 @@ export class SqliteCodexSessionRegistry {
       throw new Error("Principal actor belongs to another principal.");
     }
 
-    this.db
+    const actorWriteResult = this.db
       .prepare(
         `
           INSERT INTO themis_principal_actors (
@@ -1566,6 +1566,10 @@ export class SqliteCodexSessionRegistry {
         created_at: record.createdAt,
         updated_at: record.updatedAt,
       });
+
+    if (actorWriteResult.changes === 0) {
+      throw new Error("Principal actor write did not apply.");
+    }
   }
 
   savePrincipalMainMemory(record: StoredPrincipalMainMemoryRecord): void {
@@ -1608,7 +1612,7 @@ export class SqliteCodexSessionRegistry {
       throw new Error("Principal main memory belongs to another principal.");
     }
 
-    this.db
+    const mainMemoryWriteResult = this.db
       .prepare(
         `
           INSERT INTO themis_principal_main_memory (
@@ -1657,6 +1661,10 @@ export class SqliteCodexSessionRegistry {
         created_at: record.createdAt,
         updated_at: record.updatedAt,
       });
+
+    if (mainMemoryWriteResult.changes === 0) {
+      throw new Error("Principal main memory write did not apply.");
+    }
   }
 
   searchPrincipalMainMemory(
@@ -1784,7 +1792,7 @@ export class SqliteCodexSessionRegistry {
       throw new Error("Actor task scope belongs to another principal.");
     }
 
-    this.db
+    const scopeWriteResult = this.db
       .prepare(
         `
           INSERT INTO themis_actor_task_scopes (
@@ -1832,6 +1840,10 @@ export class SqliteCodexSessionRegistry {
         created_at: record.createdAt,
         updated_at: record.updatedAt,
       });
+
+    if (scopeWriteResult.changes === 0) {
+      throw new Error("Actor task scope write did not apply.");
+    }
   }
 
   appendActorRuntimeMemory(record: StoredActorRuntimeMemoryRecord): void {
@@ -4399,7 +4411,6 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_third_party_models_provider_idx
       ON themis_third_party_models(provider_id, updated_at DESC);
 
-      PRAGMA user_version = ${DATABASE_SCHEMA_VERSION};
     `);
 
     this.createActorMemoryTables(database);
@@ -4411,6 +4422,7 @@ export class SqliteCodexSessionRegistry {
     this.migrateSchema(database);
     this.repairActorMemorySchema(database);
     this.createActorMemoryIndexes(database);
+    database.pragma(`user_version = ${DATABASE_SCHEMA_VERSION}`);
     return database;
   }
 
@@ -4609,7 +4621,6 @@ export class SqliteCodexSessionRegistry {
       });
 
       rebuild();
-      database.pragma(`user_version = ${DATABASE_SCHEMA_VERSION}`);
     } finally {
       if (foreignKeysEnabled) {
         database.pragma("foreign_keys = ON");
@@ -4794,7 +4805,6 @@ export class SqliteCodexSessionRegistry {
       `);
     }
 
-    database.pragma(`user_version = ${DATABASE_SCHEMA_VERSION}`);
   }
 
   private createDatabaseConnection(): Database.Database {
