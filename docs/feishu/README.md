@@ -6,6 +6,10 @@
 
 - [Themis 飞书渠道说明](./themis-feishu-channel.md)
 
+手工验收入口：
+
+- [飞书真实旅程 Smoke 剧本](./themis-feishu-real-journey-smoke.md)
+
 ## 当前落地状态
 
 - Themis 已接入飞书长连接，`im.message.receive_v1` 能进入现有 runtime 主链路。

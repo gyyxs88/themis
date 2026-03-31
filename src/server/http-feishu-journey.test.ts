@@ -1,0 +1,813 @@
+import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import type { Server } from "node:http";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import test from "node:test";
+import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
+import type { AppServerReverseRequest } from "../core/codex-app-server.js";
+import { AppServerTaskRuntime, type AppServerTaskRuntimeSession } from "../core/app-server-task-runtime.js";
+import type { CodexAuthRuntime } from "../core/codex-auth.js";
+import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import { FeishuChannelService } from "../channels/feishu/service.js";
+import { FeishuSessionStore } from "../channels/feishu/session-store.js";
+import { SqliteCodexSessionRegistry } from "../storage/index.js";
+import type {
+  TaskPendingActionSubmitRequest,
+  TaskRequest,
+  TaskResult,
+  TaskRuntimeFacade,
+  TaskRuntimeRunHooks,
+} from "../types/index.js";
+import { createThemisHttpServer } from "./http-server.js";
+import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
+
+const JOURNEY_THREAD_ID = "thread-web-feishu-journey-1";
+const JOURNEY_ACTION_ID = "input-web-feishu-1";
+const JOURNEY_PRINCIPAL_ID = "principal-local-owner";
+
+test("真实 Web->飞书 journey 在 app-server 下会走通 /use + direct-text takeover 收口", async () => {
+  await withHttpFeishuJourneyServer(async ({ baseUrl, root, runtimeStore, authHeaders, feishu }) => {
+    const sessionId = "session-web-feishu-journey-1";
+    const workspace = join(root, "workspace-feishu-journey");
+
+    seedCompletedWebOwnerPersona(runtimeStore);
+    writeWorkspaceDocs(workspace, {
+      readmeTitle: "workspace-feishu-journey",
+    });
+
+    const saveWorkspaceResponse = await fetch(`${baseUrl}/api/sessions/${sessionId}/settings`, {
+      method: "PUT",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        settings: {
+          workspacePath: workspace,
+        },
+      }),
+    });
+
+    assert.equal(saveWorkspaceResponse.status, 200);
+
+    const streamResponse = await fetch(`${baseUrl}/api/tasks/stream`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sessionId,
+        goal: "请先等待我补充输入，再根据补充内容继续执行",
+        options: {
+          runtimeEngine: "app-server",
+        },
+      }),
+    });
+
+    assert.equal(streamResponse.status, 200);
+    assert.ok(streamResponse.body);
+
+    const reader = createNdjsonStreamReader(streamResponse.body!);
+    const partialLines = await withTimeout(
+      reader.readUntil((lines) => lines.some((line) => line.kind === "event" && line.title === "task.action_required")),
+      "missing user-input action_required",
+    );
+    const actionRequiredLine = partialLines.find(
+      (line) => line.kind === "event" && line.title === "task.action_required",
+    );
+
+    assert.ok(actionRequiredLine);
+    assert.equal(actionRequiredLine?.metadata?.actionId, JOURNEY_ACTION_ID, JSON.stringify(actionRequiredLine));
+    assert.equal(actionRequiredLine?.metadata?.actionType, "user-input", JSON.stringify(actionRequiredLine));
+    await reader.cancel();
+
+    const restoredAction = await waitForHistoryActionId(baseUrl, authHeaders, sessionId, JOURNEY_ACTION_ID);
+    assert.equal(restoredAction.actionType, "user-input");
+
+    await feishu.handleCommand("use", [sessionId]);
+    const switchMessages = feishu.takeMessages().join("\n");
+    assert.match(switchMessages, new RegExp(`已切换到会话：${sessionId}`));
+    assert.equal(feishu.getCurrentSessionId(), sessionId);
+
+    const beforeTaskRuntimeCalls = feishu.getTaskRuntimeCalls();
+
+    await feishu.handleMessageEventText("这是来自飞书的补充上下文");
+
+    const feishuMessages = feishu.takeMessages().join("\n");
+    assert.match(feishuMessages, /已提交补充输入。/);
+    assert.deepEqual(feishu.getTaskRuntimeCalls(), beforeTaskRuntimeCalls);
+    assert.deepEqual(feishu.getResolvedActionSubmissions().at(-1), {
+      taskId: restoredAction.taskId,
+      requestId: restoredAction.requestId,
+      actionId: JOURNEY_ACTION_ID,
+      inputText: "这是来自飞书的补充上下文",
+    });
+
+    const completedHistory = await waitForHistoryTurnStatus(baseUrl, authHeaders, sessionId, "completed");
+    assert.equal(completedHistory.turns?.length, 1);
+    assert.equal(completedHistory.turns?.[0]?.status, "completed");
+    assert.ok(completedHistory.turns?.[0]?.events?.some((event) => event.type === "task.action_required"));
+  });
+});
+
+interface FeishuJourneyHarnessContext {
+  chatId: string;
+  messageId: string;
+  userId: string;
+  text: string;
+}
+
+interface FeishuJourneyHarnessResult {
+  baseUrl: string;
+  root: string;
+  runtimeStore: SqliteCodexSessionRegistry;
+  authHeaders: Record<string, string>;
+  feishu: FeishuJourneyHarness;
+}
+
+interface FeishuJourneyHarness {
+  handleCommand(name: string, args: string[]): Promise<void>;
+  handleMessageEventText(text: string): Promise<void>;
+  takeMessages(): string[];
+  peekMessages(): string[];
+  takeSingleMessage(): string;
+  getTaskRuntimeCalls(): { sdk: number; appServer: number };
+  getResolvedActionSubmissions(): TaskPendingActionSubmitRequest[];
+  getCurrentSessionId(): string | null;
+}
+
+interface UserInputJourneySessionState {
+  taskRuntimeCalls: { sdk: number; appServer: number };
+  resolvedActionSubmissions: TaskPendingActionSubmitRequest[];
+}
+
+interface HistorySessionDetailPayload {
+  turns?: Array<{
+    status?: string;
+    requestId?: string;
+    taskId?: string;
+    events?: Array<{
+      type?: string;
+      requestId?: string;
+      taskId?: string;
+      payloadJson?: string;
+    }>;
+  }>;
+}
+
+async function withHttpFeishuJourneyServer(
+  run: (context: FeishuJourneyHarnessResult) => Promise<void>,
+): Promise<void> {
+  const root = mkdtempSync(join(tmpdir(), "themis-http-feishu-journey-"));
+  const controlDirectory = join(root, "control");
+  mkdirSync(controlDirectory, { recursive: true });
+  writeWorkspaceDocs(controlDirectory, {
+    agents: "control-rule",
+    readmeTitle: "control",
+  });
+
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const actionBridge = new AppServerActionBridge();
+  const baseRuntime = new CodexTaskRuntime({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+  });
+  const userInputJourney = createUserInputJourneySession({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+    actionBridge,
+    taskRuntimeCalls: {
+      sdk: 0,
+      appServer: 0,
+    },
+  });
+  const feishu = createFeishuJourneyHarness({
+    root,
+    runtimeStore,
+    runtime: baseRuntime,
+    state: userInputJourney.state,
+    runtimeRegistry: {
+      defaultRuntime: userInputJourney.runtime,
+      runtimes: {
+        "app-server": userInputJourney.runtime,
+      },
+    },
+    actionBridge,
+  });
+  const server = createThemisHttpServer({
+    runtime: baseRuntime,
+    runtimeRegistry: {
+      defaultRuntime: userInputJourney.runtime,
+      runtimes: {
+        "app-server": userInputJourney.runtime,
+      },
+    },
+    actionBridge,
+    authRuntime: createAuthRuntime({
+      authenticated: false,
+      requiresOpenaiAuth: false,
+    }),
+  });
+  const listeningServer = await listenServer(server);
+  const address = listeningServer.address();
+
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to resolve server address.");
+  }
+
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const authHeaders = await createAuthenticatedWebHeaders({
+    baseUrl,
+    runtimeStore,
+  });
+
+  try {
+    await run({
+      baseUrl,
+      root,
+      runtimeStore,
+      authHeaders,
+      feishu,
+    });
+  } finally {
+    await closeServer(listeningServer);
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function createFeishuJourneyHarness(input: {
+  root: string;
+  runtimeStore: SqliteCodexSessionRegistry;
+  runtime: CodexTaskRuntime;
+  state: UserInputJourneySessionState;
+  runtimeRegistry: {
+    defaultRuntime: TaskRuntimeFacade;
+    runtimes: Partial<Record<"sdk" | "app-server", TaskRuntimeFacade>>;
+  };
+  actionBridge: AppServerActionBridge;
+}): FeishuJourneyHarness {
+  const sessionStore = new FeishuSessionStore({
+    filePath: join(input.root, "infra/local/feishu-sessions.json"),
+  });
+  const messages: string[] = [];
+  const context: FeishuJourneyHarnessContext = {
+    chatId: "chat-feishu-journey-1",
+    messageId: "message-feishu-journey-1",
+    userId: "user-feishu-journey-1",
+    text: "",
+  };
+  const service = new FeishuChannelService({
+    runtime: input.runtime,
+    runtimeRegistry: input.runtimeRegistry,
+    actionBridge: input.actionBridge,
+    authRuntime: createAuthRuntime({
+      authenticated: false,
+      requiresOpenaiAuth: false,
+    }),
+    taskTimeoutMs: 5_000,
+    sessionStore,
+    logger: createJourneyLogger(),
+  });
+  const safeSendText = async (_chatId: string, text: string): Promise<void> => {
+    messages.push(text);
+  };
+
+  (service as unknown as { safeSendText: typeof safeSendText }).safeSendText = safeSendText;
+  (service as unknown as { client: unknown }).client = {
+    im: {
+      v1: {
+        message: {
+          create: async ({ data }: { data: { content: string } }) => {
+            messages.push(extractFeishuRenderedText(data.content));
+            return {
+              data: {
+                message_id: "msg-created-1",
+              },
+            };
+          },
+          update: async ({ path, data }: { path: { message_id: string }; data: { content: string } }) => {
+            messages.push(extractFeishuRenderedText(data.content));
+            return {
+              data: {
+                message_id: path.message_id,
+              },
+            };
+          },
+        },
+      },
+    },
+  };
+
+  function conversationKey() {
+    return {
+      chatId: context.chatId,
+      userId: context.userId,
+    };
+  }
+
+  return {
+    async handleCommand(name: string, args: string[]) {
+      await (service as unknown as {
+        handleCommand(command: { name: string; args: string[]; raw: string }, incomingContext: FeishuJourneyHarnessContext): Promise<void>;
+      }).handleCommand({ name, args, raw: `/${name} ${args.join(" ")}`.trim() }, context);
+    },
+    async handleMessageEventText(text: string) {
+      await (service as unknown as {
+        handleMessageReceiveEvent(incomingContext: FeishuJourneyHarnessContext): Promise<void>;
+      }).handleMessageReceiveEvent({ ...context, text });
+    },
+    takeMessages() {
+      const current = [...messages];
+      messages.length = 0;
+      return current;
+    },
+    peekMessages() {
+      return [...messages];
+    },
+    takeSingleMessage() {
+      assert.equal(messages.length, 1);
+      return messages.pop() ?? "";
+    },
+    getTaskRuntimeCalls() {
+      return { ...input.state.taskRuntimeCalls };
+    },
+    getResolvedActionSubmissions() {
+      return [...input.state.resolvedActionSubmissions];
+    },
+    getCurrentSessionId() {
+      return sessionStore.getActiveSessionId(conversationKey());
+    },
+  };
+}
+
+function createUserInputJourneySession(input: {
+  workingDirectory: string;
+  runtimeStore: SqliteCodexSessionRegistry;
+  actionBridge: AppServerActionBridge;
+  taskRuntimeCalls: { sdk: number; appServer: number };
+}): {
+  runtime: TaskRuntimeFacade;
+  state: UserInputJourneySessionState;
+} {
+  const state: UserInputJourneySessionState = {
+    taskRuntimeCalls: input.taskRuntimeCalls,
+    resolvedActionSubmissions: [],
+  };
+  let currentTaskId = "task-web-feishu-journey-1";
+  let currentRequestId = "request-web-feishu-journey-1";
+  let currentActionId = JOURNEY_ACTION_ID;
+  let currentThreadId = JOURNEY_THREAD_ID;
+  let currentTurnStatus: "queued" | "running" | "waiting" | "completed" = "queued";
+  let currentInputText: string | null = null;
+  let resolveCurrentTurn: (() => void) | null = null;
+  let onServerRequestHandler: ((request: AppServerReverseRequest) => void) | null = null;
+  const appServerRuntime = new AppServerTaskRuntime({
+    workingDirectory: input.workingDirectory,
+    runtimeStore: input.runtimeStore,
+    actionBridge: input.actionBridge,
+    sessionFactory: async (): Promise<AppServerTaskRuntimeSession> => ({
+      initialize: async () => {},
+      startThread: async (params) => {
+        currentThreadId = JOURNEY_THREAD_ID;
+        currentTurnStatus = "queued";
+        currentInputText = null;
+        return { threadId: currentThreadId };
+      },
+      resumeThread: async (threadId) => {
+        currentThreadId = threadId;
+        currentTurnStatus = "queued";
+        currentInputText = null;
+        return { threadId };
+      },
+      startTurn: async (threadId) => {
+        currentThreadId = threadId;
+        currentTurnStatus = "running";
+
+        return await new Promise<{ turnId: string }>((resolve) => {
+          resolveCurrentTurn = () => {
+            currentTurnStatus = "completed";
+            resolve({
+              turnId: "turn-web-feishu-journey-1",
+            });
+          };
+
+          onServerRequestHandler?.({
+            id: "server-request-web-feishu-journey-1",
+            method: "item/tool/requestUserInput",
+            params: {
+              itemId: JOURNEY_ACTION_ID,
+              questions: [
+                {
+                  question: "请补充输入后继续执行。",
+                },
+              ],
+            },
+          });
+        });
+      },
+      close: async () => {},
+      onNotification: (_handler) => {},
+      onServerRequest: (handler) => {
+        onServerRequestHandler = handler;
+      },
+      respondToServerRequest: async (_id, result) => {
+        const inputText = extractReplyInputText(result);
+
+        if (!inputText) {
+          throw new Error("requestUserInput response did not include answers.reply.answers[0].");
+        }
+
+        currentInputText = inputText;
+        state.resolvedActionSubmissions.push({
+          taskId: currentTaskId,
+          requestId: currentRequestId,
+          actionId: currentActionId,
+          inputText,
+        });
+        resolveCurrentTurn?.();
+        resolveCurrentTurn = null;
+      },
+      rejectServerRequest: async (_id, error) => {
+        resolveCurrentTurn = null;
+        throw error;
+      },
+      readThread: async (threadId) => ({
+        threadId,
+        preview: "app-server native preview",
+        status: currentTurnStatus,
+        cwd: input.workingDirectory,
+        createdAt: "2026-03-31T09:00:00.000Z",
+        updatedAt: currentInputText ? "2026-03-31T09:00:01.000Z" : "2026-03-31T09:00:00.000Z",
+        turnCount: currentTurnStatus === "queued" ? 0 : 1,
+        turns: [],
+      }),
+    }),
+  });
+
+  return {
+    state,
+    runtime: {
+      async runTask(request: TaskRequest, hooks: TaskRuntimeRunHooks = {}): Promise<TaskResult> {
+        state.taskRuntimeCalls.appServer += 1;
+        currentTaskId = request.taskId ?? "task-web-feishu-journey-1";
+        currentRequestId = request.requestId;
+        currentActionId = JOURNEY_ACTION_ID;
+        currentInputText = null;
+        return await appServerRuntime.runTask(request, hooks);
+      },
+      getRuntimeStore: () => appServerRuntime.getRuntimeStore(),
+      getIdentityLinkService: () => appServerRuntime.getIdentityLinkService(),
+      getPrincipalSkillsService: () => appServerRuntime.getPrincipalSkillsService(),
+      ...(typeof appServerRuntime.startReview === "function"
+        ? { startReview: appServerRuntime.startReview.bind(appServerRuntime) }
+        : {}),
+      ...(typeof appServerRuntime.steerTurn === "function"
+        ? { steerTurn: appServerRuntime.steerTurn.bind(appServerRuntime) }
+        : {}),
+      ...(typeof appServerRuntime.readThreadSnapshot === "function"
+        ? { readThreadSnapshot: appServerRuntime.readThreadSnapshot.bind(appServerRuntime) }
+        : {}),
+    },
+  };
+}
+
+function createNdjsonStreamReader(body: ReadableStream<Uint8Array>): {
+  readUntil: (
+    predicate: (lines: Array<Record<string, any>>) => boolean,
+  ) => Promise<Array<Record<string, any>>>;
+  readAll: () => Promise<Array<Record<string, any>>>;
+  cancel: () => Promise<void>;
+} {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const lines: Array<Record<string, any>> = [];
+
+  async function drainUntil(
+    predicate: (lines: Array<Record<string, any>>) => boolean,
+    stopAtEnd: boolean,
+  ): Promise<Array<Record<string, any>>> {
+    while (true) {
+      if (predicate(lines)) {
+        return [...lines];
+      }
+
+      const { value, done } = await reader.read();
+
+      if (done) {
+        const trailing = buffer.trim();
+
+        if (trailing) {
+          lines.push(JSON.parse(trailing) as Record<string, any>);
+          buffer = "";
+          if (predicate(lines)) {
+            return [...lines];
+          }
+        }
+
+        if (stopAtEnd) {
+          return [...lines];
+        }
+
+        throw new Error("NDJSON stream ended before predicate matched.");
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split("\n");
+      buffer = chunks.pop() ?? "";
+
+      for (const chunk of chunks) {
+        const trimmed = chunk.trim();
+
+        if (!trimmed) {
+          continue;
+        }
+
+        lines.push(JSON.parse(trimmed) as Record<string, any>);
+
+        if (predicate(lines)) {
+          return [...lines];
+        }
+      }
+    }
+  }
+
+  return {
+    readUntil: async (predicate) => await drainUntil(predicate, false),
+    readAll: async () => {
+      const consumedBefore = lines.length;
+      const all = await drainUntil(() => false, true);
+      return all.slice(consumedBefore);
+    },
+    cancel: async () => {
+      await reader.cancel();
+    },
+  };
+}
+
+async function waitForHistoryActionId(
+  baseUrl: string,
+  authHeaders: Record<string, string>,
+  sessionId: string,
+  expectedActionId: string,
+  timeoutMs = 1_000,
+): Promise<{
+  taskId: string;
+  requestId: string;
+  actionId: string;
+  actionType?: string;
+}> {
+  const startedAt = Date.now();
+
+  while (true) {
+    const historyDetailPayload = await readHistoryDetail(baseUrl, authHeaders, sessionId);
+    const actionRequired = extractActionRequiredFromHistoryByActionId(historyDetailPayload, expectedActionId);
+
+    if (actionRequired) {
+      return actionRequired;
+    }
+
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error(`history action did not reach actionId ${expectedActionId}`);
+    }
+
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 20);
+      timer.unref?.();
+    });
+  }
+}
+
+async function waitForHistoryTurnStatus(
+  baseUrl: string,
+  authHeaders: Record<string, string>,
+  sessionId: string,
+  expectedStatus: string,
+  timeoutMs = 1_000,
+): Promise<HistorySessionDetailPayload> {
+  const startedAt = Date.now();
+
+  while (true) {
+    const historyDetailPayload = await readHistoryDetail(baseUrl, authHeaders, sessionId);
+
+    if (historyDetailPayload.turns?.some((turn) => turn.status === expectedStatus)) {
+      return historyDetailPayload;
+    }
+
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error(`history turn did not reach status ${expectedStatus}`);
+    }
+
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 20);
+      timer.unref?.();
+    });
+  }
+}
+
+async function readHistoryDetail(
+  baseUrl: string,
+  authHeaders: Record<string, string>,
+  sessionId: string,
+): Promise<HistorySessionDetailPayload> {
+  const historyDetailResponse = await fetch(`${baseUrl}/api/history/sessions/${sessionId}`, {
+    method: "GET",
+    headers: authHeaders,
+  });
+  assert.equal(historyDetailResponse.status, 200);
+  return await historyDetailResponse.json() as HistorySessionDetailPayload;
+}
+
+async function withTimeout<T>(promise: Promise<T>, message: string, timeoutMs = 1_000): Promise<T> {
+  return await Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      timer.unref?.();
+    }),
+  ]);
+}
+
+function extractActionRequiredFromHistoryByActionId(
+  historyDetailPayload: HistorySessionDetailPayload,
+  expectedActionId: string,
+): {
+  taskId: string;
+  requestId: string;
+  actionId: string;
+  actionType?: string;
+} | null {
+  for (const turn of historyDetailPayload.turns ?? []) {
+    if (turn.status !== "waiting") {
+      continue;
+    }
+
+    for (const event of turn.events ?? []) {
+      if (event.type !== "task.action_required" || !event.payloadJson) {
+        continue;
+      }
+
+      const payload = JSON.parse(event.payloadJson) as {
+        actionId?: string;
+        actionType?: string;
+      };
+
+      if (payload.actionId !== expectedActionId) {
+        continue;
+      }
+
+      const taskId = event.taskId ?? turn.taskId;
+      const requestId = event.requestId ?? turn.requestId;
+
+      if (!taskId || !requestId) {
+        continue;
+      }
+
+      return {
+        taskId,
+        requestId,
+        actionId: payload.actionId,
+        ...(payload.actionType ? { actionType: payload.actionType } : {}),
+      };
+    }
+  }
+
+  return null;
+}
+
+function extractReplyInputText(result: unknown): string | null {
+  const record = asRecord(result);
+  const answers = asRecord(record?.answers);
+  const reply = asRecord(answers?.reply);
+  const replyAnswers = Array.isArray(reply?.answers) ? reply.answers : [];
+  const text = typeof replyAnswers[0] === "string" ? replyAnswers[0].trim() : "";
+  return text || null;
+}
+
+function listenServer(server: Server): Promise<Server> {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve(server);
+    });
+  });
+}
+
+function seedCompletedWebOwnerPersona(runtimeStore: SqliteCodexSessionRegistry): void {
+  const now = "2026-03-29T09:00:00.000Z";
+  runtimeStore.savePrincipal({
+    principalId: JOURNEY_PRINCIPAL_ID,
+    displayName: "test-owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+  runtimeStore.savePrincipalPersonaProfile({
+    principalId: JOURNEY_PRINCIPAL_ID,
+    profile: {
+      preferredAddress: "乐意",
+      workSummary: "负责 Themis 的设计与开发",
+      collaborationStyle: "先给结论，再逐步拆解关键取舍",
+      assistantLanguageStyle: "直接、清楚、不过度客套",
+    },
+    createdAt: now,
+    updatedAt: now,
+    completedAt: now,
+  });
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
+function writeWorkspaceDocs(
+  workspace: string,
+  options: {
+    agents?: string;
+    readmeTitle?: string;
+  } = {},
+): void {
+  writeRuntimeFile(workspace, "AGENTS.md", options.agents ?? "workspace-rule");
+  writeRuntimeFile(workspace, "README.md", `# ${options.readmeTitle ?? "workspace"}`);
+  writeRuntimeFile(workspace, "memory/architecture/overview.md", "# architecture");
+  writeRuntimeFile(workspace, "docs/memory/2026/03/web-journey.md", "# web journey");
+  writeRuntimeFile(workspace, "notes.txt", "journey note");
+}
+
+function writeRuntimeFile(root: string, path: string, content: string): void {
+  const absolutePath = join(root, path);
+  mkdirSync(dirname(absolutePath), { recursive: true });
+  writeFileSync(absolutePath, `${content}\n`, "utf8");
+}
+
+function extractFeishuRenderedText(content: string): string {
+  const parsed = JSON.parse(content) as {
+    text?: string;
+    zh_cn?: {
+      content?: Array<Array<{ text?: string }>>;
+    };
+  };
+
+  if (typeof parsed.text === "string") {
+    return parsed.text;
+  }
+
+  const firstText = parsed.zh_cn?.content?.flat().find((item) => typeof item.text === "string")?.text;
+  return typeof firstText === "string" ? firstText : "";
+}
+
+function createJourneyLogger(): {
+  info: () => void;
+  warn: () => void;
+  error: () => void;
+} {
+  return {
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+  };
+}
+
+function createAuthRuntime(snapshot: {
+  authenticated: boolean;
+  requiresOpenaiAuth: boolean;
+}): CodexAuthRuntime {
+  const accounts = [
+    {
+      accountId: "acc-1",
+      label: "Alpha",
+      accountEmail: "alpha@example.com",
+      codexHome: "/tmp/codex-alpha",
+    },
+    {
+      accountId: "acc-2",
+      label: "Beta",
+      accountEmail: "beta@example.com",
+      codexHome: "/tmp/codex-beta",
+    },
+  ];
+
+  return {
+    readSnapshot: async () => snapshot,
+    readThirdPartyProviderProfile: () => null,
+    listAccounts: () => accounts,
+    getActiveAccount: () => accounts[0] ?? null,
+  } as unknown as CodexAuthRuntime;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+}
