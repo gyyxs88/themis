@@ -185,6 +185,12 @@ test("真实 Web->飞书 mixed recovery journey 在 app-server 下会走通 appr
     assert.equal(feishu.getCurrentSessionId(), sessionId);
 
     const beforeTaskRuntimeCalls = feishu.getTaskRuntimeCalls();
+    const historyBeforeApproval = await readHistoryDetail(baseUrl, authHeaders, sessionId);
+
+    assert.equal(
+      extractActionRequiredFromHistoryByActionId(historyBeforeApproval, MIXED_INPUT_ACTION_ID),
+      null,
+    );
 
     await feishu.handleCommand("approve", [MIXED_APPROVAL_ACTION_ID]);
 
@@ -239,6 +245,106 @@ test("真实 Web->飞书 mixed recovery journey 在 app-server 下会走通 appr
   });
 });
 
+test("Journey session respondToServerRequest 会按 request id 严格匹配当前 waiting reverse request", async () => {
+  const singleState = createJourneySessionState({
+    scenario: "single-user-input",
+    workingDirectory: "/tmp/themis-feishu-journey-single",
+  });
+  const singleSession = createJourneySession(singleState);
+  const singleRequests: AppServerReverseRequest[] = [];
+
+  singleSession.onServerRequest((request) => {
+    singleRequests.push(request);
+  });
+
+  await singleSession.initialize();
+  await singleSession.startThread({
+    cwd: singleState.workingDirectory,
+    persistExtendedHistory: true,
+  });
+  const singleTurn = singleSession.startTurn(JOURNEY_THREAD_ID, "single journey");
+  const singleRespondToServerRequest = singleSession.respondToServerRequest;
+
+  assert.ok(singleRespondToServerRequest);
+  await waitFor(() => singleRequests.length === 1, "single scenario did not emit requestUserInput");
+
+  await assert.rejects(
+    singleRespondToServerRequest("wrong-single-request-id", {
+      answers: {
+        reply: {
+          answers: ["ignored"],
+        },
+      },
+    }),
+    /Unexpected reverse request id/,
+  );
+
+  await singleRespondToServerRequest(singleRequests[0]?.id ?? "", {
+    answers: {
+      reply: {
+        answers: ["single strict match"],
+      },
+    },
+  });
+  await singleTurn;
+  await singleSession.close();
+
+  const mixedState = createJourneySessionState({
+    scenario: "approval-then-input",
+    workingDirectory: "/tmp/themis-feishu-journey-mixed",
+  });
+  const mixedSession = createJourneySession(mixedState);
+  const mixedRequests: AppServerReverseRequest[] = [];
+
+  mixedSession.onServerRequest((request) => {
+    mixedRequests.push(request);
+  });
+
+  await mixedSession.initialize();
+  await mixedSession.startThread({
+    cwd: mixedState.workingDirectory,
+    persistExtendedHistory: true,
+  });
+  const mixedTurn = mixedSession.startTurn(JOURNEY_THREAD_ID, "mixed journey");
+  const mixedRespondToServerRequest = mixedSession.respondToServerRequest;
+
+  assert.ok(mixedRespondToServerRequest);
+  await waitFor(() => mixedRequests.length === 1, "mixed scenario did not emit approval request");
+
+  await assert.rejects(
+    mixedRespondToServerRequest("wrong-mixed-approval-id", {
+      decision: "accept",
+    }),
+    /Unexpected reverse request id/,
+  );
+
+  await mixedRespondToServerRequest(mixedRequests[0]?.id ?? "", {
+    decision: "accept",
+  });
+  await waitFor(() => mixedRequests.length === 2, "mixed scenario did not emit user-input request");
+
+  await assert.rejects(
+    mixedRespondToServerRequest("wrong-mixed-input-id", {
+      answers: {
+        reply: {
+          answers: ["ignored"],
+        },
+      },
+    }),
+    /Unexpected reverse request id/,
+  );
+
+  await mixedRespondToServerRequest(mixedRequests[1]?.id ?? "", {
+    answers: {
+      reply: {
+        answers: ["mixed strict match"],
+      },
+    },
+  });
+  await mixedTurn;
+  await mixedSession.close();
+});
+
 interface FeishuJourneyHarnessContext {
   chatId: string;
   messageId: string;
@@ -282,6 +388,19 @@ interface JourneyScenarioState {
   currentTurnStatus: "queued" | "running" | "waiting" | "completed";
   currentInputText: string | null;
 }
+
+type JourneyPendingServerRequest =
+  | {
+    id: string | number;
+    kind: "approval";
+    resolve: (value: { decision?: string } | null) => void;
+  }
+  | {
+    id: string | number;
+    kind: "input";
+    actionId: string;
+    resolve: (value: { answers?: Record<string, { answers: string[] }> } | null) => void;
+  };
 
 interface HistorySessionDetailPayload {
   turns?: Array<{
@@ -555,8 +674,28 @@ function createJourneyRuntime(input: {
 function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntimeSession {
   let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | null = null;
   let serverRequestHandler: ((request: AppServerReverseRequest) => void) | null = null;
-  let resolveApprovalResponse: ((value: { decision?: string } | null) => void) | null = null;
-  let resolveInputResponse: ((value: { answers?: Record<string, { answers: string[] }> } | null) => void) | null = null;
+  let pendingServerRequest: JourneyPendingServerRequest | null = null;
+
+  const waitForApprovalResponse = (requestId: string | number): Promise<{ decision?: string } | null> => new Promise((resolve) => {
+    assert.equal(pendingServerRequest, null, "Unexpected overlapping reverse requests.");
+    pendingServerRequest = {
+      id: requestId,
+      kind: "approval",
+      resolve,
+    };
+  });
+  const waitForInputResponse = (
+    requestId: string | number,
+    actionId: string,
+  ): Promise<{ answers?: Record<string, { answers: string[] }> } | null> => new Promise((resolve) => {
+    assert.equal(pendingServerRequest, null, "Unexpected overlapping reverse requests.");
+    pendingServerRequest = {
+      id: requestId,
+      kind: "input",
+      actionId,
+      resolve,
+    };
+  });
 
   return {
     initialize: async () => {},
@@ -585,8 +724,10 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
     startTurn: async () => {
       if (state.scenario === "single-user-input") {
         state.currentTurnStatus = "running";
+        const inputRequestId = "server-input-web-feishu-1";
+        const inputResponsePromise = waitForInputResponse(inputRequestId, JOURNEY_ACTION_ID);
         serverRequestHandler?.({
-          id: "server-input-web-feishu-1",
+          id: inputRequestId,
           method: "item/tool/requestUserInput",
           params: {
             threadId: JOURNEY_THREAD_ID,
@@ -602,9 +743,7 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
         });
         state.currentTurnStatus = "waiting";
 
-        const inputResponse = await new Promise<{ answers?: Record<string, { answers: string[] }> } | null>((resolve) => {
-          resolveInputResponse = resolve;
-        });
+        const inputResponse = await inputResponsePromise;
         const inputText = requireJourneyInputText(inputResponse);
 
         notificationHandler?.({
@@ -619,8 +758,10 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
       }
 
       state.currentTurnStatus = "running";
+      const approvalRequestId = "server-approval-web-feishu-mixed-1";
+      const approvalResponsePromise = waitForApprovalResponse(approvalRequestId);
       serverRequestHandler?.({
-        id: "server-approval-web-feishu-mixed-1",
+        id: approvalRequestId,
         method: "item/commandExecution/requestApproval",
         params: {
           threadId: JOURNEY_THREAD_ID,
@@ -633,9 +774,7 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
       });
       state.currentTurnStatus = "waiting";
 
-      const approvalResponse = await new Promise<{ decision?: string } | null>((resolve) => {
-        resolveApprovalResponse = resolve;
-      });
+      const approvalResponse = await approvalResponsePromise;
       assert.equal(approvalResponse?.decision, "accept");
       notificationHandler?.({
         method: "item/agentMessage/delta",
@@ -645,8 +784,10 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
         },
       });
 
+      const inputRequestId = "server-input-web-feishu-mixed-2";
+      const inputResponsePromise = waitForInputResponse(inputRequestId, MIXED_INPUT_ACTION_ID);
       serverRequestHandler?.({
-        id: "server-input-web-feishu-mixed-2",
+        id: inputRequestId,
         method: "item/tool/requestUserInput",
         params: {
           threadId: JOURNEY_THREAD_ID,
@@ -662,9 +803,7 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
       });
       state.currentTurnStatus = "waiting";
 
-      const inputResponse = await new Promise<{ answers?: Record<string, { answers: string[] }> } | null>((resolve) => {
-        resolveInputResponse = resolve;
-      });
+      const inputResponse = await inputResponsePromise;
       const inputText = requireJourneyInputText(inputResponse);
 
       notificationHandler?.({
@@ -684,37 +823,45 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
     onServerRequest: (handler) => {
       serverRequestHandler = handler;
     },
-    respondToServerRequest: async (_id, result) => {
-      if (resolveApprovalResponse) {
-        const resolve = resolveApprovalResponse;
-        resolveApprovalResponse = null;
+    respondToServerRequest: async (id, result) => {
+      if (!pendingServerRequest) {
+        throw new Error(`Unexpected reverse request id: ${String(id)} (no pending reverse request).`);
+      }
+
+      if (pendingServerRequest.id !== id) {
+        throw new Error(
+          `Unexpected reverse request id: ${String(id)} (expected ${String(pendingServerRequest.id)}).`,
+        );
+      }
+
+      const activeRequest = pendingServerRequest;
+      pendingServerRequest = null;
+
+      if (activeRequest.kind === "approval") {
         state.feishuState.resolvedActionSubmissions.push({
           taskId: state.currentTaskId,
           requestId: state.currentRequestId,
           actionId: MIXED_APPROVAL_ACTION_ID,
           decision: "approve",
         });
-        resolve(result as { decision?: string } | null);
+        activeRequest.resolve(result as { decision?: string } | null);
         return;
       }
 
-      if (resolveInputResponse) {
-        const resolve = resolveInputResponse;
-        resolveInputResponse = null;
-        const inputText = requireJourneyInputText(result);
-        state.currentInputText = inputText;
-        state.feishuState.resolvedActionSubmissions.push({
-          taskId: state.currentTaskId,
-          requestId: state.currentRequestId,
-          actionId: state.scenario === "single-user-input" ? JOURNEY_ACTION_ID : MIXED_INPUT_ACTION_ID,
-          inputText,
-        });
-        resolve(result as { answers?: Record<string, { answers: string[] }> } | null);
-      }
+      const inputText = requireJourneyInputText(result);
+      state.currentInputText = inputText;
+      state.feishuState.resolvedActionSubmissions.push({
+        taskId: state.currentTaskId,
+        requestId: state.currentRequestId,
+        actionId: activeRequest.actionId,
+        inputText,
+      });
+      activeRequest.resolve(result as { answers?: Record<string, { answers: string[] }> } | null);
     },
-    rejectServerRequest: async (_id, error) => {
-      resolveApprovalResponse = null;
-      resolveInputResponse = null;
+    rejectServerRequest: async (id, error) => {
+      if (pendingServerRequest && pendingServerRequest.id === id) {
+        pendingServerRequest = null;
+      }
       throw error;
     },
   };
@@ -875,6 +1022,21 @@ async function withTimeout<T>(promise: Promise<T>, message: string, timeoutMs = 
       timer.unref?.();
     }),
   ]);
+}
+
+async function waitFor(predicate: () => boolean, message: string, timeoutMs = 1_000): Promise<void> {
+  const startedAt = Date.now();
+
+  while (!predicate()) {
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error(message);
+    }
+
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 20);
+      timer.unref?.();
+    });
+  }
 }
 
 function extractActionRequiredFromHistoryByActionId(
