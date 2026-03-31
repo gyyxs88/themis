@@ -2287,7 +2287,13 @@ export class FeishuChannelService {
       return true;
     }
 
-    return await this.submitPendingUserInput(inputActions[0], context.text, context);
+    const inputAction = inputActions[0];
+
+    if (!inputAction) {
+      return false;
+    }
+
+    return await this.submitPendingUserInput(inputAction, context.text, context);
   }
 
   private async submitPendingUserInput(
