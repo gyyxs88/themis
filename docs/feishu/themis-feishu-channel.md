@@ -1,6 +1,6 @@
 # Themis 飞书渠道说明
 
-更新日期：2026-03-30
+更新日期：2026-03-31
 
 ## 当前实现
 
@@ -23,6 +23,8 @@ Themis 已接入飞书长连接渠道，特点如下：
 - 指向本地绝对路径或相对仓库路径的 Markdown 链接，不会在飞书里保留为超链接，而是降级成普通代码样式文本
 - 失败、异常和取消会直接落到当前最后一条占位消息上
 - `task.action_required` 会转成移动端友好的 waiting action 文本，直接带出 actionId、命令提示和当前会话 / 线程摘要
+- `task.action_required` 里的 `user-input` 现在支持 direct-text takeover：如果当前 `sessionId + principalId` 作用域下只有 1 条 `user-input` pending action，且不存在 `approval` pending action，飞书里直接回复普通文本即可继续；如果同一作用域下有多条 `user-input` pending action，普通文本不会自动接管，会提示改用 `/reply <actionId> <内容>`
+- `resolvePendingActionScope(...)` 现在按 `sessionId + principalId` 匹配，不再要求 `sourceChannel = "feishu"` 作为前提；同一 principal 下的 Web-origin `user-input` 和 `approval` pending action 也可以由飞书接管，不同 principal 即使 `sessionId` 一样也不会命中
 - 状态类 `task.progress` 会额外发出任务状态摘要，不会打断原来的 `处理中...` 占位链
 - `/new` 会继承当前激活会话的 `workspacePath`（只继承工作区字段）
 - `/sessions`、`/use`、`/current` 会展示当前会话与 native thread 摘要，`/use` 切换成功后会自动回显当前会话状态
@@ -328,6 +330,7 @@ infra/local/themis.db
 ## Waiting Action 与任务状态表达
 
 - `task.action_required` 到达时，飞书会输出“等待你处理”的摘要消息，并直接给出 `/approve`、`/deny` 或 `/reply` 的命令提示。
+- `task.action_required` 到达时，如果当前只有 1 条 `user-input` pending action 且没有 `approval` pending action，飞书会优先把普通文本当成补充输入；如果同一 `sessionId + principalId` scope 下有多条 `user-input` pending action，则会明确提示改用 `/reply <actionId> <内容>`。
 - waiting action 摘要会同时带出当前 `sessionId` 与 native thread 摘要，减少移动端来回切 `/current` 的成本。
 - action 提交后的 `running / restoring / completed / failed` 这类状态变化，会额外落一条状态摘要消息。
 - 状态摘要不会打断原有的 `处理中...` 占位链路；正文流和状态流会分开表达。
@@ -335,6 +338,7 @@ infra/local/themis.db
 ## 普通消息行为
 
 - 直接发送普通文本：进入当前会话
+- 如果当前在 waiting `user-input`，并且 `sessionId + principalId` scope 里只有 1 条 `user-input` pending action、且没有 `approval` pending action，普通文本会直接接管这条 waiting input；如果同一 scope 里有多条 `user-input` pending action，会提示改用 `/reply <actionId> <内容>`
 - 如果当前还没有激活会话：自动创建新会话
 - 如果当前 principal 还没有已完成的长期协作档案，普通文本会先进入一次性 bootstrap，而不是直接执行正式任务
 - 如果当前 principal 保存过默认任务配置，这些配置会随任务请求一起带入 Codex runtime

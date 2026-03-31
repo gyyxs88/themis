@@ -1,6 +1,6 @@
 # 飞书 Bot 调研与接入建议
 
-更新日期：2026-03-30
+更新日期：2026-03-31
 
 相关实现文档：
 
@@ -12,6 +12,8 @@
 - 当前已支持飞书文本收发、`/help`、`/sessions`、`/new`、`/use`、`/current`、`/review`、`/steer`、`/link`、`/settings` 命令树、`/msgupdate`、`/quota`，以及 `/account`、`/sandbox`、`/search`、`/network`、`/approval` 这些兼容入口。
 - Codex 在飞书里已改成“占位槽位 + 顺序延迟缓冲”体验：用户发消息后先立刻返回 `处理中...`；第一条中途回复先缓存，后续中途回复到达时才把上一条落成真实消息并补下一个 `处理中...`；静默超时后也会自动补发缓存内容。
 - 飞书移动端第一轮产品化表达已落地：`task.action_required` 会转成可直接执行的 waiting action 文本面，状态类 `task.progress` 会额外输出任务状态摘要，`/sessions`、`/use`、`/current` 会回显当前 native thread 摘要。
+- waiting `user-input` 现在优先走直接回复文本；只有当前 `sessionId + principalId` scope 里存在且仅存在一条 `user-input` pending action、并且没有 `approval` pending action 时，普通文本才会自动接管，同一 principal 下的 Web / 飞书入口共用这套范围。
+- `/reply <actionId> <内容>` 的优先级已经降到兜底路径，主要用于显式指定 actionId 或处理多条 `user-input` 并存的歧义。
 - 普通任务回复会优先转换成飞书 `post` 富文本，渲染列表、加粗、代码块和外链；本地文件链接会降级成普通文本显示。
 - Web 与飞书当前都统一采用“新消息默认打断旧任务”的跟进行为。
 - 飞书与 Web 现在默认共享同一套 conversation 视图；飞书 `/sessions` 可看到 Web 创建的会话，切到同一个 `conversationId` 后会继续复用后端已有上下文。
