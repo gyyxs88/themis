@@ -8,6 +8,12 @@ import type { RuntimeEngine, TaskRuntimeFacade } from "../types/index.js";
 import { WebAccessService } from "../core/web-access.js";
 import { serveWebAsset } from "./http-assets.js";
 import {
+  handleActorCreate,
+  handleActorList,
+  handleActorTakeover,
+  handleActorTimeline,
+} from "./http-actors.js";
+import {
   handleAuthAccountCreate,
   handleAuthAccountSelect,
   handleAuthLogin,
@@ -191,6 +197,22 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/identity/task-settings") {
         return handleIdentityTaskSettingsUpdate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/actors/create") {
+        return handleActorCreate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/actors/list") {
+        return handleActorList(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/actors/timeline") {
+        return handleActorTimeline(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/actors/takeover") {
+        return handleActorTakeover(request, response, runtime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/skills/list") {
