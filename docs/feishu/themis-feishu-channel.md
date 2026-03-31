@@ -330,7 +330,7 @@ infra/local/themis.db
 ## Waiting Action 与任务状态表达
 
 - `task.action_required` 到达时，飞书会输出“等待你处理”的摘要消息，并直接给出 `/approve`、`/deny` 或 `/reply` 的命令提示。
-- 如果当前只剩 1 条 `user-input` pending action，且没有 `approval` pending action，普通文本会优先接管这条 waiting input；如果同一 scope 下有多条 `user-input` pending action，普通文本会继续走原任务链，并且不会自动猜测目标 action。
+- 如果当前只剩 1 条 `user-input` pending action，且没有 `approval` pending action，普通文本会优先接管这条 waiting input；如果同一 scope 下有多条 `user-input` pending action，普通文本不会自动接管，而是提示用 `/reply <actionId> <内容>` 消歧。
 - waiting action 摘要会同时带出当前 `sessionId` 与 native thread 摘要，减少移动端来回切 `/current` 的成本。
 - action 提交后的 `running / restoring / completed / failed` 这类状态变化，会额外落一条状态摘要消息。
 - 状态摘要不会打断原有的 `处理中...` 占位链路；正文流和状态流会分开表达。
@@ -338,7 +338,7 @@ infra/local/themis.db
 ## 普通消息行为
 
 - 直接发送普通文本：进入当前会话
-- 如果当前在 waiting `user-input`，且 scope 里只有 1 条 `user-input` pending action、没有 `approval` pending action，普通文本会直接接管这条 waiting input；如果同一 scope 里有多条 `user-input` pending action，普通文本会继续走原任务链，不会自动接管。
+- 如果当前在 waiting `user-input`，且 scope 里只有 1 条 `user-input` pending action、没有 `approval` pending action，普通文本会直接接管这条 waiting input；如果同一 scope 里有多条 `user-input` pending action，普通文本不会自动接管，而是提示用 `/reply <actionId> <内容>` 消歧。
 - 如果当前还没有激活会话：自动创建新会话
 - 如果当前 principal 还没有已完成的长期协作档案，普通文本会先进入一次性 bootstrap，而不是直接执行正式任务
 - 如果当前 principal 保存过默认任务配置，这些配置会随任务请求一起带入 Codex runtime
