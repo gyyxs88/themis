@@ -1550,11 +1550,11 @@ export class SqliteCodexSessionRegistry {
             @updated_at
           )
           ON CONFLICT(actor_id) DO UPDATE SET
-            owner_principal_id = excluded.owner_principal_id,
             display_name = excluded.display_name,
             role = excluded.role,
             status = excluded.status,
             updated_at = excluded.updated_at
+          WHERE themis_principal_actors.owner_principal_id = excluded.owner_principal_id
         `,
       )
       .run({
@@ -1635,7 +1635,6 @@ export class SqliteCodexSessionRegistry {
             @updated_at
           )
           ON CONFLICT(memory_id) DO UPDATE SET
-            principal_id = excluded.principal_id,
             kind = excluded.kind,
             title = excluded.title,
             summary = excluded.summary,
@@ -1643,6 +1642,7 @@ export class SqliteCodexSessionRegistry {
             source_type = excluded.source_type,
             status = excluded.status,
             updated_at = excluded.updated_at
+          WHERE themis_principal_main_memory.principal_id = excluded.principal_id
         `,
       )
       .run({
@@ -1811,14 +1811,13 @@ export class SqliteCodexSessionRegistry {
             @updated_at
           )
           ON CONFLICT(scope_id) DO UPDATE SET
-            principal_id = excluded.principal_id,
-            actor_id = excluded.actor_id,
             task_id = excluded.task_id,
             conversation_id = excluded.conversation_id,
             goal = excluded.goal,
             workspace_path = excluded.workspace_path,
             status = excluded.status,
             updated_at = excluded.updated_at
+          WHERE themis_actor_task_scopes.principal_id = excluded.principal_id
         `,
       )
       .run({
@@ -4411,6 +4410,7 @@ export class SqliteCodexSessionRegistry {
     this.initializeSchema(database);
     this.migrateSchema(database);
     this.repairActorMemorySchema(database);
+    this.createActorMemoryIndexes(database);
     return database;
   }
 
@@ -4427,9 +4427,6 @@ export class SqliteCodexSessionRegistry {
         FOREIGN KEY (owner_principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE,
         UNIQUE(owner_principal_id, actor_id)
       );
-
-      CREATE INDEX IF NOT EXISTS themis_principal_actors_owner_idx
-      ON themis_principal_actors(owner_principal_id, updated_at DESC, actor_id ASC);
 
       CREATE TABLE IF NOT EXISTS themis_principal_main_memory (
         memory_id TEXT PRIMARY KEY,
@@ -4466,9 +4463,6 @@ export class SqliteCodexSessionRegistry {
         UNIQUE(principal_id, scope_id)
       );
 
-      CREATE INDEX IF NOT EXISTS themis_actor_task_scopes_principal_idx
-      ON themis_actor_task_scopes(principal_id, actor_id, status, updated_at DESC, scope_id ASC);
-
       CREATE TABLE IF NOT EXISTS themis_actor_runtime_memory (
         runtime_memory_id TEXT PRIMARY KEY,
         principal_id TEXT NOT NULL,
@@ -4489,6 +4483,16 @@ export class SqliteCodexSessionRegistry {
           REFERENCES themis_actor_task_scopes(principal_id, scope_id)
           ON DELETE CASCADE
       );
+    `);
+  }
+
+  private createActorMemoryIndexes(database: Database.Database): void {
+    database.exec(`
+      CREATE INDEX IF NOT EXISTS themis_principal_actors_owner_idx
+      ON themis_principal_actors(owner_principal_id, updated_at DESC, actor_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_actor_task_scopes_principal_idx
+      ON themis_actor_task_scopes(principal_id, actor_id, status, updated_at DESC, scope_id ASC);
 
       CREATE INDEX IF NOT EXISTS themis_actor_runtime_memory_principal_idx
       ON themis_actor_runtime_memory(principal_id, actor_id, scope_id, created_at DESC, runtime_memory_id DESC);
@@ -4592,6 +4596,16 @@ export class SqliteCodexSessionRegistry {
           DROP TABLE themis_actor_task_scopes_legacy;
           DROP TABLE themis_principal_actors_legacy;
         `);
+
+        const violations = database
+          .prepare(`PRAGMA foreign_key_check`)
+          .all() as Array<{ table: string; rowid: number; parent: string; fkid: number }>;
+
+        if (violations.length > 0) {
+          throw new Error(
+            `Actor memory schema migration failed foreign key check: ${JSON.stringify(violations)}`,
+          );
+        }
       });
 
       rebuild();
@@ -4736,8 +4750,6 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_web_audit_events_created_idx
       ON themis_web_audit_events(created_at DESC);
     `);
-
-    this.createActorMemoryTables(database);
 
     const authAccountColumns = database
       .prepare(`PRAGMA table_info(themis_auth_accounts)`)
