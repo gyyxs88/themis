@@ -210,6 +210,19 @@ test("AppServerActionBridge list 会按 scope 返回当前会话的 pending acti
       userId: "user-1",
     },
   });
+  bridge.register({
+    taskId: "task-input-other-principal",
+    requestId: "req-input-other-principal",
+    actionId: "reply-other-principal",
+    actionType: "user-input",
+    prompt: "Other principal details",
+    scope: {
+      sourceChannel: "web",
+      sessionId: "session-current",
+      principalId: "principal-2",
+      userId: "user-1",
+    },
+  });
 
   assert.deepEqual(
     bridge.list({
@@ -221,6 +234,16 @@ test("AppServerActionBridge list 会按 scope 返回当前会话的 pending acti
       ["approval-current", "approval"],
       ["reply-current", "user-input"],
       ["reply-web", "user-input"],
+    ],
+  );
+  assert.deepEqual(
+    bridge.list({
+      sessionId: "session-current",
+      principalId: "principal-2",
+      userId: "user-1",
+    }).map((action) => [action.actionId, action.actionType]),
+    [
+      ["reply-other-principal", "user-input"],
     ],
   );
 });

@@ -1157,6 +1157,32 @@ test("飞书普通文本在 Web-origin waiting action 的 userId 不同时仍能
   }
 });
 
+test("飞书普通文本不会自动接管同 session 但不同 principal 的 Web-origin user-input waiting action", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.injectPendingAction({
+      actionId: "reply-web-other-principal-1",
+      actionType: "user-input",
+      prompt: "Please add details",
+      sourceChannel: "web",
+      userId: "web-user-1",
+      principalId: "principal-other",
+    });
+
+    await harness.handleMessageEventText("这条消息应该继续走普通任务链");
+
+    assert.deepEqual(harness.getResolvedActionSubmissions(), []);
+    assert.notEqual(harness.findPendingAction("reply-web-other-principal-1"), null);
+    assert.deepEqual(harness.getTaskRuntimeCalls(), {
+      sdk: 0,
+      appServer: 1,
+    });
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("飞书普通任务在未显式指定 runtimeEngine 时默认走 app-server runtime", async () => {
   const harness = createHarness();
 
