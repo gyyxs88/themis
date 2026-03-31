@@ -3041,6 +3041,42 @@ export class SqliteCodexSessionRegistry {
       this.db
         .prepare(
           `
+            DELETE FROM themis_actor_runtime_memory
+            WHERE principal_id = ?
+          `,
+        )
+        .run(normalizedPrincipalId);
+
+      this.db
+        .prepare(
+          `
+            DELETE FROM themis_actor_task_scopes
+            WHERE principal_id = ?
+          `,
+        )
+        .run(normalizedPrincipalId);
+
+      this.db
+        .prepare(
+          `
+            DELETE FROM themis_principal_actors
+            WHERE owner_principal_id = ?
+          `,
+        )
+        .run(normalizedPrincipalId);
+
+      this.db
+        .prepare(
+          `
+            DELETE FROM themis_principal_main_memory
+            WHERE principal_id = ?
+          `,
+        )
+        .run(normalizedPrincipalId);
+
+      this.db
+        .prepare(
+          `
             DELETE FROM themis_principal_skill_materializations
             WHERE principal_id = ?
           `,
@@ -3109,6 +3145,8 @@ export class SqliteCodexSessionRegistry {
       if (!sourcePrincipal || !targetPrincipal) {
         return;
       }
+
+      this.db.pragma("defer_foreign_keys = ON");
 
       if (!targetPrincipal.displayName && sourcePrincipal.displayName) {
         this.savePrincipal({
@@ -3196,6 +3234,67 @@ export class SqliteCodexSessionRegistry {
           `,
         )
         .run(sourceId);
+
+      this.db
+        .prepare(
+          `
+            UPDATE themis_principal_main_memory
+            SET
+              principal_id = @target_principal_id,
+              updated_at = @updated_at
+            WHERE principal_id = @source_principal_id
+          `,
+        )
+        .run({
+          source_principal_id: sourceId,
+          target_principal_id: targetId,
+          updated_at: updatedAt,
+        });
+
+      this.db
+        .prepare(
+          `
+            UPDATE themis_principal_actors
+            SET
+              owner_principal_id = @target_principal_id,
+              updated_at = @updated_at
+            WHERE owner_principal_id = @source_principal_id
+          `,
+        )
+        .run({
+          source_principal_id: sourceId,
+          target_principal_id: targetId,
+          updated_at: updatedAt,
+        });
+
+      this.db
+        .prepare(
+          `
+            UPDATE themis_actor_task_scopes
+            SET
+              principal_id = @target_principal_id,
+              updated_at = @updated_at
+            WHERE principal_id = @source_principal_id
+          `,
+        )
+        .run({
+          source_principal_id: sourceId,
+          target_principal_id: targetId,
+          updated_at: updatedAt,
+        });
+
+      this.db
+        .prepare(
+          `
+            UPDATE themis_actor_runtime_memory
+            SET principal_id = @target_principal_id
+            WHERE principal_id = @source_principal_id
+          `,
+        )
+        .run({
+          source_principal_id: sourceId,
+          target_principal_id: targetId,
+        });
 
       const sourceSkills = this.listPrincipalSkills(sourceId);
       const targetSkillNames = new Set(

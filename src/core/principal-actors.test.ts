@@ -21,6 +21,69 @@ function createRegistryContext() {
   return { root, registry };
 }
 
+function seedPrincipalActorMemoryState(
+  registry: SqliteCodexSessionRegistry,
+  options: {
+    principalId: string;
+    actorId: string;
+    memoryId: string;
+    scopeId: string;
+    runtimeMemoryId: string;
+    taskId: string;
+    conversationId?: string;
+  },
+) {
+  registry.savePrincipalMainMemory({
+    memoryId: options.memoryId,
+    principalId: options.principalId,
+    kind: "preference",
+    title: `主记忆-${options.principalId}`,
+    summary: "先结论后展开",
+    bodyMarkdown: "默认先给结论，再展开分析。",
+    sourceType: "themis",
+    status: "active",
+    createdAt: "2026-03-31T11:01:00.000Z",
+    updatedAt: "2026-03-31T11:01:00.000Z",
+  });
+
+  registry.savePrincipalActor({
+    actorId: options.actorId,
+    ownerPrincipalId: options.principalId,
+    displayName: `演员-${options.actorId}`,
+    role: "research-worker",
+    status: "active",
+    createdAt: "2026-03-31T11:02:00.000Z",
+    updatedAt: "2026-03-31T11:02:00.000Z",
+  });
+
+  registry.saveActorTaskScope({
+    scopeId: options.scopeId,
+    principalId: options.principalId,
+    actorId: options.actorId,
+    taskId: options.taskId,
+    goal: `任务-${options.taskId}`,
+    workspacePath: "/workspace/themis",
+    status: "open",
+    createdAt: "2026-03-31T11:03:00.000Z",
+    updatedAt: "2026-03-31T11:03:00.000Z",
+    ...(options.conversationId ? { conversationId: options.conversationId } : {}),
+  });
+
+  registry.appendActorRuntimeMemory({
+    runtimeMemoryId: options.runtimeMemoryId,
+    principalId: options.principalId,
+    actorId: options.actorId,
+    taskId: options.taskId,
+    scopeId: options.scopeId,
+    kind: "progress",
+    title: `runtime-${options.runtimeMemoryId}`,
+    content: "已经完成上下文扫描。",
+    status: "active",
+    createdAt: "2026-03-31T11:04:00.000Z",
+    ...(options.conversationId ? { conversationId: options.conversationId } : {}),
+  });
+}
+
 test("actors 领域枚举遵循计划词汇", () => {
   assert.deepEqual(PRINCIPAL_ACTOR_STATUSES, ["active", "paused", "archived"]);
   assert.deepEqual(PRINCIPAL_MAIN_MEMORY_STATUSES, ["active", "deprecated", "archived"]);
@@ -1016,6 +1079,100 @@ test("脏 legacy actor memory 数据会在升级时被 foreign_key_check 拦下"
     } finally {
       inspector.close();
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("mergePrincipals 会迁移 actor/main-memory/scope/runtime-memory 到 target principal", () => {
+  const { root, registry } = createRegistryContext();
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-source",
+      displayName: "Source",
+      createdAt: "2026-03-31T11:00:00.000Z",
+      updatedAt: "2026-03-31T11:00:00.000Z",
+    });
+    registry.savePrincipal({
+      principalId: "principal-target",
+      displayName: "Target",
+      createdAt: "2026-03-31T11:00:30.000Z",
+      updatedAt: "2026-03-31T11:00:30.000Z",
+    });
+
+    seedPrincipalActorMemoryState(registry, {
+      principalId: "principal-source",
+      actorId: "actor-source-1",
+      memoryId: "main-memory-source-1",
+      scopeId: "scope-source-1",
+      runtimeMemoryId: "runtime-memory-source-1",
+      taskId: "task-source-1",
+      conversationId: "conversation-source-1",
+    });
+
+    registry.mergePrincipals(
+      "principal-source",
+      "principal-target",
+      "2026-03-31T11:05:00.000Z",
+    );
+
+    assert.deepEqual(
+      registry.listPrincipalActors("principal-target").map((actor) => [actor.actorId, actor.ownerPrincipalId]),
+      [["actor-source-1", "principal-target"]],
+    );
+    assert.equal(
+      registry.searchPrincipalMainMemory("principal-target", "主记忆-principal-source", 5)[0]?.principalId,
+      "principal-target",
+    );
+    assert.equal(
+      registry.getActorTaskScope("principal-target", "scope-source-1")?.principalId,
+      "principal-target",
+    );
+    assert.equal(
+      registry.listActorTaskTimeline({
+        principalId: "principal-target",
+        scopeId: "scope-source-1",
+      })[0]?.principalId,
+      "principal-target",
+    );
+
+    assert.equal(registry.listPrincipalActors("principal-source").length, 0);
+    assert.equal(registry.searchPrincipalMainMemory("principal-source", "主记忆", 5).length, 0);
+    assert.equal(registry.getActorTaskScope("principal-source", "scope-source-1"), null);
+    assert.equal(registry.listActorTaskTimeline({ principalId: "principal-source" }).length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("resetPrincipalState 会清空 actor/main-memory/scope/runtime-memory", () => {
+  const { root, registry } = createRegistryContext();
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-reset",
+      displayName: "Reset",
+      createdAt: "2026-03-31T11:10:00.000Z",
+      updatedAt: "2026-03-31T11:10:00.000Z",
+    });
+
+    seedPrincipalActorMemoryState(registry, {
+      principalId: "principal-reset",
+      actorId: "actor-reset-1",
+      memoryId: "main-memory-reset-1",
+      scopeId: "scope-reset-1",
+      runtimeMemoryId: "runtime-memory-reset-1",
+      taskId: "task-reset-1",
+      conversationId: "conversation-reset-1",
+    });
+
+    registry.resetPrincipalState("principal-reset", "2026-03-31T11:11:00.000Z");
+
+    assert.equal(registry.listPrincipalActors("principal-reset").length, 0);
+    assert.equal(registry.searchPrincipalMainMemory("principal-reset", "主记忆", 5).length, 0);
+    assert.equal(registry.getActorTaskScope("principal-reset", "scope-reset-1"), null);
+    assert.equal(registry.listActorTaskTimeline({ principalId: "principal-reset" }).length, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
