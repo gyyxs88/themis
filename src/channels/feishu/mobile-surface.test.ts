@@ -30,6 +30,26 @@ test("renderFeishuWaitingActionSurface 会输出等待动作、thread 摘要和�
   assert.match(text, /\/deny approval-1/);
 });
 
+test("renderFeishuWaitingActionSurface 在 user-input 场景提示直接回复并保留 /reply 兜底", () => {
+  const text = renderFeishuWaitingActionSurface({
+    sessionId: "session-feishu-1",
+    latestStatus: "waiting",
+    actionId: "reply-1",
+    actionType: "user-input",
+    prompt: "Please add details",
+    thread: {
+      engine: "app-server",
+      threadId: "thread-feishu-1",
+      preview: "need more detail",
+      status: "waiting",
+      turnCount: 2,
+    },
+  });
+
+  assert.match(text, /如果当前只在等这一条输入，直接回复即可继续/);
+  assert.match(text, /\/reply reply-1 <内容>/);
+});
+
 test("renderFeishuCurrentSessionSurface 会输出工作区、最新任务状态和 thread 概览", () => {
   const text = renderFeishuCurrentSessionSurface({
     sessionId: "session-feishu-1",

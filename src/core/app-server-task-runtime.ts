@@ -89,6 +89,7 @@ export class AppServerTaskRuntime {
   async runTask(request: TaskRequest, hooks: TaskRuntimeRunHooks = {}): Promise<TaskResult> {
     const resolvedRequest = this.conversationService.resolveRequest(request);
     request = resolvedRequest.request;
+    const principalId = resolvedRequest.principalId;
 
     const taskId = request.taskId ?? request.requestId;
     const { signal, cleanup } = createExecutionSignal(hooks.signal, hooks.timeoutMs);
@@ -127,6 +128,7 @@ export class AppServerTaskRuntime {
         const pendingServerRequest = this.handleServerRequest({
           session: activeSession,
           request,
+          principalId,
           taskId,
           requestId: request.requestId,
           serverRequest,
@@ -403,6 +405,7 @@ export class AppServerTaskRuntime {
   private async handleServerRequest(input: {
     session: AppServerTaskRuntimeSession;
     request: TaskRequest;
+    principalId: string | undefined;
     taskId: string;
     requestId: string;
     serverRequest: AppServerReverseRequest;
@@ -418,7 +421,7 @@ export class AppServerTaskRuntime {
       return;
     }
 
-    const actionScope = resolveActionScopeFromRequest(input.request);
+    const actionScope = resolveActionScopeFromRequest(input.request, input.principalId);
     const registeredAction = this.actionBridge.register({
       taskId: input.taskId,
       requestId: input.requestId,
@@ -495,12 +498,14 @@ interface ResolvedServerRequestAction {
   ) => Promise<unknown> | unknown;
 }
 
-function resolveActionScopeFromRequest(request: TaskRequest): TaskActionScope | undefined {
+function resolveActionScopeFromRequest(request: TaskRequest, principalId?: string): TaskActionScope | undefined {
   const sessionId = normalizeTextValue(request.channelContext.sessionId ?? request.channelContext.channelSessionKey);
+  const normalizedPrincipalId = normalizeTextValue(principalId);
   const userId = normalizeTextValue(request.user.userId);
   const scope: TaskActionScope = {
     ...(request.sourceChannel ? { sourceChannel: request.sourceChannel } : {}),
     ...(sessionId ? { sessionId } : {}),
+    ...(normalizedPrincipalId ? { principalId: normalizedPrincipalId } : {}),
     ...(userId ? { userId } : {}),
   };
 

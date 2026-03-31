@@ -68,6 +68,7 @@ test("AppServerActionBridge 查找同名 actionId 时可以按 scope 限定当�
     scope: {
       sourceChannel: "feishu",
       sessionId: "session-other",
+      principalId: "principal-1",
       userId: "user-1",
     },
   });
@@ -80,6 +81,7 @@ test("AppServerActionBridge 查找同名 actionId 时可以按 scope 限定当�
     scope: {
       sourceChannel: "feishu",
       sessionId: "session-current",
+      principalId: "principal-1",
       userId: "user-1",
     },
   });
@@ -87,11 +89,53 @@ test("AppServerActionBridge 查找同名 actionId 时可以按 scope 限定当�
   assert.equal(bridge.find("approval-shared", {
     sourceChannel: "feishu",
     sessionId: "session-current",
+    principalId: "principal-1",
     userId: "user-1",
   })?.taskId, "task-current");
   assert.equal(bridge.find("approval-shared", {
     sourceChannel: "feishu",
     sessionId: "session-missing",
+    principalId: "principal-1",
+    userId: "user-1",
+  }), null);
+});
+
+test("AppServerActionBridge 会用 principalId 隔离同 session 同 userId 的 waiting action", () => {
+  const bridge = new AppServerActionBridge();
+
+  bridge.register({
+    taskId: "task-other-principal",
+    requestId: "req-other-principal",
+    actionId: "approval-shared-principal",
+    actionType: "approval",
+    prompt: "Allow other principal command?",
+    scope: {
+      sessionId: "session-current",
+      principalId: "principal-other",
+      userId: "user-1",
+    },
+  });
+  bridge.register({
+    taskId: "task-current-principal",
+    requestId: "req-current-principal",
+    actionId: "approval-shared-principal",
+    actionType: "approval",
+    prompt: "Allow current principal command?",
+    scope: {
+      sessionId: "session-current",
+      principalId: "principal-current",
+      userId: "user-1",
+    },
+  });
+
+  assert.equal(bridge.find("approval-shared-principal", {
+    sessionId: "session-current",
+    principalId: "principal-current",
+    userId: "user-1",
+  })?.taskId, "task-current-principal");
+  assert.equal(bridge.find("approval-shared-principal", {
+    sessionId: "session-current",
+    principalId: "principal-missing",
     userId: "user-1",
   }), null);
 });
@@ -109,4 +153,97 @@ test("AppServerActionBridge 支持丢弃未完成的 pending action", () => {
 
   bridge.discard("task-drop", "req-drop", "approval-drop");
   assert.equal(bridge.find("approval-drop"), null);
+});
+
+test("AppServerActionBridge list 会按 scope 返回当前会话的 pending action", () => {
+  const bridge = new AppServerActionBridge();
+
+  bridge.register({
+    taskId: "task-approval",
+    requestId: "req-approval",
+    actionId: "approval-current",
+    actionType: "approval",
+    prompt: "Allow command?",
+    scope: {
+      sourceChannel: "feishu",
+      sessionId: "session-current",
+      principalId: "principal-1",
+      userId: "user-1",
+    },
+  });
+  bridge.register({
+    taskId: "task-input-current",
+    requestId: "req-input-current",
+    actionId: "reply-current",
+    actionType: "user-input",
+    prompt: "Please add details",
+    scope: {
+      sourceChannel: "feishu",
+      sessionId: "session-current",
+      principalId: "principal-1",
+      userId: "user-1",
+    },
+  });
+  bridge.register({
+    taskId: "task-input-other",
+    requestId: "req-input-other",
+    actionId: "reply-other",
+    actionType: "user-input",
+    prompt: "Other session details",
+    scope: {
+      sourceChannel: "feishu",
+      sessionId: "session-other",
+      principalId: "principal-1",
+      userId: "user-1",
+    },
+  });
+  bridge.register({
+    taskId: "task-input-web",
+    requestId: "req-input-web",
+    actionId: "reply-web",
+    actionType: "user-input",
+    prompt: "Web session details",
+    scope: {
+      sourceChannel: "web",
+      sessionId: "session-current",
+      principalId: "principal-1",
+      userId: "user-1",
+    },
+  });
+  bridge.register({
+    taskId: "task-input-other-principal",
+    requestId: "req-input-other-principal",
+    actionId: "reply-other-principal",
+    actionType: "user-input",
+    prompt: "Other principal details",
+    scope: {
+      sourceChannel: "web",
+      sessionId: "session-current",
+      principalId: "principal-2",
+      userId: "user-1",
+    },
+  });
+
+  assert.deepEqual(
+    bridge.list({
+      sessionId: "session-current",
+      principalId: "principal-1",
+      userId: "user-1",
+    }).map((action) => [action.actionId, action.actionType]),
+    [
+      ["approval-current", "approval"],
+      ["reply-current", "user-input"],
+      ["reply-web", "user-input"],
+    ],
+  );
+  assert.deepEqual(
+    bridge.list({
+      sessionId: "session-current",
+      principalId: "principal-2",
+      userId: "user-1",
+    }).map((action) => [action.actionId, action.actionType]),
+    [
+      ["reply-other-principal", "user-input"],
+    ],
+  );
 });

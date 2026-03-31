@@ -776,6 +776,14 @@ test("AppServerTaskRuntime 会把 approval reverse request 转成等待中的 ac
     assert.equal(actionRequired.actionId, "approval-1");
     assert.equal(actionRequired.actionType, "approval");
     assert.match(actionRequired.prompt ?? "", /rm -rf tmp|Need approval/);
+    assert.equal(actionBridge.find("approval-1", {
+      sessionId: "web-session-approval-1",
+      principalId: "principal-local-owner",
+    })?.taskId, "task-app-approval-1");
+    assert.equal(actionBridge.find("approval-1", {
+      sessionId: "web-session-approval-1",
+      principalId: "principal-other",
+    }), null);
 
     actionBridge.resolve({
       taskId: "task-app-approval-1",

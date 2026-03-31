@@ -20,6 +20,7 @@ import {
   APPROVAL_POLICIES,
   type PrincipalTaskSettings,
   type SessionTaskSettings,
+  type TaskActionDescriptor,
   SANDBOX_MODES,
   WEB_SEARCH_MODES,
   type ApprovalPolicy,
@@ -236,6 +237,10 @@ export class FeishuChannelService {
     try {
       if (command) {
         await this.handleCommand(command, context);
+        return;
+      }
+
+      if (await this.replyActivePendingInput(context)) {
         return;
       }
 
@@ -2254,6 +2259,68 @@ export class FeishuChannelService {
     await this.safeSendTaggedText(context.chatId, message, "处理中");
   }
 
+  private async replyActivePendingInput(context: FeishuIncomingContext): Promise<boolean> {
+    const actionScope = this.resolvePendingActionScope(context);
+
+    if (!actionScope) {
+      return false;
+    }
+
+    const scopedActions = this.actionBridge.list(actionScope);
+    const approvals = scopedActions.filter((action) => action.actionType === "approval");
+
+    if (approvals.length > 0) {
+      return false;
+    }
+
+    const inputActions = scopedActions.filter((action) => action.actionType === "user-input");
+
+    if (inputActions.length === 0) {
+      return false;
+    }
+
+    if (inputActions.length > 1) {
+      await this.safeSendText(
+        context.chatId,
+        "当前会话存在多条待补充输入，请使用 /reply <actionId> <内容> 指定要回复的 action。",
+      );
+      return true;
+    }
+
+    const inputAction = inputActions[0];
+
+    if (!inputAction) {
+      return false;
+    }
+
+    return await this.submitPendingUserInput(inputAction, context.text, context);
+  }
+
+  private async submitPendingUserInput(
+    action: TaskActionDescriptor & { taskId: string; requestId: string },
+    rawInputText: string,
+    context: FeishuIncomingContext,
+  ): Promise<boolean> {
+    const inputText = normalizeText(rawInputText);
+
+    if (!inputText) {
+      return false;
+    }
+
+    if (!this.actionBridge.resolve({
+      taskId: action.taskId,
+      requestId: action.requestId,
+      actionId: action.actionId,
+      inputText,
+    })) {
+      await this.safeSendText(context.chatId, `提交补充输入失败：${action.actionId} 已失效。`);
+      return true;
+    }
+
+    await this.safeSendTaggedText(context.chatId, "已提交补充输入。", "处理中");
+    return true;
+  }
+
   private async replyPendingAction(args: string[], context: FeishuIncomingContext): Promise<void> {
     const actionId = normalizeText(args[0]);
     const inputText = normalizeText(args.slice(1).join(" "));
@@ -2282,23 +2349,12 @@ export class FeishuChannelService {
       return;
     }
 
-    if (!this.actionBridge.resolve({
-      taskId: action.taskId,
-      requestId: action.requestId,
-      actionId,
-      inputText,
-    })) {
-      await this.safeSendText(context.chatId, `提交补充输入失败：${actionId} 已失效。`);
-      return;
-    }
-
-    await this.safeSendTaggedText(context.chatId, "已提交补充输入。", "处理中");
+    await this.submitPendingUserInput(action, inputText, context);
   }
 
   private resolvePendingActionScope(context: FeishuIncomingContext): {
-    sourceChannel: "feishu";
     sessionId: string;
-    userId: string;
+    principalId: string;
   } | null {
     const sessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
 
@@ -2306,10 +2362,11 @@ export class FeishuChannelService {
       return null;
     }
 
+    const principal = this.ensurePrincipalIdentity(context);
+
     return {
-      sourceChannel: "feishu",
       sessionId,
-      userId: context.userId,
+      principalId: principal.principalId,
     };
   }
 }

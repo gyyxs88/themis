@@ -165,6 +165,7 @@ export interface TaskActionDescriptor {
 export interface TaskActionScope {
   sourceChannel?: ChannelId;
   sessionId?: string;
+  principalId?: string;
   userId?: string;
 }
 
