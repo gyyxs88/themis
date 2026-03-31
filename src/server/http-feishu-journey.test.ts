@@ -256,7 +256,8 @@ test("真实 Web->飞书 mixed recovery 在 approval 后立即断流时仍会通
         readmeTitle: "workspace-feishu-detached-mixed-journey",
       });
 
-      const saveWorkspaceResponse = await fetch(`${baseUrl}/api/sessions/${sessionId}/settings`, {
+      try {
+        const saveWorkspaceResponse = await fetch(`${baseUrl}/api/sessions/${sessionId}/settings`, {
         method: "PUT",
         headers: {
           ...authHeaders,
@@ -297,18 +298,36 @@ test("真实 Web->飞书 mixed recovery 在 approval 后立即断流时仍会通
       assert.equal(firstAction.actionType, "approval");
 
       await feishu.handleCommand("use", [sessionId]);
-      feishu.takeMessages();
+      const switchMessages = feishu.takeMessages().join("\n");
+      assert.match(switchMessages, new RegExp(`已切换到会话：${sessionId}`));
+      assert.equal(feishu.getCurrentSessionId(), sessionId);
       const beforeTaskRuntimeCalls = feishu.getTaskRuntimeCalls();
 
-      await feishu.handleCommand("approve", [MIXED_APPROVAL_ACTION_ID]);
-      await reader.cancel();
+      let approveFailure: unknown = null;
+      try {
+        await feishu.handleCommand("approve", [MIXED_APPROVAL_ACTION_ID]);
+      } catch (error) {
+        approveFailure = error;
+      }
+
+      let cancelFailure: unknown = null;
+      try {
+        await reader.cancel();
+      } catch (error) {
+        cancelFailure = error;
+      }
 
       await new Promise<void>((resolve) => {
-        setTimeout(resolve, 50);
+        setImmediate(resolve);
       });
 
-      const historyAfterCancel = await readHistoryDetail(baseUrl, authHeaders, sessionId);
-      const restoredSecondAction = extractActionRequiredFromHistoryByActionId(historyAfterCancel, MIXED_INPUT_ACTION_ID);
+      await feishu.closeActiveSession();
+
+      assert.equal(feishu.getLastRejectedServerRequestError(), null);
+      assert.equal(approveFailure, null);
+      assert.equal(cancelFailure, null);
+
+      const restoredSecondAction = await waitForHistoryActionId(baseUrl, authHeaders, sessionId, MIXED_INPUT_ACTION_ID, 200);
       assert.ok(restoredSecondAction);
       assert.equal(restoredSecondAction.actionType, "user-input");
 
@@ -324,6 +343,9 @@ test("真实 Web->飞书 mixed recovery 在 approval 后立即断流时仍会通
         completedHistory.turns?.[0]?.events?.filter((event) => event.type === "task.action_required").length,
         2,
       );
+      } finally {
+        await feishu.closeActiveSession();
+      }
     },
   });
 });
@@ -452,6 +474,8 @@ interface FeishuJourneyHarness {
   getTaskRuntimeCalls(): { sdk: number; appServer: number };
   getResolvedActionSubmissions(): TaskPendingActionSubmitRequest[];
   getCurrentSessionId(): string | null;
+  getLastRejectedServerRequestError(): string | null;
+  closeActiveSession(): Promise<void>;
 }
 
 type FeishuJourneyScenario = "single-user-input" | "approval-then-input";
@@ -459,12 +483,14 @@ type FeishuJourneyScenario = "single-user-input" | "approval-then-input";
 interface UserInputJourneySessionState {
   taskRuntimeCalls: { sdk: number; appServer: number };
   resolvedActionSubmissions: TaskPendingActionSubmitRequest[];
+  lastRejectedServerRequestError: string | null;
 }
 
 interface JourneyScenarioState {
   scenario: FeishuJourneyScenario;
   workingDirectory: string;
   feishuState: UserInputJourneySessionState;
+  activeSession: AppServerTaskRuntimeSession | null;
   currentTaskId: string;
   currentRequestId: string;
   currentThreadId: string;
@@ -686,6 +712,17 @@ function createFeishuJourneyHarness(input: {
     getCurrentSessionId() {
       return sessionStore.getActiveSessionId(conversationKey());
     },
+    getLastRejectedServerRequestError() {
+      return input.state.feishuState.lastRejectedServerRequestError;
+    },
+    async closeActiveSession() {
+      if (!input.state.activeSession) {
+        return;
+      }
+
+      await input.state.activeSession.close();
+      input.state.activeSession = null;
+    },
   };
 }
 
@@ -702,7 +739,9 @@ function createJourneySessionState(input: {
         appServer: 0,
       },
       resolvedActionSubmissions: [],
+      lastRejectedServerRequestError: null,
     },
+    activeSession: null,
     currentTaskId: "task-web-feishu-journey-1",
     currentRequestId: "request-web-feishu-journey-1",
     currentThreadId: JOURNEY_THREAD_ID,
@@ -723,7 +762,11 @@ function createJourneyRuntime(input: {
     workingDirectory: input.state.workingDirectory,
     runtimeStore: input.runtimeStore,
     actionBridge: input.actionBridge,
-    sessionFactory: async (): Promise<AppServerTaskRuntimeSession> => createJourneySession(input.state),
+    sessionFactory: async (): Promise<AppServerTaskRuntimeSession> => {
+      const session = createJourneySession(input.state);
+      input.state.activeSession = session;
+      return session;
+    },
   });
 
   return {
@@ -758,6 +801,11 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
   let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | null = null;
   let serverRequestHandler: ((request: AppServerReverseRequest) => void) | null = null;
   let pendingServerRequest: JourneyPendingServerRequest | null = null;
+  let sessionClosed = false;
+  let resolveSessionClosed!: () => void;
+  const sessionClosedPromise = new Promise<void>((resolve) => {
+    resolveSessionClosed = resolve;
+  });
 
   const waitForApprovalResponse = (requestId: string | number): Promise<{ decision?: string } | null> => new Promise((resolve) => {
     assert.equal(pendingServerRequest, null, "Unexpected overlapping reverse requests.");
@@ -857,7 +905,14 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
       });
       state.currentTurnStatus = "waiting";
 
-      const approvalResponse = await approvalResponsePromise;
+      const approvalResponse = await Promise.race([
+        approvalResponsePromise,
+        sessionClosedPromise,
+      ]);
+      if (sessionClosed) {
+        state.currentTurnStatus = "completed";
+        return { turnId: "turn-web-feishu-mixed-1" };
+      }
       assert.equal(approvalResponse?.decision, "accept");
       notificationHandler?.({
         method: "item/agentMessage/delta",
@@ -867,9 +922,17 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
         },
       });
 
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 30);
-      });
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, 30);
+        }),
+        sessionClosedPromise,
+      ]);
+
+      if (sessionClosed) {
+        state.currentTurnStatus = "completed";
+        return { turnId: "turn-web-feishu-mixed-1" };
+      }
 
       const inputRequestId = "server-input-web-feishu-mixed-2";
       const inputResponsePromise = waitForInputResponse(inputRequestId, MIXED_INPUT_ACTION_ID);
@@ -890,7 +953,14 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
       });
       state.currentTurnStatus = "waiting";
 
-      const inputResponse = await inputResponsePromise;
+      const inputResponse = await Promise.race([
+        inputResponsePromise,
+        sessionClosedPromise,
+      ]);
+      if (sessionClosed) {
+        state.currentTurnStatus = "completed";
+        return { turnId: "turn-web-feishu-mixed-1" };
+      }
       const inputText = requireJourneyInputText(inputResponse);
 
       notificationHandler?.({
@@ -903,7 +973,15 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
       state.currentTurnStatus = "completed";
       return { turnId: "turn-web-feishu-mixed-1" };
     },
-    close: async () => {},
+    close: async () => {
+      sessionClosed = true;
+      resolveSessionClosed();
+      state.activeSession = null;
+
+      if (state.currentTurnStatus === "waiting" && state.feishuState.lastRejectedServerRequestError === null) {
+        state.feishuState.lastRejectedServerRequestError = "CLIENT_DISCONNECTED";
+      }
+    },
     onNotification: (handler) => {
       notificationHandler = handler;
     },
@@ -949,6 +1027,16 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
       if (pendingServerRequest && pendingServerRequest.id === id) {
         pendingServerRequest = null;
       }
+
+      state.feishuState.lastRejectedServerRequestError = error instanceof Error
+        ? error.message
+        : String(error);
+
+      if (state.feishuState.lastRejectedServerRequestError === "CLIENT_DISCONNECTED") {
+        sessionClosed = true;
+        return;
+      }
+
       throw error;
     },
   };

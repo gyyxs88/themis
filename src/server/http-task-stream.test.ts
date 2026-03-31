@@ -1117,6 +1117,7 @@ test("handleTaskStream 在 approval resolve 后立刻 close 时会给第二轮 u
   const secondActionGate = new Promise<void>((resolve) => {
     releaseSecondAction = resolve;
   });
+  let streamFailure: unknown = null;
 
   try {
     (runtime as CodexTaskRuntime & { runTask: CodexTaskRuntime["runTask"] }).runTask = async (taskRequest, hooks = {}) => {
@@ -1191,7 +1192,7 @@ test("handleTaskStream 在 approval resolve 后立刻 close 时会给第二轮 u
         completedAt: "2026-03-31T12:00:02.000Z",
       };
     };
-    void handleTaskStream(
+    const streamPromise = handleTaskStream(
       request as unknown as import("node:http").IncomingMessage,
       response as unknown as import("node:http").ServerResponse,
       runtime,
@@ -1200,12 +1201,17 @@ test("handleTaskStream 在 approval resolve 后立刻 close 时会给第二轮 u
       actionBridge,
       5_000,
     );
+    const streamCompletion = streamPromise.then(
+      () => undefined,
+      (error) => {
+        streamFailure = error;
+      },
+    );
 
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 20);
-    });
-
-    assert.ok(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-detached-mixed-1"));
+    await waitFor(
+      () => actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-detached-mixed-1") !== null,
+      "approval detached mixed action did not register",
+    );
 
     assert.equal(actionBridge.resolve({
       taskId: capturedTaskId,
@@ -1217,13 +1223,12 @@ test("handleTaskStream 在 approval resolve 后立刻 close 时会给第二轮 u
     response.emit("close");
     releaseSecondAction();
 
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 20);
-    });
+    await waitFor(
+      () => actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "input-detached-mixed-2") !== null,
+      "second detached mixed user-input action did not register",
+    );
 
     assert.equal(abortMessage, null);
-
-    assert.ok(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "input-detached-mixed-2"));
 
     assert.equal(actionBridge.resolve({
       taskId: capturedTaskId,
@@ -1232,9 +1237,8 @@ test("handleTaskStream 在 approval resolve 后立刻 close 时会给第二轮 u
       inputText: "来自飞书的恢复补充",
     }), true);
 
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 20);
-    });
+    await streamCompletion;
+    assert.equal(streamFailure, null);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1616,7 +1620,6 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<voi
 
     await new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, 10);
-      timer.unref?.();
     });
   }
 }
