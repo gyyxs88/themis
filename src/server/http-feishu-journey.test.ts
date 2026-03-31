@@ -25,6 +25,8 @@ import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
 const JOURNEY_THREAD_ID = "thread-web-feishu-journey-1";
 const JOURNEY_ACTION_ID = "input-web-feishu-1";
 const JOURNEY_PRINCIPAL_ID = "principal-local-owner";
+const MIXED_APPROVAL_ACTION_ID = "approval-web-feishu-mixed-1";
+const MIXED_INPUT_ACTION_ID = "input-web-feishu-mixed-2";
 
 test("真实 Web->飞书 journey 在 app-server 下会走通 /use + direct-text takeover 收口", async () => {
   await withHttpFeishuJourneyServer(async ({ baseUrl, root, runtimeStore, authHeaders, feishu }) => {
@@ -109,6 +111,127 @@ test("真实 Web->飞书 journey 在 app-server 下会走通 /use + direct-text 
     assert.equal(completedHistory.turns?.length, 1);
     assert.equal(completedHistory.turns?.[0]?.status, "completed");
     assert.ok(completedHistory.turns?.[0]?.events?.some((event) => event.type === "task.action_required"));
+  });
+});
+
+test("真实 Web->飞书 mixed recovery journey 在 app-server 下会走通 approval -> user-input -> direct-text takeover 收口", async () => {
+  await withHttpFeishuJourneyServer(async ({ baseUrl, root, runtimeStore, authHeaders, feishu }) => {
+    const sessionId = "session-web-feishu-mixed-journey-1";
+    const workspace = join(root, "workspace-feishu-mixed-journey");
+    let reader: ReturnType<typeof createNdjsonStreamReader> | null = null;
+
+    try {
+      seedCompletedWebOwnerPersona(runtimeStore);
+      writeWorkspaceDocs(workspace, {
+        readmeTitle: "workspace-feishu-mixed-journey",
+      });
+
+    const saveWorkspaceResponse = await fetch(`${baseUrl}/api/sessions/${sessionId}/settings`, {
+      method: "PUT",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        settings: {
+          workspacePath: workspace,
+        },
+      }),
+    });
+
+    assert.equal(saveWorkspaceResponse.status, 200);
+
+    const streamResponse = await fetch(`${baseUrl}/api/tasks/stream`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sessionId,
+        goal: "请先等待审批，再等待我补充输入，最后继续执行",
+        options: {
+          runtimeEngine: "app-server",
+        },
+      }),
+    });
+
+    assert.equal(streamResponse.status, 200);
+    assert.ok(streamResponse.body);
+      reader = createNdjsonStreamReader(streamResponse.body!);
+    const firstPartialLines = await withTimeout(
+      reader.readUntil((lines) => lines.some((line) => line.kind === "event" && line.title === "task.action_required")),
+      "missing approval action_required",
+    );
+    const firstActionRequiredLine = firstPartialLines.find(
+      (line) => line.kind === "event" && line.title === "task.action_required",
+    );
+
+    assert.ok(firstActionRequiredLine);
+    assert.equal(firstActionRequiredLine?.metadata?.actionId, MIXED_APPROVAL_ACTION_ID, JSON.stringify(firstActionRequiredLine));
+    assert.equal(firstActionRequiredLine?.metadata?.actionType, "approval", JSON.stringify(firstActionRequiredLine));
+
+    const firstAction = await waitForHistoryActionId(baseUrl, authHeaders, sessionId, MIXED_APPROVAL_ACTION_ID);
+    assert.equal(firstAction.actionType, "approval");
+
+    await feishu.handleCommand("use", [sessionId]);
+    const switchMessages = feishu.takeMessages().join("\n");
+    assert.match(switchMessages, new RegExp(`已切换到会话：${sessionId}`));
+    assert.equal(feishu.getCurrentSessionId(), sessionId);
+
+    const beforeTaskRuntimeCalls = feishu.getTaskRuntimeCalls();
+
+    await feishu.handleCommand("approve", [MIXED_APPROVAL_ACTION_ID]);
+
+    const firstSubmission = feishu.getResolvedActionSubmissions().at(-1);
+    assert.deepEqual(firstSubmission, {
+      taskId: firstAction.taskId,
+      requestId: firstAction.requestId,
+      actionId: MIXED_APPROVAL_ACTION_ID,
+      decision: "approve",
+    });
+    assert.deepEqual(feishu.getTaskRuntimeCalls(), beforeTaskRuntimeCalls);
+
+    const secondPartialLines = await withTimeout(
+      reader.readUntil((lines) => lines.filter((line) => line.kind === "event" && line.title === "task.action_required").length >= 2),
+      "missing second user-input action_required",
+    );
+    const secondActionRequiredLine = [...secondPartialLines].reverse().find(
+      (line) => line.kind === "event" && line.title === "task.action_required",
+    );
+
+    assert.ok(secondActionRequiredLine);
+    assert.equal(secondActionRequiredLine?.metadata?.actionId, MIXED_INPUT_ACTION_ID, JSON.stringify(secondActionRequiredLine));
+    assert.equal(secondActionRequiredLine?.metadata?.actionType, "user-input", JSON.stringify(secondActionRequiredLine));
+
+    const secondAction = await waitForHistoryActionId(baseUrl, authHeaders, sessionId, MIXED_INPUT_ACTION_ID);
+    assert.equal(secondAction.actionType, "user-input");
+
+    await feishu.handleMessageEventText("这是来自飞书的 mixed recovery 最终补充");
+
+    const messages = feishu.takeMessages().join("\n");
+    assert.match(messages, /已提交补充输入。/);
+    assert.deepEqual(feishu.getTaskRuntimeCalls(), beforeTaskRuntimeCalls);
+
+    const submissions = feishu.getResolvedActionSubmissions();
+    assert.equal(submissions.length, 2);
+    assert.deepEqual(submissions.at(-1), {
+      taskId: firstAction.taskId,
+      requestId: firstAction.requestId,
+      actionId: MIXED_INPUT_ACTION_ID,
+      inputText: "这是来自飞书的 mixed recovery 最终补充",
+    });
+
+    const completedHistory = await waitForHistoryTurnStatus(baseUrl, authHeaders, sessionId, "completed");
+    assert.equal(completedHistory.turns?.length, 1);
+    assert.equal(completedHistory.turns?.[0]?.status, "completed");
+    assert.equal(
+      completedHistory.turns?.[0]?.events?.filter((event) => event.type === "task.action_required").length,
+      2,
+    );
+    } finally {
+      await reader?.cancel();
+    }
   });
 });
 
