@@ -119,14 +119,10 @@ test("真实 Web->飞书 mixed recovery journey 在 app-server 下会走通 appr
     const sessionId = "session-web-feishu-mixed-journey-1";
     const workspace = join(root, "workspace-feishu-mixed-journey");
     let reader: ReturnType<typeof createNdjsonStreamReader> | null = null;
-    let lastActionRequiredType: "approval" | "user-input" | null = null;
-    let completedHistoryReached = false;
-
-    try {
-      seedCompletedWebOwnerPersona(runtimeStore);
-      writeWorkspaceDocs(workspace, {
-        readmeTitle: "workspace-feishu-mixed-journey",
-      });
+    seedCompletedWebOwnerPersona(runtimeStore);
+    writeWorkspaceDocs(workspace, {
+      readmeTitle: "workspace-feishu-mixed-journey",
+    });
 
     const saveWorkspaceResponse = await fetch(`${baseUrl}/api/sessions/${sessionId}/settings`, {
       method: "PUT",
@@ -160,7 +156,8 @@ test("真实 Web->飞书 mixed recovery journey 在 app-server 下会走通 appr
 
     assert.equal(streamResponse.status, 200);
     assert.ok(streamResponse.body);
-      reader = createNdjsonStreamReader(streamResponse.body!);
+
+    reader = createNdjsonStreamReader(streamResponse.body!);
     const firstPartialLines = await withTimeout(
       reader.readUntil((lines) => lines.some((line) => line.kind === "event" && line.title === "task.action_required")),
       "missing approval action_required",
@@ -168,11 +165,21 @@ test("真实 Web->飞书 mixed recovery journey 在 app-server 下会走通 appr
     const firstActionRequiredLine = firstPartialLines.find(
       (line) => line.kind === "event" && line.title === "task.action_required",
     );
+    const firstActionId = firstActionRequiredLine?.metadata?.actionId;
+    const firstActionType = firstActionRequiredLine?.metadata?.actionType;
+
+    if (firstActionId !== MIXED_APPROVAL_ACTION_ID || firstActionType !== "approval") {
+      await feishu.handleCommand("use", [sessionId]);
+      await feishu.handleMessageEventText("这是来自飞书的 mixed recovery cleanup");
+      await reader.cancel();
+      assert.ok(firstActionRequiredLine);
+      assert.equal(firstActionId, MIXED_APPROVAL_ACTION_ID, JSON.stringify(firstActionRequiredLine));
+      assert.equal(firstActionType, "approval", JSON.stringify(firstActionRequiredLine));
+    }
 
     assert.ok(firstActionRequiredLine);
-    lastActionRequiredType = firstActionRequiredLine?.metadata?.actionType ?? null;
-    assert.equal(firstActionRequiredLine?.metadata?.actionId, MIXED_APPROVAL_ACTION_ID, JSON.stringify(firstActionRequiredLine));
-    assert.equal(firstActionRequiredLine?.metadata?.actionType, "approval", JSON.stringify(firstActionRequiredLine));
+    assert.equal(firstActionId, MIXED_APPROVAL_ACTION_ID, JSON.stringify(firstActionRequiredLine));
+    assert.equal(firstActionType, "approval", JSON.stringify(firstActionRequiredLine));
 
     const firstAction = await waitForHistoryActionId(baseUrl, authHeaders, sessionId, MIXED_APPROVAL_ACTION_ID);
     assert.equal(firstAction.actionType, "approval");
@@ -204,7 +211,6 @@ test("真实 Web->飞书 mixed recovery journey 在 app-server 下会走通 appr
     );
 
     assert.ok(secondActionRequiredLine);
-    lastActionRequiredType = secondActionRequiredLine?.metadata?.actionType ?? null;
     assert.equal(secondActionRequiredLine?.metadata?.actionId, MIXED_INPUT_ACTION_ID, JSON.stringify(secondActionRequiredLine));
     assert.equal(secondActionRequiredLine?.metadata?.actionType, "user-input", JSON.stringify(secondActionRequiredLine));
 
@@ -227,24 +233,13 @@ test("真实 Web->飞书 mixed recovery journey 在 app-server 下会走通 appr
     });
 
     const completedHistory = await waitForHistoryTurnStatus(baseUrl, authHeaders, sessionId, "completed");
-    completedHistoryReached = true;
     assert.equal(completedHistory.turns?.length, 1);
     assert.equal(completedHistory.turns?.[0]?.status, "completed");
     assert.equal(
       completedHistory.turns?.[0]?.events?.filter((event) => event.type === "task.action_required").length,
       2,
     );
-    } finally {
-      if (!completedHistoryReached && lastActionRequiredType === "user-input") {
-        try {
-          await feishu.handleCommand("use", [sessionId]);
-          await feishu.handleMessageEventText("这是来自飞书的 mixed recovery cleanup");
-        } catch {
-          // Ignore cleanup failures; the test has already failed by design.
-        }
-      }
-      await reader?.cancel();
-    }
+    await reader.cancel();
   });
 });
 
@@ -680,9 +675,12 @@ function createNdjsonStreamReader(body: ReadableStream<Uint8Array>): {
       return all.slice(consumedBefore);
     },
     cancel: async () => {
-      void reader.cancel().catch(() => {});
-      reader.releaseLock();
-      void body.cancel().catch(() => {});
+      try {
+        await reader.cancel();
+      } finally {
+        reader.releaseLock();
+        await body.cancel();
+      }
     },
   };
 }
