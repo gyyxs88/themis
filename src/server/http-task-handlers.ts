@@ -35,7 +35,7 @@ export async function handleTaskStream(
   let streamCompleted = false;
   let detachedRecoveryActionId: string | null = null;
   let detachedRecoveryCloseActionId: string | null = null;
-  const closeAbortGraceMs = 100;
+  const closeAbortGraceMs = 90;
   let closeAbortTimer: ReturnType<typeof setTimeout> | null = null;
   const clearCloseAbortTimer = (): void => {
     if (closeAbortTimer) {
@@ -123,7 +123,7 @@ export async function handleTaskStream(
       onEvent: async (event) => {
         if (event.type === "task.action_required" && typeof event.payload?.actionId === "string") {
           detachedRecoveryActionId = event.payload.actionId;
-          if (streamClosed) {
+          if (streamClosed && hasRecoverableDetachedAction(normalizedRequest, event.payload.actionId, actionBridge)) {
             armDetachedRecoveryClose(event.payload.actionId);
             clearCloseAbortTimer();
           }

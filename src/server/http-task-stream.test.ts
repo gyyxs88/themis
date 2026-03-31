@@ -1511,6 +1511,99 @@ test("handleTaskStream 仅收到无 bridge pending action 的 task.action_requir
   }
 });
 
+test("handleTaskStream 在 streamClosed 后收到非 bridge 的 task.action_required 不能清掉 grace timer", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-http-task-stream-non-bridge-grace-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: root,
+    runtimeStore,
+  });
+  const authRuntime = createAuthRuntime({
+    authenticated: false,
+    requiresOpenaiAuth: false,
+  });
+  const actionBridge = new AppServerActionBridge();
+  const request = createTaskStreamRequest({
+    goal: "请检查非 bridge action_required 不应清理 grace",
+    sessionId: "session-task-stream-non-bridge-grace",
+  });
+  const response = createTaskStreamResponse(({ writeCount, chunk }) => {
+    const line = parseNdjson(String(chunk))[0];
+
+    if (writeCount === 1 && line?.kind === "ack") {
+      request.emit("close");
+    }
+  });
+  let abortMessage: string | null = null;
+
+  try {
+    (runtime as CodexTaskRuntime & {
+      runTask: CodexTaskRuntime["runTask"];
+    }).runTask = async (taskRequest, hooks = {}) => {
+      const { onEvent, signal } = hooks;
+      assert.ok(signal);
+
+      const abortObserved = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error("timeout waiting CLIENT_DISCONNECTED"));
+        }, 200);
+
+        signal.addEventListener("abort", () => {
+          clearTimeout(timer);
+          abortMessage = signal.reason instanceof Error
+            ? signal.reason.message
+            : String(signal.reason);
+          resolve();
+        }, { once: true });
+      });
+
+      await onEvent?.({
+        eventId: "event-non-bridge-grace-1",
+        taskId: taskRequest.taskId ?? "task-stream-non-bridge-grace",
+        requestId: taskRequest.requestId,
+        type: "task.action_required",
+        status: "waiting",
+        message: "Need follow-up answer",
+        payload: {
+          actionId: "fake-non-bridge-grace-1",
+          actionType: "approval",
+        },
+        timestamp: "2026-04-01T09:00:00.000Z",
+      });
+
+      await abortObserved;
+
+      return {
+        taskId: taskRequest.taskId ?? "task-stream-non-bridge-grace",
+        requestId: taskRequest.requestId,
+        status: "cancelled",
+        summary: "任务已取消",
+        completedAt: "2026-04-01T09:00:01.000Z",
+      };
+    };
+
+    await handleTaskStream(
+      request as unknown as import("node:http").IncomingMessage,
+      response as unknown as import("node:http").ServerResponse,
+      runtime,
+      {
+        defaultRuntime: runtime,
+      },
+      authRuntime,
+      actionBridge,
+      5_000,
+    );
+
+    assert.equal(abortMessage, "CLIENT_DISCONNECTED");
+    const lines = parseNdjson(response.lines.join(""));
+    assert.deepEqual(lines.map((line) => line.kind), ["ack"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function parseNdjson(body: string): Array<{
   kind?: string;
   title?: string;
