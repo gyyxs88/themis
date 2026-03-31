@@ -415,8 +415,6 @@ test("真实 Web->飞书 mixed recovery 在 approval 后立即断流时仍会通
         await feishu.handleCommand("approve", [MIXED_APPROVAL_ACTION_ID]);
         await reader.cancel();
 
-        await feishu.closeActiveSession();
-
         const restoredSecondAction = await waitForHistoryActionId(baseUrl, authHeaders, sessionId, MIXED_INPUT_ACTION_ID, 200);
         assert.ok(restoredSecondAction);
         assert.equal(restoredSecondAction.actionType, "user-input");
