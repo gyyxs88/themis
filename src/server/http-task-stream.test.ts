@@ -1712,12 +1712,18 @@ function listenServer(server: Server): Promise<Server> {
   });
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMsOrMessage: number | string = 1_000,
+  errorMessage = "waitFor timeout",
+): Promise<void> {
+  const timeoutMs = typeof timeoutMsOrMessage === "number" ? timeoutMsOrMessage : 1_000;
+  const timeoutMessage = typeof timeoutMsOrMessage === "string" ? timeoutMsOrMessage : errorMessage;
   const startedAt = Date.now();
 
   while (!predicate()) {
     if (Date.now() - startedAt >= timeoutMs) {
-      throw new Error("waitFor timeout");
+      throw new Error(timeoutMessage);
     }
 
     await new Promise<void>((resolve) => {
