@@ -170,7 +170,25 @@ test("真实 Web->飞书 mixed recovery journey 在 app-server 下会走通 appr
 
     if (firstActionId !== MIXED_APPROVAL_ACTION_ID || firstActionType !== "approval") {
       await feishu.handleCommand("use", [sessionId]);
-      await feishu.handleMessageEventText("这是来自飞书的 mixed recovery cleanup");
+      if (firstActionType === "user-input" && firstActionId) {
+        await feishu.handleMessageEventText("这是来自飞书的 mixed recovery cleanup");
+      } else if (firstActionType === "approval" && firstActionId) {
+        await feishu.handleCommand("approve", [firstActionId]);
+
+        const recoveryPartialLines = await withTimeout(
+          reader.readUntil((lines) => lines.filter((line) => line.kind === "event" && line.title === "task.action_required").length >= 2),
+          "missing recovery user-input action_required",
+        );
+        const recoveryActionRequiredLine = [...recoveryPartialLines].reverse().find(
+          (line) => line.kind === "event" && line.title === "task.action_required",
+        );
+        const recoveryActionId = recoveryActionRequiredLine?.metadata?.actionId;
+        const recoveryActionType = recoveryActionRequiredLine?.metadata?.actionType;
+
+        if (recoveryActionType === "user-input" && recoveryActionId) {
+          await feishu.handleMessageEventText("这是来自飞书的 mixed recovery cleanup");
+        }
+      }
       await reader.cancel();
       assert.ok(firstActionRequiredLine);
       assert.equal(firstActionId, MIXED_APPROVAL_ACTION_ID, JSON.stringify(firstActionRequiredLine));
@@ -675,12 +693,7 @@ function createNdjsonStreamReader(body: ReadableStream<Uint8Array>): {
       return all.slice(consumedBefore);
     },
     cancel: async () => {
-      try {
-        await reader.cancel();
-      } finally {
-        reader.releaseLock();
-        await body.cancel();
-      }
+      await reader.cancel();
     },
   };
 }
