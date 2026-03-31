@@ -9,6 +9,7 @@
 手工验收入口：
 
 - [飞书真实旅程 Smoke 剧本](./themis-feishu-real-journey-smoke.md)
+- [card.action.trigger 暂不进入实现阶段的长期记忆](../memory/2026/03/feishu-card-action-trigger-entry-criteria.md)
 
 ## 当前落地状态
 
@@ -186,12 +187,8 @@
 
 ## 下一步建议
 
-1. 继续补真实 Feishu 主链路回归和更大范围 E2E，优先覆盖 waiting action 恢复、会话切换、`/review`、`/steer` 与线程摘要。
-2. 按需补第二阶段能力：
-   - `card.action.trigger` 交互卡片，优先评估 `approval / reply / review / steer`
-   - “取消任务 / 新开会话 / 重试” 按钮
-   - 群会话与单聊会话的不同路由策略
-   - 更细的管理员控制
+1. 文本态主链路 P0 收口后，继续低成本复跑 direct-text + mixed recovery，优先确认 waiting `user-input` 和 `approval -> user-input` 两条恢复链都稳定。
+2. 当前仍不进入 `card.action.trigger` 实现阶段；只有等文本态主链路、准入条件和真实需求都满足后，再单独开 PoC。
 3. 如果以后要追桌面版那种 guide 行为，先做 `turn/steer` 的最小 PoC，再决定是否迁移到底层 `app-server`。
 
 ## 本次实际验证记录
