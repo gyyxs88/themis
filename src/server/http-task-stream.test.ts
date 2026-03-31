@@ -840,6 +840,129 @@ test("handleTaskStream 在 task.action_required 后 close 不会中止 waiting a
   });
 });
 
+test("handleTaskStream 在 user-input task.action_required 后 close 不会丢失 pending action，后续 inputText 提交仍能收口", async () => {
+  let capturedTaskId = "";
+  let capturedRequestId = "";
+  let abortMessage: string | null = null;
+  const actionBridge = new AppServerActionBridge();
+  let resolveRuntimeCompleted!: () => void;
+  const runtimeCompleted = new Promise<void>((resolve) => {
+    resolveRuntimeCompleted = resolve;
+  });
+
+  await withHttpServer(async ({ baseUrl, runtimeStore, runtime }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/stream`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请在等待补充输入时断开连接",
+        sessionId: "session-task-stream-input-disconnect",
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.ok(response.body);
+
+    const reader = createNdjsonStreamReader(response.body!);
+    const partialLines = await reader.readUntil((lines) => lines.some((line) => line.title === "task.action_required"));
+    const actionRequiredLine = partialLines.find((line) => line.title === "task.action_required");
+
+    assert.ok(actionRequiredLine);
+    await reader.cancel();
+
+    await waitFor(() => capturedTaskId.length > 0 && capturedRequestId.length > 0);
+    await waitFor(() => actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "input-detached-1") !== null);
+
+    assert.equal(abortMessage, null);
+    assert.ok(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "input-detached-1"));
+
+    assert.equal(actionBridge.resolve({
+      taskId: capturedTaskId,
+      requestId: capturedRequestId,
+      actionId: "input-detached-1",
+      inputText: "补充 detached 输入",
+    }), true);
+
+    await runtimeCompleted;
+
+    assert.equal(abortMessage, null);
+    assert.equal(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "input-detached-1"), null);
+  }, {
+    authenticated: false,
+    requiresOpenaiAuth: false,
+  }, ({ runtimeStore, runtime }) => {
+    const inputRuntime = {
+      runTask: async (taskRequest: Parameters<CodexTaskRuntime["runTask"]>[0], hooks: Parameters<CodexTaskRuntime["runTask"]>[1] = {}) => {
+        const { onEvent, signal } = hooks;
+        assert.ok(signal);
+        capturedTaskId = taskRequest.taskId ?? "task-stream-input-disconnect";
+        capturedRequestId = taskRequest.requestId;
+
+        const action = actionBridge.register({
+          taskId: capturedTaskId,
+          requestId: capturedRequestId,
+          actionId: "input-detached-1",
+          actionType: "user-input",
+          prompt: "Please add detail",
+        });
+        const submission = actionBridge.waitForSubmission(capturedTaskId, capturedRequestId, action.actionId);
+        assert.ok(submission);
+
+        signal.addEventListener("abort", () => {
+          abortMessage = signal.reason instanceof Error
+            ? signal.reason.message
+            : String(signal.reason);
+          actionBridge.discard(capturedTaskId, capturedRequestId, action.actionId);
+        }, { once: true });
+
+        await onEvent?.({
+          eventId: "event-input-required-1",
+          taskId: capturedTaskId,
+          requestId: capturedRequestId,
+          type: "task.action_required",
+          status: "waiting",
+          message: "Please add detail",
+          payload: {
+            actionId: action.actionId,
+            actionType: action.actionType,
+          },
+          timestamp: "2026-03-31T09:00:00.000Z",
+        });
+
+        const payload = await submission;
+        assert.equal(payload.inputText, "补充 detached 输入");
+        resolveRuntimeCompleted();
+
+        return {
+          taskId: capturedTaskId,
+          requestId: capturedRequestId,
+          status: signal.aborted ? "cancelled" as const : "completed" as const,
+          summary: signal.aborted ? "任务已取消" : `已处理 ${payload.inputText}`,
+          completedAt: "2026-03-31T09:00:02.000Z",
+        };
+      },
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => runtime.getIdentityLinkService(),
+      getPrincipalSkillsService: () => runtime.getPrincipalSkillsService(),
+    };
+
+    return {
+      defaultRuntime: inputRuntime,
+      runtimes: {
+        sdk: runtime,
+      },
+    };
+  });
+});
+
 test("handleTaskStream 在 pending action resolve 后再次 close 会恢复 CLIENT_DISCONNECTED", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-http-task-stream-recovery-window-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
