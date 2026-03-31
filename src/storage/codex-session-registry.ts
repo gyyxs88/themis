@@ -48,7 +48,7 @@ import type {
   StoredPrincipalMainMemoryRecord,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 12;
+const DATABASE_SCHEMA_VERSION = 13;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -1592,6 +1592,20 @@ export class SqliteCodexSessionRegistry {
       !PRINCIPAL_MAIN_MEMORY_STATUSES.includes(status as PrincipalMainMemoryStatus)
     ) {
       throw new Error("Principal main memory record is incomplete.");
+    }
+
+    const existing = this.db
+      .prepare(
+        `
+          SELECT principal_id
+          FROM themis_principal_main_memory
+          WHERE memory_id = ?
+        `,
+      )
+      .get(memoryId) as { principal_id: string } | undefined;
+
+    if (existing && existing.principal_id !== principalId) {
+      throw new Error("Principal main memory belongs to another principal.");
     }
 
     this.db
@@ -4396,6 +4410,7 @@ export class SqliteCodexSessionRegistry {
     const database = this.createDatabaseConnection();
     this.initializeSchema(database);
     this.migrateSchema(database);
+    this.repairActorMemorySchema(database);
     return database;
   }
 
@@ -4481,6 +4496,144 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_actor_runtime_memory_scope_timeline_idx
       ON themis_actor_runtime_memory(principal_id, scope_id, created_at ASC, runtime_memory_id ASC);
     `);
+  }
+
+  private repairActorMemorySchema(database: Database.Database): void {
+    if (this.isActorMemorySchemaCurrent(database)) {
+      return;
+    }
+
+    const foreignKeysEnabled = database.pragma("foreign_keys", { simple: true }) === 1;
+    database.pragma("foreign_keys = OFF");
+
+    try {
+      const rebuild = database.transaction(() => {
+        database.exec(`
+          ALTER TABLE themis_actor_runtime_memory RENAME TO themis_actor_runtime_memory_legacy;
+          ALTER TABLE themis_actor_task_scopes RENAME TO themis_actor_task_scopes_legacy;
+          ALTER TABLE themis_principal_actors RENAME TO themis_principal_actors_legacy;
+        `);
+
+        this.createActorMemoryTables(database);
+
+        database.exec(`
+          INSERT INTO themis_principal_actors (
+            actor_id,
+            owner_principal_id,
+            display_name,
+            role,
+            status,
+            created_at,
+            updated_at
+          )
+          SELECT
+            actor_id,
+            owner_principal_id,
+            display_name,
+            role,
+            status,
+            created_at,
+            updated_at
+          FROM themis_principal_actors_legacy;
+
+          INSERT INTO themis_actor_task_scopes (
+            scope_id,
+            principal_id,
+            actor_id,
+            task_id,
+            conversation_id,
+            goal,
+            workspace_path,
+            status,
+            created_at,
+            updated_at
+          )
+          SELECT
+            scope_id,
+            principal_id,
+            actor_id,
+            task_id,
+            conversation_id,
+            goal,
+            workspace_path,
+            status,
+            created_at,
+            updated_at
+          FROM themis_actor_task_scopes_legacy;
+
+          INSERT INTO themis_actor_runtime_memory (
+            runtime_memory_id,
+            principal_id,
+            actor_id,
+            task_id,
+            conversation_id,
+            scope_id,
+            kind,
+            title,
+            content,
+            status,
+            created_at
+          )
+          SELECT
+            runtime_memory_id,
+            principal_id,
+            actor_id,
+            task_id,
+            conversation_id,
+            scope_id,
+            kind,
+            title,
+            content,
+            status,
+            created_at
+          FROM themis_actor_runtime_memory_legacy;
+
+          DROP TABLE themis_actor_runtime_memory_legacy;
+          DROP TABLE themis_actor_task_scopes_legacy;
+          DROP TABLE themis_principal_actors_legacy;
+        `);
+      });
+
+      rebuild();
+      database.pragma(`user_version = ${DATABASE_SCHEMA_VERSION}`);
+    } finally {
+      if (foreignKeysEnabled) {
+        database.pragma("foreign_keys = ON");
+      }
+    }
+  }
+
+  private isActorMemorySchemaCurrent(database: Database.Database): boolean {
+    const actorSql = this.readTableSql(database, "themis_principal_actors");
+    const scopeSql = this.readTableSql(database, "themis_actor_task_scopes");
+    const runtimeSql = this.readTableSql(database, "themis_actor_runtime_memory");
+
+    if (!actorSql || !scopeSql || !runtimeSql) {
+      return false;
+    }
+
+    return (
+      /UNIQUE\s*\(\s*owner_principal_id\s*,\s*actor_id\s*\)/i.test(actorSql) &&
+      /FOREIGN KEY\s*\(\s*principal_id\s*,\s*actor_id\s*\)\s*REFERENCES\s*themis_principal_actors\s*\(\s*owner_principal_id\s*,\s*actor_id\s*\)/i.test(scopeSql) &&
+      /UNIQUE\s*\(\s*principal_id\s*,\s*scope_id\s*\)/i.test(scopeSql) &&
+      /FOREIGN KEY\s*\(\s*principal_id\s*,\s*actor_id\s*\)\s*REFERENCES\s*themis_principal_actors\s*\(\s*owner_principal_id\s*,\s*actor_id\s*\)/i.test(runtimeSql) &&
+      /FOREIGN KEY\s*\(\s*principal_id\s*,\s*scope_id\s*\)\s*REFERENCES\s*themis_actor_task_scopes\s*\(\s*principal_id\s*,\s*scope_id\s*\)/i.test(runtimeSql)
+    );
+  }
+
+  private readTableSql(database: Database.Database, tableName: string): string | null {
+    const row = database
+      .prepare(
+        `
+          SELECT sql
+          FROM sqlite_master
+          WHERE type = 'table'
+            AND name = ?
+        `,
+      )
+      .get(tableName) as { sql: string | null } | undefined;
+
+    return row?.sql ?? null;
   }
 
   private migrateSchema(database: Database.Database): void {

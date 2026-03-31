@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import Database from "better-sqlite3";
 import {
   ACTOR_RUNTIME_MEMORY_KINDS,
   ACTOR_TASK_SCOPE_STATUSES,
@@ -298,6 +299,60 @@ test("SqliteCodexSessionRegistry 会分别检索主记忆和 actor runtime memor
   }
 });
 
+test("savePrincipalMainMemory 会拒绝跨 principal 重挂 memoryId", () => {
+  const { root, registry } = createRegistryContext();
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-main-1",
+      displayName: "Owner 1",
+      createdAt: "2026-03-31T10:00:00.000Z",
+      updatedAt: "2026-03-31T10:00:00.000Z",
+    });
+    registry.savePrincipal({
+      principalId: "principal-main-2",
+      displayName: "Owner 2",
+      createdAt: "2026-03-31T10:00:30.000Z",
+      updatedAt: "2026-03-31T10:00:30.000Z",
+    });
+
+    registry.savePrincipalMainMemory({
+      memoryId: "main-memory-shared",
+      principalId: "principal-main-1",
+      kind: "preference",
+      title: "回答节奏",
+      summary: "先结论后展开",
+      bodyMarkdown: "先给结论，再展开分析。",
+      sourceType: "themis",
+      status: "active",
+      createdAt: "2026-03-31T10:01:00.000Z",
+      updatedAt: "2026-03-31T10:01:00.000Z",
+    });
+
+    assert.throws(
+      () =>
+        registry.savePrincipalMainMemory({
+          memoryId: "main-memory-shared",
+          principalId: "principal-main-2",
+          kind: "preference",
+          title: "回答节奏",
+          summary: "先结论后展开",
+          bodyMarkdown: "这条不该抢走别人的 memory。",
+          sourceType: "themis",
+          status: "active",
+          createdAt: "2026-03-31T10:02:00.000Z",
+          updatedAt: "2026-03-31T10:02:00.000Z",
+        }),
+      /principal main memory belongs to another principal/i,
+    );
+
+    assert.equal(registry.searchPrincipalMainMemory("principal-main-1", "回答", 5)[0]?.title, "回答节奏");
+    assert.equal(registry.searchPrincipalMainMemory("principal-main-2", "回答", 5).length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("searchActorRuntimeMemory 会按 actorId / scopeId / query / limit 组合过滤", () => {
   const { root, registry } = createRegistryContext();
 
@@ -410,6 +465,224 @@ test("searchActorRuntimeMemory 会按 actorId / scopeId / query / limit 组合�
       }).map((entry) => entry.title),
       ["keyring 线索"],
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("旧 actor memory schema 打开后会升级到复合约束", () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-principal-actors-legacy-"));
+  const databaseFile = join(root, "infra/local/themis.db");
+  mkdirSync(join(root, "infra/local"), { recursive: true });
+  const legacyDatabase = new Database(databaseFile);
+
+  try {
+    legacyDatabase.exec(`
+      CREATE TABLE themis_principals (
+        principal_id TEXT PRIMARY KEY,
+        display_name TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE themis_principal_actors (
+        actor_id TEXT PRIMARY KEY,
+        owner_principal_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        role TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (owner_principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE themis_actor_task_scopes (
+        scope_id TEXT PRIMARY KEY,
+        principal_id TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        conversation_id TEXT,
+        goal TEXT NOT NULL,
+        workspace_path TEXT,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE,
+        FOREIGN KEY (actor_id) REFERENCES themis_principal_actors(actor_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE themis_actor_runtime_memory (
+        runtime_memory_id TEXT PRIMARY KEY,
+        principal_id TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        conversation_id TEXT,
+        scope_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE,
+        FOREIGN KEY (actor_id) REFERENCES themis_principal_actors(actor_id) ON DELETE CASCADE,
+        FOREIGN KEY (scope_id) REFERENCES themis_actor_task_scopes(scope_id) ON DELETE CASCADE
+      );
+
+      PRAGMA user_version = 12;
+    `);
+
+    legacyDatabase.prepare(
+      `
+        INSERT INTO themis_principals (
+          principal_id,
+          display_name,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?)
+      `,
+    ).run(
+      "principal-legacy",
+      "Legacy Owner",
+      "2026-03-31T09:59:00.000Z",
+      "2026-03-31T09:59:00.000Z",
+    );
+    legacyDatabase.prepare(
+      `
+        INSERT INTO themis_principal_actors (
+          actor_id,
+          owner_principal_id,
+          display_name,
+          role,
+          status,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `,
+    ).run(
+      "actor-legacy-1",
+      "principal-legacy",
+      "阿旧",
+      "frontend-worker",
+      "active",
+      "2026-03-31T10:00:00.000Z",
+      "2026-03-31T10:00:00.000Z",
+    );
+    legacyDatabase.prepare(
+      `
+        INSERT INTO themis_actor_task_scopes (
+          scope_id,
+          principal_id,
+          actor_id,
+          task_id,
+          conversation_id,
+          goal,
+          workspace_path,
+          status,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    ).run(
+      "scope-legacy-1",
+      "principal-legacy",
+      "actor-legacy-1",
+      "task-legacy-1",
+      "conversation-legacy-1",
+      "迁移前测试",
+      "/workspace/legacy",
+      "open",
+      "2026-03-31T10:01:00.000Z",
+      "2026-03-31T10:01:00.000Z",
+    );
+    legacyDatabase.prepare(
+      `
+        INSERT INTO themis_actor_runtime_memory (
+          runtime_memory_id,
+          principal_id,
+          actor_id,
+          task_id,
+          conversation_id,
+          scope_id,
+          kind,
+          title,
+          content,
+          status,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    ).run(
+      "memory-legacy-1",
+      "principal-legacy",
+      "actor-legacy-1",
+      "task-legacy-1",
+      "conversation-legacy-1",
+      "scope-legacy-1",
+      "progress",
+      "迁移前进度",
+      "旧库里的一条 runtime memory。",
+      "active",
+      "2026-03-31T10:02:00.000Z",
+    );
+    legacyDatabase.close();
+
+    const registry = new SqliteCodexSessionRegistry({
+      databaseFile,
+    });
+
+    const inspector = new Database(databaseFile, { readonly: true });
+
+    try {
+      const actorSql = inspector
+        .prepare(
+          `
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name = ?
+          `,
+        )
+        .get("themis_principal_actors") as { sql?: string } | undefined;
+      const scopeSql = inspector
+        .prepare(
+          `
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name = ?
+          `,
+        )
+        .get("themis_actor_task_scopes") as { sql?: string } | undefined;
+      const runtimeSql = inspector
+        .prepare(
+          `
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name = ?
+          `,
+        )
+        .get("themis_actor_runtime_memory") as { sql?: string } | undefined;
+
+      assert.match(actorSql?.sql ?? "", /UNIQUE\s*\(\s*owner_principal_id\s*,\s*actor_id\s*\)/i);
+      assert.match(scopeSql?.sql ?? "", /FOREIGN KEY\s*\(\s*principal_id\s*,\s*actor_id\s*\)/i);
+      assert.match(scopeSql?.sql ?? "", /UNIQUE\s*\(\s*principal_id\s*,\s*scope_id\s*\)/i);
+      assert.match(runtimeSql?.sql ?? "", /FOREIGN KEY\s*\(\s*principal_id\s*,\s*actor_id\s*\)/i);
+      assert.match(runtimeSql?.sql ?? "", /FOREIGN KEY\s*\(\s*principal_id\s*,\s*scope_id\s*\)/i);
+
+      assert.deepEqual(
+        registry.listPrincipalActors("principal-legacy").map((actor) => actor.actorId),
+        ["actor-legacy-1"],
+      );
+      assert.deepEqual(
+        registry.listActorTaskTimeline({
+          principalId: "principal-legacy",
+          scopeId: "scope-legacy-1",
+        }).map((entry) => entry.title),
+        ["迁移前进度"],
+      );
+    } finally {
+      inspector.close();
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
