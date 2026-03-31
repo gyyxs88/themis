@@ -374,6 +374,10 @@ test("Journey session rejectServerRequest 不应把 CLIENT_DISCONNECTED 直接�
   });
 
   const turnPromise = session.startTurn(JOURNEY_THREAD_ID, "journey reject close semantics");
+  let turnSettled = false;
+  void turnPromise.finally(() => {
+    turnSettled = true;
+  });
   await waitFor(() => requests.length === 1, "approval request was not emitted");
 
   await session.rejectServerRequest(requests[0]?.id ?? "", new Error("CLIENT_DISCONNECTED"));
@@ -387,11 +391,6 @@ test("Journey session rejectServerRequest 不应把 CLIENT_DISCONNECTED 直接�
   });
   assert.equal(requests.length, 1);
   assert.equal(state.currentTurnStatus, "waiting");
-
-  let turnSettled = false;
-  void turnPromise.finally(() => {
-    turnSettled = true;
-  });
   assert.equal(turnSettled, false);
 
   await session.close();
