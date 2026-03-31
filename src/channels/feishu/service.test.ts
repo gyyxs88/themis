@@ -1362,6 +1362,160 @@ test("/use 成功后会回显切换后的会话状态和线程摘要", async () 
   }
 });
 
+test("飞书 /use 切回目标会话后会接管该会话里的 Web-origin user-input waiting action", async () => {
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      taskRuntimeCalls,
+    }) => ({
+      ...createTaskRuntimeDouble({
+        engine: "app-server",
+        runtimeStore,
+        identityService,
+        principalSkillsService,
+        taskRuntimeCalls,
+      }),
+      readThreadSnapshot: async ({ threadId }) => ({
+        threadId,
+        preview: threadId === "thread-web-switch-a" ? "session A preview" : "session B preview",
+        status: "idle",
+        cwd: "/workspace/themis",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        turnCount: 2,
+        turns: [],
+      }),
+      async runTask(request, hooks = {}) {
+        taskRuntimeCalls.appServer += 1;
+        const sessionId = request.channelContext.channelSessionKey ?? "session-web-switch-fallback";
+        const threadId = /会话 A/.test(request.goal) ? "thread-web-switch-a" : "thread-web-switch-b";
+        const storedRequest = {
+          ...request,
+          channelContext: {
+            ...request.channelContext,
+            sessionId,
+          },
+        };
+        runtimeStore.upsertTurnFromRequest(storedRequest, request.taskId ?? `task-${threadId}`);
+        runtimeStore.saveSession({
+          sessionId,
+          threadId,
+          createdAt: request.createdAt,
+          updatedAt: request.createdAt,
+        });
+
+        const result: TaskResult = {
+          taskId: request.taskId ?? `task-${threadId}`,
+          requestId: request.requestId,
+          status: "completed",
+          summary: request.goal,
+          output: request.goal,
+          structuredOutput: {
+            session: {
+              engine: "app-server",
+              threadId,
+            },
+          },
+          completedAt: new Date().toISOString(),
+        };
+
+        const finalized = hooks.finalizeResult ? await hooks.finalizeResult(request, result) : result;
+        runtimeStore.completeTaskTurn({
+          request: storedRequest,
+          result: finalized,
+          sessionMode: "resumed",
+          threadId,
+        });
+        return finalized;
+      },
+    }),
+  });
+
+  try {
+    await harness.handleIncomingText("建立会话 A");
+    const sessionA = harness.getCurrentSessionId();
+    harness.takeMessages();
+
+    await harness.handleCommand("new", []);
+    harness.takeMessages();
+    await harness.handleIncomingText("建立会话 B");
+    const sessionB = harness.getCurrentSessionId();
+    harness.takeMessages();
+
+    assert.ok(sessionA);
+    assert.ok(sessionB);
+    assert.notEqual(sessionA, sessionB);
+
+    harness.injectPendingAction({
+      taskId: "task-web-switch-1",
+      requestId: "req-web-switch-1",
+      actionId: "reply-web-switch-1",
+      actionType: "user-input",
+      prompt: "Please continue session A",
+      sourceChannel: "web",
+      userId: "web-user-1",
+      principalId: harness.getCurrentPrincipalId(),
+      sessionId: sessionA,
+    });
+
+    await harness.handleCommand("use", [sessionA]);
+    const switchMessages = harness.takeMessages().join("\n");
+    assert.match(switchMessages, new RegExp(`已切换到会话：${sessionA}`));
+
+    await harness.handleMessageEventText("按会话 A 的上下文继续");
+
+    assert.equal(harness.findPendingAction("reply-web-switch-1"), null);
+    assert.deepEqual(harness.getResolvedActionSubmissions().at(-1), {
+      taskId: "task-web-switch-1",
+      requestId: "req-web-switch-1",
+      actionId: "reply-web-switch-1",
+      inputText: "按会话 A 的上下文继续",
+    });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书切到其他会话后不会误接管非当前会话的 waiting input", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleIncomingText("建立会话 A");
+    const sessionA = harness.getCurrentSessionId();
+    harness.takeMessages();
+
+    harness.injectPendingAction({
+      taskId: "task-hidden-session-a",
+      requestId: "req-hidden-session-a",
+      actionId: "reply-hidden-a",
+      actionType: "user-input",
+      prompt: "Please continue session A",
+      sourceChannel: "web",
+      userId: "web-user-2",
+      principalId: harness.getCurrentPrincipalId(),
+      sessionId: sessionA ?? undefined,
+    });
+
+    await harness.handleCommand("new", []);
+    harness.takeMessages();
+    await harness.handleIncomingText("建立会话 B");
+    const sessionB = harness.getCurrentSessionId();
+
+    const messages = harness.takeMessages().join("\n");
+    assert.ok(sessionA);
+    assert.ok(sessionB);
+    assert.notEqual(sessionA, sessionB);
+    assert.match(messages, /建立会话 B/);
+    assert.notEqual(harness.findPendingAction("reply-hidden-a"), null);
+    assert.deepEqual(harness.getResolvedActionSubmissions(), []);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("飞书收到 task.action_required 时会输出移动端 waiting action 表达和线程摘要", async () => {
   const harness = createHarness({
     runtimeEngine: "app-server",
