@@ -18,17 +18,37 @@ import {
   isSessionTaskSettingsEmpty,
   normalizeSessionTaskSettings,
 } from "../core/session-task-settings.js";
+import {
+  ACTOR_RUNTIME_MEMORY_KINDS,
+  ACTOR_RUNTIME_MEMORY_STATUSES,
+  ACTOR_TASK_SCOPE_STATUSES,
+  PRINCIPAL_ACTOR_STATUSES,
+  PRINCIPAL_MAIN_MEMORY_KINDS,
+  PRINCIPAL_MAIN_MEMORY_SOURCE_TYPES,
+  PRINCIPAL_MAIN_MEMORY_STATUSES,
+} from "../types/index.js";
 import type {
+  ActorRuntimeMemoryKind,
+  ActorRuntimeMemoryStatus,
+  ActorTaskScopeStatus,
   PrincipalTaskSettings,
   PrincipalPersonaOnboardingState,
   PrincipalPersonaProfileData,
+  PrincipalActorStatus,
+  PrincipalMainMemoryKind,
+  PrincipalMainMemorySourceType,
+  PrincipalMainMemoryStatus,
   SessionTaskSettings,
   TaskEvent,
   TaskRequest,
   TaskResult,
+  StoredActorRuntimeMemoryRecord,
+  StoredActorTaskScopeRecord,
+  StoredPrincipalActorRecord,
+  StoredPrincipalMainMemoryRecord,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 11;
+const DATABASE_SCHEMA_VERSION = 12;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -156,6 +176,56 @@ export interface StoredPrincipalTaskSettingsRecord {
   settings: PrincipalTaskSettings;
   createdAt: string;
   updatedAt: string;
+}
+
+interface PrincipalActorRow {
+  actor_id: string;
+  owner_principal_id: string;
+  display_name: string;
+  role: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PrincipalMainMemoryRow {
+  memory_id: string;
+  principal_id: string;
+  kind: string;
+  title: string;
+  summary: string;
+  body_markdown: string;
+  source_type: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ActorTaskScopeRow {
+  scope_id: string;
+  principal_id: string;
+  actor_id: string;
+  task_id: string;
+  conversation_id: string | null;
+  goal: string;
+  workspace_path: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ActorRuntimeMemoryRow {
+  runtime_memory_id: string;
+  principal_id: string;
+  actor_id: string;
+  task_id: string;
+  conversation_id: string | null;
+  scope_id: string;
+  kind: string;
+  title: string;
+  content: string;
+  status: string;
+  created_at: string;
 }
 
 interface PrincipalSkillRow {
@@ -1368,6 +1438,559 @@ export class SqliteCodexSessionRegistry {
         created_at: record.createdAt,
         updated_at: record.updatedAt,
       });
+  }
+
+  getPrincipalActor(principalId: string, actorId: string): StoredPrincipalActorRecord | null {
+    const normalizedPrincipalId = principalId.trim();
+    const normalizedActorId = actorId.trim();
+
+    if (!normalizedPrincipalId || !normalizedActorId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            actor_id,
+            owner_principal_id,
+            display_name,
+            role,
+            status,
+            created_at,
+            updated_at
+          FROM themis_principal_actors
+          WHERE owner_principal_id = ?
+            AND actor_id = ?
+        `,
+      )
+      .get(normalizedPrincipalId, normalizedActorId) as PrincipalActorRow | undefined;
+
+    return row ? mapPrincipalActorRow(row) : null;
+  }
+
+  listPrincipalActors(principalId: string): StoredPrincipalActorRecord[] {
+    const normalizedPrincipalId = principalId.trim();
+
+    if (!normalizedPrincipalId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            actor_id,
+            owner_principal_id,
+            display_name,
+            role,
+            status,
+            created_at,
+            updated_at
+          FROM themis_principal_actors
+          WHERE owner_principal_id = ?
+          ORDER BY updated_at DESC, actor_id ASC
+        `,
+      )
+      .all(normalizedPrincipalId) as PrincipalActorRow[];
+
+    return rows.map(mapPrincipalActorRow);
+  }
+
+  savePrincipalActor(record: StoredPrincipalActorRecord): void {
+    const actorId = record.actorId.trim();
+    const ownerPrincipalId = record.ownerPrincipalId.trim();
+    const displayName = record.displayName.trim();
+    const role = record.role.trim();
+    const status = normalizeText(record.status);
+
+    if (
+      !actorId ||
+      !ownerPrincipalId ||
+      !displayName ||
+      !role ||
+      !status ||
+      !PRINCIPAL_ACTOR_STATUSES.includes(status as PrincipalActorStatus)
+    ) {
+      throw new Error("Principal actor record is incomplete.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_principal_actors (
+            actor_id,
+            owner_principal_id,
+            display_name,
+            role,
+            status,
+            created_at,
+            updated_at
+          ) VALUES (
+            @actor_id,
+            @owner_principal_id,
+            @display_name,
+            @role,
+            @status,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(actor_id) DO UPDATE SET
+            owner_principal_id = excluded.owner_principal_id,
+            display_name = excluded.display_name,
+            role = excluded.role,
+            status = excluded.status,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        actor_id: actorId,
+        owner_principal_id: ownerPrincipalId,
+        display_name: displayName,
+        role,
+        status,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+  }
+
+  savePrincipalMainMemory(record: StoredPrincipalMainMemoryRecord): void {
+    const memoryId = record.memoryId.trim();
+    const principalId = record.principalId.trim();
+    const kind = normalizeText(record.kind);
+    const title = normalizeText(record.title);
+    const summary = normalizeText(record.summary);
+    const bodyMarkdown = normalizeText(record.bodyMarkdown);
+    const sourceType = normalizeText(record.sourceType);
+    const status = normalizeText(record.status);
+
+    if (
+      !memoryId ||
+      !principalId ||
+      !kind ||
+      !PRINCIPAL_MAIN_MEMORY_KINDS.includes(kind as PrincipalMainMemoryKind) ||
+      !title ||
+      !summary ||
+      !bodyMarkdown ||
+      !sourceType ||
+      !PRINCIPAL_MAIN_MEMORY_SOURCE_TYPES.includes(sourceType as PrincipalMainMemorySourceType) ||
+      !status ||
+      !PRINCIPAL_MAIN_MEMORY_STATUSES.includes(status as PrincipalMainMemoryStatus)
+    ) {
+      throw new Error("Principal main memory record is incomplete.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_principal_main_memory (
+            memory_id,
+            principal_id,
+            kind,
+            title,
+            summary,
+            body_markdown,
+            source_type,
+            status,
+            created_at,
+            updated_at
+          ) VALUES (
+            @memory_id,
+            @principal_id,
+            @kind,
+            @title,
+            @summary,
+            @body_markdown,
+            @source_type,
+            @status,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(memory_id) DO UPDATE SET
+            principal_id = excluded.principal_id,
+            kind = excluded.kind,
+            title = excluded.title,
+            summary = excluded.summary,
+            body_markdown = excluded.body_markdown,
+            source_type = excluded.source_type,
+            status = excluded.status,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        memory_id: memoryId,
+        principal_id: principalId,
+        kind,
+        title,
+        summary,
+        body_markdown: bodyMarkdown,
+        source_type: sourceType,
+        status,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+  }
+
+  searchPrincipalMainMemory(
+    principalId: string,
+    query: string,
+    limit = 20,
+  ): StoredPrincipalMainMemoryRecord[] {
+    const normalizedPrincipalId = principalId.trim();
+    const normalizedQuery = query.trim();
+    const normalizedLimit = normalizeLimit(limit);
+
+    if (!normalizedPrincipalId) {
+      return [];
+    }
+
+    const parameters: Array<string | number> = [normalizedPrincipalId];
+    let sql = `
+      SELECT
+        memory_id,
+        principal_id,
+        kind,
+        title,
+        summary,
+        body_markdown,
+        source_type,
+        status,
+        created_at,
+        updated_at
+      FROM themis_principal_main_memory
+      WHERE principal_id = ?
+    `;
+
+    if (normalizedQuery) {
+      const likePattern = `%${normalizedQuery}%`;
+      sql += `
+        AND (
+          title LIKE ?
+          OR summary LIKE ?
+          OR body_markdown LIKE ?
+        )
+      `;
+      parameters.push(likePattern, likePattern, likePattern);
+    }
+
+    sql += `
+      ORDER BY updated_at DESC, memory_id DESC
+      LIMIT ?
+    `;
+    parameters.push(normalizedLimit);
+
+    const rows = this.db.prepare(sql).all(...parameters) as PrincipalMainMemoryRow[];
+
+    return rows.map(mapPrincipalMainMemoryRow);
+  }
+
+  getActorTaskScope(principalId: string, scopeId: string): StoredActorTaskScopeRecord | null {
+    const normalizedPrincipalId = principalId.trim();
+    const normalizedScopeId = scopeId.trim();
+
+    if (!normalizedPrincipalId || !normalizedScopeId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            scope_id,
+            principal_id,
+            actor_id,
+            task_id,
+            conversation_id,
+            goal,
+            workspace_path,
+            status,
+            created_at,
+            updated_at
+          FROM themis_actor_task_scopes
+          WHERE principal_id = ?
+            AND scope_id = ?
+        `,
+      )
+      .get(normalizedPrincipalId, normalizedScopeId) as ActorTaskScopeRow | undefined;
+
+    return row ? mapActorTaskScopeRow(row) : null;
+  }
+
+  saveActorTaskScope(record: StoredActorTaskScopeRecord): void {
+    const scopeId = record.scopeId.trim();
+    const principalId = record.principalId.trim();
+    const actorId = record.actorId.trim();
+    const taskId = record.taskId.trim();
+    const conversationId = normalizeText(record.conversationId);
+    const goal = normalizeText(record.goal);
+    const workspacePath = normalizeText(record.workspacePath);
+    const status = normalizeText(record.status);
+
+    if (
+      !scopeId ||
+      !principalId ||
+      !actorId ||
+      !taskId ||
+      !goal ||
+      !status ||
+      !ACTOR_TASK_SCOPE_STATUSES.includes(status as ActorTaskScopeStatus)
+    ) {
+      throw new Error("Actor task scope record is incomplete.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_actor_task_scopes (
+            scope_id,
+            principal_id,
+            actor_id,
+            task_id,
+            conversation_id,
+            goal,
+            workspace_path,
+            status,
+            created_at,
+            updated_at
+          ) VALUES (
+            @scope_id,
+            @principal_id,
+            @actor_id,
+            @task_id,
+            @conversation_id,
+            @goal,
+            @workspace_path,
+            @status,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(scope_id) DO UPDATE SET
+            principal_id = excluded.principal_id,
+            actor_id = excluded.actor_id,
+            task_id = excluded.task_id,
+            conversation_id = excluded.conversation_id,
+            goal = excluded.goal,
+            workspace_path = excluded.workspace_path,
+            status = excluded.status,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        scope_id: scopeId,
+        principal_id: principalId,
+        actor_id: actorId,
+        task_id: taskId,
+        conversation_id: conversationId ?? null,
+        goal,
+        workspace_path: workspacePath ?? null,
+        status,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+  }
+
+  appendActorRuntimeMemory(record: StoredActorRuntimeMemoryRecord): void {
+    const runtimeMemoryId = record.runtimeMemoryId.trim();
+    const principalId = record.principalId.trim();
+    const actorId = record.actorId.trim();
+    const taskId = record.taskId.trim();
+    const scopeId = record.scopeId.trim();
+    const conversationId = normalizeText(record.conversationId);
+    const kind = normalizeText(record.kind);
+    const title = normalizeText(record.title);
+    const content = normalizeText(record.content);
+    const status = normalizeText(record.status);
+
+    if (
+      !runtimeMemoryId ||
+      !principalId ||
+      !actorId ||
+      !taskId ||
+      !scopeId ||
+      !kind ||
+      !ACTOR_RUNTIME_MEMORY_KINDS.includes(kind as ActorRuntimeMemoryKind) ||
+      !title ||
+      !content ||
+      !status ||
+      !ACTOR_RUNTIME_MEMORY_STATUSES.includes(status as ActorRuntimeMemoryStatus)
+    ) {
+      throw new Error("Actor runtime memory record is incomplete.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_actor_runtime_memory (
+            runtime_memory_id,
+            principal_id,
+            actor_id,
+            task_id,
+            conversation_id,
+            scope_id,
+            kind,
+            title,
+            content,
+            status,
+            created_at
+          ) VALUES (
+            @runtime_memory_id,
+            @principal_id,
+            @actor_id,
+            @task_id,
+            @conversation_id,
+            @scope_id,
+            @kind,
+            @title,
+            @content,
+            @status,
+            @created_at
+          )
+          ON CONFLICT(runtime_memory_id) DO UPDATE SET
+            principal_id = excluded.principal_id,
+            actor_id = excluded.actor_id,
+            task_id = excluded.task_id,
+            conversation_id = excluded.conversation_id,
+            scope_id = excluded.scope_id,
+            kind = excluded.kind,
+            title = excluded.title,
+            content = excluded.content,
+            status = excluded.status
+        `,
+      )
+      .run({
+        runtime_memory_id: runtimeMemoryId,
+        principal_id: principalId,
+        actor_id: actorId,
+        task_id: taskId,
+        conversation_id: conversationId ?? null,
+        scope_id: scopeId,
+        kind,
+        title,
+        content,
+        status,
+        created_at: record.createdAt,
+      });
+  }
+
+  searchActorRuntimeMemory(filters: {
+    principalId: string;
+    actorId?: string;
+    scopeId?: string;
+    query?: string;
+    limit?: number;
+  }): StoredActorRuntimeMemoryRecord[] {
+    const normalizedPrincipalId = filters.principalId.trim();
+    const normalizedActorId = normalizeText(filters.actorId);
+    const normalizedScopeId = normalizeText(filters.scopeId);
+    const normalizedQuery = normalizeText(filters.query);
+    const normalizedLimit = normalizeLimit(filters.limit);
+
+    if (!normalizedPrincipalId) {
+      return [];
+    }
+
+    const parameters: Array<string | number> = [normalizedPrincipalId];
+    let sql = `
+      SELECT
+        runtime_memory_id,
+        principal_id,
+        actor_id,
+        task_id,
+        conversation_id,
+        scope_id,
+        kind,
+        title,
+        content,
+        status,
+        created_at
+      FROM themis_actor_runtime_memory
+      WHERE principal_id = ?
+    `;
+
+    if (normalizedActorId) {
+      sql += ` AND actor_id = ?`;
+      parameters.push(normalizedActorId);
+    }
+
+    if (normalizedScopeId) {
+      sql += ` AND scope_id = ?`;
+      parameters.push(normalizedScopeId);
+    }
+
+    if (normalizedQuery) {
+      const likePattern = `%${normalizedQuery}%`;
+      sql += `
+        AND (
+          title LIKE ?
+          OR content LIKE ?
+        )
+      `;
+      parameters.push(likePattern, likePattern);
+    }
+
+    sql += `
+      ORDER BY created_at DESC, runtime_memory_id DESC
+      LIMIT ?
+    `;
+    parameters.push(normalizedLimit);
+
+    const rows = this.db.prepare(sql).all(...parameters) as ActorRuntimeMemoryRow[];
+
+    return rows.map(mapActorRuntimeMemoryRow);
+  }
+
+  listActorTaskTimeline(filters: {
+    principalId: string;
+    actorId?: string;
+    scopeId?: string;
+    limit?: number;
+  }): StoredActorRuntimeMemoryRecord[] {
+    const normalizedPrincipalId = filters.principalId.trim();
+    const normalizedActorId = normalizeText(filters.actorId);
+    const normalizedScopeId = normalizeText(filters.scopeId);
+    const normalizedLimit = normalizeLimit(filters.limit);
+
+    if (!normalizedPrincipalId) {
+      return [];
+    }
+
+    const parameters: Array<string | number> = [normalizedPrincipalId];
+    let sql = `
+      SELECT
+        runtime_memory_id,
+        principal_id,
+        actor_id,
+        task_id,
+        conversation_id,
+        scope_id,
+        kind,
+        title,
+        content,
+        status,
+        created_at
+      FROM themis_actor_runtime_memory
+      WHERE principal_id = ?
+    `;
+
+    if (normalizedActorId) {
+      sql += ` AND actor_id = ?`;
+      parameters.push(normalizedActorId);
+    }
+
+    if (normalizedScopeId) {
+      sql += ` AND scope_id = ?`;
+      parameters.push(normalizedScopeId);
+    }
+
+    sql += `
+      ORDER BY created_at ASC, runtime_memory_id ASC
+      LIMIT ?
+    `;
+    parameters.push(normalizedLimit);
+
+    const rows = this.db.prepare(sql).all(...parameters) as ActorRuntimeMemoryRow[];
+
+    return rows.map(mapActorRuntimeMemoryRow);
   }
 
   getPrincipalTaskSettings(principalId: string): StoredPrincipalTaskSettingsRecord | null {
@@ -3729,6 +4352,8 @@ export class SqliteCodexSessionRegistry {
 
       PRAGMA user_version = ${DATABASE_SCHEMA_VERSION};
     `);
+
+    this.createActorMemoryTables(database);
   }
 
   private openDatabase(): Database.Database {
@@ -3736,6 +4361,82 @@ export class SqliteCodexSessionRegistry {
     this.initializeSchema(database);
     this.migrateSchema(database);
     return database;
+  }
+
+  private createActorMemoryTables(database: Database.Database): void {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS themis_principal_actors (
+        actor_id TEXT PRIMARY KEY,
+        owner_principal_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        role TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (owner_principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_principal_actors_owner_idx
+      ON themis_principal_actors(owner_principal_id, updated_at DESC, actor_id ASC);
+
+      CREATE TABLE IF NOT EXISTS themis_principal_main_memory (
+        memory_id TEXT PRIMARY KEY,
+        principal_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        body_markdown TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_principal_main_memory_principal_idx
+      ON themis_principal_main_memory(principal_id, updated_at DESC, memory_id DESC);
+
+      CREATE TABLE IF NOT EXISTS themis_actor_task_scopes (
+        scope_id TEXT PRIMARY KEY,
+        principal_id TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        conversation_id TEXT,
+        goal TEXT NOT NULL,
+        workspace_path TEXT,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE,
+        FOREIGN KEY (actor_id) REFERENCES themis_principal_actors(actor_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_actor_task_scopes_principal_idx
+      ON themis_actor_task_scopes(principal_id, actor_id, status, updated_at DESC, scope_id ASC);
+
+      CREATE TABLE IF NOT EXISTS themis_actor_runtime_memory (
+        runtime_memory_id TEXT PRIMARY KEY,
+        principal_id TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        conversation_id TEXT,
+        scope_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE,
+        FOREIGN KEY (actor_id) REFERENCES themis_principal_actors(actor_id) ON DELETE CASCADE,
+        FOREIGN KEY (scope_id) REFERENCES themis_actor_task_scopes(scope_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_actor_runtime_memory_principal_idx
+      ON themis_actor_runtime_memory(principal_id, actor_id, scope_id, created_at DESC, runtime_memory_id DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_actor_runtime_memory_scope_timeline_idx
+      ON themis_actor_runtime_memory(principal_id, scope_id, created_at ASC, runtime_memory_id ASC);
+    `);
   }
 
   private migrateSchema(database: Database.Database): void {
@@ -3838,6 +4539,8 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_web_audit_events_created_idx
       ON themis_web_audit_events(created_at DESC);
     `);
+
+    this.createActorMemoryTables(database);
 
     const authAccountColumns = database
       .prepare(`PRAGMA table_info(themis_auth_accounts)`)
@@ -4013,6 +4716,64 @@ function mapPrincipalRow(row: PrincipalRow): StoredPrincipalRecord {
     ...(row.display_name ? { displayName: row.display_name } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function mapPrincipalActorRow(row: PrincipalActorRow): StoredPrincipalActorRecord {
+  return {
+    actorId: row.actor_id,
+    ownerPrincipalId: row.owner_principal_id,
+    displayName: row.display_name,
+    role: row.role,
+    status: row.status as PrincipalActorStatus,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapPrincipalMainMemoryRow(row: PrincipalMainMemoryRow): StoredPrincipalMainMemoryRecord {
+  return {
+    memoryId: row.memory_id,
+    principalId: row.principal_id,
+    kind: row.kind as PrincipalMainMemoryKind,
+    title: row.title,
+    summary: row.summary,
+    bodyMarkdown: row.body_markdown,
+    sourceType: row.source_type as PrincipalMainMemorySourceType,
+    status: row.status as PrincipalMainMemoryStatus,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapActorTaskScopeRow(row: ActorTaskScopeRow): StoredActorTaskScopeRecord {
+  return {
+    scopeId: row.scope_id,
+    principalId: row.principal_id,
+    actorId: row.actor_id,
+    taskId: row.task_id,
+    ...(row.conversation_id ? { conversationId: row.conversation_id } : {}),
+    goal: row.goal,
+    ...(row.workspace_path ? { workspacePath: row.workspace_path } : {}),
+    status: row.status as ActorTaskScopeStatus,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapActorRuntimeMemoryRow(row: ActorRuntimeMemoryRow): StoredActorRuntimeMemoryRecord {
+  return {
+    runtimeMemoryId: row.runtime_memory_id,
+    principalId: row.principal_id,
+    actorId: row.actor_id,
+    taskId: row.task_id,
+    ...(row.conversation_id ? { conversationId: row.conversation_id } : {}),
+    scopeId: row.scope_id,
+    kind: row.kind as ActorRuntimeMemoryKind,
+    title: row.title,
+    content: row.content,
+    status: row.status as ActorRuntimeMemoryStatus,
+    createdAt: row.created_at,
   };
 }
 
@@ -4338,6 +5099,14 @@ function safeParseJson(value: string): unknown {
 function normalizeText(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
+}
+
+function normalizeLimit(value: number | undefined, fallback = 20): number {
+  if (!Number.isFinite(value) || typeof value !== "number" || value <= 0) {
+    return fallback;
+  }
+
+  return Math.floor(value);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
