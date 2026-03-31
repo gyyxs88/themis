@@ -1,4 +1,4 @@
-export const PRINCIPAL_ACTOR_STATUSES = ["active", "inactive"] as const;
+export const PRINCIPAL_ACTOR_STATUSES = ["active", "paused", "archived"] as const;
 
 export type PrincipalActorStatus = (typeof PRINCIPAL_ACTOR_STATUSES)[number];
 
@@ -11,7 +11,7 @@ export const PRINCIPAL_MAIN_MEMORY_KINDS = [
 
 export type PrincipalMainMemoryKind = (typeof PRINCIPAL_MAIN_MEMORY_KINDS)[number];
 
-export const PRINCIPAL_MAIN_MEMORY_STATUSES = ["active", "inactive", "archived"] as const;
+export const PRINCIPAL_MAIN_MEMORY_STATUSES = ["active", "deprecated", "archived"] as const;
 
 export type PrincipalMainMemoryStatus = (typeof PRINCIPAL_MAIN_MEMORY_STATUSES)[number];
 
@@ -19,15 +19,22 @@ export const PRINCIPAL_MAIN_MEMORY_SOURCE_TYPES = ["themis", "manual", "imported
 
 export type PrincipalMainMemorySourceType = (typeof PRINCIPAL_MAIN_MEMORY_SOURCE_TYPES)[number];
 
-export const ACTOR_TASK_SCOPE_STATUSES = ["open", "closed", "archived"] as const;
+export const ACTOR_TASK_SCOPE_STATUSES = [
+  "open",
+  "completed",
+  "failed",
+  "cancelled",
+  "taken_over",
+] as const;
 
 export type ActorTaskScopeStatus = (typeof ACTOR_TASK_SCOPE_STATUSES)[number];
 
 export const ACTOR_RUNTIME_MEMORY_KINDS = [
   "progress",
-  "blocker",
   "observation",
-  "decision",
+  "blocker",
+  "result",
+  "handoff",
 ] as const;
 
 export type ActorRuntimeMemoryKind = (typeof ACTOR_RUNTIME_MEMORY_KINDS)[number];

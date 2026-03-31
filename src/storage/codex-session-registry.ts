@@ -1515,6 +1515,20 @@ export class SqliteCodexSessionRegistry {
       throw new Error("Principal actor record is incomplete.");
     }
 
+    const existing = this.db
+      .prepare(
+        `
+          SELECT owner_principal_id
+          FROM themis_principal_actors
+          WHERE actor_id = ?
+        `,
+      )
+      .get(actorId) as { owner_principal_id: string } | undefined;
+
+    if (existing && existing.owner_principal_id !== ownerPrincipalId) {
+      throw new Error("Principal actor belongs to another principal.");
+    }
+
     this.db
       .prepare(
         `
@@ -1738,6 +1752,24 @@ export class SqliteCodexSessionRegistry {
       throw new Error("Actor task scope record is incomplete.");
     }
 
+    if (!this.getPrincipalActor(principalId, actorId)) {
+      throw new Error("Actor task scope actor must belong to the same principal.");
+    }
+
+    const existing = this.db
+      .prepare(
+        `
+          SELECT principal_id
+          FROM themis_actor_task_scopes
+          WHERE scope_id = ?
+        `,
+      )
+      .get(scopeId) as { principal_id: string } | undefined;
+
+    if (existing && existing.principal_id !== principalId) {
+      throw new Error("Actor task scope belongs to another principal.");
+    }
+
     this.db
       .prepare(
         `
@@ -1817,6 +1849,20 @@ export class SqliteCodexSessionRegistry {
       throw new Error("Actor runtime memory record is incomplete.");
     }
 
+    if (!this.getPrincipalActor(principalId, actorId)) {
+      throw new Error("Actor runtime memory actor must belong to the same principal.");
+    }
+
+    const scope = this.getActorTaskScope(principalId, scopeId);
+
+    if (!scope) {
+      throw new Error("Actor runtime memory scope must belong to the same principal.");
+    }
+
+    if (scope.actorId !== actorId) {
+      throw new Error("Actor runtime memory scope must belong to the same actor.");
+    }
+
     this.db
       .prepare(
         `
@@ -1845,16 +1891,6 @@ export class SqliteCodexSessionRegistry {
             @status,
             @created_at
           )
-          ON CONFLICT(runtime_memory_id) DO UPDATE SET
-            principal_id = excluded.principal_id,
-            actor_id = excluded.actor_id,
-            task_id = excluded.task_id,
-            conversation_id = excluded.conversation_id,
-            scope_id = excluded.scope_id,
-            kind = excluded.kind,
-            title = excluded.title,
-            content = excluded.content,
-            status = excluded.status
         `,
       )
       .run({
@@ -4373,7 +4409,8 @@ export class SqliteCodexSessionRegistry {
         status TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        FOREIGN KEY (owner_principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+        FOREIGN KEY (owner_principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE,
+        UNIQUE(owner_principal_id, actor_id)
       );
 
       CREATE INDEX IF NOT EXISTS themis_principal_actors_owner_idx
@@ -4408,7 +4445,10 @@ export class SqliteCodexSessionRegistry {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE,
-        FOREIGN KEY (actor_id) REFERENCES themis_principal_actors(actor_id) ON DELETE CASCADE
+        FOREIGN KEY (principal_id, actor_id)
+          REFERENCES themis_principal_actors(owner_principal_id, actor_id)
+          ON DELETE CASCADE,
+        UNIQUE(principal_id, scope_id)
       );
 
       CREATE INDEX IF NOT EXISTS themis_actor_task_scopes_principal_idx
@@ -4427,8 +4467,12 @@ export class SqliteCodexSessionRegistry {
         status TEXT NOT NULL,
         created_at TEXT NOT NULL,
         FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE,
-        FOREIGN KEY (actor_id) REFERENCES themis_principal_actors(actor_id) ON DELETE CASCADE,
-        FOREIGN KEY (scope_id) REFERENCES themis_actor_task_scopes(scope_id) ON DELETE CASCADE
+        FOREIGN KEY (principal_id, actor_id)
+          REFERENCES themis_principal_actors(owner_principal_id, actor_id)
+          ON DELETE CASCADE,
+        FOREIGN KEY (principal_id, scope_id)
+          REFERENCES themis_actor_task_scopes(principal_id, scope_id)
+          ON DELETE CASCADE
       );
 
       CREATE INDEX IF NOT EXISTS themis_actor_runtime_memory_principal_idx
