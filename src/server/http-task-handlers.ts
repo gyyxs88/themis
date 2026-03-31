@@ -35,7 +35,7 @@ export async function handleTaskStream(
   let streamCompleted = false;
   let detachedRecoveryActionId: string | null = null;
   let detachedRecoveryCloseActionId: string | null = null;
-  const closeAbortGraceMs = 31;
+  const closeAbortGraceMs = 38;
   let closeAbortTimer: ReturnType<typeof setTimeout> | null = null;
   const clearCloseAbortTimer = (): void => {
     if (closeAbortTimer) {

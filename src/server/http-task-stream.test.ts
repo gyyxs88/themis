@@ -1091,7 +1091,7 @@ test("handleTaskStream 在 pending action resolve 后再次 close 会恢复 CLIE
   }
 });
 
-test("handleTaskStream 在 approval resolve 后立刻 close 时会给第二轮 user-input 留恢复窗口", async () => {
+test("handleTaskStream 在 approval resolve 后延迟注册第二轮 user-input 时仍不会 CLIENT_DISCONNECTED", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-http-task-stream-detached-mixed-window-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
@@ -1167,6 +1167,10 @@ test("handleTaskStream 在 approval resolve 后立刻 close 时会给第二轮 u
       const inputSubmission = actionBridge.waitForSubmission(capturedTaskId, capturedRequestId, input.actionId);
       assert.ok(inputSubmission);
 
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
       await onEvent?.({
         eventId: "event-detached-mixed-input-2",
         taskId: capturedTaskId,
@@ -1221,6 +1225,11 @@ test("handleTaskStream 在 approval resolve 后立刻 close 时会给第二轮 u
     }), true);
 
     response.emit("close");
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        setImmediate(resolve);
+      }, 35);
+    });
     releaseSecondAction();
 
     await waitFor(
