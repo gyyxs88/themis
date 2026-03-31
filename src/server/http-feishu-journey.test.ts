@@ -29,7 +29,9 @@ const MIXED_APPROVAL_ACTION_ID = "approval-web-feishu-mixed-1";
 const MIXED_INPUT_ACTION_ID = "input-web-feishu-mixed-2";
 
 test("真实 Web->飞书 journey 在 app-server 下会走通 /use + direct-text takeover 收口", async () => {
-  await withHttpFeishuJourneyServer(async ({ baseUrl, root, runtimeStore, authHeaders, feishu }) => {
+  await withHttpFeishuJourneyServer({
+    scenario: "single-user-input",
+    run: async ({ baseUrl, root, runtimeStore, authHeaders, feishu }) => {
     const sessionId = "session-web-feishu-journey-1";
     const workspace = join(root, "workspace-feishu-journey");
 
@@ -111,14 +113,16 @@ test("真实 Web->飞书 journey 在 app-server 下会走通 /use + direct-text 
     assert.equal(completedHistory.turns?.length, 1);
     assert.equal(completedHistory.turns?.[0]?.status, "completed");
     assert.ok(completedHistory.turns?.[0]?.events?.some((event) => event.type === "task.action_required"));
+    },
   });
 });
 
 test("真实 Web->飞书 mixed recovery journey 在 app-server 下会走通 approval -> user-input -> direct-text takeover 收口", async () => {
-  await withHttpFeishuJourneyServer(async ({ baseUrl, root, runtimeStore, authHeaders, feishu }) => {
+  await withHttpFeishuJourneyServer({
+    scenario: "approval-then-input",
+    run: async ({ baseUrl, root, runtimeStore, authHeaders, feishu }) => {
     const sessionId = "session-web-feishu-mixed-journey-1";
     const workspace = join(root, "workspace-feishu-mixed-journey");
-    let reader: ReturnType<typeof createNdjsonStreamReader> | null = null;
     seedCompletedWebOwnerPersona(runtimeStore);
     writeWorkspaceDocs(workspace, {
       readmeTitle: "workspace-feishu-mixed-journey",
@@ -157,7 +161,7 @@ test("真实 Web->飞书 mixed recovery journey 在 app-server 下会走通 appr
     assert.equal(streamResponse.status, 200);
     assert.ok(streamResponse.body);
 
-    reader = createNdjsonStreamReader(streamResponse.body!);
+    const reader = createNdjsonStreamReader(streamResponse.body!);
     const firstPartialLines = await withTimeout(
       reader.readUntil((lines) => lines.some((line) => line.kind === "event" && line.title === "task.action_required")),
       "missing approval action_required",
@@ -167,33 +171,6 @@ test("真实 Web->飞书 mixed recovery journey 在 app-server 下会走通 appr
     );
     const firstActionId = firstActionRequiredLine?.metadata?.actionId;
     const firstActionType = firstActionRequiredLine?.metadata?.actionType;
-
-    if (firstActionId !== MIXED_APPROVAL_ACTION_ID || firstActionType !== "approval") {
-      await feishu.handleCommand("use", [sessionId]);
-      if (firstActionType === "user-input" && firstActionId) {
-        await feishu.handleMessageEventText("这是来自飞书的 mixed recovery cleanup");
-      } else if (firstActionType === "approval" && firstActionId) {
-        await feishu.handleCommand("approve", [firstActionId]);
-
-        const recoveryPartialLines = await withTimeout(
-          reader.readUntil((lines) => lines.filter((line) => line.kind === "event" && line.title === "task.action_required").length >= 2),
-          "missing recovery user-input action_required",
-        );
-        const recoveryActionRequiredLine = [...recoveryPartialLines].reverse().find(
-          (line) => line.kind === "event" && line.title === "task.action_required",
-        );
-        const recoveryActionId = recoveryActionRequiredLine?.metadata?.actionId;
-        const recoveryActionType = recoveryActionRequiredLine?.metadata?.actionType;
-
-        if (recoveryActionType === "user-input" && recoveryActionId) {
-          await feishu.handleMessageEventText("这是来自飞书的 mixed recovery cleanup");
-        }
-      }
-      await reader.cancel();
-      assert.ok(firstActionRequiredLine);
-      assert.equal(firstActionId, MIXED_APPROVAL_ACTION_ID, JSON.stringify(firstActionRequiredLine));
-      assert.equal(firstActionType, "approval", JSON.stringify(firstActionRequiredLine));
-    }
 
     assert.ok(firstActionRequiredLine);
     assert.equal(firstActionId, MIXED_APPROVAL_ACTION_ID, JSON.stringify(firstActionRequiredLine));
@@ -258,6 +235,7 @@ test("真实 Web->飞书 mixed recovery journey 在 app-server 下会走通 appr
       2,
     );
     await reader.cancel();
+    },
   });
 });
 
@@ -287,9 +265,22 @@ interface FeishuJourneyHarness {
   getCurrentSessionId(): string | null;
 }
 
+type FeishuJourneyScenario = "single-user-input" | "approval-then-input";
+
 interface UserInputJourneySessionState {
   taskRuntimeCalls: { sdk: number; appServer: number };
   resolvedActionSubmissions: TaskPendingActionSubmitRequest[];
+}
+
+interface JourneyScenarioState {
+  scenario: FeishuJourneyScenario;
+  workingDirectory: string;
+  feishuState: UserInputJourneySessionState;
+  currentTaskId: string;
+  currentRequestId: string;
+  currentThreadId: string;
+  currentTurnStatus: "queued" | "running" | "waiting" | "completed";
+  currentInputText: string | null;
 }
 
 interface HistorySessionDetailPayload {
@@ -307,7 +298,10 @@ interface HistorySessionDetailPayload {
 }
 
 async function withHttpFeishuJourneyServer(
-  run: (context: FeishuJourneyHarnessResult) => Promise<void>,
+  input: {
+    scenario?: FeishuJourneyScenario;
+    run: (context: FeishuJourneyHarnessResult) => Promise<void>;
+  },
 ): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "themis-http-feishu-journey-"));
   const controlDirectory = join(root, "control");
@@ -325,24 +319,24 @@ async function withHttpFeishuJourneyServer(
     workingDirectory: controlDirectory,
     runtimeStore,
   });
-  const userInputJourney = createUserInputJourneySession({
+  const journeyState = createJourneySessionState({
+    scenario: input.scenario ?? "single-user-input",
     workingDirectory: controlDirectory,
+  });
+  const journey = createJourneyRuntime({
+    state: journeyState,
     runtimeStore,
     actionBridge,
-    taskRuntimeCalls: {
-      sdk: 0,
-      appServer: 0,
-    },
   });
   const feishu = createFeishuJourneyHarness({
     root,
     runtimeStore,
     runtime: baseRuntime,
-    state: userInputJourney.state,
+    state: journeyState,
     runtimeRegistry: {
-      defaultRuntime: userInputJourney.runtime,
+      defaultRuntime: journey.runtime,
       runtimes: {
-        "app-server": userInputJourney.runtime,
+        "app-server": journey.runtime,
       },
     },
     actionBridge,
@@ -350,9 +344,9 @@ async function withHttpFeishuJourneyServer(
   const server = createThemisHttpServer({
     runtime: baseRuntime,
     runtimeRegistry: {
-      defaultRuntime: userInputJourney.runtime,
+      defaultRuntime: journey.runtime,
       runtimes: {
-        "app-server": userInputJourney.runtime,
+        "app-server": journey.runtime,
       },
     },
     actionBridge,
@@ -375,7 +369,7 @@ async function withHttpFeishuJourneyServer(
   });
 
   try {
-    await run({
+    await input.run({
       baseUrl,
       root,
       runtimeStore,
@@ -392,7 +386,7 @@ function createFeishuJourneyHarness(input: {
   root: string;
   runtimeStore: SqliteCodexSessionRegistry;
   runtime: CodexTaskRuntime;
-  state: UserInputJourneySessionState;
+  state: JourneyScenarioState;
   runtimeRegistry: {
     defaultRuntime: TaskRuntimeFacade;
     runtimes: Partial<Record<"sdk" | "app-server", TaskRuntimeFacade>>;
@@ -482,10 +476,10 @@ function createFeishuJourneyHarness(input: {
       return messages.pop() ?? "";
     },
     getTaskRuntimeCalls() {
-      return { ...input.state.taskRuntimeCalls };
+      return { ...input.state.feishuState.taskRuntimeCalls };
     },
     getResolvedActionSubmissions() {
-      return [...input.state.resolvedActionSubmissions];
+      return [...input.state.feishuState.resolvedActionSubmissions];
     },
     getCurrentSessionId() {
       return sessionStore.getActiveSessionId(conversationKey());
@@ -493,119 +487,53 @@ function createFeishuJourneyHarness(input: {
   };
 }
 
-function createUserInputJourneySession(input: {
+function createJourneySessionState(input: {
+  scenario: FeishuJourneyScenario;
   workingDirectory: string;
+}): JourneyScenarioState {
+  return {
+    scenario: input.scenario,
+    workingDirectory: input.workingDirectory,
+    feishuState: {
+      taskRuntimeCalls: {
+        sdk: 0,
+        appServer: 0,
+      },
+      resolvedActionSubmissions: [],
+    },
+    currentTaskId: "task-web-feishu-journey-1",
+    currentRequestId: "request-web-feishu-journey-1",
+    currentThreadId: JOURNEY_THREAD_ID,
+    currentTurnStatus: "queued",
+    currentInputText: null,
+  };
+}
+
+function createJourneyRuntime(input: {
+  state: JourneyScenarioState;
   runtimeStore: SqliteCodexSessionRegistry;
   actionBridge: AppServerActionBridge;
-  taskRuntimeCalls: { sdk: number; appServer: number };
 }): {
   runtime: TaskRuntimeFacade;
-  state: UserInputJourneySessionState;
+  state: JourneyScenarioState;
 } {
-  const state: UserInputJourneySessionState = {
-    taskRuntimeCalls: input.taskRuntimeCalls,
-    resolvedActionSubmissions: [],
-  };
-  let currentTaskId = "task-web-feishu-journey-1";
-  let currentRequestId = "request-web-feishu-journey-1";
-  let currentActionId = JOURNEY_ACTION_ID;
-  let currentThreadId = JOURNEY_THREAD_ID;
-  let currentTurnStatus: "queued" | "running" | "waiting" | "completed" = "queued";
-  let currentInputText: string | null = null;
-  let resolveCurrentTurn: (() => void) | null = null;
-  let onServerRequestHandler: ((request: AppServerReverseRequest) => void) | null = null;
   const appServerRuntime = new AppServerTaskRuntime({
-    workingDirectory: input.workingDirectory,
+    workingDirectory: input.state.workingDirectory,
     runtimeStore: input.runtimeStore,
     actionBridge: input.actionBridge,
-    sessionFactory: async (): Promise<AppServerTaskRuntimeSession> => ({
-      initialize: async () => {},
-      startThread: async (params) => {
-        currentThreadId = JOURNEY_THREAD_ID;
-        currentTurnStatus = "queued";
-        currentInputText = null;
-        return { threadId: currentThreadId };
-      },
-      resumeThread: async (threadId) => {
-        currentThreadId = threadId;
-        currentTurnStatus = "queued";
-        currentInputText = null;
-        return { threadId };
-      },
-      startTurn: async (threadId) => {
-        currentThreadId = threadId;
-        currentTurnStatus = "running";
-
-        return await new Promise<{ turnId: string }>((resolve) => {
-          resolveCurrentTurn = () => {
-            currentTurnStatus = "completed";
-            resolve({
-              turnId: "turn-web-feishu-journey-1",
-            });
-          };
-
-          onServerRequestHandler?.({
-            id: "server-request-web-feishu-journey-1",
-            method: "item/tool/requestUserInput",
-            params: {
-              itemId: JOURNEY_ACTION_ID,
-              questions: [
-                {
-                  question: "请补充输入后继续执行。",
-                },
-              ],
-            },
-          });
-        });
-      },
-      close: async () => {},
-      onNotification: (_handler) => {},
-      onServerRequest: (handler) => {
-        onServerRequestHandler = handler;
-      },
-      respondToServerRequest: async (_id, result) => {
-        const inputText = extractReplyInputText(result);
-
-        if (!inputText) {
-          throw new Error("requestUserInput response did not include answers.reply.answers[0].");
-        }
-
-        currentInputText = inputText;
-        state.resolvedActionSubmissions.push({
-          taskId: currentTaskId,
-          requestId: currentRequestId,
-          actionId: currentActionId,
-          inputText,
-        });
-        resolveCurrentTurn?.();
-        resolveCurrentTurn = null;
-      },
-      rejectServerRequest: async (_id, error) => {
-        resolveCurrentTurn = null;
-        throw error;
-      },
-      readThread: async (threadId) => ({
-        threadId,
-        preview: "app-server native preview",
-        status: currentTurnStatus,
-        cwd: input.workingDirectory,
-        createdAt: "2026-03-31T09:00:00.000Z",
-        updatedAt: currentInputText ? "2026-03-31T09:00:01.000Z" : "2026-03-31T09:00:00.000Z",
-        turnCount: currentTurnStatus === "queued" ? 0 : 1,
-        turns: [],
-      }),
-    }),
+    sessionFactory: async (): Promise<AppServerTaskRuntimeSession> => createJourneySession(input.state),
   });
 
   return {
-    state,
+    state: input.state,
     runtime: {
       async runTask(request: TaskRequest, hooks: TaskRuntimeRunHooks = {}): Promise<TaskResult> {
-        state.taskRuntimeCalls.appServer += 1;
-        currentTaskId = request.taskId ?? "task-web-feishu-journey-1";
-        currentRequestId = request.requestId;
-        currentActionId = JOURNEY_ACTION_ID;
-        currentInputText = null;
+        input.state.feishuState.taskRuntimeCalls.appServer += 1;
+        input.state.currentTaskId = request.taskId ?? "task-web-feishu-journey-1";
+        input.state.currentRequestId = request.requestId;
+        input.state.currentThreadId = JOURNEY_THREAD_ID;
+        input.state.currentTurnStatus = "queued";
+        input.state.currentInputText = null;
         return await appServerRuntime.runTask(request, hooks);
       },
       getRuntimeStore: () => appServerRuntime.getRuntimeStore(),
@@ -620,6 +548,174 @@ function createUserInputJourneySession(input: {
       ...(typeof appServerRuntime.readThreadSnapshot === "function"
         ? { readThreadSnapshot: appServerRuntime.readThreadSnapshot.bind(appServerRuntime) }
         : {}),
+    },
+  };
+}
+
+function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntimeSession {
+  let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | null = null;
+  let serverRequestHandler: ((request: AppServerReverseRequest) => void) | null = null;
+  let resolveApprovalResponse: ((value: { decision?: string } | null) => void) | null = null;
+  let resolveInputResponse: ((value: { answers?: Record<string, { answers: string[] }> } | null) => void) | null = null;
+
+  return {
+    initialize: async () => {},
+    startThread: async () => {
+      state.currentThreadId = JOURNEY_THREAD_ID;
+      state.currentTurnStatus = "queued";
+      state.currentInputText = null;
+      return { threadId: JOURNEY_THREAD_ID };
+    },
+    resumeThread: async (threadId) => {
+      state.currentThreadId = threadId;
+      state.currentTurnStatus = "queued";
+      state.currentInputText = null;
+      return { threadId };
+    },
+    readThread: async (threadId) => ({
+      threadId,
+      preview: "app-server native preview",
+      status: state.currentTurnStatus,
+      cwd: state.workingDirectory,
+      createdAt: "2026-03-31T12:00:00.000Z",
+      updatedAt: state.currentInputText ? "2026-03-31T12:00:01.000Z" : "2026-03-31T12:00:00.000Z",
+      turnCount: state.currentTurnStatus === "queued" ? 0 : 1,
+      turns: [],
+    }),
+    startTurn: async () => {
+      if (state.scenario === "single-user-input") {
+        state.currentTurnStatus = "running";
+        serverRequestHandler?.({
+          id: "server-input-web-feishu-1",
+          method: "item/tool/requestUserInput",
+          params: {
+            threadId: JOURNEY_THREAD_ID,
+            turnId: "turn-web-feishu-journey-1",
+            itemId: JOURNEY_ACTION_ID,
+            questions: [
+              {
+                id: "reply",
+                question: "请补充来自飞书的上下文",
+              },
+            ],
+          },
+        });
+        state.currentTurnStatus = "waiting";
+
+        const inputResponse = await new Promise<{ answers?: Record<string, { answers: string[] }> } | null>((resolve) => {
+          resolveInputResponse = resolve;
+        });
+        const inputText = requireJourneyInputText(inputResponse);
+
+        notificationHandler?.({
+          method: "item/agentMessage/delta",
+          params: {
+            itemId: "item-app-feishu-journey-1",
+            text: `已按补充输入继续：${inputText}`,
+          },
+        });
+        state.currentTurnStatus = "completed";
+        return { turnId: "turn-web-feishu-journey-1" };
+      }
+
+      state.currentTurnStatus = "running";
+      serverRequestHandler?.({
+        id: "server-approval-web-feishu-mixed-1",
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: JOURNEY_THREAD_ID,
+          turnId: "turn-web-feishu-mixed-1",
+          itemId: MIXED_APPROVAL_ACTION_ID,
+          approvalId: MIXED_APPROVAL_ACTION_ID,
+          command: "codex app-server mixed recovery",
+          reason: "Need first approval before requesting final input.",
+        },
+      });
+      state.currentTurnStatus = "waiting";
+
+      const approvalResponse = await new Promise<{ decision?: string } | null>((resolve) => {
+        resolveApprovalResponse = resolve;
+      });
+      assert.equal(approvalResponse?.decision, "accept");
+      notificationHandler?.({
+        method: "item/agentMessage/delta",
+        params: {
+          itemId: "item-app-feishu-mixed-running-1",
+          text: "第一轮审批已通过，继续等待补充输入。",
+        },
+      });
+
+      serverRequestHandler?.({
+        id: "server-input-web-feishu-mixed-2",
+        method: "item/tool/requestUserInput",
+        params: {
+          threadId: JOURNEY_THREAD_ID,
+          turnId: "turn-web-feishu-mixed-1",
+          itemId: MIXED_INPUT_ACTION_ID,
+          questions: [
+            {
+              id: "reply",
+              question: "请补充 mixed recovery 的最终上下文",
+            },
+          ],
+        },
+      });
+      state.currentTurnStatus = "waiting";
+
+      const inputResponse = await new Promise<{ answers?: Record<string, { answers: string[] }> } | null>((resolve) => {
+        resolveInputResponse = resolve;
+      });
+      const inputText = requireJourneyInputText(inputResponse);
+
+      notificationHandler?.({
+        method: "item/agentMessage/delta",
+        params: {
+          itemId: "item-app-feishu-mixed-complete-1",
+          text: `mixed recovery 已按补充输入继续：${inputText}`,
+        },
+      });
+      state.currentTurnStatus = "completed";
+      return { turnId: "turn-web-feishu-mixed-1" };
+    },
+    close: async () => {},
+    onNotification: (handler) => {
+      notificationHandler = handler;
+    },
+    onServerRequest: (handler) => {
+      serverRequestHandler = handler;
+    },
+    respondToServerRequest: async (_id, result) => {
+      if (resolveApprovalResponse) {
+        const resolve = resolveApprovalResponse;
+        resolveApprovalResponse = null;
+        state.feishuState.resolvedActionSubmissions.push({
+          taskId: state.currentTaskId,
+          requestId: state.currentRequestId,
+          actionId: MIXED_APPROVAL_ACTION_ID,
+          decision: "approve",
+        });
+        resolve(result as { decision?: string } | null);
+        return;
+      }
+
+      if (resolveInputResponse) {
+        const resolve = resolveInputResponse;
+        resolveInputResponse = null;
+        const inputText = requireJourneyInputText(result);
+        state.currentInputText = inputText;
+        state.feishuState.resolvedActionSubmissions.push({
+          taskId: state.currentTaskId,
+          requestId: state.currentRequestId,
+          actionId: state.scenario === "single-user-input" ? JOURNEY_ACTION_ID : MIXED_INPUT_ACTION_ID,
+          inputText,
+        });
+        resolve(result as { answers?: Record<string, { answers: string[] }> } | null);
+      }
+    },
+    rejectServerRequest: async (_id, error) => {
+      resolveApprovalResponse = null;
+      resolveInputResponse = null;
+      throw error;
     },
   };
 }
@@ -835,6 +931,16 @@ function extractReplyInputText(result: unknown): string | null {
   const replyAnswers = Array.isArray(reply?.answers) ? reply.answers : [];
   const text = typeof replyAnswers[0] === "string" ? replyAnswers[0].trim() : "";
   return text || null;
+}
+
+function requireJourneyInputText(result: unknown): string {
+  const inputText = extractReplyInputText(result);
+
+  if (!inputText) {
+    throw new Error("requestUserInput response did not include answers.reply.answers[0].");
+  }
+
+  return inputText;
 }
 
 function listenServer(server: Server): Promise<Server> {
