@@ -354,6 +354,47 @@ test("Journey session respondToServerRequest 会按 request id 严格匹配当�
 
 });
 
+test("Journey session rejectServerRequest 不应把 CLIENT_DISCONNECTED 直接等价成 session closed", async () => {
+  const state = createJourneySessionState({
+    scenario: "approval-then-input",
+    workingDirectory: "/tmp/themis-feishu-journey-reject-close",
+    mixedRecoveryInputDelayMs: 0,
+  });
+  const session = createJourneySession(state);
+  const requests: AppServerReverseRequest[] = [];
+
+  session.onServerRequest((request) => {
+    requests.push(request);
+  });
+
+  await session.initialize();
+  await session.startThread({
+    cwd: state.workingDirectory,
+    persistExtendedHistory: true,
+  });
+
+  const turnPromise = session.startTurn(JOURNEY_THREAD_ID, "journey reject close semantics");
+  await waitFor(() => requests.length === 1, "approval request was not emitted");
+
+  await session.rejectServerRequest(requests[0]?.id ?? "", new Error("CLIENT_DISCONNECTED"));
+
+  assert.equal(state.feishuState.lastRejectedServerRequestError, "CLIENT_DISCONNECTED");
+  assert.equal(state.currentTurnStatus, "waiting");
+
+  const turnStateAfterReject = await Promise.race([
+    turnPromise.then(() => "resolved" as const),
+    new Promise<"pending">((resolve) => {
+      setTimeout(() => resolve("pending"), 25);
+    }),
+  ]);
+  assert.equal(turnStateAfterReject, "pending");
+  assert.equal(state.currentTurnStatus, "waiting");
+
+  await session.close();
+  await turnPromise;
+  assert.equal(state.currentTurnStatus, "completed");
+});
+
 test("真实 Web->飞书 mixed recovery 在 approval 后立即断流时仍会通过 /use + direct-text takeover 收口", async () => {
   await withHttpFeishuJourneyServer({
     scenario: "approval-then-input",
@@ -1058,8 +1099,6 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
         : String(error);
 
       if (state.feishuState.lastRejectedServerRequestError === "CLIENT_DISCONNECTED") {
-        sessionClosed = true;
-        resolveSessionClosed();
         return;
       }
 
