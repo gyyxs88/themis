@@ -14,7 +14,7 @@ export function renderFeishuWaitingActionSurface(input: {
       `- 拒绝：/deny ${input.actionId}`,
     ]
     : [
-      "- 直接回复这条消息即可继续",
+      "- 如果当前只在等这一条输入，直接回复即可继续",
       `- 如需显式指定 action，也可用：/reply ${input.actionId} <内容>`,
     ];
 
