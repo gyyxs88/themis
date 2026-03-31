@@ -1464,6 +1464,7 @@ test("飞书 /use 切回目标会话后会接管该会话里的 Web-origin user-
     await harness.handleCommand("use", [sessionA]);
     const switchMessages = harness.takeMessages().join("\n");
     assert.match(switchMessages, new RegExp(`已切换到会话：${sessionA}`));
+    const beforeTaskRuntimeCalls = harness.getTaskRuntimeCalls();
 
     await harness.handleMessageEventText("按会话 A 的上下文继续");
 
@@ -1474,6 +1475,7 @@ test("飞书 /use 切回目标会话后会接管该会话里的 Web-origin user-
       actionId: "reply-web-switch-1",
       inputText: "按会话 A 的上下文继续",
     });
+    assert.deepEqual(harness.getTaskRuntimeCalls(), beforeTaskRuntimeCalls);
   } finally {
     harness.cleanup();
   }
@@ -1501,7 +1503,8 @@ test("飞书切到其他会话后不会误接管非当前会话的 waiting input
 
     await harness.handleCommand("new", []);
     harness.takeMessages();
-    await harness.handleIncomingText("建立会话 B");
+    const beforeTaskRuntimeCalls = harness.getTaskRuntimeCalls();
+    await harness.handleMessageEventText("建立会话 B");
     const sessionB = harness.getCurrentSessionId();
 
     const messages = harness.takeMessages().join("\n");
@@ -1511,6 +1514,10 @@ test("飞书切到其他会话后不会误接管非当前会话的 waiting input
     assert.match(messages, /建立会话 B/);
     assert.notEqual(harness.findPendingAction("reply-hidden-a"), null);
     assert.deepEqual(harness.getResolvedActionSubmissions(), []);
+    assert.deepEqual(harness.getTaskRuntimeCalls(), {
+      sdk: beforeTaskRuntimeCalls.sdk,
+      appServer: beforeTaskRuntimeCalls.appServer + 1,
+    });
   } finally {
     harness.cleanup();
   }
