@@ -1487,6 +1487,7 @@ test("飞书切到其他会话后不会误接管非当前会话的 waiting input
   try {
     await harness.handleIncomingText("建立会话 A");
     const sessionA = harness.getCurrentSessionId();
+    assert.ok(sessionA);
     harness.takeMessages();
 
     harness.injectPendingAction({
@@ -1498,7 +1499,7 @@ test("飞书切到其他会话后不会误接管非当前会话的 waiting input
       sourceChannel: "web",
       userId: "web-user-2",
       principalId: harness.getCurrentPrincipalId(),
-      sessionId: sessionA ?? undefined,
+      sessionId: sessionA,
     });
 
     await harness.handleCommand("new", []);
