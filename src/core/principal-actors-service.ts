@@ -99,6 +99,27 @@ export interface ActorTaskTakeoverSummary {
 }
 
 const DISPATCH_AUTHORIZED_MEMORY_LIMIT = 5;
+const TASK_FILTERED_TIMELINE_LIMIT_FALLBACK = 20;
+const TASK_FILTERED_TIMELINE_FETCH_LIMIT = 1000000;
+const GOAL_ACTION_PREFIXES = [
+  "修复",
+  "解决",
+  "处理",
+  "排查",
+  "定位",
+  "检查",
+  "确认",
+  "优化",
+  "补齐",
+  "补充",
+  "实现",
+  "新增",
+  "更新",
+  "查看",
+  "分析",
+  "跟进",
+  "推进",
+] as const;
 
 export class PrincipalActorsService {
   private readonly registry: SqliteCodexSessionRegistry;
@@ -173,22 +194,33 @@ export class PrincipalActorsService {
       goal: scope.goal,
       ...(scope.conversationId ? { conversationId: scope.conversationId } : {}),
       ...(scope.workspacePath ? { workspacePath: scope.workspacePath } : {}),
-      authorizedMemory: this.registry
-        .searchPrincipalMainMemory(principalId, scope.goal, DISPATCH_AUTHORIZED_MEMORY_LIMIT * 4)
-        .filter((record) => record.status === "active")
-        .slice(0, DISPATCH_AUTHORIZED_MEMORY_LIMIT),
+      authorizedMemory: this.buildAuthorizedMemoryView(principalId, scope.goal),
     };
   }
 
   appendActorRuntimeMemory(input: AppendActorRuntimeMemoryInput): StoredActorRuntimeMemoryRecord {
+    const principalId = normalizeRequiredText(input.principalId, "Principal id is required.");
+    const actorId = normalizeRequiredText(input.actorId, "Actor id is required.");
+    const taskId = normalizeRequiredText(input.taskId, "Task id is required.");
+    const scopeId = normalizeRequiredText(input.scopeId, "Scope id is required.");
     const conversationId = normalizeOptionalText(input.conversationId);
+    const scope = this.requireScope(principalId, scopeId);
+
+    if (scope.actorId !== actorId) {
+      throw new Error("Actor runtime memory scope must belong to the same actor.");
+    }
+
+    if (scope.taskId !== taskId) {
+      throw new Error("Actor runtime memory scope must belong to the same task.");
+    }
+
     const record: StoredActorRuntimeMemoryRecord = {
       runtimeMemoryId: normalizeOptionalText(input.runtimeMemoryId) ?? createId("runtime-memory"),
-      principalId: normalizeRequiredText(input.principalId, "Principal id is required."),
-      actorId: normalizeRequiredText(input.actorId, "Actor id is required."),
-      taskId: normalizeRequiredText(input.taskId, "Task id is required."),
+      principalId,
+      actorId,
+      taskId,
       ...(conversationId ? { conversationId } : {}),
-      scopeId: normalizeRequiredText(input.scopeId, "Scope id is required."),
+      scopeId,
       kind: input.kind,
       title: normalizeRequiredText(input.title, "Runtime memory title is required."),
       content: normalizeRequiredText(input.content, "Runtime memory content is required."),
@@ -222,21 +254,41 @@ export class PrincipalActorsService {
   }
 
   getActorTaskTimeline(input: GetActorTaskTimelineInput): StoredActorRuntimeMemoryRecord[] {
+    const principalId = normalizeRequiredText(input.principalId, "Principal id is required.");
     const actorId = normalizeOptionalText(input.actorId);
     const scopeId = normalizeOptionalText(input.scopeId);
+    const taskId = normalizeOptionalText(input.taskId);
+
+    if (taskId) {
+      const filteredTimeline = filterTimelineEntries(
+        this.registry.listActorTaskTimeline({
+          principalId,
+          ...(actorId ? { actorId } : {}),
+          ...(scopeId ? { scopeId } : {}),
+          limit: TASK_FILTERED_TIMELINE_FETCH_LIMIT,
+        }),
+        {
+          principalId,
+          ...(actorId ? { actorId } : {}),
+          ...(scopeId ? { scopeId } : {}),
+          taskId,
+        },
+      );
+
+      return applyTimelineLimit(
+        filteredTimeline,
+        normalizeLimitValue(input.limit, TASK_FILTERED_TIMELINE_LIMIT_FALLBACK),
+      );
+    }
+
     const timeline = this.registry.listActorTaskTimeline({
-      principalId: normalizeRequiredText(input.principalId, "Principal id is required."),
+      principalId,
       ...(actorId ? { actorId } : {}),
       ...(scopeId ? { scopeId } : {}),
       ...(typeof input.limit === "number" ? { limit: input.limit } : {}),
     });
-    const taskId = normalizeOptionalText(input.taskId);
 
-    if (!taskId) {
-      return timeline;
-    }
-
-    return timeline.filter((entry) => entry.taskId === taskId);
+    return timeline;
   }
 
   takeOverActorTask(input: TakeOverActorTaskInput): ActorTaskTakeoverSummary {
@@ -249,10 +301,19 @@ export class PrincipalActorsService {
       throw new Error("Actor task scope does not exist.");
     }
 
-    const timeline = this.registry.listActorTaskTimeline({
-      principalId,
-      scopeId,
-    });
+    const timeline = filterTimelineEntries(
+      this.registry.listActorTaskTimeline({
+        principalId,
+        scopeId,
+        limit: TASK_FILTERED_TIMELINE_FETCH_LIMIT,
+      }),
+      {
+        principalId,
+        actorId: actor.actorId,
+        scopeId,
+        taskId: scope.taskId,
+      },
+    );
 
     return {
       actor,
@@ -278,6 +339,43 @@ export class PrincipalActorsService {
 
     return actor;
   }
+
+  private requireScope(principalId: string, scopeId: string): StoredActorTaskScopeRecord {
+    const scope = this.registry.getActorTaskScope(principalId, scopeId);
+
+    if (!scope) {
+      throw new Error("Actor task scope does not exist.");
+    }
+
+    return scope;
+  }
+
+  private buildAuthorizedMemoryView(
+    principalId: string,
+    goal: string,
+  ): StoredPrincipalMainMemoryRecord[] {
+    const recordsById = new Map<string, StoredPrincipalMainMemoryRecord>();
+
+    for (const query of expandGoalSearchQueries(goal)) {
+      const records = this.registry.searchPrincipalMainMemory(
+        principalId,
+        query,
+        DISPATCH_AUTHORIZED_MEMORY_LIMIT,
+      );
+
+      for (const record of records) {
+        if (record.status !== "active" || recordsById.has(record.memoryId)) {
+          continue;
+        }
+
+        recordsById.set(record.memoryId, record);
+      }
+    }
+
+    return [...recordsById.values()]
+      .sort(compareMainMemoryByUpdatedAtDesc)
+      .slice(0, DISPATCH_AUTHORIZED_MEMORY_LIMIT);
+  }
 }
 
 function findLatestTimelineContent(
@@ -293,6 +391,100 @@ function findLatestTimelineContent(
   }
 
   return null;
+}
+
+function filterTimelineEntries(
+  timeline: StoredActorRuntimeMemoryRecord[],
+  filters: {
+    principalId: string;
+    actorId?: string;
+    scopeId?: string;
+    taskId?: string;
+  },
+): StoredActorRuntimeMemoryRecord[] {
+  return timeline.filter((entry) => {
+    if (entry.principalId !== filters.principalId) {
+      return false;
+    }
+
+    if (filters.actorId && entry.actorId !== filters.actorId) {
+      return false;
+    }
+
+    if (filters.scopeId && entry.scopeId !== filters.scopeId) {
+      return false;
+    }
+
+    if (filters.taskId && entry.taskId !== filters.taskId) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+function applyTimelineLimit(
+  timeline: StoredActorRuntimeMemoryRecord[],
+  limit: number,
+): StoredActorRuntimeMemoryRecord[] {
+  return timeline.slice(0, limit);
+}
+
+function expandGoalSearchQueries(goal: string): string[] {
+  const normalizedGoal = normalizeRequiredText(goal, "Goal is required.");
+  const queries = new Set<string>();
+  const strippedGoal = stripLeadingGoalAction(normalizedGoal);
+
+  for (const candidate of [normalizedGoal, strippedGoal]) {
+    addGoalCandidate(queries, candidate);
+
+    for (const segment of candidate.split(/[，,。；;、]/u)) {
+      addGoalCandidate(queries, segment);
+    }
+  }
+
+  return [...queries];
+}
+
+function addGoalCandidate(queries: Set<string>, value: string): void {
+  const normalized = normalizeOptionalText(value);
+
+  if (!normalized || normalized.length < 2) {
+    return;
+  }
+
+  queries.add(normalized);
+}
+
+function stripLeadingGoalAction(goal: string): string {
+  let current = goal.trim();
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    current = current.replace(/^[\s:：\-]+/u, "");
+
+    for (const prefix of GOAL_ACTION_PREFIXES) {
+      if (current.startsWith(prefix) && current.length > prefix.length) {
+        current = current.slice(prefix.length).trim();
+        changed = true;
+        break;
+      }
+    }
+  }
+
+  return current;
+}
+
+function compareMainMemoryByUpdatedAtDesc(
+  left: StoredPrincipalMainMemoryRecord,
+  right: StoredPrincipalMainMemoryRecord,
+): number {
+  if (left.updatedAt !== right.updatedAt) {
+    return right.updatedAt.localeCompare(left.updatedAt);
+  }
+
+  return right.memoryId.localeCompare(left.memoryId);
 }
 
 function normalizeRequiredText(value: string, message: string): string {
@@ -312,6 +504,14 @@ function normalizeOptionalText(value?: string): string | undefined {
 
 function normalizeNow(now?: string): string {
   return normalizeOptionalText(now) ?? new Date().toISOString();
+}
+
+function normalizeLimitValue(value: number | undefined, fallback: number): number {
+  if (!Number.isFinite(value) || typeof value !== "number" || value <= 0) {
+    return fallback;
+  }
+
+  return Math.floor(value);
 }
 
 function createId(prefix: string): string {
