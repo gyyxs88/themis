@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { CodexTaskRuntime } from "../core/codex-runtime.js";
-import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
+import { createTaskError, resolveErrorStatusCode, toErrorMessage } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
 import { writeJson } from "./http-responses.js";
 
@@ -41,6 +41,17 @@ function writeRuntimeError(response: ServerResponse, error: unknown): void {
   writeJson(response, resolveErrorStatusCode(error, true), {
     error: createTaskError(error, true),
   });
+}
+
+function writeActorBoundaryError(response: ServerResponse, error: unknown): void {
+  if (isActorBoundaryError(error)) {
+    writeJson(response, 400, {
+      error: createTaskError(error, false),
+    });
+    return;
+  }
+
+  writeRuntimeError(response, error);
 }
 
 export async function handleActorCreate(
@@ -109,7 +120,7 @@ export async function handleActorTimeline(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const timeline = runtime.getPrincipalActorsService().getActorTaskTimeline({
+    const takeover = runtime.getPrincipalActorsService().takeOverActorTask({
       principalId: identity.principalId,
       actorId: payload.actorId,
       scopeId: payload.scopeId,
@@ -117,10 +128,10 @@ export async function handleActorTimeline(
 
     writeJson(response, 200, {
       identity,
-      timeline,
+      timeline: takeover.timeline,
     });
   } catch (error) {
-    writeRuntimeError(response, error);
+    writeActorBoundaryError(response, error);
   }
 }
 
@@ -145,7 +156,7 @@ export async function handleActorTakeover(
 
     writeJson(response, 200, result);
   } catch (error) {
-    writeRuntimeError(response, error);
+    writeActorBoundaryError(response, error);
   }
 }
 
@@ -222,4 +233,11 @@ function normalizeText(value: unknown): string | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isActorBoundaryError(error: unknown): boolean {
+  const message = toErrorMessage(error);
+
+  return message === "Principal actor does not exist."
+    || message === "Actor task scope does not exist.";
 }

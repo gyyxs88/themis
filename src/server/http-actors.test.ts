@@ -72,6 +72,20 @@ async function postJson(
   });
 }
 
+async function readErrorResponse(response: Response): Promise<{
+  error?: {
+    code?: string;
+    message?: string;
+  };
+}> {
+  return response.json() as Promise<{
+    error?: {
+      code?: string;
+      message?: string;
+    };
+  }>;
+}
+
 test("POST /api/actors/create 和 /api/actors/list 会按当前 principal 创建并列出数字员工", async () => {
   await withHttpServer(async ({ baseUrl, runtimeStore }) => {
     const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
@@ -119,6 +133,90 @@ test("POST /api/actors/create 和 /api/actors/list 会按当前 principal 创建
         },
       ],
     );
+  });
+});
+
+test("POST /api/actors/timeline 在 actorId 和 scopeId 冲突时返回客户端错误，而不是别的 actor timeline", async () => {
+  await withHttpServer(async ({ baseUrl, runtime, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+    const identity = runtime.getIdentityLinkService().ensureIdentity(buildIdentityPayload("owner-actor-conflict"));
+    const service = runtime.getPrincipalActorsService();
+    const actorA = service.createActor({
+      principalId: identity.principalId,
+      displayName: "阿运",
+      role: "ops-worker",
+      now: "2026-03-31T13:00:00.000Z",
+    });
+    const actorB = service.createActor({
+      principalId: identity.principalId,
+      displayName: "阿前",
+      role: "frontend-worker",
+      now: "2026-03-31T13:00:30.000Z",
+    });
+    const dispatch = service.dispatchTaskToActor({
+      principalId: identity.principalId,
+      actorId: actorA.actorId,
+      taskId: "task-ops-conflict",
+      goal: "排查网关告警",
+      now: "2026-03-31T13:01:00.000Z",
+    });
+
+    service.appendActorRuntimeMemory({
+      principalId: identity.principalId,
+      actorId: actorA.actorId,
+      taskId: "task-ops-conflict",
+      scopeId: dispatch.scope.scopeId,
+      kind: "progress",
+      title: "只属于阿运的记录",
+      content: "这条 timeline 不该被别的 actorId 读到。",
+      status: "active",
+      createdAt: "2026-03-31T13:02:00.000Z",
+    });
+
+    const response = await postJson(baseUrl, "/api/actors/timeline", {
+      ...buildIdentityPayload("owner-actor-conflict"),
+      actorId: actorB.actorId,
+      scopeId: dispatch.scope.scopeId,
+    }, authHeaders);
+
+    assert.equal(response.status, 400);
+    const payload = await readErrorResponse(response);
+    assert.equal(payload.error?.code, "INVALID_REQUEST");
+    assert.equal(payload.error?.message, "Actor task scope does not exist.");
+  });
+});
+
+test("POST /api/actors/timeline 和 /api/actors/takeover 在 scope 不存在时返回一致的客户端错误", async () => {
+  await withHttpServer(async ({ baseUrl, runtime, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+    const identity = runtime.getIdentityLinkService().ensureIdentity(buildIdentityPayload("owner-actor-missing-scope"));
+    const actor = runtime.getPrincipalActorsService().createActor({
+      principalId: identity.principalId,
+      displayName: "阿测",
+      role: "qa-worker",
+      now: "2026-03-31T14:00:00.000Z",
+    });
+
+    const timelineResponse = await postJson(baseUrl, "/api/actors/timeline", {
+      ...buildIdentityPayload("owner-actor-missing-scope"),
+      actorId: actor.actorId,
+      scopeId: "scope-missing",
+    }, authHeaders);
+    const timelinePayload = await readErrorResponse(timelineResponse);
+
+    const takeoverResponse = await postJson(baseUrl, "/api/actors/takeover", {
+      ...buildIdentityPayload("owner-actor-missing-scope"),
+      actorId: actor.actorId,
+      scopeId: "scope-missing",
+    }, authHeaders);
+    const takeoverPayload = await readErrorResponse(takeoverResponse);
+
+    assert.equal(timelineResponse.status, 400);
+    assert.equal(takeoverResponse.status, 400);
+    assert.equal(timelinePayload.error?.code, "INVALID_REQUEST");
+    assert.equal(takeoverPayload.error?.code, "INVALID_REQUEST");
+    assert.equal(timelinePayload.error?.message, "Actor task scope does not exist.");
+    assert.equal(takeoverPayload.error?.message, "Actor task scope does not exist.");
   });
 });
 
