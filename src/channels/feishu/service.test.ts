@@ -1783,6 +1783,95 @@ test("/steer <指令> 会向当前会话发送 steer", async () => {
   }
 });
 
+test("飞书 /use 切回目标会话后，/review 仍绑定当前会话", async () => {
+  const reviewCalls: Array<{ sessionId: string; instructions: string }> = [];
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: (deps) => ({
+      ...createAppServerSessionThreadRuntime({
+        ...deps,
+        sessionIdFallback: "session-review-fallback",
+        taskIdPrefix: "task-review",
+        threadIdForGoal: (goal) => (/会话 A/.test(goal) ? "thread-review-a" : "thread-review-b"),
+      }),
+      startReview: async (request) => {
+        reviewCalls.push(request);
+        return {
+          reviewThreadId: `review-thread-${request.sessionId}`,
+          turnId: `review-turn-${request.sessionId}`,
+        };
+      },
+    }),
+  } as FeishuHarnessConfig);
+
+  try {
+    await harness.handleIncomingText("建立 review 会话 A");
+    const sessionA = harness.getCurrentSessionId();
+    harness.takeMessages();
+
+    await harness.handleCommand("new", []);
+    harness.takeMessages();
+    await harness.handleIncomingText("建立 review 会话 B");
+    harness.takeMessages();
+
+    assert.ok(sessionA);
+    await harness.handleCommand("use", [sessionA ?? ""]);
+    harness.takeMessages();
+    await harness.handleCommand("review", ["只检查会话 A 的回归风险"]);
+
+    assert.deepEqual(reviewCalls, [{
+      sessionId: sessionA ?? "",
+      instructions: "只检查会话 A 的回归风险",
+    }]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书 /use 切回目标会话后，/steer 仍绑定当前会话", async () => {
+  const steerCalls: Array<{ sessionId: string; message: string }> = [];
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: (deps) => ({
+      ...createAppServerSessionThreadRuntime({
+        ...deps,
+        sessionIdFallback: "session-steer-fallback",
+        taskIdPrefix: "task-steer",
+        threadIdForGoal: (goal) => (/会话 A/.test(goal) ? "thread-steer-a" : "thread-steer-b"),
+      }),
+      steerTurn: async (request) => {
+        steerCalls.push(request);
+        return {
+          turnId: `steer-turn-${request.sessionId}`,
+        };
+      },
+    }),
+  } as FeishuHarnessConfig);
+
+  try {
+    await harness.handleIncomingText("建立 steer 会话 A");
+    const sessionA = harness.getCurrentSessionId();
+    harness.takeMessages();
+
+    await harness.handleCommand("new", []);
+    harness.takeMessages();
+    await harness.handleIncomingText("建立 steer 会话 B");
+    harness.takeMessages();
+
+    assert.ok(sessionA);
+    await harness.handleCommand("use", [sessionA ?? ""]);
+    harness.takeMessages();
+    await harness.handleCommand("steer", ["把当前会话收窄到 A 的上下文"]);
+
+    assert.deepEqual(steerCalls, [{
+      sessionId: sessionA ?? "",
+      message: "把当前会话收窄到 A 的上下文",
+    }]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("飞书命令式审批恢复会沿同一任务链收口 action 提示、审批提交与最终结果", async () => {
   const harness = createHarness({
     runtimeEngine: "app-server",
@@ -1893,6 +1982,190 @@ test("飞书命令式审批恢复会沿同一任务链收口 action 提示、审
     assert.equal(submissions[0]?.actionId, "approval-feishu-journey-1");
     assert.equal(submissions[0]?.decision, "approve");
     assert.ok(submissions[0]?.requestId);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书 approval -> user-input 混合恢复会由 direct-text takeover 完成第二轮收口", async () => {
+  const emittedEventSummaries: string[] = [];
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      actionBridge,
+      taskRuntimeCalls,
+    }) => ({
+      async runTask(request, hooks = {}) {
+        taskRuntimeCalls.appServer += 1;
+        const taskId = request.taskId ?? "task-feishu-mixed-journey";
+        const requestId = request.requestId;
+        const approvalActionId = "approval-feishu-mixed-1";
+        const inputActionId = "reply-feishu-mixed-2";
+        const principalId = identityService.ensureIdentity({
+          channel: request.sourceChannel,
+          channelUserId: request.user.userId,
+        }).principalId;
+
+        actionBridge.register({
+          taskId,
+          requestId,
+          actionId: approvalActionId,
+          actionType: "approval",
+          prompt: "Allow first step?",
+          choices: ["approve", "deny"],
+          scope: {
+            sourceChannel: "feishu",
+            principalId,
+            userId: request.user.userId,
+            ...(request.channelContext.channelSessionKey
+              ? { sessionId: request.channelContext.channelSessionKey }
+              : {}),
+          },
+        });
+
+        await hooks.onEvent?.({
+          eventId: "event-feishu-mixed-approval",
+          taskId,
+          requestId,
+          type: "task.action_required",
+          status: "waiting",
+          message: `Allow first step?\n使用 /approve ${approvalActionId} 或 /deny ${approvalActionId}`,
+          payload: {
+            actionId: approvalActionId,
+            actionType: "approval",
+            prompt: "Allow first step?",
+            choices: ["approve", "deny"],
+          },
+          timestamp: new Date().toISOString(),
+        });
+        emittedEventSummaries.push(`task.action_required:${approvalActionId}`);
+
+        const approvalSubmission = await actionBridge.waitForSubmission(taskId, requestId, approvalActionId);
+        assert.ok(approvalSubmission);
+        assert.equal(approvalSubmission.decision, "approve");
+
+        await hooks.onEvent?.({
+          eventId: "event-feishu-mixed-running",
+          taskId,
+          requestId,
+          type: "task.progress",
+          status: "running",
+          message: "第一轮审批已提交，继续等待补充输入。",
+          payload: {
+            itemType: "agent_message",
+            threadEventType: "item.completed",
+            itemId: "item-feishu-mixed-running",
+          },
+          timestamp: new Date().toISOString(),
+        });
+        emittedEventSummaries.push("task.progress:running");
+
+        actionBridge.register({
+          taskId,
+          requestId,
+          actionId: inputActionId,
+          actionType: "user-input",
+          prompt: "Please provide final detail",
+          scope: {
+            sourceChannel: "feishu",
+            principalId,
+            userId: request.user.userId,
+            ...(request.channelContext.channelSessionKey
+              ? { sessionId: request.channelContext.channelSessionKey }
+              : {}),
+          },
+        });
+
+        await hooks.onEvent?.({
+          eventId: "event-feishu-mixed-input",
+          taskId,
+          requestId,
+          type: "task.action_required",
+          status: "waiting",
+          message: "Please provide final detail",
+          payload: {
+            actionId: inputActionId,
+            actionType: "user-input",
+            prompt: "Please provide final detail",
+          },
+          timestamp: new Date().toISOString(),
+        });
+        emittedEventSummaries.push(`task.action_required:${inputActionId}`);
+
+        const inputSubmission = await actionBridge.waitForSubmission(taskId, requestId, inputActionId);
+        assert.ok(inputSubmission);
+        assert.equal(inputSubmission.inputText, "补充最终上下文");
+
+        const result: TaskResult = {
+          taskId,
+          requestId,
+          status: "completed",
+          summary: `最终结果：${request.goal}`,
+          output: `最终结果：${request.goal}`,
+          structuredOutput: {
+            session: {
+              engine: "app-server",
+            },
+          },
+          completedAt: new Date().toISOString(),
+        };
+
+        return hooks.finalizeResult ? await hooks.finalizeResult(request, result) : result;
+      },
+      getRuntimeStore() {
+        return runtimeStore;
+      },
+      getIdentityLinkService() {
+        return identityService;
+      },
+      getPrincipalSkillsService() {
+        return principalSkillsService;
+      },
+    }),
+  } as FeishuHarnessConfig);
+
+  try {
+    let taskSettled = false;
+    const taskPromise = harness.handleIncomingText("请执行一次飞书混合恢复闭环测试").then(() => {
+      taskSettled = true;
+    });
+
+    await waitFor(() => harness.peekMessages().some((message) => message.includes("/approve approval-feishu-mixed-1")));
+    await harness.handleCommand("approve", ["approval-feishu-mixed-1"]);
+
+    await waitFor(() => {
+      const messages = harness.peekMessages().join("\n");
+      return /Please provide final detail/.test(messages) && /直接回复.*继续/.test(messages);
+    });
+
+    assert.equal(taskSettled, false);
+    await harness.handleMessageEventText("补充最终上下文");
+    await taskPromise;
+
+    const messages = harness.takeMessages().join("\n");
+    const submissions = harness.getResolvedActionSubmissions();
+    assert.match(messages, /Allow first step\?/);
+    assert.match(messages, /Please provide final detail/);
+    assert.match(messages, /直接回复.*继续/);
+    assert.match(messages, /最终结果：请执行一次飞书混合恢复闭环测试/);
+    assert.deepEqual(emittedEventSummaries, [
+      "task.action_required:approval-feishu-mixed-1",
+      "task.progress:running",
+      "task.action_required:reply-feishu-mixed-2",
+    ]);
+    assert.equal(submissions.length, 2);
+    const taskId = submissions[0]?.taskId;
+    assert.ok(taskId);
+    assert.equal(submissions[0]?.actionId, "approval-feishu-mixed-1");
+    assert.equal(submissions[0]?.decision, "approve");
+    assert.ok(submissions[0]?.requestId);
+    assert.equal(submissions[1]?.taskId, taskId);
+    assert.equal(submissions[1]?.actionId, "reply-feishu-mixed-2");
+    assert.equal(submissions[1]?.inputText, "补充最终上下文");
+    assert.equal(submissions[1]?.requestId, submissions[0]?.requestId);
   } finally {
     harness.cleanup();
   }
@@ -2249,6 +2522,61 @@ function createTaskRuntimeDouble(input: {
     getRuntimeStore: () => input.runtimeStore,
     getIdentityLinkService: () => input.identityService,
     getPrincipalSkillsService: () => input.principalSkillsService,
+  };
+}
+
+function createAppServerSessionThreadRuntime(
+  input: Parameters<NonNullable<FeishuHarnessConfig["appServerRuntimeFactory"]>>[0] & {
+    sessionIdFallback: string;
+    taskIdPrefix: string;
+    threadIdForGoal: (goal: string) => string;
+  },
+): TaskRuntimeFacade {
+  return {
+    ...createTaskRuntimeDouble({
+      engine: "app-server",
+      runtimeStore: input.runtimeStore,
+      identityService: input.identityService,
+      principalSkillsService: input.principalSkillsService,
+      taskRuntimeCalls: input.taskRuntimeCalls,
+    }),
+    async runTask(request: TaskRequest, hooks: TaskRuntimeRunHooks = {}): Promise<TaskResult> {
+      input.taskRuntimeCalls.appServer += 1;
+      const sessionId = request.channelContext.channelSessionKey ?? input.sessionIdFallback;
+      const threadId = input.threadIdForGoal(request.goal);
+      const storedRequest = {
+        ...request,
+        channelContext: {
+          ...request.channelContext,
+          sessionId,
+        },
+      };
+
+      input.runtimeStore.upsertTurnFromRequest(storedRequest, request.taskId ?? `${input.taskIdPrefix}-${threadId}`);
+      input.runtimeStore.saveSession({
+        sessionId,
+        threadId,
+        createdAt: request.createdAt,
+        updatedAt: request.createdAt,
+      });
+
+      const result: TaskResult = {
+        taskId: request.taskId ?? `${input.taskIdPrefix}-${threadId}`,
+        requestId: request.requestId,
+        status: "completed",
+        summary: request.goal,
+        output: request.goal,
+        structuredOutput: {
+          session: {
+            engine: "app-server",
+            threadId,
+          },
+        },
+        completedAt: new Date().toISOString(),
+      };
+
+      return hooks.finalizeResult ? await hooks.finalizeResult(request, result) : result;
+    },
   };
 }
 
