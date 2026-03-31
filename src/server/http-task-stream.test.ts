@@ -1228,7 +1228,7 @@ test("handleTaskStream 在 approval resolve 后延迟注册第二轮 user-input 
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
         setImmediate(resolve);
-      }, 35);
+      }, 60);
     });
     releaseSecondAction();
 
