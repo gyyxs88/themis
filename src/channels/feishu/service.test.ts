@@ -976,6 +976,132 @@ test("飞书 /reply <actionId> <内容> 会提交等待中的 user-input action"
   }
 });
 
+test("飞书普通文本在当前会话存在唯一 user-input waiting action 时会直接提交补充输入", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.injectPendingAction({
+      actionId: "reply-1",
+      actionType: "user-input",
+      prompt: "Please add details",
+    });
+
+    await harness.handleMessageEventText("继续执行");
+
+    assert.deepEqual(harness.getResolvedActionSubmissions(), [{
+      taskId: "task-pending-action",
+      requestId: "req-pending-action",
+      actionId: "reply-1",
+      inputText: "继续执行",
+    }]);
+    assert.deepEqual(harness.getTaskRuntimeCalls(), {
+      sdk: 0,
+      appServer: 0,
+    });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书普通文本在没有 pending action 时仍按现有语义进入任务链", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleMessageEventText("请继续执行新的任务");
+
+    assert.deepEqual(harness.getResolvedActionSubmissions(), []);
+    assert.deepEqual(harness.getTaskRuntimeCalls(), {
+      sdk: 0,
+      appServer: 1,
+    });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书普通文本在当前会话存在 approval waiting action 时不会误提交补充输入", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.injectPendingAction({
+      actionId: "approval-1",
+      actionType: "approval",
+      prompt: "Allow command?",
+    });
+
+    await harness.handleMessageEventText("我补充一句");
+
+    assert.deepEqual(harness.getResolvedActionSubmissions(), []);
+    assert.equal(harness.findPendingAction("approval-1")?.actionType, "approval");
+    assert.deepEqual(harness.getTaskRuntimeCalls(), {
+      sdk: 0,
+      appServer: 1,
+    });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书普通文本在同一会话存在多条 user-input waiting action 时会提示改用 /reply", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.injectPendingAction({
+      taskId: "task-1",
+      requestId: "req-1",
+      actionId: "reply-1",
+      actionType: "user-input",
+      prompt: "Please add details A",
+    });
+    harness.injectPendingAction({
+      taskId: "task-2",
+      requestId: "req-2",
+      actionId: "reply-2",
+      actionType: "user-input",
+      prompt: "Please add details B",
+    });
+
+    await harness.handleMessageEventText("统一补一句");
+
+    assert.match(harness.takeSingleMessage(), /存在多条待补充输入.*\/reply <actionId> <内容>/);
+    assert.deepEqual(harness.getResolvedActionSubmissions(), []);
+    assert.deepEqual(harness.getTaskRuntimeCalls(), {
+      sdk: 0,
+      appServer: 0,
+    });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书普通文本也可以接管同一会话里的 Web-origin user-input waiting action", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.injectPendingAction({
+      actionId: "reply-web-1",
+      actionType: "user-input",
+      prompt: "Please add details",
+      sourceChannel: "web",
+    });
+
+    await harness.handleMessageEventText("按 Web 会话上下文继续");
+
+    assert.deepEqual(harness.getResolvedActionSubmissions(), [{
+      taskId: "task-pending-action",
+      requestId: "req-pending-action",
+      actionId: "reply-web-1",
+      inputText: "按 Web 会话上下文继续",
+    }]);
+    assert.deepEqual(harness.getTaskRuntimeCalls(), {
+      sdk: 0,
+      appServer: 0,
+    });
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("飞书普通任务在未显式指定 runtimeEngine 时默认走 app-server runtime", async () => {
   const harness = createHarness();
 
@@ -2265,6 +2391,11 @@ function createHarness(
         handleCommand(command: { name: string; args: string[]; raw: string }, incomingContext: typeof context): Promise<void>;
       }).handleCommand({ name, args, raw: `/${name} ${args.join(" ")}`.trim() }, context);
     },
+    async handleMessageEventText(text: string) {
+      await (service as unknown as {
+        handleMessageReceiveEvent(incomingContext: typeof context): Promise<void>;
+      }).handleMessageReceiveEvent({ ...context, text });
+    },
     async handleIncomingText(text: string) {
       await (service as unknown as {
         handleTaskMessage(incomingContext: typeof context): Promise<void>;
@@ -2292,7 +2423,7 @@ function createHarness(
       actionType: "approval" | "user-input";
       prompt: string;
       choices?: string[];
-      sourceChannel?: "feishu";
+      sourceChannel?: "feishu" | "web";
       sessionId?: string;
       userId?: string;
     }) {
