@@ -379,16 +379,20 @@ test("Journey session rejectServerRequest 不应把 CLIENT_DISCONNECTED 直接�
   await session.rejectServerRequest(requests[0]?.id ?? "", new Error("CLIENT_DISCONNECTED"));
 
   assert.equal(state.feishuState.lastRejectedServerRequestError, "CLIENT_DISCONNECTED");
+  assert.equal(requests.length, 1);
   assert.equal(state.currentTurnStatus, "waiting");
 
-  const turnStateAfterReject = await Promise.race([
-    turnPromise.then(() => "resolved" as const),
-    new Promise<"pending">((resolve) => {
-      setTimeout(() => resolve("pending"), 25);
-    }),
-  ]);
-  assert.equal(turnStateAfterReject, "pending");
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  assert.equal(requests.length, 1);
   assert.equal(state.currentTurnStatus, "waiting");
+
+  let turnSettled = false;
+  void turnPromise.finally(() => {
+    turnSettled = true;
+  });
+  assert.equal(turnSettled, false);
 
   await session.close();
   await turnPromise;
