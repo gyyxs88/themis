@@ -255,9 +255,14 @@ export class PrincipalActorsService {
 
   getActorTaskTimeline(input: GetActorTaskTimelineInput): StoredActorRuntimeMemoryRecord[] {
     const principalId = normalizeRequiredText(input.principalId, "Principal id is required.");
-    const actorId = normalizeOptionalText(input.actorId);
     const scopeId = normalizeOptionalText(input.scopeId);
-    const taskId = normalizeOptionalText(input.taskId);
+    const scope = scopeId ? this.registry.getActorTaskScope(principalId, scopeId) : null;
+    const actorId = scope?.actorId ?? normalizeOptionalText(input.actorId);
+    const taskId = normalizeOptionalText(input.taskId) ?? scope?.taskId;
+
+    if (scopeId && !scope) {
+      return [];
+    }
 
     if (taskId) {
       const filteredTimeline = filterTimelineEntries(
