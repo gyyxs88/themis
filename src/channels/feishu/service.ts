@@ -1,5 +1,6 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
 import type { EventHandles } from "@larksuiteoapi/node-sdk";
+import { join } from "node:path";
 import { InMemoryCommunicationRouter } from "../../communication/router.js";
 import { AppServerActionBridge } from "../../core/app-server-action-bridge.js";
 import { AppServerTaskRuntime } from "../../core/app-server-task-runtime.js";
@@ -7,6 +8,7 @@ import type { CodexRuntimeCatalog } from "../../core/codex-app-server.js";
 import { CodexAuthRuntime } from "../../core/codex-auth.js";
 import { CodexTaskRuntime } from "../../core/codex-runtime.js";
 import { readSessionNativeThreadSummary } from "../../core/native-thread-summary.js";
+import { validateWorkspacePath } from "../../core/session-workspace.js";
 import { resolveStoredSessionThreadReference } from "../../core/session-thread-reference.js";
 import {
   isPrincipalTaskSettingsEmpty,
@@ -33,7 +35,17 @@ import {
   resolveRequestedTaskRuntime,
 } from "../../types/index.js";
 import { FeishuAdapter } from "./adapter.js";
+import {
+  FeishuAttachmentDraftStore,
+  type FeishuAttachmentDraft,
+  type FeishuAttachmentDraftKey,
+} from "./attachment-draft-store.js";
 import { renderFeishuAssistantMessage, type FeishuRenderedMessageDraft } from "./message-renderer.js";
+import {
+  downloadFeishuMessageResources,
+  extractFeishuMessageResources,
+  type FeishuMessageResourceReference,
+} from "./message-resource.js";
 import { FeishuSessionStore, type FeishuConversationKey } from "./session-store.js";
 import {
   DEFAULT_FEISHU_PROGRESS_FLUSH_TIMEOUT_MS,
@@ -55,7 +67,7 @@ interface FeishuChannelLogger {
   error(message: string): void;
 }
 
-interface FeishuIncomingContext {
+interface FeishuIncomingContextBase {
   chatId: string;
   messageId: string;
   messageCreateTimeMs?: number;
@@ -64,8 +76,18 @@ interface FeishuIncomingContext {
   tenantKey?: string;
   threadId?: string;
   chatType?: string;
-  text: string;
 }
+
+type FeishuIncomingContext =
+  | (FeishuIncomingContextBase & {
+    kind: "text";
+    text: string;
+  })
+  | (FeishuIncomingContextBase & {
+    kind: "attachment";
+    text: "";
+    attachments: FeishuMessageResourceReference[];
+  });
 
 interface ParsedFeishuCommand {
   name: string;
@@ -103,6 +125,8 @@ const MAX_FEISHU_TEXT_CHARS = 3500;
 const FEISHU_MESSAGE_DEDUPE_TTL_MS = 10 * 60 * 1000;
 const FEISHU_SETTINGS_SCOPE_LINE = "作用范围：Themis 中间层长期默认配置，会同时影响 Web 和飞书后续新任务。";
 const FEISHU_SETTINGS_EFFECT_LINE = "生效规则：只影响之后新发起的任务，不会打断已经在运行中的任务。";
+const FEISHU_ATTACHMENT_DRAFT_CONFIRMATION = "请直接回复你的问题，我会和附件一起处理。";
+const SESSION_WORKSPACE_UNAVAILABLE_ERROR = "当前会话绑定的工作区不可用，请新建会话后重新设置。";
 
 export class FeishuChannelService {
   private readonly runtime: CodexTaskRuntime;
@@ -116,6 +140,7 @@ export class FeishuChannelService {
   private readonly useEnvProxy: boolean;
   private readonly progressFlushTimeoutMs: number;
   private readonly sessionStore: FeishuSessionStore;
+  private readonly attachmentDraftStore: FeishuAttachmentDraftStore;
   private readonly logger: FeishuChannelLogger;
   private readonly client: Lark.Client | null;
   private readonly wsClient: Lark.WSClient | null;
@@ -149,6 +174,9 @@ export class FeishuChannelService {
       DEFAULT_FEISHU_PROGRESS_FLUSH_TIMEOUT_MS,
     );
     this.sessionStore = options.sessionStore ?? new FeishuSessionStore();
+    this.attachmentDraftStore = new FeishuAttachmentDraftStore({
+      filePath: join(this.runtime.getWorkingDirectory(), "infra/local/feishu-attachment-drafts.json"),
+    });
     this.logger = options.logger ?? console;
 
     if (this.isConfigured()) {
@@ -239,16 +267,23 @@ export class FeishuChannelService {
     }
 
     this.logger.info(
-      `[themis/feishu] 收到消息事件：chat=${context.chatId} user=${context.userId} message=${context.messageId} text=${truncateText(context.text, 120)}`,
+      context.kind === "attachment"
+        ? `[themis/feishu] 收到消息事件：chat=${context.chatId} user=${context.userId} message=${context.messageId} kind=attachment attachments=${context.attachments.length}`
+        : `[themis/feishu] 收到消息事件：chat=${context.chatId} user=${context.userId} message=${context.messageId} kind=text text=${truncateText(context.text, 120)}`,
     );
 
-    void this.handleMessageReceiveEvent(context);
+    await this.handleMessageReceiveEvent(context);
   }
 
   private async handleMessageReceiveEvent(context: FeishuIncomingContext): Promise<void> {
-    const command = parseFeishuCommand(context.text);
-
     try {
+      if (context.kind === "attachment") {
+        await this.handleAttachmentMessage(context);
+        return;
+      }
+
+      const command = parseFeishuCommand(context.text);
+
       if (command) {
         await this.handleCommand(command, context);
         return;
@@ -264,6 +299,29 @@ export class FeishuChannelService {
       this.logger.error(`[themis/feishu] 处理消息失败：${message}`);
       await this.safeSendTaggedText(context.chatId, message, "执行异常");
     }
+  }
+
+  private async handleAttachmentMessage(
+    context: Extract<FeishuIncomingContext, { kind: "attachment" }>,
+  ): Promise<void> {
+    const sessionId = this.sessionStore.ensureActiveSessionId(toConversationKey(context));
+    const attachments = await downloadFeishuMessageResources({
+      client: this.requireClient(),
+      resources: context.attachments,
+      targetDirectory: join(
+        this.resolveAttachmentWorkingDirectory(sessionId),
+        "temp",
+        "feishu-attachments",
+        sessionId,
+        context.messageId,
+      ),
+    });
+
+    this.attachmentDraftStore.append(createAttachmentDraftKey(context, sessionId), attachments);
+    await this.safeSendText(
+      context.chatId,
+      `已收到 ${attachments.length} 个附件，${FEISHU_ATTACHMENT_DRAFT_CONFIRMATION}`,
+    );
   }
 
   private isDuplicateMessage(messageId: string): boolean {
@@ -430,9 +488,11 @@ export class FeishuChannelService {
     }
   }
 
-  private async handleTaskMessage(context: FeishuIncomingContext): Promise<void> {
+  private async handleTaskMessage(context: Extract<FeishuIncomingContext, { kind: "text" }>): Promise<void> {
     const conversationKey = toConversationKey(context);
     const sessionId = this.sessionStore.ensureActiveSessionId(conversationKey);
+    const draftKey = createAttachmentDraftKey(context, sessionId);
+    const pendingDraft = this.attachmentDraftStore.get(draftKey);
     const taskLease = await this.acquireSessionTaskLease(sessionId);
     const bridge = new FeishuTaskMessageBridge({
       createText: async (text) => this.createAssistantMessage(context.chatId, text),
@@ -458,9 +518,20 @@ export class FeishuChannelService {
     router.registerAdapter(adapter);
 
     let normalizedRequest: TaskRequest | null = null;
+    let shouldClearDraft = Boolean(pendingDraft?.attachments.length);
+    const clearAttachmentDraft = () => {
+      if (!shouldClearDraft) {
+        return;
+      }
+
+      this.attachmentDraftStore.consume(draftKey);
+      shouldClearDraft = false;
+    };
 
     try {
-      normalizedRequest = router.normalizeRequest(this.createTaskPayload(context, sessionId));
+      normalizedRequest = router.normalizeRequest(
+        this.createTaskPayload(context, sessionId, pendingDraft?.attachments),
+      );
       await bridge.prepareResponseSlot();
       await ensureAuthAvailable(this.authRuntime, normalizedRequest);
       const selectedRuntime = resolveRequestedTaskRuntime(this.runtimeRegistry, normalizedRequest.options?.runtimeEngine);
@@ -470,10 +541,14 @@ export class FeishuChannelService {
         timeoutMs: this.taskTimeoutMs,
         finalizeResult: (request, taskResult) => appendTaskReplyQuotaFooter(this.authRuntime, request, taskResult),
         onEvent: async (taskEvent) => {
+          if (shouldClearDraft && taskEvent.type === "task.started") {
+            clearAttachmentDraft();
+          }
           await router.publishEvent(taskEvent);
         },
       });
 
+      clearAttachmentDraft();
       await router.publishResult(result);
     } catch (error) {
       const taskError = createTaskError(error, Boolean(normalizedRequest));
@@ -625,7 +700,11 @@ export class FeishuChannelService {
     }
   }
 
-  private createTaskPayload(context: FeishuIncomingContext, sessionId: string): FeishuTaskPayload {
+  private createTaskPayload(
+    context: Extract<FeishuIncomingContext, { kind: "text" }>,
+    sessionId: string,
+    attachments?: FeishuAttachmentDraft[],
+  ): FeishuTaskPayload {
     const principalSettings = this.readPrincipalTaskSettings(context);
     const options = isPrincipalTaskSettingsEmpty(principalSettings) ? undefined : principalSettings;
 
@@ -646,6 +725,7 @@ export class FeishuChannelService {
         ...(context.threadId ? { threadId: context.threadId } : {}),
         text: context.text,
       },
+      ...(attachments?.length ? { attachments } : {}),
       ...(options ? { options } : {}),
       createdAt: new Date().toISOString(),
     };
@@ -2263,6 +2343,28 @@ export class FeishuChannelService {
     }
   }
 
+  private requireClient(): Lark.Client {
+    if (!this.client) {
+      throw new Error("飞书客户端未就绪，暂时无法处理附件消息。");
+    }
+
+    return this.client;
+  }
+
+  private resolveAttachmentWorkingDirectory(sessionId: string): string {
+    const workspacePath = this.readSessionTaskSettings(sessionId).workspacePath?.trim();
+
+    if (!workspacePath) {
+      return this.runtime.getWorkingDirectory();
+    }
+
+    try {
+      return validateWorkspacePath(workspacePath);
+    } catch {
+      throw new Error(SESSION_WORKSPACE_UNAVAILABLE_ERROR);
+    }
+  }
+
   private async resolvePendingApproval(
     rawActionId: string | undefined,
     decision: "approve" | "deny",
@@ -2469,16 +2571,17 @@ function normalizeIncomingContext(event: FeishuMessageReceiveEvent): FeishuIncom
   const userId = normalizeText(event.sender?.sender_id?.user_id)
     ?? normalizeText(event.sender?.sender_id?.open_id);
   const text = extractFeishuText(event);
+  const attachments = extractFeishuMessageResources(event);
   const openId = normalizeText(event.sender?.sender_id?.open_id);
   const tenantKey = normalizeText(event.sender?.tenant_key);
   const threadId = normalizeText(event.message?.thread_id);
   const chatType = normalizeText(event.message?.chat_type);
 
-  if (!chatId || !messageId || !userId || !text) {
+  if (!chatId || !messageId || !userId) {
     return null;
   }
 
-  return {
+  const shared: FeishuIncomingContextBase = {
     chatId,
     messageId,
     ...(typeof messageCreateTimeMs === "number" ? { messageCreateTimeMs } : {}),
@@ -2487,8 +2590,26 @@ function normalizeIncomingContext(event: FeishuMessageReceiveEvent): FeishuIncom
     ...(tenantKey ? { tenantKey } : {}),
     ...(threadId ? { threadId } : {}),
     ...(chatType ? { chatType } : {}),
-    text,
   };
+
+  if (text) {
+    return {
+      ...shared,
+      kind: "text",
+      text,
+    };
+  }
+
+  if (attachments?.length) {
+    return {
+      ...shared,
+      kind: "attachment",
+      text: "",
+      attachments,
+    };
+  }
+
+  return null;
 }
 
 function parseFeishuMessageCreateTime(value: unknown): number | null {
@@ -2579,6 +2700,17 @@ function toConversationKey(context: FeishuIncomingContext): FeishuConversationKe
   return {
     chatId: context.chatId,
     userId: context.userId,
+  };
+}
+
+function createAttachmentDraftKey(
+  context: Pick<FeishuIncomingContextBase, "chatId" | "userId">,
+  sessionId: string,
+): FeishuAttachmentDraftKey {
+  return {
+    chatId: context.chatId,
+    userId: context.userId,
+    sessionId,
   };
 }
 

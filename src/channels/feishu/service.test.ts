@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -1350,6 +1350,371 @@ test("飞书普通文本不会自动接管同 session 但不同 principal 的 We
       sdk: 0,
       appServer: 1,
     });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书图片消息会先写入附件草稿并提示用户继续补文字", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.setMessageResourceDownloader(async () => ({
+      headers: {
+        "content-type": "image/png",
+      },
+      async writeFile(filePath: string) {
+        await import("node:fs/promises").then(({ writeFile }) => writeFile(filePath, "fake-image"));
+      },
+      getReadableStream() {
+        throw new Error("not implemented");
+      },
+    }));
+
+    await harness.handleRawMessageEvent({
+      message: {
+        chat_id: "chat-1",
+        message_id: "message-image-1",
+        create_time: "1711958400000",
+        message_type: "image",
+        chat_type: "p2p",
+        content: JSON.stringify({
+          image_key: "img-key-1",
+        }),
+      },
+      sender: {
+        sender_id: {
+          user_id: "user-1",
+          open_id: "open-user-1",
+        },
+        tenant_key: "tenant-1",
+      },
+    });
+
+    assert.match(harness.takeSingleMessage(), /已收到 1 个附件，请直接回复你的问题/);
+    assert.deepEqual(harness.getTaskRuntimeCalls(), {
+      sdk: 0,
+      appServer: 0,
+    });
+    const draftStore = harness.readAttachmentDraftStore();
+    assert.equal(draftStore?.drafts.length, 1);
+    assert.equal(draftStore?.drafts[0]?.attachments[0]?.type, "image");
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书附件草稿会在下一条普通文本中自动合并进任务请求并清空", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.setMessageResourceDownloader(async () => ({
+      headers: {
+        "content-type": "image/png",
+      },
+      async writeFile(filePath: string) {
+        await import("node:fs/promises").then(({ writeFile }) => writeFile(filePath, "fake-image"));
+      },
+      getReadableStream() {
+        throw new Error("not implemented");
+      },
+    }));
+
+    await harness.handleRawMessageEvent({
+      message: {
+        chat_id: "chat-1",
+        message_id: "message-image-2",
+        create_time: "1711958400000",
+        message_type: "image",
+        chat_type: "p2p",
+        content: JSON.stringify({
+          image_key: "img-key-2",
+        }),
+      },
+      sender: {
+        sender_id: {
+          user_id: "user-1",
+        },
+      },
+    });
+    harness.takeSingleMessage();
+
+    await harness.handleMessageEventText("帮我总结这张图");
+
+    const requests = harness.getTaskRequests();
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]?.goal, "帮我总结这张图");
+    assert.equal(requests[0]?.attachments?.length, 1);
+    assert.equal(requests[0]?.attachments?.[0]?.type, "image");
+    assert.match(requests[0]?.attachments?.[0]?.value ?? "", /temp\/feishu-attachments\/.+\/message-image-2\//);
+    assert.equal(harness.readAttachmentDraftStore()?.drafts.length ?? 0, 0);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书附件会落到当前 session 工作区，并把 sessionId 透传给 runtime 请求", async () => {
+  const harness = createHarness();
+  const sessionId = "session-image-workspace";
+  const workspace = harness.createWorkspace("attachment-workspace");
+
+  try {
+    harness.setCurrentSession(sessionId);
+    harness.writeSessionSettings(sessionId, {
+      workspacePath: workspace,
+    });
+    harness.setMessageResourceDownloader(async () => ({
+      headers: {
+        "content-type": "image/png",
+      },
+      async writeFile(filePath: string) {
+        await import("node:fs/promises").then(({ writeFile }) => writeFile(filePath, "fake-image"));
+      },
+      getReadableStream() {
+        throw new Error("not implemented");
+      },
+    }));
+
+    await harness.handleRawMessageEvent({
+      message: {
+        chat_id: "chat-1",
+        message_id: "message-image-workspace",
+        create_time: "1711958400000",
+        message_type: "image",
+        chat_type: "p2p",
+        content: JSON.stringify({
+          image_key: "img-key-workspace",
+        }),
+      },
+      sender: {
+        sender_id: {
+          user_id: "user-1",
+        },
+      },
+    });
+    harness.takeSingleMessage();
+
+    await harness.handleMessageEventText("请处理这个附件");
+
+    const request = harness.getTaskRequests()[0];
+    assert.equal(request?.channelContext.sessionId, sessionId);
+    assert.equal(
+      request?.attachments?.[0]?.value.startsWith(
+        join(workspace, "temp", "feishu-attachments", sessionId, "message-image-workspace"),
+      ),
+      true,
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书普通文本在 waiting action 存在时不会误消费附件草稿", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.setMessageResourceDownloader(async () => ({
+      headers: {
+        "content-type": "image/png",
+      },
+      async writeFile(filePath: string) {
+        await import("node:fs/promises").then(({ writeFile }) => writeFile(filePath, "fake-image"));
+      },
+      getReadableStream() {
+        throw new Error("not implemented");
+      },
+    }));
+
+    await harness.handleRawMessageEvent({
+      message: {
+        chat_id: "chat-1",
+        message_id: "message-image-3",
+        create_time: "1711958400000",
+        message_type: "image",
+        content: JSON.stringify({
+          image_key: "img-key-3",
+        }),
+      },
+      sender: {
+        sender_id: {
+          user_id: "user-1",
+        },
+      },
+    });
+    harness.takeSingleMessage();
+
+    harness.injectPendingAction({
+      actionId: "reply-attachment-1",
+      actionType: "user-input",
+      prompt: "Please add details",
+    });
+
+    await harness.handleMessageEventText("先补一句说明");
+
+    assert.deepEqual(harness.getResolvedActionSubmissions(), [{
+      taskId: "task-pending-action",
+      requestId: "req-pending-action",
+      actionId: "reply-attachment-1",
+      inputText: "先补一句说明",
+    }]);
+    assert.equal(harness.getTaskRequests().length, 0);
+    assert.equal(harness.readAttachmentDraftStore()?.drafts.length, 1);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书连续收到两个附件后，下一条普通文本会自动合并发送", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.setMessageResourceDownloader(async (payload) => ({
+      headers: {
+        "content-type": payload?.params.type === "file" ? "application/pdf" : "image/png",
+      },
+      async writeFile(filePath: string) {
+        await import("node:fs/promises").then(({ writeFile }) => writeFile(
+          filePath,
+          payload?.params.type === "file" ? "fake-file" : "fake-image",
+        ));
+      },
+      getReadableStream() {
+        throw new Error("not implemented");
+      },
+    }));
+
+    await harness.handleRawMessageEvent({
+      message: {
+        chat_id: "chat-1",
+        message_id: "message-image-4",
+        create_time: "1711958400000",
+        message_type: "image",
+        content: JSON.stringify({
+          image_key: "img-key-4",
+        }),
+      },
+      sender: {
+        sender_id: {
+          user_id: "user-1",
+        },
+      },
+    });
+    harness.takeSingleMessage();
+
+    await harness.handleRawMessageEvent({
+      message: {
+        chat_id: "chat-1",
+        message_id: "message-file-4",
+        create_time: "1711958460000",
+        message_type: "file",
+        content: JSON.stringify({
+          file_key: "file-key-4",
+          file_name: "report.pdf",
+        }),
+      },
+      sender: {
+        sender_id: {
+          user_id: "user-1",
+        },
+      },
+    });
+    harness.takeSingleMessage();
+
+    await harness.handleMessageEventText("帮我一起总结这两个附件");
+
+    const requests = harness.getTaskRequests();
+    assert.equal(requests.length, 1);
+    assert.deepEqual(
+      requests[0]?.attachments?.map((item) => [item.type, item.name ?? ""]),
+      [
+        ["image", "image-message-image-4-img-key-4.png"],
+        ["file", "report.pdf"],
+      ],
+    );
+    assert.equal(harness.readAttachmentDraftStore()?.drafts.length ?? 0, 0);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书切换到新会话后不会误消费旧会话的附件草稿", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.setMessageResourceDownloader(async () => ({
+      headers: {
+        "content-type": "image/png",
+      },
+      async writeFile(filePath: string) {
+        await import("node:fs/promises").then(({ writeFile }) => writeFile(filePath, "fake-image"));
+      },
+      getReadableStream() {
+        throw new Error("not implemented");
+      },
+    }));
+
+    await harness.handleRawMessageEvent({
+      message: {
+        chat_id: "chat-1",
+        message_id: "message-image-5",
+        create_time: "1711958400000",
+        message_type: "image",
+        content: JSON.stringify({
+          image_key: "img-key-5",
+        }),
+      },
+      sender: {
+        sender_id: {
+          user_id: "user-1",
+        },
+      },
+    });
+    harness.takeSingleMessage();
+
+    await harness.handleCommand("new", []);
+    harness.takeSingleMessage();
+
+    await harness.handleMessageEventText("这是新会话里的普通文本");
+
+    const requests = harness.getTaskRequests();
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]?.attachments?.length ?? 0, 0);
+    assert.equal(harness.readAttachmentDraftStore()?.drafts.length ?? 0, 1);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书附件下载失败时会提示错误且不留下脏草稿", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.setMessageResourceDownloader(async () => {
+      throw new Error("download failed");
+    });
+
+    await harness.handleRawMessageEvent({
+      message: {
+        chat_id: "chat-1",
+        message_id: "message-image-6",
+        create_time: "1711958400000",
+        message_type: "image",
+        content: JSON.stringify({
+          image_key: "img-key-6",
+        }),
+      },
+      sender: {
+        sender_id: {
+          user_id: "user-1",
+        },
+      },
+    });
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /执行异常/);
+    assert.match(message, /download failed/);
+    assert.equal(harness.getTaskRequests().length, 0);
+    assert.equal(harness.readAttachmentDraftStore(), null);
   } finally {
     harness.cleanup();
   }
@@ -2861,9 +3226,12 @@ function createTaskRuntimeDouble(input: {
   };
   taskRuntimeCalls: { sdk: number; appServer: number };
   eventBuilder?: (request: TaskRequest) => TaskEvent[];
+  onRequest?: (request: TaskRequest) => void;
 }): TaskRuntimeFacade {
   return {
     async runTask(request: TaskRequest, hooks: TaskRuntimeRunHooks = {}): Promise<TaskResult> {
+      input.onRequest?.(request);
+
       if (input.engine === "sdk") {
         input.taskRuntimeCalls.sdk += 1;
       } else {
@@ -3191,6 +3559,7 @@ function createHarness(
     sdk: 0,
     appServer: 0,
   };
+  const taskRequests: TaskRequest[] = [];
   const actionBridge = new AppServerActionBridge();
   const baseRuntime = createTaskRuntimeDouble({
     engine: "sdk",
@@ -3198,6 +3567,7 @@ function createHarness(
     identityService,
     principalSkillsService,
     taskRuntimeCalls,
+    onRequest: (request) => taskRequests.push(request),
   });
   const runtime = {
     ...baseRuntime,
@@ -3236,6 +3606,7 @@ function createHarness(
       identityService,
       principalSkillsService,
       taskRuntimeCalls,
+      onRequest: (request) => taskRequests.push(request),
       ...(harnessConfig?.appServerEventsBuilder ? { eventBuilder: harnessConfig.appServerEventsBuilder } : {}),
     });
   const loggerState = createLogger();
@@ -3307,6 +3678,10 @@ function createHarness(
   });
   const messages: string[] = [];
   let nextMessageId = 1;
+  let messageResourceDownloader: ((
+    payload?: { params: { type: string }; path: { message_id: string; file_key: string } },
+  ) => Promise<{ writeFile: (filePath: string) => Promise<unknown>; getReadableStream: () => unknown; headers: unknown }>)
+    | null = null;
   const context = {
     chatId: "chat-1",
     messageId: "message-1",
@@ -3342,6 +3717,15 @@ function createHarness(
             };
           },
         },
+        messageResource: {
+          get: async (payload?: { params: { type: string }; path: { message_id: string; file_key: string } }) => {
+            if (!messageResourceDownloader) {
+              throw new Error("message resource downloader not configured");
+            }
+
+            return await messageResourceDownloader(payload);
+          },
+        },
       },
     },
   };
@@ -3371,6 +3755,11 @@ function createHarness(
         handleMessageReceiveEvent(incomingContext: typeof context): Promise<void>;
       }).handleMessageReceiveEvent({ ...context, text });
     },
+    async handleRawMessageEvent(event: unknown) {
+      await (service as unknown as {
+        acceptMessageReceiveEvent(event: unknown): Promise<void>;
+      }).acceptMessageReceiveEvent(event);
+    },
     async handleIncomingText(text: string) {
       await (service as unknown as {
         handleTaskMessage(incomingContext: typeof context): Promise<void>;
@@ -3390,6 +3779,28 @@ function createHarness(
     },
     getTaskRuntimeCalls() {
       return { ...taskRuntimeCalls };
+    },
+    getTaskRequests() {
+      return [...taskRequests];
+    },
+    setMessageResourceDownloader(
+      downloader: (
+        payload?: { params: { type: string }; path: { message_id: string; file_key: string } },
+      ) => Promise<{ writeFile: (filePath: string) => Promise<unknown>; getReadableStream: () => unknown; headers: unknown }>,
+    ) {
+      messageResourceDownloader = downloader;
+    },
+    readAttachmentDraftStore() {
+      const filePath = join(workingDirectory, "infra/local/feishu-attachment-drafts.json");
+      if (!existsSync(filePath)) {
+        return null;
+      }
+      return JSON.parse(readFileSync(filePath, "utf8")) as {
+        version: number;
+        drafts: Array<{
+          attachments: Array<{ type: string; value: string }>;
+        }>;
+      };
     },
     injectPendingAction(input: {
       taskId?: string;

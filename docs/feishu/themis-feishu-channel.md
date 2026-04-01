@@ -8,6 +8,10 @@ Themis 已接入飞书长连接渠道，特点如下：
 
 - 使用飞书官方 Node SDK 长连接模式接收 `im.message.receive_v1`
 - 飞书普通文本消息会作为 Themis 任务输入
+- 飞书 `image` / `file` 消息会先下载到当前会话实际执行工作目录下的 `temp/feishu-attachments/<sessionId>/<messageId>/`
+- 飞书附件不会立刻起任务，而是先按 `chatId + userId + activeSessionId` 写入本地附件草稿，等下一条真正进入普通任务路径的文本自动合并发送
+- 命令和 waiting action 恢复优先级高于附件草稿消费；只有普通任务文本才会自动拼接附件
+- 附件任务真正开始执行后会清空已消费草稿；附件下载失败会直接返回错误且不留下脏草稿
 - 飞书发任务前会读取当前 principal 保存的 Themis 默认任务配置，并带上对应 `options`
 - 飞书支持会话级工作区：`/workspace`（别名 `/ws`）会写当前激活会话的 `workspacePath`，不改 principal 默认配置
 - 如果当前 principal 还没有长期协作档案，首次普通消息会先进入一次性人格 bootstrap
@@ -99,7 +103,6 @@ npm run dev:web
 - `im:message:send_as_bot` 或 `im:message:send`
 - `im:message.p2p_msg:readonly`
 - `im:message.group_at_msg:readonly`
-
 ## 会话规则
 
 - Themis 不再把飞书 `chat_id` 直接当成唯一会话 ID。
@@ -114,6 +117,13 @@ infra/local/feishu-sessions.json
 ```
 
 - 这个 JSON 文件只负责记录飞书侧当前激活的是哪条 conversation。
+- 飞书附件草稿保存在：
+
+```text
+infra/local/feishu-attachment-drafts.json
+```
+
+- 这个 JSON 只保存待发送附件元数据，不保存附件二进制；真实文件落在当前会话执行目录下的 `temp/feishu-attachments/...`
 - 真正的统一 conversation、channel binding、identity 和历史数据都保存在：
 
 ```text
@@ -126,6 +136,19 @@ infra/local/themis.db
 - 在已有会话之间切换
 - 不影响现有 Web 端会话历史
 - 使用同一个 `conversationId` 时，与 Web 复用同一条服务端会话和上下文
+
+## 附件草稿规则
+
+- 飞书附件草稿按 `chatId + userId + activeSessionId` 隔离。
+- 草稿文件保存在：
+
+```text
+infra/local/feishu-attachment-drafts.json
+```
+
+- 连续发送多个附件时，会累加到同一份草稿。
+- `/new`、`/use` 切会话后不会把旧草稿带到新会话。
+- 附件草稿只有在普通文本真正进入任务路径时才会被消费；命令和 waiting action 恢复不会消费草稿。
 
 ## 飞书命令
 

@@ -51,7 +51,8 @@ export class FeishuAdapter implements ChannelAdapter<FeishuTaskPayload> {
     const displayName = normalizeText(input.sender?.name);
     const tenantId = normalizeText(input.sender?.tenantKey);
     const inputText = normalizeText(input.inputText);
-    const channelSessionKey = normalizeText(input.sessionId) ?? normalizeText(input.message?.chatId);
+    const sessionId = normalizeText(input.sessionId);
+    const channelSessionKey = sessionId ?? normalizeText(input.message?.chatId);
     const replyTarget = normalizeText(input.message?.chatId);
     const threadId = normalizeText(input.message?.threadId);
     const messageId = normalizeText(input.message?.messageId);
@@ -71,6 +72,7 @@ export class FeishuAdapter implements ChannelAdapter<FeishuTaskPayload> {
       ...(input.attachments?.length ? { attachments: input.attachments } : {}),
       ...(input.options ? { options: input.options } : {}),
       channelContext: {
+        ...(sessionId ? { sessionId } : {}),
         ...(channelSessionKey ? { channelSessionKey } : {}),
         ...(threadId ? { threadId } : {}),
         ...(messageId ? { messageId } : {}),
