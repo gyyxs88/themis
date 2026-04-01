@@ -108,13 +108,33 @@ export function compileTaskInputForRuntime(input: {
         });
       }
 
-      const text = resolveTextualDocumentContent(asset);
+      const textualDocument = resolveTextualDocumentContent(asset);
+
+      if (textualDocument.kind === "source_unavailable") {
+        return blocked({
+          code: "TEXTUAL_DOCUMENT_SOURCE_UNAVAILABLE",
+          message: "当前可文本化文档缺少可读文本源，无法诚实地编译为文本输入。",
+          assetId: asset.assetId,
+        });
+      }
+
       nativeInputParts.push({
         type: "text",
-        text,
+        text: textualDocument.text,
         sourcePartId: part.partId,
         assetId: asset.assetId,
       });
+
+      if (textualDocument.kind === "preview_fallback") {
+        compileWarnings.push({
+          code: "TEXTUAL_DOCUMENT_PREVIEW_FALLBACK",
+          message: "可文本化文档缺少真实文本源，当前退回 textPreview 作为受控降级输入。",
+          assetId: asset.assetId,
+        });
+        degradationLevel = mergeDegradationLevel(degradationLevel, "controlled_fallback");
+        continue;
+      }
+
       degradationLevel = mergeDegradationLevel(degradationLevel, "lossless_textualization");
       continue;
     }
@@ -131,6 +151,14 @@ export function compileTaskInputForRuntime(input: {
     }
 
     if (asset.mimeType === "application/pdf" && input.target.capabilities.supportsPdfTextExtraction) {
+      if (!input.target.capabilities.nativeTextInput) {
+        return blocked({
+          code: "TEXT_NATIVE_INPUT_REQUIRED",
+          message: "PDF 受控降级依赖文本原生输入，当前 runtime 未声明支持。",
+          assetId: asset.assetId,
+        });
+      }
+
       fallbackPromptSections.push(
         [
           "PDF fallback context:",
@@ -198,18 +226,34 @@ function isLosslessTextDocument(mimeType: string): boolean {
   ].includes(mimeType);
 }
 
-function resolveTextualDocumentContent(asset: TaskInputAsset): string {
+function resolveTextualDocumentContent(asset: TaskInputAsset):
+  | { kind: "lossless_source"; text: string }
+  | { kind: "preview_fallback"; text: string }
+  | { kind: "source_unavailable" } {
   const textPath = asset.textExtraction?.status === "completed" ? asset.textExtraction.textPath : undefined;
 
   if (textPath && existsSync(textPath)) {
-    return readFileSync(textPath, "utf8");
+    return {
+      kind: "lossless_source",
+      text: readFileSync(textPath, "utf8"),
+    };
   }
 
   if (existsSync(asset.localPath)) {
-    return readFileSync(asset.localPath, "utf8");
+    return {
+      kind: "lossless_source",
+      text: readFileSync(asset.localPath, "utf8"),
+    };
   }
 
-  return asset.textExtraction?.textPreview ?? `[document:${asset.localPath}]`;
+  if (asset.textExtraction?.textPreview) {
+    return {
+      kind: "preview_fallback",
+      text: asset.textExtraction.textPreview,
+    };
+  }
+
+  return { kind: "source_unavailable" };
 }
 
 function resolvePdfFallbackText(asset: TaskInputAsset): string {
