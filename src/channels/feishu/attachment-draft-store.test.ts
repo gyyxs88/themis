@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -327,6 +327,96 @@ test("FeishuAttachmentDraftStore append 空数组、混合无效附件或全无�
         },
       ]);
     });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("FeishuAttachmentDraftStore 混合输入会 fail-fast 且不写入任何草稿", () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-feishu-attachment-draft-mixed-write-"));
+  const filePath = join(root, "infra/local/feishu-attachment-drafts.json");
+  const store = new FeishuAttachmentDraftStore({ filePath });
+  const key = {
+    chatId: "chat-1",
+    userId: "user-1",
+    sessionId: "session-1",
+  };
+
+  try {
+    store.append(key, [{
+      id: "img-1",
+      type: "image",
+      value: "/workspace/temp/feishu-attachments/session-1/message-1/image.png",
+      sourceMessageId: "message-1",
+      createdAt: "2026-04-01T08:00:00.000Z",
+    }]);
+    const before = readFileSync(filePath, "utf8");
+
+    assert.throws(() => {
+      store.append(key, [
+        {
+          id: "file-1",
+          type: "file",
+          value: "/workspace/temp/feishu-attachments/session-1/message-2/file.pdf",
+          sourceMessageId: "message-2",
+          createdAt: "2026-04-01T08:00:30.000Z",
+        },
+        {
+          id: "file-2",
+          type: "file",
+          value: "",
+          sourceMessageId: "message-3",
+          createdAt: "2026-04-01T08:00:40.000Z",
+        },
+      ]);
+    });
+
+    assert.equal(readFileSync(filePath, "utf8"), before);
+    assert.deepEqual(
+      store.get(key)?.attachments.map((item) => item.id),
+      ["img-1"],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("FeishuAttachmentDraftStore 损坏的 JSON 应 fail-fast 且不覆盖原文件", () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-feishu-attachment-draft-corrupt-json-"));
+  const filePath = join(root, "infra/local/feishu-attachment-drafts.json");
+  const corruptedContent = `{"version":1,"drafts":[`;
+
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, corruptedContent, "utf8");
+
+  const store = new FeishuAttachmentDraftStore({ filePath });
+  const key = {
+    chatId: "chat-1",
+    userId: "user-1",
+    sessionId: "session-1",
+  };
+
+  try {
+    assert.throws(() => {
+      store.get(key);
+    });
+    assert.equal(readFileSync(filePath, "utf8"), corruptedContent);
+
+    assert.throws(() => {
+      store.append(key, [{
+        id: "img-1",
+        type: "image",
+        value: "/workspace/temp/feishu-attachments/session-1/message-1/image.png",
+        sourceMessageId: "message-1",
+        createdAt: "2026-04-01T08:00:00.000Z",
+      }]);
+    });
+    assert.equal(readFileSync(filePath, "utf8"), corruptedContent);
+
+    assert.throws(() => {
+      store.consume(key);
+    });
+    assert.equal(readFileSync(filePath, "utf8"), corruptedContent);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

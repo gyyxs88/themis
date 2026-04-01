@@ -194,11 +194,11 @@ export class FeishuAttachmentDraftStore {
         drafts,
       };
     } catch (error) {
-      if (error instanceof Error && /ENOENT/i.test(error.message)) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
         return { ...EMPTY_STORE, drafts: [] };
       }
 
-      return { ...EMPTY_STORE, drafts: [] };
+      throw error;
     }
   }
 
