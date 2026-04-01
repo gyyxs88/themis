@@ -27,6 +27,7 @@ import { IdentityLinkService } from "./identity-link-service.js";
 import { PrincipalActorsService } from "./principal-actors-service.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
 import { buildBootstrapPrompt, buildTaskPrompt } from "./prompt.js";
+import { compileTaskInputForRuntime, type CompiledTaskInput } from "./runtime-input-compiler.js";
 import { MemoryService } from "../memory/memory-service.js";
 import { validateWorkspacePath } from "./session-workspace.js";
 import {
@@ -52,6 +53,7 @@ import { ContextBuilder } from "../context/context-builder.js";
 import { SqliteCodexSessionRegistry, type StoredAuthAccountRecord } from "../storage/index.js";
 import type {
   PrincipalTaskSettings,
+  RuntimeInputCapabilities,
   TaskAccessMode,
   TaskEvent,
   TaskRequest,
@@ -217,6 +219,18 @@ export class CodexTaskRuntime {
       throwIfAborted(signal);
 
       const target = this.resolveRuntimeTarget(request, hooks.allowUnsupportedThirdPartyModel === true);
+      const compiledInput = request.inputEnvelope
+        ? compileTaskInputForRuntime({
+          envelope: request.inputEnvelope,
+          target: {
+            runtimeId: target.providerConfig ? `third-party:${target.providerId}` : "codex-sdk",
+            capabilities: resolveCodexRuntimeInputCapabilities(),
+          },
+        })
+        : null;
+      if (compiledInput?.degradationLevel === "blocked") {
+        throw new Error(compiledInput.compileWarnings[0]?.message ?? "当前输入不受支持。");
+      }
       throwIfAborted(signal);
       const threadOptions = buildThreadOptions(
         request,
@@ -229,14 +243,18 @@ export class CodexTaskRuntime {
       throwIfAborted(signal);
       const thread = sessionLease.thread;
       const personalizedProfileContext = this.principalPersonaService.buildPromptContext(principalId);
+      const promptRequest = compiledInput ? withoutTaskAttachments(request) : request;
+      const fallbackPromptSections = buildCodexFallbackPromptSections(compiledInput);
       const prompt = onboardingIntercept
-        ? buildBootstrapPrompt(request, onboardingIntercept, {
+        ? buildBootstrapPrompt(promptRequest, onboardingIntercept, {
           personalizedProfileContext,
           taskContext,
+          fallbackPromptSections,
         })
-        : buildTaskPrompt(request, {
+        : buildTaskPrompt(promptRequest, {
           personalizedProfileContext,
           taskContext,
+          fallbackPromptSections,
         });
       const touchedFiles = new Set<string>();
       let finalResponse = "";
@@ -1320,6 +1338,40 @@ function createSessionPayload(
   }
 
   return Object.keys(payload).length ? payload : undefined;
+}
+
+function resolveCodexRuntimeInputCapabilities(): RuntimeInputCapabilities {
+  return {
+    nativeTextInput: true,
+    nativeImageInput: false,
+    nativeDocumentInput: false,
+    supportedDocumentMimeTypes: [],
+    supportsPdfTextExtraction: true,
+    supportsDocumentPageRasterization: false,
+  };
+}
+
+function buildCodexFallbackPromptSections(compiledInput: CompiledTaskInput | null): string[] {
+  if (!compiledInput) {
+    return [];
+  }
+
+  const textSections = compiledInput.nativeInputParts
+    .filter((part): part is Extract<CompiledTaskInput["nativeInputParts"][number], { type: "text"; assetId?: string }> => (
+      part.type === "text" && typeof part.assetId === "string"
+    ))
+    .map((part) => [
+      "Document text fallback:",
+      `assetId: ${part.assetId}`,
+      part.text,
+    ].join("\n"));
+
+  return [...compiledInput.fallbackPromptSections, ...textSections];
+}
+
+function withoutTaskAttachments(request: TaskRequest): TaskRequest {
+  const { attachments: _attachments, ...rest } = request;
+  return rest;
 }
 
 function summarizeResponse(finalResponse: string): string {

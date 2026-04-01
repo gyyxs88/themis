@@ -7,6 +7,7 @@ import test from "node:test";
 import type { Codex, Thread, ThreadEvent, ThreadOptions } from "@openai/codex-sdk";
 import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import { AppServerTaskRuntime, type AppServerTaskRuntimeSession } from "../core/app-server-task-runtime.js";
+import type { AppServerTurnInputPart } from "../core/codex-app-server.js";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { CodexThreadSessionStore } from "../core/codex-session-store.js";
@@ -35,7 +36,7 @@ interface JourneyCodexDouble {
 interface AppServerJourneySessionState {
   started: Array<{ cwd: string }>;
   resumed: Array<{ threadId: string; cwd: string }>;
-  prompts: string[];
+  prompts: Array<string | AppServerTurnInputPart[]>;
   read: string[];
   approvalPlan: AppServerApprovalPlanEntry[];
   approvals: Array<{ id: string | number; method: string }>;
@@ -54,6 +55,14 @@ type AppServerApprovalPlanEntry = {
   reason: string;
   waitForGate?: Promise<void>;
 };
+
+function stringifyAppServerTurnInput(input: string | AppServerTurnInputPart[] | undefined): string {
+  if (typeof input === "string") {
+    return input;
+  }
+
+  return JSON.stringify(input ?? []);
+}
 
 for (const runtimeEngine of ["sdk", "app-server"] as const) {
   test(`真实 Web 旅程在 ${runtimeEngine} 下都能走通 owner 登录、workspace 保存、task stream 与 history 查询`, async () => {
@@ -183,8 +192,8 @@ for (const runtimeEngine of ["sdk", "app-server"] as const) {
         assert.equal(appServerJourneyState.started[0]?.cwd, workspace);
         assert.equal(appServerJourneyState.resumed[0]?.threadId, "thread-app-web-journey-1");
         assert.equal(appServerJourneyState.resumed[0]?.cwd, workspace);
-        assert.match(appServerJourneyState.prompts[0] ?? "", /真实 web 旅程测试/);
-        assert.match(appServerJourneyState.prompts[1] ?? "", /继续执行真实 web 旅程测试/);
+        assert.match(stringifyAppServerTurnInput(appServerJourneyState.prompts[0]), /真实 web 旅程测试/);
+        assert.match(stringifyAppServerTurnInput(appServerJourneyState.prompts[1]), /继续执行真实 web 旅程测试/);
         assert.equal(runtimeStore.getSession(sessionId)?.threadId, "thread-app-web-journey-1");
         assert.deepEqual(historyDetailPayload.nativeThread, {
           threadId: "thread-app-web-journey-1",

@@ -64,7 +64,7 @@ export interface AppServerTaskRuntimeSession {
   ): Promise<TaskRuntimeThreadSnapshot>;
   startReview?(threadId: string, instructions: string): Promise<TaskRuntimeStartReviewResult>;
   steerTurn?(threadId: string, expectedTurnId: string, message: string): Promise<TaskRuntimeSteerTurnResult>;
-  startTurn(threadId: string, prompt: string): Promise<{ turnId: string }>;
+  startTurn(threadId: string, input: string | AppServerTurnInputPart[]): Promise<{ turnId: string }>;
   close(): Promise<void>;
   onNotification(handler: (notification: CodexAppServerNotification) => void): void | (() => void);
   onServerRequest(handler: (request: AppServerReverseRequest) => void): void | (() => void);
@@ -229,10 +229,7 @@ export class AppServerTaskRuntime {
           ...compiledInput.nativeInputParts.map(mapAppServerTurnInputPart),
         ]
         : prompt;
-      const turnSession = activeSession as AppServerTaskRuntimeSession & {
-        startTurn(threadId: string, input: string | AppServerTurnInputPart[]): Promise<{ turnId: string }>;
-      };
-      const turn = await abortable(() => turnSession.startTurn(threadId, turnInput), signal);
+      const turn = await abortable(() => activeSession.startTurn(threadId, turnInput), signal);
       turnCompletion.targetTurnId = turn.turnId;
       await abortable(() => waitForPendingServerRequests(pendingServerRequests), signal);
       await abortable(() => turnCompletion.promise, signal);

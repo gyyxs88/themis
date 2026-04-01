@@ -160,6 +160,14 @@ export function buildBootstrapPrompt(
     sections.push(`Additional context:\n${request.inputText}`);
   }
 
+  const fallbackPromptSections = options.fallbackPromptSections
+    ?.map((section) => normalizePromptSection(section))
+    .filter((section): section is string => Boolean(section));
+
+  if (fallbackPromptSections?.length) {
+    sections.push(...fallbackPromptSections);
+  }
+
   if (taskContextSection) {
     sections.push(taskContextSection);
   }

@@ -8,6 +8,7 @@ import { FeishuChannelService } from "../channels/feishu/service.js";
 import { FeishuSessionStore } from "../channels/feishu/session-store.js";
 import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import { AppServerTaskRuntime, type AppServerTaskRuntimeSession } from "../core/app-server-task-runtime.js";
+import type { AppServerTurnInputPart } from "../core/codex-app-server.js";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
 import type { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { IdentityLinkService } from "../core/identity-link-service.js";
@@ -46,7 +47,7 @@ interface CrossChannelApprovalPlanEntry {
 interface CrossChannelJourneyState {
   started: Array<{ threadId: string; cwd: string }>;
   resumed: Array<{ threadId: string; cwd: string }>;
-  prompts: Array<{ threadId: string; prompt: string }>;
+  prompts: Array<{ threadId: string; prompt: string | AppServerTurnInputPart[] }>;
   read: Array<{ threadId: string; includeTurns: boolean }>;
   reviews: Array<{ threadId: string; instructions: string }>;
   steers: Array<{ threadId: string; turnId: string; message: string }>;
