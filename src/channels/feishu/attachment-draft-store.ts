@@ -137,6 +137,10 @@ export class FeishuAttachmentDraftStore {
     }
 
     const [record] = store.drafts.splice(index, 1);
+    if (!record) {
+      return null;
+    }
+
     if (record.attachments.length === 0) {
       this.writeStore(store);
       return null;
@@ -253,7 +257,6 @@ function normalizeDraftRecord(value: unknown): FeishuAttachmentDraftStoreRecord 
     return null;
   }
 
-  const key = normalizeText(value.key);
   const chatId = normalizeText(value.chatId);
   const userId = normalizeText(value.userId);
   const sessionId = normalizeText(value.sessionId);
@@ -261,6 +264,7 @@ function normalizeDraftRecord(value: unknown): FeishuAttachmentDraftStoreRecord 
   const attachments = rawAttachments
     .map(normalizeAttachment)
     .filter((item): item is FeishuAttachmentDraft => item !== null);
+  const key = createDraftKey({ chatId: chatId ?? "", userId: userId ?? "", sessionId: sessionId ?? "" });
 
   if (!key || !chatId || !userId || !sessionId || attachments.length === 0) {
     return null;

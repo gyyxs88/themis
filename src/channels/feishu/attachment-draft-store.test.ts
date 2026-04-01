@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { FeishuAttachmentDraftStore } from "./attachment-draft-store.js";
@@ -195,6 +195,73 @@ test("FeishuAttachmentDraftStore 会在消费时独立清理过期草稿", () =>
     });
     assert.equal(newStore.get(key), null);
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("FeishuAttachmentDraftStore 会基于 chatId + userId + sessionId 重建持久化 key", () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-feishu-attachment-draft-normalized-key-"));
+  const filePath = join(root, "infra/local/feishu-attachment-drafts.json");
+  const now = new Date().toISOString();
+  const key = {
+    chatId: "chat-1",
+    userId: "user-1",
+    sessionId: "session-1",
+  };
+
+  try {
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, `${JSON.stringify({
+      version: 1,
+      drafts: [{
+        key: "tampered-key",
+        chatId: key.chatId,
+        userId: key.userId,
+        sessionId: key.sessionId,
+        attachments: [{
+          id: "img-1",
+          type: "image",
+          value: "/workspace/temp/feishu-attachments/session-1/message-1/image.png",
+          sourceMessageId: "message-1",
+          createdAt: now,
+        }],
+      }],
+    }, null, 2)}\n`, "utf8");
+
+    const store = new FeishuAttachmentDraftStore({ filePath });
+    assert.deepEqual(store.get(key)?.attachments.map((item) => item.id), ["img-1"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("FeishuAttachmentDraftStore 默认使用本地路径与 30 分钟 TTL", () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-feishu-attachment-draft-defaults-"));
+  const originalCwd = process.cwd();
+  const key = {
+    chatId: "chat-1",
+    userId: "user-1",
+    sessionId: "session-1",
+  };
+
+  try {
+    process.chdir(root);
+    const store = new FeishuAttachmentDraftStore();
+    const oldAttachmentCreatedAt = new Date(Date.now() - 31 * 60 * 1000).toISOString();
+    const draftPath = join(root, "infra/local/feishu-attachment-drafts.json");
+
+    store.append(key, [{
+      id: "img-1",
+      type: "image",
+      value: "/workspace/temp/feishu-attachments/session-1/message-1/image.png",
+      sourceMessageId: "message-1",
+      createdAt: oldAttachmentCreatedAt,
+    }]);
+
+    assert.equal(existsSync(draftPath), true);
+    assert.equal(store.consume(key), null);
+  } finally {
+    process.chdir(originalCwd);
     rmSync(root, { recursive: true, force: true });
   }
 });
