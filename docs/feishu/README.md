@@ -1,10 +1,13 @@
 # 飞书 Bot 调研与接入建议
 
-更新日期：2026-03-31
+更新日期：2026-04-01
 
 相关实现文档：
 
 - [Themis 飞书渠道说明](./themis-feishu-channel.md)
+- [飞书与 Web 跨端 waiting action 恢复边界](../memory/2026/03/feishu-cross-channel-action-recovery-boundary.md)
+- [飞书消息入口去重与顺序保护](../memory/2026/03/feishu-message-ingress-ordering.md)
+- [飞书 waiting user-input 直接文本接管约束](../memory/2026/03/feishu-direct-text-user-input-takeover.md)
 
 手工验收入口：
 
