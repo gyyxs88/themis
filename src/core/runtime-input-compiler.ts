@@ -159,12 +159,22 @@ export function compileTaskInputForRuntime(input: {
         });
       }
 
+      const pdfFallbackText = resolvePdfFallbackText(asset);
+
+      if (pdfFallbackText === null) {
+        return blocked({
+          code: "PDF_TEXT_SOURCE_UNAVAILABLE",
+          message: "PDF 缺少可用文本提取结果，无法进行受控降级。",
+          assetId: asset.assetId,
+        });
+      }
+
       fallbackPromptSections.push(
         [
           "PDF fallback context:",
           `assetId: ${asset.assetId}`,
           `path: ${asset.localPath}`,
-          resolvePdfFallbackText(asset),
+          pdfFallbackText,
         ].join("\n"),
       );
       compileWarnings.push({
@@ -256,14 +266,14 @@ function resolveTextualDocumentContent(asset: TaskInputAsset):
   return { kind: "source_unavailable" };
 }
 
-function resolvePdfFallbackText(asset: TaskInputAsset): string {
+function resolvePdfFallbackText(asset: TaskInputAsset): string | null {
   const textPath = asset.textExtraction?.status === "completed" ? asset.textExtraction.textPath : undefined;
 
   if (textPath && existsSync(textPath)) {
     return readFileSync(textPath, "utf8");
   }
 
-  return asset.textExtraction?.textPreview ?? "[pdf text extraction unavailable]";
+  return asset.textExtraction?.textPreview ?? null;
 }
 
 function requireAsset(assets: TaskInputAsset[], assetId: string): TaskInputAsset {

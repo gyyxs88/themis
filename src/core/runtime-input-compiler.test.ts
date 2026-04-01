@@ -335,6 +335,48 @@ test("PDF controlled fallback 在 runtime 不支持 nativeTextInput 时会被 bl
   assert.match(compiled.compileWarnings[0]?.message ?? "", /PDF.*文本原生输入/);
 });
 
+test("PDF 在没有任何可用文本时会被 blocked", () => {
+  const compiled = compileTaskInputForRuntime({
+    envelope: {
+      envelopeId: "env-pdf-missing-text-1",
+      sourceChannel: "feishu",
+      parts: [
+        { partId: "part-1", type: "document", role: "user", order: 1, assetId: "asset-pdf-1" },
+      ],
+      assets: [
+        {
+          assetId: "asset-pdf-1",
+          kind: "document",
+          mimeType: "application/pdf",
+          localPath: "/workspace/temp/input-assets/missing-report.pdf",
+          sourceChannel: "feishu",
+          ingestionStatus: "ready",
+          textExtraction: {
+            status: "failed",
+          },
+        },
+      ],
+      createdAt: "2026-04-01T21:31:30.000Z",
+    },
+    target: {
+      runtimeId: "app-server",
+      capabilities: {
+        nativeTextInput: true,
+        nativeImageInput: true,
+        nativeDocumentInput: false,
+        supportedDocumentMimeTypes: [],
+        supportsPdfTextExtraction: true,
+        supportsDocumentPageRasterization: true,
+      },
+    },
+  });
+
+  assert.equal(compiled.degradationLevel, "blocked");
+  assert.deepEqual(compiled.fallbackPromptSections, []);
+  assert.equal(compiled.compileWarnings[0]?.code, "PDF_TEXT_SOURCE_UNAVAILABLE");
+  assert.match(compiled.compileWarnings[0]?.message ?? "", /PDF.*缺少可用文本/);
+});
+
 test("runtime 支持 nativeDocumentInput 且 mimeType 被支持时会直通 document part", () => {
   const compiled = compileTaskInputForRuntime({
     envelope: {
@@ -371,4 +413,42 @@ test("runtime 支持 nativeDocumentInput 且 mimeType 被支持时会直通 docu
   assert.equal(compiled.degradationLevel, "native");
   assert.equal(compiled.nativeInputParts[0]?.type, "document");
   assert.equal(compiled.nativeInputParts[0]?.assetId, "asset-doc-1");
+});
+
+test("runtime 不支持该文档 mimeType 且无其他降级路径时会走 DOCUMENT_INPUT_UNSUPPORTED", () => {
+  const compiled = compileTaskInputForRuntime({
+    envelope: {
+      envelopeId: "env-doc-unsupported-1",
+      sourceChannel: "web",
+      parts: [
+        { partId: "part-1", type: "document", role: "user", order: 1, assetId: "asset-doc-1" },
+      ],
+      assets: [
+        {
+          assetId: "asset-doc-1",
+          kind: "document",
+          mimeType: "application/vnd.ms-excel",
+          localPath: "/workspace/temp/input-assets/sheet.xls",
+          sourceChannel: "web",
+          ingestionStatus: "ready",
+        },
+      ],
+      createdAt: "2026-04-01T21:33:00.000Z",
+    },
+    target: {
+      runtimeId: "third-party",
+      capabilities: {
+        nativeTextInput: true,
+        nativeImageInput: true,
+        nativeDocumentInput: false,
+        supportedDocumentMimeTypes: [],
+        supportsPdfTextExtraction: false,
+        supportsDocumentPageRasterization: false,
+      },
+    },
+  });
+
+  assert.equal(compiled.degradationLevel, "blocked");
+  assert.equal(compiled.compileWarnings[0]?.code, "DOCUMENT_INPUT_UNSUPPORTED");
+  assert.match(compiled.compileWarnings[0]?.message ?? "", /application\/vnd\.ms-excel/);
 });
