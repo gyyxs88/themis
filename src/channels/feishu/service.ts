@@ -522,6 +522,12 @@ export class FeishuChannelService {
     const inlineAssets = await this.downloadInlineAttachments(context, sessionId);
     const reservedDraft = this.attachmentDraftStore.consume(draftKey);
     const inputEnvelope = buildFeishuInputEnvelope(context, sessionId, reservedDraft, inlineAssets);
+    const inlineDraft = inlineAssets.length > 0
+      ? {
+        parts: buildFeishuDraftPartsFromAssets(inlineAssets),
+        assets: inlineAssets,
+      }
+      : null;
     const bridge = new FeishuTaskMessageBridge({
       createText: async (text) => this.createAssistantMessage(context.chatId, text),
       updateText: async (messageId, text) => this.updateAssistantMessage(messageId, text),
@@ -546,24 +552,38 @@ export class FeishuChannelService {
     router.registerAdapter(adapter);
 
     let normalizedRequest: TaskRequest | null = null;
-    let shouldRestoreDraft = Boolean(reservedDraft);
-    const discardReservedDraft = () => {
+    let shouldRestoreDraft = Boolean(reservedDraft) || Boolean(inlineDraft);
+    const discardDraftRestore = () => {
       shouldRestoreDraft = false;
     };
-    const restoreReservedDraft = () => {
-      if (!shouldRestoreDraft || !reservedDraft) {
+    const restoreDraft = () => {
+      if (!shouldRestoreDraft) {
+        return;
+      }
+
+      const parts = [
+        ...(reservedDraft?.parts ?? []),
+        ...(inlineDraft?.parts ?? []),
+      ];
+      const assets = [
+        ...(reservedDraft?.assets ?? []),
+        ...(inlineDraft?.assets ?? []),
+      ];
+
+      if (parts.length === 0 || assets.length === 0) {
+        discardDraftRestore();
         return;
       }
 
       try {
         this.attachmentDraftStore.appendEnvelope(draftKey, {
-          parts: reservedDraft.parts,
-          assets: reservedDraft.assets,
+          parts,
+          assets,
         });
       } catch (error) {
         this.logger.error(`[themis/feishu] 恢复附件草稿失败：${toErrorMessage(error)}`);
       } finally {
-        shouldRestoreDraft = false;
+        discardDraftRestore();
       }
     };
 
@@ -583,16 +603,16 @@ export class FeishuChannelService {
         finalizeResult: (request, taskResult) => appendTaskReplyQuotaFooter(this.authRuntime, request, taskResult),
         onEvent: async (taskEvent) => {
           if (shouldRestoreDraft && taskEvent.type === "task.started") {
-            discardReservedDraft();
+            discardDraftRestore();
           }
           await router.publishEvent(taskEvent);
         },
       });
 
-      discardReservedDraft();
+      discardDraftRestore();
       await router.publishResult(result);
     } catch (error) {
-      restoreReservedDraft();
+      restoreDraft();
       const taskError = createTaskError(error, Boolean(normalizedRequest));
 
       if (normalizedRequest) {

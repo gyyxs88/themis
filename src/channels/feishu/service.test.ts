@@ -1581,6 +1581,89 @@ test("飞书真实入站 post 顶层结构里的文本和图片会直接作为�
   }
 });
 
+test("飞书同一条 post 消息在 task.started 前失败时会把 inline 图片恢复进草稿", async () => {
+  const seenRequests: Array<{ goal?: string }> = [];
+  const harness = createHarness({
+    appServerRuntimeFactory: ({
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      taskRuntimeCalls,
+    }) => ({
+      ...createTaskRuntimeDouble({
+        engine: "app-server",
+        runtimeStore,
+        identityService,
+        principalSkillsService,
+        taskRuntimeCalls,
+      }),
+      async runTask(request) {
+        taskRuntimeCalls.appServer += 1;
+        seenRequests.push(request);
+        throw new Error("runTask before task.started");
+      },
+    }),
+  });
+
+  try {
+    harness.setMessageResourceDownloader(async () => ({
+      headers: {
+        "content-type": "image/png",
+      },
+      async writeFile(filePath: string) {
+        await import("node:fs/promises").then(({ writeFile }) => writeFile(filePath, "fake-image"));
+      },
+      getReadableStream() {
+        throw new Error("not implemented");
+      },
+    }));
+
+    await harness.handleRawMessageEvent({
+      message: {
+        chat_id: "chat-1",
+        message_id: "message-post-fail-1",
+        create_time: "1775040596104",
+        message_type: "post",
+        content: JSON.stringify({
+          title: "",
+          content: [[
+            {
+              tag: "text",
+              text: "帮我看看这张图",
+            },
+            {
+              tag: "img",
+              image_key: "img-key-post-fail-1",
+            },
+          ]],
+        }),
+      },
+      sender: {
+        sender_id: {
+          user_id: "user-1",
+        },
+      },
+    });
+
+    const messages = harness.takeMessages();
+    assert.ok(messages.some((message) => message.includes("执行异常")));
+    assert.ok(messages.some((message) => message.includes("runTask before task.started")));
+    assert.equal(seenRequests.length, 1);
+
+    const draftStore = harness.readAttachmentDraftStore();
+    assert.equal(draftStore?.drafts.length, 1);
+    const draft = draftStore?.drafts[0];
+    assert.ok(draft);
+    assert.ok(draft.assets);
+    assert.ok(draft.parts);
+    assert.equal(draft.assets.length, 1);
+    assert.equal(draft.assets[0]?.kind, "image");
+    assert.equal(draft.parts.some((part) => part.type === "image"), true);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("飞书附件会落到当前 session 工作区，并把 sessionId 透传给 runtime 请求", async () => {
   const harness = createHarness();
   const sessionId = "session-image-workspace";
