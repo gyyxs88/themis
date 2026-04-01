@@ -75,6 +75,7 @@ export class FeishuAttachmentDraftStore {
 
     const store = this.readStore();
     const now = this.now();
+    const cleaned = cleanupExpiredDrafts(store, now);
     const record = store.drafts.find((entry) => entry.key === normalizedKey);
     const normalizedAttachments = attachments
       .map(normalizeAttachment)
