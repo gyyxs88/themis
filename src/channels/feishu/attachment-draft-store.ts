@@ -29,6 +29,9 @@ interface FeishuAttachmentDraftStoreRecord {
   userId: string;
   sessionId: string;
   attachments: FeishuAttachmentDraft[];
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
 }
 
 interface FeishuAttachmentDraftStoreData {
@@ -62,28 +65,41 @@ export class FeishuAttachmentDraftStore {
 
   append(key: FeishuAttachmentDraftKey, attachments: FeishuAttachmentDraft[]): void {
     const normalizedKey = createDraftKey(key);
-    if (!normalizedKey || attachments.length === 0) {
-      return;
+    if (!normalizedKey) {
+      throw new Error("Feishu 会话映射缺少必要字段。");
+    }
+
+    if (attachments.length === 0) {
+      throw new Error("Feishu 附件草稿不能为空。");
     }
 
     const store = this.readStore();
+    const now = this.now();
     const record = store.drafts.find((entry) => entry.key === normalizedKey);
     const normalizedAttachments = attachments
       .map(normalizeAttachment)
       .filter((item): item is FeishuAttachmentDraft => item !== null);
 
     if (!normalizedAttachments.length) {
-      return;
+      throw new Error("Feishu 附件草稿不包含可用字段。");
     }
+
+    const nowMs = parseTimestamp(now, Date.now());
+    const refreshedAt = new Date(nowMs).toISOString();
 
     if (record) {
       record.attachments.push(...normalizedAttachments);
+      record.updatedAt = refreshedAt;
+      record.expiresAt = new Date(nowMs + this.ttlMs).toISOString();
     } else {
       store.drafts.push({
         key: normalizedKey,
         chatId: key.chatId.trim(),
         userId: key.userId.trim(),
         sessionId: key.sessionId.trim(),
+        createdAt: now,
+        updatedAt: now,
+        expiresAt: new Date(nowMs + this.ttlMs).toISOString(),
         attachments: normalizedAttachments,
       });
     }
@@ -98,7 +114,7 @@ export class FeishuAttachmentDraftStore {
     }
 
     const store = this.readStore();
-    const changed = cleanupExpiredDrafts(store, this.now(), this.ttlMs);
+    const changed = cleanupExpiredDrafts(store, this.now());
     const record = store.drafts.find((entry) => entry.key === normalizedKey);
 
     if (changed) {
@@ -126,7 +142,7 @@ export class FeishuAttachmentDraftStore {
     }
 
     const store = this.readStore();
-    const changed = cleanupExpiredDrafts(store, this.now(), this.ttlMs);
+    const changed = cleanupExpiredDrafts(store, this.now());
     const index = store.drafts.findIndex((entry) => entry.key === normalizedKey);
 
     if (index === -1) {
@@ -167,7 +183,7 @@ export class FeishuAttachmentDraftStore {
       }
 
       const drafts = parsed.drafts
-        .map(normalizeDraftRecord)
+        .map((entry) => normalizeDraftRecord(entry, this.now(), this.ttlMs))
         .filter((record): record is FeishuAttachmentDraftStoreRecord => record !== null);
 
       return {
@@ -188,42 +204,22 @@ export class FeishuAttachmentDraftStore {
   }
 }
 
-function cleanupExpiredDrafts(
-  store: FeishuAttachmentDraftStoreData,
-  now: string,
-  ttlMs: number,
-): boolean {
-  const nowMs = Number.isNaN(Date.parse(now)) ? Date.now() : Date.parse(now);
+function cleanupExpiredDrafts(store: FeishuAttachmentDraftStoreData, now: string): boolean {
+  const nowMs = parseTimestamp(now, Date.now());
 
   const beforeLength = store.drafts.length;
-  const beforeAttachmentCount = countAttachments(store.drafts);
   store.drafts = store.drafts
-    .map((record) => {
-      const nextAttachments = record.attachments.filter((attachment) => {
-        const createdAtMs = Date.parse(attachment.createdAt);
-        if (Number.isNaN(createdAtMs)) {
-          return false;
-        }
-        return nowMs - createdAtMs <= ttlMs;
-      });
-
-      return {
-        ...record,
-        attachments: nextAttachments,
-      };
-    })
     .filter((record) => {
-      return record.attachments.length > 0;
+      const expiresAtMs = parseTimestamp(record.expiresAt, Number.NaN);
+      if (Number.isNaN(expiresAtMs)) {
+        return false;
+      }
+
+      return nowMs <= expiresAtMs;
     });
 
   const afterLength = store.drafts.length;
-  const afterAttachmentCount = countAttachments(store.drafts);
-
-  return afterLength !== beforeLength || afterAttachmentCount !== beforeAttachmentCount;
-}
-
-function countAttachments(records: FeishuAttachmentDraftStoreRecord[]): number {
-  return records.reduce((count, record) => count + record.attachments.length, 0);
+  return afterLength !== beforeLength;
 }
 
 function normalizeAttachment(value: unknown): FeishuAttachmentDraft | null {
@@ -252,7 +248,11 @@ function normalizeAttachment(value: unknown): FeishuAttachmentDraft | null {
   };
 }
 
-function normalizeDraftRecord(value: unknown): FeishuAttachmentDraftStoreRecord | null {
+function normalizeDraftRecord(
+  value: unknown,
+  now: string,
+  ttlMs: number,
+): FeishuAttachmentDraftStoreRecord | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -264,9 +264,25 @@ function normalizeDraftRecord(value: unknown): FeishuAttachmentDraftStoreRecord 
   const attachments = rawAttachments
     .map(normalizeAttachment)
     .filter((item): item is FeishuAttachmentDraft => item !== null);
+  const createdAt = normalizeText(value.createdAt);
+  const updatedAt = normalizeText(value.updatedAt);
+  const expiresAt = normalizeText(value.expiresAt);
   const key = createDraftKey({ chatId: chatId ?? "", userId: userId ?? "", sessionId: sessionId ?? "" });
+  const attachmentLatestCreatedAt = attachments.reduce<number | null>((max, item) => {
+    const next = Date.parse(item.createdAt);
+    if (Number.isNaN(next)) {
+      return max;
+    }
+    return max === null || next > max ? next : max;
+  }, null);
+  const fallbackUpdatedAtMs = parseTimestamp(updatedAt, parseTimestamp(createdAt, attachmentLatestCreatedAt ?? parseTimestamp(now, Date.now())));
+  const fallbackCreatedAtMs = parseTimestamp(createdAt, fallbackUpdatedAtMs);
+  const fallbackExpiresAtMs = parseTimestamp(expiresAt, fallbackUpdatedAtMs + ttlMs);
 
   if (!key || !chatId || !userId || !sessionId || attachments.length === 0) {
+    return null;
+  }
+  if (Number.isNaN(fallbackUpdatedAtMs) || Number.isNaN(fallbackCreatedAtMs) || Number.isNaN(fallbackExpiresAtMs)) {
     return null;
   }
 
@@ -275,6 +291,9 @@ function normalizeDraftRecord(value: unknown): FeishuAttachmentDraftStoreRecord 
     chatId,
     userId,
     sessionId,
+    createdAt: new Date(fallbackCreatedAtMs).toISOString(),
+    updatedAt: new Date(fallbackUpdatedAtMs).toISOString(),
+    expiresAt: new Date(fallbackExpiresAtMs).toISOString(),
     attachments,
   };
 }
@@ -313,6 +332,14 @@ function normalizeAttachmentType(value: unknown): TaskAttachmentType | null {
 
 function normalizeText(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function parseTimestamp(value: string | null | undefined, fallback: number): number {
+  const parsed = value ? Date.parse(value) : Number.NaN;
+  if (Number.isNaN(parsed)) {
+    return fallback;
+  }
+  return parsed;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

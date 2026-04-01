@@ -199,6 +199,82 @@ test("FeishuAttachmentDraftStore 会在消费时独立清理过期草稿", () =>
   }
 });
 
+test("FeishuAttachmentDraftStore 会刷新同一草稿的 TTL，避免早期附件被单独过期", () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-feishu-attachment-draft-refresh-ttl-"));
+  let now = "2026-04-01T08:00:00.000Z";
+  const store = new FeishuAttachmentDraftStore({
+    filePath: join(root, "infra/local/feishu-attachment-drafts.json"),
+    now: () => now,
+    ttlMs: 60_000,
+  });
+  const key = {
+    chatId: "chat-1",
+    userId: "user-1",
+    sessionId: "session-1",
+  };
+
+  try {
+    store.append(key, [{
+      id: "img-1",
+      type: "image",
+      value: "/workspace/temp/feishu-attachments/session-1/message-1/image.png",
+      sourceMessageId: "message-1",
+      createdAt: now,
+    }]);
+
+    now = "2026-04-01T08:01:00.000Z";
+    store.append(key, [{
+      id: "file-1",
+      type: "file",
+      value: "/workspace/temp/feishu-attachments/session-1/message-2/file.pdf",
+      sourceMessageId: "message-2",
+      createdAt: now,
+    }]);
+
+    now = "2026-04-01T08:01:55.000Z";
+    assert.deepEqual(
+      store.get(key)?.attachments.map((item) => item.id),
+      ["img-1", "file-1"],
+    );
+
+    now = "2026-04-01T08:03:02.000Z";
+    assert.equal(store.consume(key), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("FeishuAttachmentDraftStore append 空数组或无效附件会 fail-fast", () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-feishu-attachment-draft-append-empty-"));
+  const store = new FeishuAttachmentDraftStore({
+    filePath: join(root, "infra/local/feishu-attachment-drafts.json"),
+  });
+  const key = {
+    chatId: "chat-1",
+    userId: "user-1",
+    sessionId: "session-1",
+  };
+  const now = "2026-04-01T08:00:00.000Z";
+
+  try {
+    assert.throws(() => {
+      store.append(key, []);
+    });
+
+    assert.throws(() => {
+      store.append(key, [{
+        id: "img-1",
+        type: "image",
+        value: "",
+        sourceMessageId: "message-1",
+        createdAt: now,
+      }]);
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("FeishuAttachmentDraftStore 会基于 chatId + userId + sessionId 重建持久化 key", () => {
   const root = mkdtempSync(join(tmpdir(), "themis-feishu-attachment-draft-normalized-key-"));
   const filePath = join(root, "infra/local/feishu-attachment-drafts.json");
@@ -246,20 +322,29 @@ test("FeishuAttachmentDraftStore 默认使用本地路径与 30 分钟 TTL", () 
 
   try {
     process.chdir(root);
-    const store = new FeishuAttachmentDraftStore();
-    const oldAttachmentCreatedAt = new Date(Date.now() - 31 * 60 * 1000).toISOString();
+    let now = "2026-04-01T08:00:00.000Z";
     const draftPath = join(root, "infra/local/feishu-attachment-drafts.json");
 
-    store.append(key, [{
+    const withNowStore = new FeishuAttachmentDraftStore({
+      filePath: draftPath,
+      now: () => now,
+    });
+    withNowStore.append(key, [{
       id: "img-1",
       type: "image",
       value: "/workspace/temp/feishu-attachments/session-1/message-1/image.png",
       sourceMessageId: "message-1",
-      createdAt: oldAttachmentCreatedAt,
+      createdAt: now,
     }]);
 
     assert.equal(existsSync(draftPath), true);
-    assert.equal(store.consume(key), null);
+
+    now = "2026-04-01T08:31:00.000Z";
+    const futureStore = new FeishuAttachmentDraftStore({
+      filePath: draftPath,
+      now: () => now,
+    });
+    assert.equal(futureStore.consume(key), null);
   } finally {
     process.chdir(originalCwd);
     rmSync(root, { recursive: true, force: true });
