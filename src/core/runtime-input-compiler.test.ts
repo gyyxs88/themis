@@ -84,6 +84,91 @@ test("Markdown 文档会被无损文本化成 native text parts", () => {
   assert.match(compiled.nativeInputParts[0]?.text ?? "", /hello/);
 });
 
+test("Markdown 文档即使 runtime 声明 nativeDocumentInput 也仍然优先走 lossless_textualization", () => {
+  const compiled = compileTaskInputForRuntime({
+    envelope: {
+      envelopeId: "env-markdown-native-doc-1",
+      sourceChannel: "web",
+      parts: [
+        { partId: "part-1", type: "document", role: "user", order: 1, assetId: "asset-doc-1" },
+      ],
+      assets: [
+        {
+          assetId: "asset-doc-1",
+          kind: "document",
+          mimeType: "text/markdown",
+          localPath: "/workspace/temp/input-assets/guide.md",
+          sourceChannel: "web",
+          ingestionStatus: "ready",
+          textExtraction: {
+            status: "completed",
+            textPreview: "# Guide\n\nstill text",
+          },
+        },
+      ],
+      createdAt: "2026-04-01T21:27:00.000Z",
+    },
+    target: {
+      runtimeId: "app-server",
+      capabilities: {
+        nativeTextInput: true,
+        nativeImageInput: true,
+        nativeDocumentInput: true,
+        supportedDocumentMimeTypes: ["text/markdown", "application/pdf"],
+        supportsPdfTextExtraction: true,
+        supportsDocumentPageRasterization: true,
+      },
+    },
+  });
+
+  assert.equal(compiled.degradationLevel, "lossless_textualization");
+  assert.equal(compiled.nativeInputParts[0]?.type, "text");
+  assert.match(compiled.nativeInputParts[0]?.text ?? "", /still text/);
+});
+
+test("可文本化文档在 runtime 不支持 nativeTextInput 时会被 blocked", () => {
+  const compiled = compileTaskInputForRuntime({
+    envelope: {
+      envelopeId: "env-markdown-no-native-text-1",
+      sourceChannel: "web",
+      parts: [
+        { partId: "part-1", type: "document", role: "user", order: 1, assetId: "asset-doc-1" },
+      ],
+      assets: [
+        {
+          assetId: "asset-doc-1",
+          kind: "document",
+          mimeType: "text/markdown",
+          localPath: "/workspace/temp/input-assets/guide.md",
+          sourceChannel: "web",
+          ingestionStatus: "ready",
+          textExtraction: {
+            status: "completed",
+            textPreview: "# Guide\n\nblocked",
+          },
+        },
+      ],
+      createdAt: "2026-04-01T21:28:00.000Z",
+    },
+    target: {
+      runtimeId: "third-party",
+      capabilities: {
+        nativeTextInput: false,
+        nativeImageInput: true,
+        nativeDocumentInput: true,
+        supportedDocumentMimeTypes: ["text/markdown"],
+        supportsPdfTextExtraction: true,
+        supportsDocumentPageRasterization: false,
+      },
+    },
+  });
+
+  assert.equal(compiled.degradationLevel, "blocked");
+  assert.deepEqual(compiled.nativeInputParts, []);
+  assert.equal(compiled.compileWarnings[0]?.code, "TEXT_NATIVE_INPUT_REQUIRED");
+  assert.match(compiled.compileWarnings[0]?.message ?? "", /当前 runtime 未声明支持文本原生输入/);
+});
+
 test("PDF 在没有 nativeDocumentInput 时会走 controlled fallback", () => {
   const compiled = compileTaskInputForRuntime({
     envelope: {

@@ -99,18 +99,15 @@ export function compileTaskInputForRuntime(input: {
       continue;
     }
 
-    if (supportsNativeDocumentInput(asset.mimeType, input.target.capabilities)) {
-      nativeInputParts.push({
-        type: "document",
-        assetPath: asset.localPath,
-        mimeType: asset.mimeType,
-        sourcePartId: part.partId,
-        assetId: asset.assetId,
-      });
-      continue;
-    }
-
     if (isLosslessTextDocument(asset.mimeType)) {
+      if (!input.target.capabilities.nativeTextInput) {
+        return blocked({
+          code: "TEXT_NATIVE_INPUT_REQUIRED",
+          message: "当前 runtime 未声明支持文本原生输入，无法承载可文本化文档。",
+          assetId: asset.assetId,
+        });
+      }
+
       const text = resolveTextualDocumentContent(asset);
       nativeInputParts.push({
         type: "text",
@@ -119,6 +116,17 @@ export function compileTaskInputForRuntime(input: {
         assetId: asset.assetId,
       });
       degradationLevel = mergeDegradationLevel(degradationLevel, "lossless_textualization");
+      continue;
+    }
+
+    if (supportsNativeDocumentInput(asset.mimeType, input.target.capabilities)) {
+      nativeInputParts.push({
+        type: "document",
+        assetPath: asset.localPath,
+        mimeType: asset.mimeType,
+        sourcePartId: part.partId,
+        assetId: asset.assetId,
+      });
       continue;
     }
 
