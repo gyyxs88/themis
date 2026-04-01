@@ -1,4 +1,4 @@
-import type { TaskAttachment, TaskOptions } from "../../types/index.js";
+import type { TaskAttachment, TaskInputEnvelope, TaskOptions } from "../../types/index.js";
 
 export interface FeishuSender {
   userId?: string;
@@ -22,6 +22,7 @@ export interface FeishuTaskPayload {
   sessionId?: string;
   goal?: string;
   inputText?: string;
+  inputEnvelope?: TaskInputEnvelope;
   sender?: FeishuSender;
   message?: FeishuMessageContext;
   attachments?: TaskAttachment[];

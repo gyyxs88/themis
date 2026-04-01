@@ -4,4 +4,5 @@ export * from "./context.js";
 export * from "./memory.js";
 export * from "./persona.js";
 export * from "./runtime-engine.js";
+export * from "./task-input.js";
 export * from "./task.js";

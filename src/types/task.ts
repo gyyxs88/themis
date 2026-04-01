@@ -1,6 +1,7 @@
 import type { ChannelContext, ChannelId, ChannelUser } from "./channel.js";
 import type { MemoryUpdate } from "./memory.js";
 import type { RuntimeEngine } from "./runtime-engine.js";
+import type { TaskInputEnvelope } from "./task-input.js";
 
 export const TASK_ATTACHMENT_TYPES = ["text", "link", "file", "image"] as const;
 
@@ -146,6 +147,7 @@ export interface TaskRequest {
   goal: string;
   inputText?: string;
   historyContext?: string;
+  inputEnvelope?: TaskInputEnvelope;
   attachments?: TaskAttachment[];
   options?: TaskOptions;
   channelContext: ChannelContext;

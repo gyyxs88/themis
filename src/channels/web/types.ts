@@ -1,4 +1,4 @@
-import type { TaskAttachment, TaskOptions } from "../../types/index.js";
+import type { TaskAttachment, TaskInputEnvelope, TaskOptions } from "../../types/index.js";
 
 export interface WebTaskPayload {
   source?: "web";
@@ -7,6 +7,7 @@ export interface WebTaskPayload {
   goal?: string;
   inputText?: string;
   historyContext?: string;
+  inputEnvelope?: TaskInputEnvelope;
   userId?: string;
   displayName?: string;
   sessionId?: string;
