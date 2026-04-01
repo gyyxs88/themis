@@ -126,6 +126,34 @@ export function renderComposerActionBarMarkup(actionBarState, utils) {
   `;
 }
 
+export function renderDraftInputAssetsMarkup(draftInputAssets, utils) {
+  const assets = Array.isArray(draftInputAssets) ? draftInputAssets : [];
+
+  if (!assets.length) {
+    return "";
+  }
+
+  return `
+    <div class="composer-input-assets-shell">
+      <p class="composer-input-assets-label">已添加附件</p>
+      <ul class="composer-input-assets-list">
+        ${assets.map((asset, index) => `
+          <li class="composer-input-assets-item">
+            <span class="composer-input-assets-name">${utils.escapeHtml(asset.name ?? asset.localPath ?? `asset-${index + 1}`)}</span>
+            <button
+              type="button"
+              class="toolbar-button composer-input-assets-remove"
+              data-draft-input-asset-remove="${index}"
+            >
+              移除
+            </button>
+          </li>
+        `).join("")}
+      </ul>
+    </div>
+  `;
+}
+
 export function renderTurnMarkup(turn, index, { thread = null, store, utils }) {
   const assistantLabel = store.resolveAssistantDisplayLabel(turn.options);
   const assistantMessages = store.getVisibleAssistantMessages(turn);

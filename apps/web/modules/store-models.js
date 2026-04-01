@@ -32,6 +32,7 @@ export function createStoreModelHelpers() {
       updatedAt: timestamp,
       draftGoal: "",
       draftContext: "",
+      draftInputAssets: [],
       composerMode: normalizeComposerMode(options.composerMode),
       threadOrigin: normalizeThreadOrigin(options.threadOrigin),
       settings: normalizeThreadSettings(settings),
@@ -110,6 +111,7 @@ export function createStoreModelHelpers() {
       updatedAt: typeof thread.updatedAt === "string" ? thread.updatedAt : nowIso(),
       draftGoal: typeof thread.draftGoal === "string" ? thread.draftGoal : "",
       draftContext: typeof thread.draftContext === "string" ? thread.draftContext : "",
+      draftInputAssets: normalizeDraftInputAssets(thread.draftInputAssets),
       composerMode: normalizeComposerMode(thread.composerMode),
       threadOrigin: normalizeThreadOrigin(thread.threadOrigin),
       settings: normalizeThreadSettings(thread.settings),
@@ -171,6 +173,31 @@ export function createStoreModelHelpers() {
       id: typeof message.id === "string" && message.id ? message.id : createId("assistant-msg"),
       text,
     };
+  }
+
+  function normalizeDraftInputAssets(value) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((asset) => {
+        if (!asset || typeof asset !== "object") {
+          return null;
+        }
+
+        return {
+          ...(typeof asset.assetId === "string" ? { assetId: asset.assetId } : {}),
+          ...(asset.kind === "image" || asset.kind === "document" ? { kind: asset.kind } : {}),
+          ...(typeof asset.name === "string" ? { name: asset.name } : {}),
+          ...(typeof asset.mimeType === "string" ? { mimeType: asset.mimeType } : {}),
+          ...(Number.isFinite(asset.sizeBytes) ? { sizeBytes: Number(asset.sizeBytes) } : {}),
+          ...(typeof asset.localPath === "string" ? { localPath: asset.localPath } : {}),
+          ...(typeof asset.sourceChannel === "string" ? { sourceChannel: asset.sourceChannel } : {}),
+          ...(typeof asset.ingestionStatus === "string" ? { ingestionStatus: asset.ingestionStatus } : {}),
+        };
+      })
+      .filter(Boolean);
   }
 
   function normalizeStep(step) {

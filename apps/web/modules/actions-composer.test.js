@@ -217,6 +217,47 @@ test("persisted review mode 在当前 latest turn running 时会回退到普通�
   }
 });
 
+test("submitThread 会在存在 draftInputAssets 时向 /api/tasks/stream 提交 inputEnvelope", async () => {
+  const harness = createComposerHarness({
+    activeRunRef: null,
+    activeRequestController: null,
+    allowCreateTurn: true,
+    activeTurnState: "completed",
+    activeTurnAction: null,
+    activeThreadDraftGoal: "帮我看图",
+    activeThreadDraftAssets: [
+      {
+        assetId: "asset-image-1",
+        kind: "image",
+        mimeType: "image/png",
+        localPath: "/workspace/temp/input-assets/shot.png",
+        sourceChannel: "web",
+        ingestionStatus: "ready",
+      },
+    ],
+  });
+
+  try {
+    const { app, dom } = harness;
+    const actions = createComposerActions(app, {
+      consumeNdjsonStream: async () => {},
+      finalizeTurnCancelled() {},
+      finalizeTurnError() {},
+    });
+    actions.bindComposerControls();
+
+    await dom.form.listeners.submit[0]({
+      preventDefault() {},
+    });
+
+    assert.equal(app.runtime.streamRequestCount, 1);
+    assert.equal(app.runtime.streamRequests[0]?.url, "/api/tasks/stream");
+    assert.equal(app.runtime.streamRequests[0]?.body.inputEnvelope.parts[1].type, "image");
+  } finally {
+    harness.restore();
+  }
+});
+
 test("waiting action 优先级高于显式 composer mode", async () => {
   const harness = createComposerHarness({
     activeTurnState: "waiting",
@@ -1018,6 +1059,7 @@ test("线程 A 正在执行时，线程 B 的新消息会在打断后自动续�
       goal: "线程 B 的新消息",
       draftGoal: "线程 B 的新消息",
       draftContext: "",
+      draftInputAssets: [],
     });
     assert.equal(app.runtime.streamRequestCount, 0);
     assert.equal(waitingThread.turns.length, 1);
@@ -1220,6 +1262,7 @@ function createComposerHarness(options = {}) {
     title: "线程 A",
     draftGoal: options.activeThreadDraftGoal ?? "",
     draftContext: options.activeThreadDraftContext ?? "",
+    draftInputAssets: options.activeThreadDraftAssets ?? [],
     composerMode: options.activeThreadComposerMode ?? "chat",
     historyNeedsRehydrate: options.activeThreadHistoryNeedsRehydrate ?? false,
   });
@@ -1229,6 +1272,7 @@ function createComposerHarness(options = {}) {
       title: "线程 B",
       draftGoal: options.activeThreadDraftGoal ?? "",
       draftContext: options.activeThreadDraftContext ?? "",
+      draftInputAssets: options.activeThreadDraftAssets ?? [],
       composerMode: options.activeThreadComposerMode ?? "chat",
     })
     : waitingThread;
@@ -1269,6 +1313,7 @@ function createComposerHarness(options = {}) {
       },
       abortCount: 0,
       streamRequestCount: 0,
+      streamRequests: [],
       smokeRequestCount: 0,
       smokeRequests: [],
       submitActionCalls: [],
@@ -1302,6 +1347,27 @@ function createComposerHarness(options = {}) {
     },
     auth: {
       ensureAuthenticated: async () => ({ ok: true }),
+    },
+    inputAssets: {
+      async buildDraftEnvelope({ sourceChannel, createdAt, draftGoal, draftAssets }) {
+        const assets = Array.isArray(draftAssets) ? draftAssets.map((asset) => ({ ...asset })) : [];
+        return {
+          envelopeId: "input-envelope-test-1",
+          sourceChannel,
+          createdAt,
+          parts: [
+            { partId: "part-1", type: "text", role: "user", order: 1, text: draftGoal },
+            ...assets.map((asset, index) => ({
+              partId: `part-${index + 2}`,
+              type: asset.kind === "image" ? "image" : "document",
+              role: "user",
+              order: index + 2,
+              assetId: asset.assetId,
+            })),
+          ],
+          assets,
+        };
+      },
     },
   };
 
@@ -1470,6 +1536,9 @@ function createComposerHarness(options = {}) {
 
   const dom = {
     goalInput: createInputHost("goal-input"),
+    composerInputAssetsButton: createEventHost("composer-input-assets-button"),
+    composerInputAssetsInput: createFileInputHost(),
+    composerInputAssetsList: createEventHost("composer-input-assets-list"),
     form: createEventHost("form"),
     cancelButton: createEventHost("cancel-button"),
     conversation: createEventHost("conversation"),
@@ -1529,6 +1598,10 @@ function createComposerHarness(options = {}) {
     }
     if (url === "/api/tasks/stream") {
       app.runtime.streamRequestCount += 1;
+      app.runtime.streamRequests.push({
+        url,
+        body: JSON.parse(init.body),
+      });
     }
     if (url === "/api/tasks/smoke") {
       app.runtime.smokeRequestCount += 1;
@@ -1561,6 +1634,7 @@ function createThreadRecord({
   title,
   draftGoal = "",
   draftContext = "",
+  draftInputAssets = [],
   composerMode = "chat",
   historyNeedsRehydrate = false,
 }) {
@@ -1569,11 +1643,27 @@ function createThreadRecord({
     title,
     draftGoal,
     draftContext,
+    draftInputAssets,
     composerMode,
     settings: {},
     historyNeedsRehydrate,
     turns: [],
     updatedAt: "2026-03-29T00:00:00.000Z",
+  };
+}
+
+function createFileInputHost() {
+  return {
+    value: "",
+    files: [],
+    listeners: {
+      change: [],
+    },
+    addEventListener(type, handler) {
+      this.listeners[type] ??= [];
+      this.listeners[type].push(handler);
+    },
+    click() {},
   };
 }
 

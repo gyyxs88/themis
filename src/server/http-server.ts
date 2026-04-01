@@ -30,6 +30,7 @@ import {
   handleIdentityStatus,
   handleIdentityTaskSettingsUpdate,
 } from "./http-identity.js";
+import { handleInputAssetUploadHttp } from "./http-input-assets.js";
 import { handleRuntimeConfig } from "./http-runtime-config.js";
 import {
   handleDiagnostics,
@@ -250,6 +251,12 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/auth/logout") {
         return handleAuthLogout(request, response, authRuntime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/input-assets") {
+        return handleInputAssetUploadHttp(request, response, {
+          workingDirectory: runtime.getWorkingDirectory(),
+        });
       }
 
       if (request.method === "POST" && url.pathname === "/api/tasks/run") {

@@ -4,6 +4,7 @@ import { createAuthController, createDefaultAuthState } from "./modules/auth.js"
 import { createDom } from "./modules/dom.js";
 import { createHistoryController } from "./modules/history.js";
 import { createIdentityController } from "./modules/identity.js";
+import { createInputAssetsApi } from "./modules/input-assets.js";
 import { createLayoutController } from "./modules/layout.js";
 import { createDefaultModeSwitchDraftState, createModeSwitchController } from "./modules/mode-switch.js";
 import { createDefaultRuntimeConfigState, createRuntimeConfigController } from "./modules/runtime-config.js";
@@ -53,6 +54,7 @@ const app = {
 
 app.store = createStore(app);
 app.renderer = createRenderer(app);
+app.inputAssets = createInputAssetsApi();
 app.history = createHistoryController(app);
 app.layout = createLayoutController(app);
 app.auth = createAuthController(app);

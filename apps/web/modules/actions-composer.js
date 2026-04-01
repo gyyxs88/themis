@@ -25,6 +25,13 @@ export function createComposerActions(app, streamActions) {
       dom.form.requestSubmit();
     });
 
+    if (dom.inputAssetButton?.addEventListener && dom.inputAssetInput?.addEventListener) {
+      dom.inputAssetButton.addEventListener("click", () => {
+        dom.inputAssetInput.click();
+      });
+      dom.inputAssetInput.addEventListener("change", handleInputAssetSelection);
+    }
+
     dom.cancelButton.addEventListener("click", () => {
       const turn = store.getActiveTurn();
 
@@ -70,6 +77,20 @@ export function createComposerActions(app, streamActions) {
 
     if (dom.composerActionBar?.addEventListener) {
       dom.composerActionBar.addEventListener("click", handleComposerActionBarClick);
+    }
+
+    if (dom.composerInputAssetsButton?.addEventListener) {
+      dom.composerInputAssetsButton.addEventListener("click", () => {
+        dom.composerInputAssetsInput?.click?.();
+      });
+    }
+
+    if (dom.composerInputAssetsInput?.addEventListener) {
+      dom.composerInputAssetsInput.addEventListener("change", handleDraftAssetSelection);
+    }
+
+    if (dom.composerInputAssetsList?.addEventListener) {
+      dom.composerInputAssetsList.addEventListener("click", handleDraftAssetRemovalClick);
     }
 
     if (dom.conversation?.addEventListener) {
@@ -181,6 +202,57 @@ export function createComposerActions(app, streamActions) {
     }
   }
 
+  async function handleDraftAssetSelection(event) {
+    const thread = store.getActiveThread();
+    const files = Array.from(event?.target?.files ?? []);
+
+    if (!thread || !files.length) {
+      return;
+    }
+
+    if (typeof event.target.value === "string") {
+      event.target.value = "";
+    }
+
+    try {
+      const uploadedAssets = [];
+
+      for (const file of files) {
+        uploadedAssets.push(await app.inputAssets.uploadFile(file));
+      }
+
+      thread.draftInputAssets = [...cloneDraftInputAssets(thread.draftInputAssets), ...uploadedAssets];
+      store.touchThread(thread.id);
+      store.saveState();
+      app.renderer.renderAll();
+    } catch (error) {
+      store.setTransientStatus(thread.id, error?.message ?? "上传附件失败");
+      app.renderer.renderAll();
+    }
+  }
+
+  function handleDraftAssetRemovalClick(event) {
+    const removeButton = event.target?.closest?.("[data-draft-input-asset-remove]");
+    const thread = store.getActiveThread();
+
+    if (!removeButton || !thread) {
+      return;
+    }
+
+    const index = Number.parseInt(removeButton.dataset.draftInputAssetRemove ?? "", 10);
+
+    if (!Number.isInteger(index) || index < 0) {
+      return;
+    }
+
+    const nextAssets = cloneDraftInputAssets(thread.draftInputAssets);
+    nextAssets.splice(index, 1);
+    thread.draftInputAssets = nextAssets;
+    store.touchThread(thread.id);
+    store.saveState();
+    app.renderer.renderAll();
+  }
+
   async function handleConversationActionSubmit(event) {
     const form = event.target.closest("form[data-turn-action-kind=\"waiting\"]");
 
@@ -204,6 +276,7 @@ export function createComposerActions(app, streamActions) {
   function requestInterruptSubmit(thread) {
     const draftGoal = typeof thread?.draftGoal === "string" ? thread.draftGoal : "";
     const draftContext = typeof thread?.draftContext === "string" ? thread.draftContext : "";
+    const draftInputAssets = cloneDraftInputAssets(thread?.draftInputAssets);
     const goal = mergeDraftContent(draftGoal, draftContext).trim();
 
     if (!goal) {
@@ -218,6 +291,7 @@ export function createComposerActions(app, streamActions) {
         goal,
         draftGoal,
         draftContext,
+        draftInputAssets,
       });
       return;
     }
@@ -227,6 +301,7 @@ export function createComposerActions(app, streamActions) {
       goal,
       draftGoal,
       draftContext,
+      ...(draftInputAssets.length ? { draftInputAssets } : {}),
     };
     app.renderer.renderAll();
     app.runtime.activeRequestController.abort(new Error("WEB_SUBMIT_REPLACED"));
@@ -234,6 +309,7 @@ export function createComposerActions(app, streamActions) {
 
   async function submitThread(thread, pendingSubmission = null) {
     const goal = (pendingSubmission?.goal ?? mergeDraftContent(thread.draftGoal, thread.draftContext)).trim();
+    const draftInputAssets = pendingSubmission?.draftInputAssets ?? cloneDraftInputAssets(thread?.draftInputAssets);
 
     if (!goal) {
       if (store.getActiveThread()?.id === thread.id) {
@@ -306,6 +382,12 @@ export function createComposerActions(app, streamActions) {
       return;
     }
 
+    if (draftInputAssets.length && !app.inputAssets?.buildDraftEnvelope) {
+      store.setTransientStatus(thread.id, "当前环境还没启用附件输入。");
+      app.renderer.renderAll();
+      return;
+    }
+
     const turn = beginStreamingTurn(thread, goal, {
       pendingSubmission,
       turnOptions: store.buildTaskOptions(thread.settings),
@@ -314,6 +396,14 @@ export function createComposerActions(app, streamActions) {
     try {
       const historyContext = store.shouldBootstrapThread(thread) ? thread.bootstrapTranscript : "";
       const identity = app.identity.getRequestIdentity();
+      const inputEnvelope = draftInputAssets.length
+        ? await app.inputAssets.buildDraftEnvelope({
+          sourceChannel: "web",
+          createdAt: app.utils.nowIso(),
+          draftGoal: goal,
+          draftAssets: draftInputAssets,
+        })
+        : null;
       await submitStreamingRequest(thread, "/api/tasks/stream", {
         source: "web",
         goal,
@@ -322,6 +412,7 @@ export function createComposerActions(app, streamActions) {
         sessionId: thread.id,
         ...(turn.options ? { options: turn.options } : {}),
         ...(historyContext ? { historyContext } : {}),
+        ...(inputEnvelope ? { inputEnvelope } : {}),
       });
     } catch (error) {
       finalizeSubmitError(thread, error);
@@ -435,6 +526,7 @@ export function createComposerActions(app, streamActions) {
     if (resolvedSubmission.consumedComposerDraft) {
       thread.draftGoal = "";
       thread.draftContext = "";
+      thread.draftInputAssets = [];
       dom.goalInput.value = "";
       app.utils.autoResizeTextarea(dom.goalInput);
     }
@@ -611,6 +703,7 @@ export function createComposerActions(app, streamActions) {
 
     thread.draftGoal = "";
     thread.draftContext = "";
+    thread.draftInputAssets = [];
     dom.goalInput.value = "";
     app.utils.autoResizeTextarea(dom.goalInput);
     store.touchThread(thread.id);
@@ -912,6 +1005,41 @@ export function createComposerActions(app, streamActions) {
     await submitThread(targetThread, pending);
   }
 
+  async function handleInputAssetSelection(event) {
+    const thread = store.getActiveThread();
+    const files = Array.from(event?.target?.files ?? []);
+
+    if (!thread || !files.length) {
+      resetInputAssetControl();
+      return;
+    }
+
+    if (!app.inputAssets?.uploadFiles && !app.inputAssets?.uploadFile) {
+      store.setTransientStatus(thread.id, "当前环境还没启用附件上传。");
+      app.renderer.renderAll();
+      resetInputAssetControl();
+      return;
+    }
+
+    try {
+      const uploadedAssets = typeof app.inputAssets.uploadFiles === "function"
+        ? await app.inputAssets.uploadFiles(files)
+        : await Promise.all(files.map((file) => app.inputAssets.uploadFile(file)));
+      thread.draftInputAssets = [
+        ...cloneDraftInputAssets(thread.draftInputAssets),
+        ...cloneDraftInputAssets(uploadedAssets),
+      ];
+      store.touchThread(thread.id);
+      store.saveState();
+      app.renderer.renderAll();
+    } catch (error) {
+      store.setTransientStatus(thread.id, error instanceof Error ? error.message : "附件上传失败。");
+      app.renderer.renderAll();
+    } finally {
+      resetInputAssetControl();
+    }
+  }
+
   function applySuggestion(button) {
     const thread = store.getActiveThread();
 
@@ -1100,6 +1228,7 @@ export function createComposerActions(app, streamActions) {
     if (!pendingSubmission) {
       thread.draftGoal = "";
       thread.draftContext = "";
+      thread.draftInputAssets = [];
       return;
     }
 
@@ -1109,6 +1238,38 @@ export function createComposerActions(app, streamActions) {
 
     if ((thread.draftContext ?? "") === pendingSubmission.draftContext) {
       thread.draftContext = "";
+    }
+
+    if (hasSameDraftAssets(thread.draftInputAssets, pendingSubmission.draftInputAssets)) {
+      thread.draftInputAssets = [];
+    }
+  }
+
+  function cloneDraftInputAssets(draftInputAssets) {
+    if (!Array.isArray(draftInputAssets)) {
+      return [];
+    }
+
+    return draftInputAssets.map((asset) => ({ ...asset }));
+  }
+
+  function hasSameDraftAssets(currentAssets, pendingAssets) {
+    if (!Array.isArray(currentAssets) || !Array.isArray(pendingAssets)) {
+      return !currentAssets?.length && !pendingAssets?.length;
+    }
+
+    if (currentAssets.length !== pendingAssets.length) {
+      return false;
+    }
+
+    return currentAssets.every((asset, index) => (
+      asset?.assetId === pendingAssets[index]?.assetId && asset?.localPath === pendingAssets[index]?.localPath
+    ));
+  }
+
+  function resetInputAssetControl() {
+    if (dom.inputAssetInput) {
+      dom.inputAssetInput.value = "";
     }
   }
 

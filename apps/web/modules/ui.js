@@ -1,5 +1,6 @@
 import {
   renderComposerActionBarMarkup,
+  renderDraftInputAssetsMarkup,
   renderHistoryLoadingState,
   renderStoredSummaryState,
   renderThreadControlDetailsMarkup,
@@ -1068,6 +1069,9 @@ export function createRenderer(app) {
         ...actionBarState,
         mode: effectiveComposerMode,
       }, utils);
+    }
+    if (dom.composerInputAssetsList) {
+      dom.composerInputAssetsList.innerHTML = renderDraftInputAssetsMarkup(thread?.draftInputAssets, utils);
     }
     utils.autoResizeTextarea(dom.goalInput);
     renderComposerAuthNote();
