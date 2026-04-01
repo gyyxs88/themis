@@ -604,6 +604,53 @@ test("runTask 会把 inputEnvelope 文本文档编译进 sdk prompt fallback sec
   }
 });
 
+test("runTask 会把 inputEnvelope 里的额外纯文本 parts 编译进 sdk prompt fallback sections", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-envelope-text-fallback-"));
+  const controlDirectory = join(root, "control");
+  mkdirSync(controlDirectory);
+  writeRuntimeFile(controlDirectory, "README.md", "# control");
+
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const capturedThreadOptions: ThreadOptions[] = [];
+  const capturedPrompts: string[] = [];
+  const sessionStore = createSessionStoreDouble(runtimeStore, capturedThreadOptions, capturedPrompts);
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+    sessionStore,
+  });
+
+  try {
+    await runtime.runTask(createRequest({
+      requestId: "req-runtime-envelope-text-fallback",
+      taskId: "task-runtime-envelope-text-fallback",
+      goal: "请结合这些分段上下文回答",
+      inputEnvelope: {
+        envelopeId: "env-runtime-text-fallback-1",
+        sourceChannel: "web",
+        parts: [
+          { partId: "part-1", type: "text", role: "user", order: 1, text: "第一段上下文：系统已经切到新会话。" },
+          { partId: "part-2", type: "text", role: "user", order: 2, text: "第二段上下文：请保持同一线程继续处理。" },
+        ],
+        assets: [],
+        createdAt: "2026-04-02T10:00:00.000Z",
+      },
+      channelContext: {
+        sessionId: "session-runtime-envelope-text-fallback",
+      },
+    }));
+
+    assert.equal(capturedPrompts.length, 1);
+    assert.match(capturedPrompts[0] ?? "", /Additional envelope text parts:/);
+    assert.match(capturedPrompts[0] ?? "", /第一段上下文：系统已经切到新会话。/);
+    assert.match(capturedPrompts[0] ?? "", /第二段上下文：请保持同一线程继续处理。/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("runTask 在会话工作区失效时会报错", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-runtime-session-workspace-invalid-"));
   const controlDirectory = join(root, "control");

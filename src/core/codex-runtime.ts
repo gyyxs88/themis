@@ -244,7 +244,7 @@ export class CodexTaskRuntime {
       const thread = sessionLease.thread;
       const personalizedProfileContext = this.principalPersonaService.buildPromptContext(principalId);
       const promptRequest = compiledInput ? withoutTaskAttachments(request) : request;
-      const fallbackPromptSections = buildCodexFallbackPromptSections(compiledInput);
+      const fallbackPromptSections = buildCodexFallbackPromptSections(request, compiledInput);
       const prompt = onboardingIntercept
         ? buildBootstrapPrompt(promptRequest, onboardingIntercept, {
           personalizedProfileContext,
@@ -1351,12 +1351,15 @@ function resolveCodexRuntimeInputCapabilities(): RuntimeInputCapabilities {
   };
 }
 
-function buildCodexFallbackPromptSections(compiledInput: CompiledTaskInput | null): string[] {
+function buildCodexFallbackPromptSections(
+  request: TaskRequest,
+  compiledInput: CompiledTaskInput | null,
+): string[] {
   if (!compiledInput) {
     return [];
   }
 
-  const textSections = compiledInput.nativeInputParts
+  const documentTextSections = compiledInput.nativeInputParts
     .filter((part): part is Extract<CompiledTaskInput["nativeInputParts"][number], { type: "text"; assetId?: string }> => (
       part.type === "text" && typeof part.assetId === "string"
     ))
@@ -1366,7 +1369,25 @@ function buildCodexFallbackPromptSections(compiledInput: CompiledTaskInput | nul
       part.text,
     ].join("\n"));
 
-  return [...compiledInput.fallbackPromptSections, ...textSections];
+  const mirroredTextParts = new Set(
+    [request.goal, request.inputText]
+      .map((value) => normalizeOptionalText(value))
+      .filter((value) => value.length > 0),
+  );
+  const extraTextParts = compiledInput.nativeInputParts
+    .filter((part): part is Extract<CompiledTaskInput["nativeInputParts"][number], { type: "text"; assetId?: string }> => (
+      part.type === "text" && typeof part.assetId !== "string"
+    ))
+    .map((part) => normalizeOptionalText(part.text))
+    .filter((text) => text.length > 0 && !mirroredTextParts.has(text));
+  const envelopeTextSections = extraTextParts.length
+    ? [[
+      "Additional envelope text parts:",
+      ...extraTextParts.flatMap((text, index) => [`--- part ${index + 1} ---`, text]),
+    ].join("\n")]
+    : [];
+
+  return [...compiledInput.fallbackPromptSections, ...documentTextSections, ...envelopeTextSections];
 }
 
 function withoutTaskAttachments(request: TaskRequest): TaskRequest {

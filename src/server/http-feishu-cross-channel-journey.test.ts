@@ -126,6 +126,76 @@ interface WithWebAndFeishuServerOptions {
   appServerApprovalPlan?: CrossChannelApprovalPlanEntry[];
 }
 
+function extractComparableAppServerRequestText(input: string | AppServerTurnInputPart[] | undefined): string {
+  const promptText = resolveAppServerPromptText(input);
+  const goalSection = extractPromptSection(promptText, "Goal:");
+
+  if (goalSection) {
+    return goalSection;
+  }
+
+  return promptText.trim();
+}
+
+function resolveAppServerPromptText(input: string | AppServerTurnInputPart[] | undefined): string {
+  if (typeof input === "string") {
+    return input;
+  }
+
+  const textPart = input?.find((part) => part.type === "text");
+
+  if (textPart?.text) {
+    return textPart.text;
+  }
+
+  return JSON.stringify(input ?? []);
+}
+
+function extractPromptSection(promptText: string, heading: string): string | null {
+  const headingToken = `${heading}\n`;
+  const headingIndex = promptText.indexOf(headingToken);
+
+  if (headingIndex < 0) {
+    return null;
+  }
+
+  const start = headingIndex + headingToken.length;
+  const remainder = promptText.slice(start);
+  const boundary = findNextPromptSectionBoundary(remainder);
+  const sectionText = boundary >= 0 ? remainder.slice(0, boundary) : remainder;
+  const normalized = sectionText.trim();
+
+  return normalized ? normalized : null;
+}
+
+function findNextPromptSectionBoundary(text: string): number {
+  const sectionMarkers = [
+    "\n\nAdditional context:\n",
+    "\n\nPrior conversation transcript for this forked session:\n",
+    "\n\nAttachments:\n",
+    "\n\nDocument text fallback:\n",
+    "\n\nPDF fallback context:\n",
+    "\n\nTask context blocks:\n",
+    "\n\nTask context warnings:\n",
+    "\n\nResponse guidance:\n",
+    "\n\nCurrent structural target:\n",
+    "\n\nCollected profile so far:\n",
+    "\n\nLatest user message:\n",
+  ];
+
+  let boundary = -1;
+
+  for (const marker of sectionMarkers) {
+    const markerIndex = text.indexOf(marker);
+
+    if (markerIndex >= 0 && (boundary < 0 || markerIndex < boundary)) {
+      boundary = markerIndex;
+    }
+  }
+
+  return boundary;
+}
+
 test("真实 Web / 飞书跨端旅程会在 Feishu /use 后复用同一 app-server native thread，并保持 history 连续", async () => {
   await withWebAndFeishuServer(async ({ baseUrl, authHeaders, runtimeStore, appServerJourneyState, feishu }) => {
     const sessionId = "session-web-feishu-cross-1";
@@ -171,7 +241,10 @@ test("真实 Web / 飞书跨端旅程会在 Feishu /use 后复用同一 app-serv
     assert.equal(appServerJourneyState.started.length, 1);
     assert.equal(appServerJourneyState.resumed.length, 1);
     assert.equal(appServerJourneyState.resumed[0]?.threadId, threadId);
-    assert.deepEqual(appServerJourneyState.prompts.map((entry) => entry.prompt), [firstGoal, secondGoal]);
+    assert.deepEqual(
+      appServerJourneyState.prompts.map((entry) => extractComparableAppServerRequestText(entry.prompt)),
+      [firstGoal, secondGoal],
+    );
 
     const historyDetailResponse = await fetch(`${baseUrl}/api/history/sessions/${sessionId}`, {
       method: "GET",
@@ -242,7 +315,10 @@ test("真实飞书消息事件入口会让 Web 创建的 session 在 /use 后继
 
     const historyDetailPayload = await waitForHistoryTurnCount(baseUrl, authHeaders, sessionId, 2);
     assert.equal(appServerJourneyState.resumed[0]?.threadId, threadId);
-    assert.deepEqual(appServerJourneyState.prompts.map((entry) => entry.prompt), [firstGoal, secondGoal]);
+    assert.deepEqual(
+      appServerJourneyState.prompts.map((entry) => extractComparableAppServerRequestText(entry.prompt)),
+      [firstGoal, secondGoal],
+    );
     assert.equal(historyDetailPayload.nativeThread?.threadId, threadId);
     assert.equal(historyDetailPayload.nativeThread?.turnCount, 2);
   });
@@ -298,7 +374,10 @@ test("真实飞书消息事件入口会忽略重复 messageId 的普通文本任
     });
 
     assert.equal(appServerJourneyState.resumed.length, 1);
-    assert.deepEqual(appServerJourneyState.prompts.map((entry) => entry.prompt), [firstGoal, secondGoal]);
+    assert.deepEqual(
+      appServerJourneyState.prompts.map((entry) => extractComparableAppServerRequestText(entry.prompt)),
+      [firstGoal, secondGoal],
+    );
     assert.equal(historyDetailPayload.nativeThread?.threadId, threadId);
     assert.equal(historyDetailPayload.nativeThread?.turnCount, 2);
     assert.equal((await readHistoryDetail(baseUrl, authHeaders, sessionId)).turns?.length, 2);
@@ -362,7 +441,10 @@ test("真实飞书消息事件入口会忽略 create_time 更旧的延迟普通�
     assert.equal(finalHistory.nativeThread?.threadId, threadId);
     assert.equal(finalHistory.nativeThread?.turnCount, 2);
     assert.equal(finalHistory.turns?.length, 2);
-    assert.deepEqual(appServerJourneyState.prompts.map((entry) => entry.prompt), [firstGoal, secondGoal]);
+    assert.deepEqual(
+      appServerJourneyState.prompts.map((entry) => extractComparableAppServerRequestText(entry.prompt)),
+      [firstGoal, secondGoal],
+    );
   });
 });
 
@@ -421,7 +503,10 @@ test("真实飞书消息事件入口不会因为 create_time 相等而误丢后�
       assert.deepEqual(historyDetail.turns?.map((turn) => turn.status), ["completed", "completed", "completed"]);
     }
 
-    assert.deepEqual(appServerJourneyState.prompts.map((entry) => entry.prompt), [firstGoal, secondGoal, thirdGoal]);
+    assert.deepEqual(
+      appServerJourneyState.prompts.map((entry) => extractComparableAppServerRequestText(entry.prompt)),
+      [firstGoal, secondGoal, thirdGoal],
+    );
   });
 });
 
@@ -1233,7 +1318,10 @@ test("更长的 shared cross-channel E2E 会在 Web waiting action 由飞书接�
     const historyDetailPayload = await waitForHistoryTurnCount(baseUrl, authHeaders, sessionId, 2);
     assert.equal(appServerJourneyState.started.length, 1);
     assert.equal(appServerJourneyState.resumed[0]?.threadId, threadId);
-    assert.deepEqual(appServerJourneyState.prompts.map((entry) => entry.prompt), [firstGoal, secondGoal]);
+    assert.deepEqual(
+      appServerJourneyState.prompts.map((entry) => extractComparableAppServerRequestText(entry.prompt)),
+      [firstGoal, secondGoal],
+    );
     assert.equal(historyDetailPayload.nativeThread?.threadId, threadId);
     assert.equal(historyDetailPayload.nativeThread?.turnCount, 2);
     assert.deepEqual(historyDetailPayload.turns?.map((turn) => turn.status), ["completed", "completed"]);
@@ -1351,7 +1439,10 @@ test("更长的 shared cross-channel E2E 会在 Web -> Feishu -> Web 连续三�
 
     assert.equal(appServerJourneyState.started.length, 1);
     assert.equal(appServerJourneyState.resumed.length, 2);
-    assert.deepEqual(appServerJourneyState.prompts.map((entry) => entry.prompt), [firstGoal, secondGoal, thirdGoal]);
+    assert.deepEqual(
+      appServerJourneyState.prompts.map((entry) => extractComparableAppServerRequestText(entry.prompt)),
+      [firstGoal, secondGoal, thirdGoal],
+    );
   }, {
     appServerApprovalPlan: [{
       serverRequestId: "server-cross-web-feishu-history-long-1",
@@ -1465,12 +1556,10 @@ test("更密集的 shared cross-channel E2E 会在 Web -> Feishu -> Web -> Feish
 
     assert.equal(appServerJourneyState.started.length, 1);
     assert.equal(appServerJourneyState.resumed.length, 3);
-    assert.deepEqual(appServerJourneyState.prompts.map((entry) => entry.prompt), [
-      firstGoal,
-      secondGoal,
-      thirdGoal,
-      fourthGoal,
-    ]);
+    assert.deepEqual(
+      appServerJourneyState.prompts.map((entry) => extractComparableAppServerRequestText(entry.prompt)),
+      [firstGoal, secondGoal, thirdGoal, fourthGoal],
+    );
   }, {
     appServerApprovalPlan: [{
       serverRequestId: "server-cross-web-feishu-history-long-2",
@@ -1618,7 +1707,10 @@ test("真实飞书消息事件入口会忽略跨会话旧 /use、旧普通文本
     assert.equal(currentHistory.nativeThread?.threadId, currentThreadId);
     assert.equal(currentHistory.nativeThread?.turnCount, 1);
     assert.deepEqual(currentHistory.turns?.map((turn) => turn.goal), [currentGoal]);
-    assert.deepEqual(appServerJourneyState.prompts.map((entry) => entry.prompt), [currentGoal]);
+    assert.deepEqual(
+      appServerJourneyState.prompts.map((entry) => extractComparableAppServerRequestText(entry.prompt)),
+      [currentGoal],
+    );
     assert.deepEqual(appServerJourneyState.respondedApprovals, []);
     assert.deepEqual(feishu.peekMessages(), []);
   });
@@ -1666,10 +1758,10 @@ test("真实飞书消息事件入口会忽略跨会话旧 /use 与旧普通文�
 
     const currentThreadId = runtimeStore.getSession(currentSessionId)?.threadId;
     assert.ok(currentThreadId);
-    assert.deepEqual(appServerJourneyState.prompts.map((entry) => entry.prompt), [
-      "请先建立一个旧会话",
-      "请建立当前正在进行的新会话",
-    ]);
+    assert.deepEqual(
+      appServerJourneyState.prompts.map((entry) => extractComparableAppServerRequestText(entry.prompt)),
+      ["请先建立一个旧会话", "请建立当前正在进行的新会话"],
+    );
 
     await feishu.receiveTextMessage(`/use ${currentSessionId}`, {
       messageId: "message-cross-event-stale-text-combo-new-use-1",
@@ -1698,10 +1790,10 @@ test("真实飞书消息事件入口会忽略跨会话旧 /use 与旧普通文�
     assert.equal(finalHistory.nativeThread?.threadId, currentThreadId);
     assert.equal(finalHistory.nativeThread?.turnCount, 1);
     assert.deepEqual(finalHistory.turns?.map((turn) => turn.goal), ["请建立当前正在进行的新会话"]);
-    assert.deepEqual(appServerJourneyState.prompts.map((entry) => entry.prompt), [
-      "请先建立一个旧会话",
-      "请建立当前正在进行的新会话",
-    ]);
+    assert.deepEqual(
+      appServerJourneyState.prompts.map((entry) => extractComparableAppServerRequestText(entry.prompt)),
+      ["请先建立一个旧会话", "请建立当前正在进行的新会话"],
+    );
     assert.deepEqual(feishu.peekMessages(), []);
   });
 });
