@@ -7,6 +7,7 @@ import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { resolveCodexAuthFilePath, resolveDefaultCodexHome } from "../core/auth-accounts.js";
 import { RuntimeDiagnosticsService, type RuntimeDiagnosticFileStatus } from "../diagnostics/runtime-diagnostics.js";
+import { RuntimeSmokeService } from "../diagnostics/runtime-smoke.js";
 import { McpInspector } from "../mcp/mcp-inspector.js";
 import { PrincipalSkillsService } from "../core/principal-skills-service.js";
 import { WebAccessService } from "../core/web-access.js";
@@ -74,6 +75,10 @@ async function main(args: string[]): Promise<void> {
       await handleStatus();
       return;
     case "doctor":
+      if (subcommand?.trim().toLowerCase() === "smoke") {
+        process.exit(await handleDoctorSmoke(rest));
+      }
+
       await handleDoctor(subcommand, rest);
       return;
     case "config":
@@ -243,13 +248,20 @@ async function handleStatus(): Promise<void> {
 }
 
 async function handleDoctor(subcommand: string | undefined, args: string[]): Promise<void> {
-  const sections = [subcommand, ...args].filter((item): item is string => Boolean(item && item.trim()));
-  if (sections.length > 1) {
-    throw new Error("用法：themis doctor [context|auth|provider|memory|service|mcp]");
+  const selected = subcommand?.trim().toLowerCase();
+
+  if (selected === "smoke") {
+    await handleDoctorSmoke(args);
+    return;
   }
 
-  const selected = sections[0]?.trim().toLowerCase();
-  if (selected && !["context", "auth", "provider", "memory", "service", "mcp"].includes(selected)) {
+  const sections = [subcommand, ...args].filter((item): item is string => Boolean(item && item.trim()));
+  if (sections.length > 1) {
+    throw new Error("用法：themis doctor [context|auth|provider|memory|service|mcp|smoke]");
+  }
+
+  const selectedSection = sections[0]?.trim().toLowerCase();
+  if (selectedSection && !["context", "auth", "provider", "memory", "service", "mcp"].includes(selectedSection)) {
     throw new Error("doctor 子命令仅支持 context / auth / provider / memory / service / mcp。");
   }
 
@@ -267,7 +279,7 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
   });
   const summary = await diagnostics.readSummary();
 
-  if (!selected) {
+  if (!selectedSection) {
     console.log("Themis 运行诊断");
     console.log("");
     console.log(`- 工作目录：${summary.workingDirectory}`);
@@ -280,7 +292,7 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
     return;
   }
 
-  switch (selected) {
+  switch (selectedSection) {
     case "context":
       console.log("Themis 诊断 - context");
       printFileStatuses(summary.context.files);
@@ -327,6 +339,49 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
       return;
     default:
       return;
+  }
+}
+
+async function handleDoctorSmoke(args: string[]): Promise<number> {
+  if (args.length !== 1) {
+    throw new Error("用法：themis doctor smoke <web|feishu|all>");
+  }
+
+  const target = args[0]?.trim().toLowerCase();
+
+  if (!target || !["web", "feishu", "all"].includes(target)) {
+    throw new Error("doctor smoke 子命令仅支持 web / feishu / all。");
+  }
+
+  const smokeService = new RuntimeSmokeService({
+    workingDirectory: cwd,
+    env: process.env,
+  });
+
+  switch (target) {
+    case "web": {
+      const web = await smokeService.runWebSmoke();
+      printWebSmokeResult(web);
+      return web.ok ? 0 : 1;
+    }
+    case "feishu": {
+      const feishu = await smokeService.runFeishuSmoke();
+      printFeishuSmokeResult(feishu);
+      return feishu.ok ? 0 : 1;
+    }
+    case "all": {
+      const all = await smokeService.runAllSmoke();
+      printWebSmokeResult(all.web);
+
+      if (all.feishu) {
+        console.log("");
+        printFeishuSmokeResult(all.feishu);
+      }
+
+      return all.ok ? 0 : 1;
+    }
+    default:
+      throw new Error("doctor smoke 子命令仅支持 web / feishu / all。");
   }
 }
 
@@ -493,6 +548,7 @@ function printHelp(): void {
   console.log("- ./themis check");
   console.log("- ./themis doctor");
   console.log("- ./themis doctor <context|auth|provider|memory|service|mcp>");
+  console.log("- ./themis doctor smoke <web|feishu|all>");
   console.log("- ./themis config list [--show-secrets]");
   console.log("- ./themis config set <KEY> <VALUE>");
   console.log("- ./themis config unset <KEY>");
@@ -515,6 +571,34 @@ function printHelp(): void {
 function printFileStatuses(files: RuntimeDiagnosticFileStatus[]): void {
   for (const file of files) {
     console.log(`${file.path}：${file.status}`);
+  }
+}
+
+function printWebSmokeResult(result: Awaited<ReturnType<RuntimeSmokeService["runWebSmoke"]>>): void {
+  console.log("Themis smoke - web");
+  console.log(`ok：${result.ok ? "yes" : "no"}`);
+  console.log(`baseUrl：${result.baseUrl}`);
+  console.log(`sessionId：${result.sessionId ?? "<none>"}`);
+  console.log(`requestId：${result.requestId ?? "<none>"}`);
+  console.log(`taskId：${result.taskId ?? "<none>"}`);
+  console.log(`actionId：${result.actionId ?? "<none>"}`);
+  console.log(`observedActionRequired：${result.observedActionRequired ? "yes" : "no"}`);
+  console.log(`observedCompleted：${result.observedCompleted ? "yes" : "no"}`);
+  console.log(`historyCompleted：${result.historyCompleted ? "yes" : "no"}`);
+  console.log(`message：${result.message}`);
+}
+
+function printFeishuSmokeResult(result: Awaited<ReturnType<RuntimeSmokeService["runFeishuSmoke"]>>): void {
+  console.log("Themis smoke - feishu");
+  console.log(`ok：${result.ok ? "yes" : "no"}`);
+  console.log(`serviceReachable：${result.serviceReachable ? "yes" : "no"}`);
+  console.log(`feishuConfigReady：${result.feishuConfigReady ? "yes" : "no"}`);
+  console.log(`docPath：${result.docPath}`);
+  console.log(`message：${result.message}`);
+  console.log("nextSteps：");
+
+  for (const [index, step] of result.nextSteps.entries()) {
+    console.log(`${index + 1}. ${step}`);
   }
 }
 
