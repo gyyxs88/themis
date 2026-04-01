@@ -3,6 +3,7 @@ import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import type { CodexCliConfigOverrides } from "./auth-accounts.js";
 import type {
   RuntimeEngine,
+  RuntimeInputCapabilities,
   TaskActionDescriptor,
   TaskActionScope,
   TaskEvent,
@@ -21,6 +22,7 @@ import type {
 } from "../types/index.js";
 import type {
   AppServerReverseRequest,
+  AppServerTurnInputPart,
   AppServerThreadStartParams,
   CodexAppServerNotification,
 } from "./codex-app-server.js";
@@ -31,11 +33,20 @@ import { createTaskEvent, finalizeTaskResult } from "./codex-runtime.js";
 import { IdentityLinkService } from "./identity-link-service.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
 import { buildTaskPrompt } from "./prompt.js";
+import { compileTaskInputForRuntime } from "./runtime-input-compiler.js";
 import { resolveStoredSessionThreadReference } from "./session-thread-reference.js";
 import { validateWorkspacePath } from "./session-workspace.js";
 
 const SESSION_WORKSPACE_UNAVAILABLE_ERROR = "当前会话绑定的工作区不可用，请新建会话后重新设置。";
 const APP_SERVER_AUX_TIMEOUT_MS = 15_000;
+const APP_SERVER_INPUT_CAPABILITIES: RuntimeInputCapabilities = {
+  nativeTextInput: true,
+  nativeImageInput: true,
+  nativeDocumentInput: false,
+  supportedDocumentMimeTypes: [],
+  supportsPdfTextExtraction: true,
+  supportsDocumentPageRasterization: false,
+};
 export const APP_SERVER_TASK_CONFIG_OVERRIDES: CodexCliConfigOverrides = {
   "features.default_mode_request_user_input": true,
 };
@@ -123,6 +134,20 @@ export class AppServerTaskRuntime {
 
     try {
       throwIfAborted(signal);
+      const compiledInput = request.inputEnvelope
+        ? compileTaskInputForRuntime({
+          envelope: request.inputEnvelope,
+          target: {
+            runtimeId: "app-server",
+            capabilities: APP_SERVER_INPUT_CAPABILITIES,
+          },
+        })
+        : null;
+
+      if (compiledInput?.degradationLevel === "blocked") {
+        throw new Error(compiledInput.compileWarnings[0]?.message ?? "当前输入无法发送到 app-server。");
+      }
+
       session = await abortable(() => this.sessionFactory(), signal);
       const activeSession = session;
       throwIfAborted(signal);
@@ -190,8 +215,24 @@ export class AppServerTaskRuntime {
       }));
       throwIfAborted(signal);
 
-      const prompt = buildTaskPrompt(request);
-      const turn = await abortable(() => activeSession.startTurn(threadId, prompt), signal);
+      const promptRequest = compiledInput ? withoutTaskAttachments(request) : request;
+      const prompt = buildTaskPrompt(promptRequest, {
+        fallbackPromptSections: compiledInput?.fallbackPromptSections ?? [],
+      });
+      const turnInput = compiledInput?.nativeInputParts.length
+        ? [
+          {
+            type: "text",
+            text: prompt,
+            text_elements: [],
+          } satisfies AppServerTurnInputPart,
+          ...compiledInput.nativeInputParts.map(mapAppServerTurnInputPart),
+        ]
+        : prompt;
+      const turnSession = activeSession as AppServerTaskRuntimeSession & {
+        startTurn(threadId: string, input: string | AppServerTurnInputPart[]): Promise<{ turnId: string }>;
+      };
+      const turn = await abortable(() => turnSession.startTurn(threadId, turnInput), signal);
       turnCompletion.targetTurnId = turn.turnId;
       await abortable(() => waitForPendingServerRequests(pendingServerRequests), signal);
       await abortable(() => turnCompletion.promise, signal);
@@ -1127,6 +1168,36 @@ function resolveSessionMode(
   }
 
   return storedThreadId ? "resumed" : "created";
+}
+
+function withoutTaskAttachments(request: TaskRequest): TaskRequest {
+  const { attachments: _attachments, ...rest } = request;
+  return rest;
+}
+
+function mapAppServerTurnInputPart(part: {
+  type: "text" | "image" | "document";
+  text?: string;
+  assetPath?: string;
+  mimeType?: string;
+}): AppServerTurnInputPart {
+  if (part.type === "text") {
+    return {
+      type: "text",
+      text: part.text ?? "",
+      text_elements: [],
+    };
+  }
+
+  if (part.type === "image") {
+    return {
+      type: "image",
+      assetPath: part.assetPath ?? "",
+      ...(part.mimeType ? { mimeType: part.mimeType } : {}),
+    };
+  }
+
+  throw new Error("App-server does not support native document input.");
 }
 
 function normalizeSessionId(value: string | undefined): string {

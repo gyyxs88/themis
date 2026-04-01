@@ -19,7 +19,17 @@ interface SessionDoubleState {
   factoryCalls: number;
   started: Array<{ cwd: string }>;
   resumed: Array<{ threadId: string; cwd: string }>;
-  turns: Array<{ threadId: string; prompt: string }>;
+  turns: Array<{
+    threadId: string;
+    prompt: string | null;
+    input: string | Array<{
+      type: "text" | "image";
+      text?: string;
+      text_elements?: [];
+      assetPath?: string;
+      mimeType?: string;
+    }>;
+  }>;
   reviews: Array<{ threadId: string; instructions: string }>;
   steers: Array<{ threadId: string; turnId: string; message: string }>;
   readThreads: Array<{ threadId: string; includeTurns: boolean }>;
@@ -147,7 +157,11 @@ function createSessionFactory(overrides: {
         };
       },
       startTurn: async (threadId, prompt) => {
-        state.turns.push({ threadId, prompt });
+        state.turns.push({
+          threadId,
+          prompt: typeof prompt === "string" ? prompt : null,
+          input: prompt,
+        });
         if (overrides.startTurn) {
           return await overrides.startTurn(state);
         }
@@ -287,6 +301,62 @@ test("AppServerTaskRuntime 会把图片附件写进 startTurn prompt", async () 
     assert.match(state.turns[0]?.prompt ?? "", /帮我看看这张图/);
     assert.match(state.turns[0]?.prompt ?? "", /Attachments:/);
     assert.match(state.turns[0]?.prompt ?? "", /receipt\.jpg/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 会把 inputEnvelope 里的图片作为 native image input 传给 app-server", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-native-image-1",
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    await fixture.runtime.runTask({
+      requestId: "req-app-native-image-1",
+      taskId: "task-app-native-image-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "帮我看图",
+      inputEnvelope: {
+        envelopeId: "env-app-native-image-1",
+        sourceChannel: "web",
+        parts: [
+          { partId: "part-1", type: "text", role: "user", order: 1, text: "帮我看图" },
+          { partId: "part-2", type: "image", role: "user", order: 2, assetId: "asset-image-1" },
+        ],
+        assets: [
+          {
+            assetId: "asset-image-1",
+            kind: "image",
+            mimeType: "image/png",
+            localPath: "/workspace/temp/input-assets/shot.png",
+            sourceChannel: "web",
+            ingestionStatus: "ready",
+          },
+        ],
+        createdAt: "2026-04-01T11:05:00.000Z",
+      },
+      channelContext: { sessionId: "web-session-native-image-1" },
+      createdAt: "2026-04-01T11:05:00.000Z",
+    });
+
+    assert.equal(state.turns.length, 1);
+    assert.equal(Array.isArray(state.turns[0]?.input), true);
+    const input = state.turns[0]?.input as Array<{
+      type: "text" | "image";
+      text?: string;
+      assetPath?: string;
+      mimeType?: string;
+    }>;
+    assert.equal(input[0]?.type, "text");
+    assert.match(input[0]?.text ?? "", /帮我看图/);
+    assert.equal(input.some((part) => part.type === "image"), true);
+    assert.equal(
+      input.find((part) => part.type === "image")?.assetPath,
+      "/workspace/temp/input-assets/shot.png",
+    );
   } finally {
     fixture.cleanup();
   }

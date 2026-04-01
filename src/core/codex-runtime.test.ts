@@ -165,6 +165,51 @@ test("第三方模型未声明图片输入时会阻止图片附件请求", () =>
   }
 });
 
+test("第三方模型未声明图片输入时会阻止 inputEnvelope 里的图片请求", () => {
+  const workingDirectory = mkdtempSync(join(tmpdir(), "themis-runtime-constraints-envelope-"));
+  const registry = new SqliteCodexSessionRegistry({
+    databaseFile: join(workingDirectory, "infra/local/themis.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory,
+    runtimeStore: registry,
+    providerConfigs: [createProviderConfig()],
+  });
+
+  try {
+    assert.throws(() => {
+      (runtime as unknown as {
+        assertThirdPartyModelSupported(request: TaskRequest, providerConfig: OpenAICompatibleProviderConfig): void;
+      }).assertThirdPartyModelSupported(createRequest({
+        options: {
+          accessMode: "third-party",
+          model: "gpt-5.4",
+        },
+        inputEnvelope: {
+          envelopeId: "env-provider-image-1",
+          sourceChannel: "web",
+          parts: [
+            { partId: "part-1", type: "image", role: "user", order: 1, assetId: "asset-image-1" },
+          ],
+          assets: [
+            {
+              assetId: "asset-image-1",
+              kind: "image",
+              mimeType: "image/png",
+              localPath: "/workspace/temp/input-assets/shot.png",
+              sourceChannel: "web",
+              ingestionStatus: "ready",
+            },
+          ],
+          createdAt: "2026-04-01T10:10:00.000Z",
+        },
+      }), createProviderConfig());
+    }, /图片输入/);
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
 test("CodexTaskRuntime 构造时会为现有 auth account 预建 session store，并在 auth 请求中复用", () => {
   withClearedOpenAICompatEnv(() => {
     const workingDirectory = mkdtempSync(join(tmpdir(), "themis-runtime-auth-store-"));

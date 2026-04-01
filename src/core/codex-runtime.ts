@@ -756,7 +756,9 @@ export class CodexTaskRuntime {
       throw new Error("当前第三方模型未声明支持 search tool，已阻止发送。请先把联网搜索改成 disabled，或更换为明确支持该能力的模型。");
     }
 
-    const hasImageAttachment = request.attachments?.some((attachment) => attachment.type === "image") ?? false;
+    const hasImageAttachment = request.inputEnvelope
+      ? request.inputEnvelope.parts.some((part) => part.type === "image")
+      : request.attachments?.some((attachment) => attachment.type === "image") ?? false;
 
     if (hasImageAttachment && capabilities?.imageInput !== true) {
       throw new Error("当前第三方模型未声明支持图片输入，已阻止发送。请先移除图片附件，或更换为明确支持该能力的模型。");

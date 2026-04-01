@@ -6,6 +6,7 @@ import type { PrincipalPersonaOnboardingInterceptResult } from "./principal-pers
 export interface BuildTaskPromptOptions {
   personalizedProfileContext?: string | null;
   taskContext?: ContextBuildResult | null;
+  fallbackPromptSections?: string[] | null;
 }
 
 export function buildTaskPrompt(request: TaskRequest, options: BuildTaskPromptOptions = {}): string {
@@ -39,6 +40,14 @@ export function buildTaskPrompt(request: TaskRequest, options: BuildTaskPromptOp
 
   if (request.attachments?.length) {
     sections.push(`Attachments:\n${formatAttachments(request.attachments)}`);
+  }
+
+  const fallbackPromptSections = options.fallbackPromptSections
+    ?.map((section) => normalizePromptSection(section))
+    .filter((section): section is string => Boolean(section));
+
+  if (fallbackPromptSections?.length) {
+    sections.push(...fallbackPromptSections);
   }
 
   if (taskContextSection) {

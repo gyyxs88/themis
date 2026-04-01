@@ -165,6 +165,20 @@ export interface AppServerReverseRequest {
   params?: unknown;
 }
 
+export interface AppServerTextInputPart {
+  type: "text";
+  text: string;
+  text_elements: [];
+}
+
+export interface AppServerImageInputPart {
+  type: "image";
+  assetPath: string;
+  mimeType?: string;
+}
+
+export type AppServerTurnInputPart = AppServerTextInputPart | AppServerImageInputPart;
+
 interface AppServerModelListResponse {
   data?: unknown;
 }
@@ -481,16 +495,19 @@ export class CodexAppServerSession {
     return normalizeThreadSnapshot(response.thread);
   }
 
-  async startTurn(threadId: string, prompt: string): Promise<{ turnId: string }> {
+  async startTurn(
+    threadId: string,
+    input: string | AppServerTurnInputPart[],
+  ): Promise<{ turnId: string }> {
+    const normalizedInput = typeof input === "string"
+      ? [normalizeAppServerTextInputPart(input)]
+      : input.map((part) => (part.type === "text"
+        ? normalizeAppServerTextInputPart(part.text)
+        : normalizeAppServerImageInputPart(part)));
+
     const response = await this.request<AppServerTurnResponse>("turn/start", {
       threadId,
-      input: [
-        {
-          type: "text",
-          text: prompt,
-          text_elements: [],
-        },
-      ],
+      input: normalizedInput,
     });
 
     return {
@@ -686,6 +703,22 @@ export class CodexAppServerSession {
       });
     });
   }
+}
+
+function normalizeAppServerTextInputPart(text: string): AppServerTextInputPart {
+  return {
+    type: "text",
+    text,
+    text_elements: [],
+  };
+}
+
+function normalizeAppServerImageInputPart(part: AppServerImageInputPart): AppServerImageInputPart {
+  return {
+    type: "image",
+    assetPath: part.assetPath,
+    ...(part.mimeType ? { mimeType: part.mimeType } : {}),
+  };
 }
 
 function normalizeRuntimeDefaults(response: AppServerConfigReadResponse): CodexRuntimeDefaults {
