@@ -5506,23 +5506,38 @@ function mapSessionSummaryRow(row: SessionSummaryRow): StoredSessionHistorySumma
 }
 
 function mapInputAssetRow(row: InputAssetRow): TaskInputAsset {
-  return {
+  const asset: TaskInputAsset = {
     assetId: row.asset_id,
     kind: row.kind === "document" ? "document" : "image",
-    ...(row.name ? { name: row.name } : {}),
     mimeType: row.mime_type,
-    ...(typeof row.size_bytes === "number" ? { sizeBytes: row.size_bytes } : {}),
     localPath: row.local_path,
     sourceChannel: row.source_channel as TaskInputAsset["sourceChannel"],
-    ...(row.source_message_id ? { sourceMessageId: row.source_message_id } : {}),
     ingestionStatus: row.ingestion_status as TaskInputAsset["ingestionStatus"],
-    ...(normalizeTaskInputTextExtraction(safeParseJson(row.text_extraction_json ?? "")) ? {
-      textExtraction: normalizeTaskInputTextExtraction(safeParseJson(row.text_extraction_json ?? "")),
-    } : {}),
-    ...(normalizeTaskInputMetadata(safeParseJson(row.metadata_json ?? "")) ? {
-      metadata: normalizeTaskInputMetadata(safeParseJson(row.metadata_json ?? "")),
-    } : {}),
   };
+
+  if (row.name) {
+    asset.name = row.name;
+  }
+
+  if (typeof row.size_bytes === "number") {
+    asset.sizeBytes = row.size_bytes;
+  }
+
+  if (row.source_message_id) {
+    asset.sourceMessageId = row.source_message_id;
+  }
+
+  const textExtraction = normalizeTaskInputTextExtraction(safeParseJson(row.text_extraction_json ?? ""));
+  if (textExtraction !== undefined) {
+    asset.textExtraction = textExtraction;
+  }
+
+  const metadata = normalizeTaskInputMetadata(safeParseJson(row.metadata_json ?? ""));
+  if (metadata !== undefined) {
+    asset.metadata = metadata;
+  }
+
+  return asset;
 }
 
 function normalizeTaskInputEnvelope(value: unknown): TaskInputEnvelope {
@@ -5538,7 +5553,137 @@ function normalizeTaskInputEnvelope(value: unknown): TaskInputEnvelope {
     return fallback;
   }
 
-  return value as TaskInputEnvelope;
+  const envelopeId = normalizeText(typeof value.envelopeId === "string" ? value.envelopeId : undefined) ?? fallback.envelopeId;
+  const sourceChannel = normalizeText(typeof value.sourceChannel === "string" ? value.sourceChannel : undefined) ?? fallback.sourceChannel;
+  const sourceSessionId = normalizeText(typeof value.sourceSessionId === "string" ? value.sourceSessionId : undefined);
+  const sourceMessageId = normalizeText(typeof value.sourceMessageId === "string" ? value.sourceMessageId : undefined);
+  const createdAt = normalizeText(typeof value.createdAt === "string" ? value.createdAt : undefined) ?? fallback.createdAt;
+  const parts = Array.isArray(value.parts)
+    ? value.parts
+      .map(normalizeTaskInputPart)
+      .filter((part): part is TaskInputEnvelope["parts"][number] => part !== null)
+    : fallback.parts;
+  const assets = Array.isArray(value.assets)
+    ? value.assets
+      .map(normalizeTaskInputAsset)
+      .filter((asset): asset is TaskInputAsset => asset !== null)
+    : fallback.assets;
+
+  return {
+    envelopeId,
+    sourceChannel: sourceChannel as TaskInputEnvelope["sourceChannel"],
+    ...(sourceSessionId ? { sourceSessionId } : {}),
+    ...(sourceMessageId ? { sourceMessageId } : {}),
+    parts,
+    assets,
+    createdAt,
+  };
+}
+
+function normalizeTaskInputPart(value: unknown): TaskInputEnvelope["parts"][number] | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const partId = normalizeText(typeof value.partId === "string" ? value.partId : undefined);
+  const order = typeof value.order === "number" && Number.isFinite(value.order) ? value.order : null;
+
+  if (!partId || order === null) {
+    return null;
+  }
+
+  if (value.type === "text") {
+    const text = normalizeText(typeof value.text === "string" ? value.text : undefined);
+
+    if (!text) {
+      return null;
+    }
+
+    return {
+      partId,
+      type: "text",
+      role: "user",
+      order,
+      text,
+    };
+  }
+
+  if (value.type !== "image" && value.type !== "document") {
+    return null;
+  }
+
+  const assetId = normalizeText(typeof value.assetId === "string" ? value.assetId : undefined);
+
+  if (!assetId) {
+    return null;
+  }
+
+  const caption = normalizeText(typeof value.caption === "string" ? value.caption : undefined);
+
+  return {
+    partId,
+    type: value.type,
+    role: "user",
+    order,
+    assetId,
+    ...(caption ? { caption } : {}),
+  };
+}
+
+function normalizeTaskInputAsset(value: unknown): TaskInputAsset | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const assetId = normalizeText(typeof value.assetId === "string" ? value.assetId : undefined);
+  const kind = value.kind === "document" ? "document" : value.kind === "image" ? "image" : null;
+  const mimeType = normalizeText(typeof value.mimeType === "string" ? value.mimeType : undefined);
+  const localPath = normalizeText(typeof value.localPath === "string" ? value.localPath : undefined);
+  const sourceChannel = normalizeText(typeof value.sourceChannel === "string" ? value.sourceChannel : undefined);
+  const ingestionStatus = value.ingestionStatus === "processing" || value.ingestionStatus === "failed"
+    ? value.ingestionStatus
+    : value.ingestionStatus === "ready"
+      ? "ready"
+      : null;
+
+  if (!assetId || !kind || !mimeType || !localPath || !sourceChannel || !ingestionStatus) {
+    return null;
+  }
+
+  const asset: TaskInputAsset = {
+    assetId,
+    kind,
+    mimeType,
+    localPath,
+    sourceChannel: sourceChannel as TaskInputAsset["sourceChannel"],
+    ingestionStatus,
+  };
+
+  const name = normalizeText(typeof value.name === "string" ? value.name : undefined);
+  if (name) {
+    asset.name = name;
+  }
+
+  if (typeof value.sizeBytes === "number" && Number.isFinite(value.sizeBytes)) {
+    asset.sizeBytes = value.sizeBytes;
+  }
+
+  const sourceMessageId = normalizeText(typeof value.sourceMessageId === "string" ? value.sourceMessageId : undefined);
+  if (sourceMessageId) {
+    asset.sourceMessageId = sourceMessageId;
+  }
+
+  const textExtraction = normalizeTaskInputTextExtraction(value.textExtraction);
+  if (textExtraction !== undefined) {
+    asset.textExtraction = textExtraction;
+  }
+
+  const metadata = normalizeTaskInputMetadata(value.metadata);
+  if (metadata !== undefined) {
+    asset.metadata = metadata;
+  }
+
+  return asset;
 }
 
 function normalizeTurnInputCompileSummary(value: unknown): StoredTurnInputCompileSummary {
