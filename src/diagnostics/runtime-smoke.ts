@@ -438,11 +438,11 @@ function extractCookie(setCookieHeader: string, name: string): string {
 
 async function isServiceReachable(baseUrl: string, fetchImpl: typeof fetch): Promise<boolean> {
   try {
-    const response = await fetchImpl(`${baseUrl}/api/health`, {
-      method: "HEAD",
+    const response = await fetchImpl(`${baseUrl}/`, {
+      method: "GET",
     });
 
-    return response.ok;
+    return response.status < 500;
   } catch {
     return false;
   }

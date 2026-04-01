@@ -296,8 +296,13 @@ test("RuntimeSmokeService.runFeishuSmoke 在缺少 FEISHU_APP_ID / FEISHU_APP_SE
       fetchImpl: async (input) => {
         const url = normalizeUrl(input);
 
-        if (url.endsWith("/api/health")) {
-          return new Response(null, { status: 200 });
+        if (url === "http://127.0.0.1:3100/") {
+          return new Response(null, {
+            status: 302,
+            headers: {
+              location: "/login",
+            },
+          });
         }
 
         throw new Error(`unexpected fetch: ${url}`);
@@ -319,6 +324,41 @@ test("RuntimeSmokeService.runFeishuSmoke 在缺少 FEISHU_APP_ID / FEISHU_APP_SE
   }
 });
 
+test("RuntimeSmokeService.runFeishuSmoke 在根路径返回 302/login 时仍判定服务可达", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-smoke-feishu-login-redirect-"));
+
+  try {
+    const service = createService(root, {
+      env: {
+        FEISHU_APP_ID: "cli_xxx",
+        FEISHU_APP_SECRET: "secret_xxx",
+      },
+      fetchImpl: async (input) => {
+        const url = normalizeUrl(input);
+
+        if (url === "http://127.0.0.1:3100/") {
+          return new Response(null, {
+            status: 302,
+            headers: {
+              location: "/login",
+            },
+          });
+        }
+
+        throw new Error(`unexpected fetch: ${url}`);
+      },
+    });
+
+    const result = await service.runFeishuSmoke();
+
+    assert.equal(result.ok, true);
+    assert.equal(result.serviceReachable, true);
+    assert.equal(result.feishuConfigReady, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("RuntimeSmokeService.runFeishuSmoke 在健康检查返回 500 时判定为不可达", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-runtime-smoke-feishu-health-fail-"));
 
@@ -331,7 +371,7 @@ test("RuntimeSmokeService.runFeishuSmoke 在健康检查返回 500 时判定为�
       fetchImpl: async (input) => {
         const url = normalizeUrl(input);
 
-        if (url.endsWith("/api/health")) {
+        if (url === "http://127.0.0.1:3100/") {
           return new Response(null, { status: 500 });
         }
 

@@ -341,8 +341,10 @@ test("themis doctor smoke feishu 会输出前置检查和 nextSteps", async () =
     server = createServer((req, res) => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
-      if (req.method === "HEAD" && url.pathname === "/api/health") {
-        res.writeHead(200);
+      if (req.method === "GET" && url.pathname === "/") {
+        res.writeHead(302, {
+          Location: "/login",
+        });
         res.end();
         return;
       }
