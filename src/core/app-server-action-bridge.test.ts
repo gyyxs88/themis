@@ -68,6 +68,7 @@ test("AppServerActionBridge 查找同名 actionId 时可以按 scope 限定当�
     scope: {
       sourceChannel: "feishu",
       sessionId: "session-other",
+      principalId: "principal-1",
       userId: "user-1",
     },
   });
@@ -80,6 +81,7 @@ test("AppServerActionBridge 查找同名 actionId 时可以按 scope 限定当�
     scope: {
       sourceChannel: "feishu",
       sessionId: "session-current",
+      principalId: "principal-1",
       userId: "user-1",
     },
   });
@@ -87,11 +89,53 @@ test("AppServerActionBridge 查找同名 actionId 时可以按 scope 限定当�
   assert.equal(bridge.find("approval-shared", {
     sourceChannel: "feishu",
     sessionId: "session-current",
+    principalId: "principal-1",
     userId: "user-1",
   })?.taskId, "task-current");
   assert.equal(bridge.find("approval-shared", {
     sourceChannel: "feishu",
     sessionId: "session-missing",
+    principalId: "principal-1",
+    userId: "user-1",
+  }), null);
+});
+
+test("AppServerActionBridge 会用 principalId 隔离同 session 同 userId 的 waiting action", () => {
+  const bridge = new AppServerActionBridge();
+
+  bridge.register({
+    taskId: "task-other-principal",
+    requestId: "req-other-principal",
+    actionId: "approval-shared-principal",
+    actionType: "approval",
+    prompt: "Allow other principal command?",
+    scope: {
+      sessionId: "session-current",
+      principalId: "principal-other",
+      userId: "user-1",
+    },
+  });
+  bridge.register({
+    taskId: "task-current-principal",
+    requestId: "req-current-principal",
+    actionId: "approval-shared-principal",
+    actionType: "approval",
+    prompt: "Allow current principal command?",
+    scope: {
+      sessionId: "session-current",
+      principalId: "principal-current",
+      userId: "user-1",
+    },
+  });
+
+  assert.equal(bridge.find("approval-shared-principal", {
+    sessionId: "session-current",
+    principalId: "principal-current",
+    userId: "user-1",
+  })?.taskId, "task-current-principal");
+  assert.equal(bridge.find("approval-shared-principal", {
+    sessionId: "session-current",
+    principalId: "principal-missing",
     userId: "user-1",
   }), null);
 });
