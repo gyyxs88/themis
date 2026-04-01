@@ -36,6 +36,7 @@ export function translateAppServerNotification(
       status: "running",
       message,
       payload: {
+        threadEventType: "item.completed",
         itemType: "agent_message",
         itemId,
         itemText,

@@ -29,6 +29,7 @@ export class FeishuTaskMessageBridge {
   private readonly progressFlushTimeoutMs: number;
   private currentPlaceholderMessageId: string | null = null;
   private currentPlaceholderUpdatable = false;
+  private pendingProgressItemId: string | null = null;
   private pendingProgressText: string | null = null;
   private pendingFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingFlushOperation: Promise<void> | null = null;
@@ -109,7 +110,7 @@ export class FeishuTaskMessageBridge {
     }
 
     this.deliveredProgress.set(itemId, text);
-    await this.deliverProgressText(text);
+    await this.deliverProgressText(itemId, text);
   }
 
   private async deliverResult(message: FeishuDeliveryMessage): Promise<void> {
@@ -145,7 +146,7 @@ export class FeishuTaskMessageBridge {
     await this.deliverTerminalText(text);
   }
 
-  private async deliverProgressText(text: string): Promise<void> {
+  private async deliverProgressText(itemId: string, text: string): Promise<void> {
     const normalizedText = normalizeText(text);
 
     if (!normalizedText) {
@@ -154,10 +155,11 @@ export class FeishuTaskMessageBridge {
 
     await this.cancelScheduledPendingFlush();
 
-    if (this.pendingProgressText) {
+    if (this.pendingProgressText && this.pendingProgressItemId !== itemId) {
       await this.flushPendingProgressAndKeepPlaceholder();
     }
 
+    this.pendingProgressItemId = itemId;
     this.pendingProgressText = normalizedText;
     this.schedulePendingFlush();
   }
@@ -172,6 +174,7 @@ export class FeishuTaskMessageBridge {
     await this.cancelScheduledPendingFlush();
 
     const pendingProgressText = this.pendingProgressText;
+    this.pendingProgressItemId = null;
     this.pendingProgressText = null;
 
     if (!pendingProgressText) {
@@ -196,6 +199,7 @@ export class FeishuTaskMessageBridge {
     }
 
     await this.cancelScheduledPendingFlush();
+    this.pendingProgressItemId = null;
     this.pendingProgressText = null;
     await this.commitCurrentPlaceholder(normalizedText);
   }
@@ -276,6 +280,7 @@ export class FeishuTaskMessageBridge {
     }
 
     await this.commitCurrentPlaceholder(pendingProgressText);
+    this.pendingProgressItemId = null;
     this.pendingProgressText = null;
     await this.ensureCurrentPlaceholder();
   }

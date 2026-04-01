@@ -16,6 +16,7 @@ test("agent 文本增量会翻译成现有 agent_message 事件元数据", () =>
   assert.equal(translated?.status, "running");
   assert.equal(translated?.payload?.itemType, "agent_message");
   assert.equal(translated?.payload?.itemId, "item-1");
+  assert.equal(translated?.payload?.threadEventType, "item.completed");
 });
 
 test("同一 itemId 的多次 delta 在提供缓存时会累计成完整文本", () => {

@@ -1268,6 +1268,7 @@ test("AppServerTaskRuntime 会把同一 agentMessage item 的 delta 累计成完
     assert.equal(storedProgressEvents.length, 1);
     assert.equal(storedProgressEvents[0]?.message, "你好");
     assert.deepEqual(JSON.parse(storedProgressEvents[0]?.payloadJson ?? "{}"), {
+      threadEventType: "item.completed",
       itemType: "agent_message",
       itemId: "item-app-accumulate-1",
       itemText: "你好",

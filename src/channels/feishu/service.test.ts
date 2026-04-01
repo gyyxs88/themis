@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { CodexRuntimeCatalog } from "../../core/codex-app-server.js";
+import type { CodexAppServerNotification, CodexRuntimeCatalog } from "../../core/codex-app-server.js";
 import { AppServerActionBridge } from "../../core/app-server-action-bridge.js";
 import { AppServerTaskRuntime } from "../../core/app-server-task-runtime.js";
 import { IdentityLinkService } from "../../core/identity-link-service.js";
@@ -882,6 +882,121 @@ test("飞书普通任务在 app-server runtime 下仍保持占位、顺序缓冲
       sdk: 0,
       appServer: 1,
     });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书真实 app-server delta 正文不会被渲染成任务状态更新", async () => {
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      runtimeStore,
+      taskRuntimeCalls,
+      actionBridge,
+    }) => {
+      let notificationHandler: ((notification: CodexAppServerNotification) => void) | null = null;
+
+      const runtime = new AppServerTaskRuntime({
+        runtimeStore,
+        actionBridge,
+        sessionFactory: () => ({
+          async initialize() {},
+          async startThread() {
+            return { threadId: "thread-feishu-delta-1" };
+          },
+          async resumeThread(threadId) {
+            return { threadId };
+          },
+          async startTurn(threadId) {
+            notificationHandler?.({
+              method: "item/agentMessage/delta",
+              params: {
+                itemId: "item-feishu-delta-1",
+                delta: "先读取",
+                text: "先读取",
+              },
+            });
+            notificationHandler?.({
+              method: "item/agentMessage/delta",
+              params: {
+                itemId: "item-feishu-delta-1",
+                delta: "先读取 `using-superpowers`",
+                text: "先读取 `using-superpowers`",
+              },
+            });
+
+            setTimeout(() => {
+              notificationHandler?.({
+                method: "item/completed",
+                params: {
+                  threadId,
+                  turnId: "turn-feishu-delta-1",
+                  item: {
+                    type: "agentMessage",
+                    id: "item-feishu-delta-final-1",
+                    text: "先读取 `using-superpowers`",
+                    phase: "final_answer",
+                    memoryCitation: null,
+                  },
+                },
+              });
+              notificationHandler?.({
+                method: "turn/completed",
+                params: {
+                  threadId,
+                  turn: {
+                    id: "turn-feishu-delta-1",
+                    items: [],
+                    status: "completed",
+                    error: null,
+                  },
+                },
+              });
+            }, 0);
+
+            return { turnId: "turn-feishu-delta-1" };
+          },
+          async close() {},
+          onNotification(handler) {
+            notificationHandler = handler;
+            return () => {
+              if (notificationHandler === handler) {
+                notificationHandler = null;
+              }
+            };
+          },
+          onServerRequest() {},
+        }),
+      });
+
+      return {
+        runTask: async (request, hooks = {}) => {
+          taskRuntimeCalls.appServer += 1;
+          return await runtime.runTask(request, hooks);
+        },
+        getRuntimeStore: () => runtime.getRuntimeStore(),
+        getIdentityLinkService: () => runtime.getIdentityLinkService(),
+        getPrincipalSkillsService: () => runtime.getPrincipalSkillsService(),
+        forkThread: runtime.forkThread.bind(runtime),
+        readThreadSnapshot: runtime.readThreadSnapshot?.bind(runtime),
+        startReview: runtime.startReview?.bind(runtime),
+        steerTurn: runtime.steerTurn?.bind(runtime),
+      };
+    },
+  } as FeishuHarnessConfig);
+
+  try {
+    await harness.handleIncomingText("请复现飞书增量正文");
+
+    const messages = harness.takeMessages();
+    assert.deepEqual(messages, [
+      "处理中...",
+      "先读取 `using-superpowers`",
+    ]);
+    assert.match(messages.join("\n"), /using-superpowers/);
+    assert.doesNotMatch(messages.join("\n"), /任务状态更新/);
+    assert.doesNotMatch(messages.join("\n"), /系统继续处理中/);
   } finally {
     harness.cleanup();
   }
