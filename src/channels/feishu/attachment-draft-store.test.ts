@@ -470,7 +470,7 @@ test("FeishuAttachmentDraftStore 默认使用本地路径", () => {
 
   try {
     process.chdir(root);
-    const draftPath = join(root, "infra/local/feishu-attachment-drafts.json");
+    const draftPath = join(process.cwd(), "infra/local/feishu-attachment-drafts.json");
 
     const store = new FeishuAttachmentDraftStore({
       now: () => now,
