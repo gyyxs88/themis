@@ -190,6 +190,7 @@ interface AppServerAccountRateLimitsResponse {
 
 interface AppServerThreadResponse {
   threadId?: unknown;
+  thread?: unknown;
 }
 
 interface AppServerThreadForkResponse {
@@ -202,6 +203,7 @@ interface AppServerThreadReadResponse {
 
 interface AppServerTurnResponse {
   turnId?: unknown;
+  turn?: unknown;
 }
 
 interface AppServerReviewStartResponse {
@@ -377,7 +379,7 @@ export class CodexAppServerSession {
         version: "0.1.0",
       },
       capabilities: {
-        experimentalApi: false,
+        experimentalApi: true,
       },
     });
   }
@@ -429,7 +431,10 @@ export class CodexAppServerSession {
     });
 
     return {
-      threadId: requireText(response.threadId, "codex app-server thread/start did not return a threadId."),
+      threadId: requireText(
+        normalizeOptionalText(response.threadId) ?? extractThreadId(response.thread),
+        "codex app-server thread/start did not return a threadId.",
+      ),
     };
   }
 
@@ -441,7 +446,10 @@ export class CodexAppServerSession {
     });
 
     return {
-      threadId: requireText(response.threadId, "codex app-server thread/resume did not return a threadId."),
+      threadId: requireText(
+        normalizeOptionalText(response.threadId) ?? extractThreadId(response.thread),
+        "codex app-server thread/resume did not return a threadId.",
+      ),
     };
   }
 
@@ -476,11 +484,20 @@ export class CodexAppServerSession {
   async startTurn(threadId: string, prompt: string): Promise<{ turnId: string }> {
     const response = await this.request<AppServerTurnResponse>("turn/start", {
       threadId,
-      prompt,
+      input: [
+        {
+          type: "text",
+          text: prompt,
+          text_elements: [],
+        },
+      ],
     });
 
     return {
-      turnId: requireText(response.turnId, "codex app-server turn/start did not return a turnId."),
+      turnId: requireText(
+        normalizeOptionalText(response.turnId) ?? extractTurnId(response.turn),
+        "codex app-server turn/start did not return a turnId.",
+      ),
     };
   }
 

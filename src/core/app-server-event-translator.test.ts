@@ -18,6 +18,33 @@ test("agent 文本增量会翻译成现有 agent_message 事件元数据", () =>
   assert.equal(translated?.payload?.itemId, "item-1");
 });
 
+test("同一 itemId 的多次 delta 在提供缓存时会累计成完整文本", () => {
+  const cache = new Map<string, string>();
+  const first = translateAppServerNotification("task-1", "req-1", {
+    method: "item/agentMessage/delta",
+    params: {
+      itemId: "item-accumulate-1",
+      delta: "你",
+    },
+  }, {
+    agentMessageTextByItemId: cache,
+  });
+  const second = translateAppServerNotification("task-1", "req-1", {
+    method: "item/agentMessage/delta",
+    params: {
+      itemId: "item-accumulate-1",
+      delta: "好",
+    },
+  }, {
+    agentMessageTextByItemId: cache,
+  });
+
+  assert.equal(first?.message, "你");
+  assert.equal(first?.payload?.itemText, "你");
+  assert.equal(second?.message, "你好");
+  assert.equal(second?.payload?.itemText, "你好");
+});
+
 test("未知通知会返回 null", () => {
   const translated = translateAppServerNotification("task-1", "req-1", {
     method: "thread/started",

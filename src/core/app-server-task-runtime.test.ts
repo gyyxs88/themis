@@ -145,7 +145,9 @@ function createSessionFactory(overrides: {
         if (overrides.startTurn) {
           return await overrides.startTurn(state);
         }
-        return { turnId: "turn-app-1" };
+        const started = { turnId: "turn-app-1" };
+        scheduleCompletedTurn(state, started.turnId);
+        return started;
       },
       close: async () => {
         state.closed += 1;
@@ -194,6 +196,37 @@ function createDeferred(): {
   return { promise, resolve };
 }
 
+function scheduleCompletedTurn(
+  state: SessionDoubleState,
+  turnId: string,
+  options: {
+    threadId?: string;
+    status?: "completed" | "failed" | "interrupted";
+    errorMessage?: string | null;
+  } = {},
+): void {
+  setTimeout(() => {
+    state.notificationHandler?.({
+      method: "turn/completed",
+      params: {
+        threadId: options.threadId ?? "thread-app-test",
+        turn: {
+          id: turnId,
+          items: [],
+          status: options.status ?? "completed",
+          error: options.errorMessage
+            ? {
+              message: options.errorMessage,
+              codexErrorInfo: null,
+              additionalDetails: null,
+            }
+            : null,
+        },
+      },
+    });
+  }, 0);
+}
+
 test("AppServerTaskRuntime 会按真实 Web channelSessionKey 解析 conversation，并以 created 模式启动线程", async () => {
   const { state, sessionFactory } = createSessionFactory({
     startThreadId: "thread-app-created",
@@ -216,6 +249,120 @@ test("AppServerTaskRuntime 会按真实 Web channelSessionKey 解析 conversatio
     assert.equal(readSessionPayload(result).sessionId, "web-session-created-1");
     assert.equal(readSessionPayload(result).threadId, "thread-app-created");
     assert.equal(fixture.runtimeStore.resolveThreadId("web-session-created-1"), "thread-app-created");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 会把 item/completed 里的 final_answer 收口成最终结果，而不是回退成用户 goal", async () => {
+  const { sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-final-answer",
+    startTurn: async (state) => {
+      state.notificationHandler?.({
+        method: "item/completed",
+        params: {
+          item: {
+            type: "agentMessage",
+            id: "msg-commentary-1",
+            text: "先检查上下文。",
+            phase: "commentary",
+            memoryCitation: null,
+          },
+          threadId: "thread-app-final-answer",
+          turnId: "turn-app-final-answer-1",
+        },
+      });
+      state.notificationHandler?.({
+        method: "item/completed",
+        params: {
+          item: {
+            type: "agentMessage",
+            id: "msg-final-1",
+            text: "你好\n\n这里是最终回答。",
+            phase: "final_answer",
+            memoryCitation: null,
+          },
+          threadId: "thread-app-final-answer",
+          turnId: "turn-app-final-answer-1",
+        },
+      });
+      scheduleCompletedTurn(state, "turn-app-final-answer-1", {
+        threadId: "thread-app-final-answer",
+      });
+      return { turnId: "turn-app-final-answer-1" };
+    },
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    const result = await fixture.runtime.runTask({
+      requestId: "req-app-final-answer-1",
+      taskId: "task-app-final-answer-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "请打个招呼",
+      channelContext: { channelSessionKey: "web-session-final-answer-1" },
+      createdAt: "2026-04-01T10:00:00.000Z",
+    });
+
+    assert.equal(result.summary, "你好");
+    assert.equal(result.output, "你好\n\n这里是最终回答。");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 会等待异步到达的 turn/completed，再用 final_answer 收口", async () => {
+  const { sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-async-final-answer",
+    startTurn: async (state) => {
+      setTimeout(() => {
+        state.notificationHandler?.({
+          method: "item/completed",
+          params: {
+            item: {
+              type: "agentMessage",
+              id: "msg-final-async-1",
+              text: "你好\n\n这是异步完成的最终回答。",
+              phase: "final_answer",
+              memoryCitation: null,
+            },
+            threadId: "thread-app-async-final-answer",
+            turnId: "turn-app-async-final-answer-1",
+          },
+        });
+        state.notificationHandler?.({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-app-async-final-answer",
+            turn: {
+              id: "turn-app-async-final-answer-1",
+              items: [],
+              status: "completed",
+              error: null,
+            },
+          },
+        });
+      }, 0);
+
+      return { turnId: "turn-app-async-final-answer-1" };
+    },
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    const result = await fixture.runtime.runTask({
+      requestId: "req-app-async-final-answer-1",
+      taskId: "task-app-async-final-answer-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "请异步打个招呼",
+      channelContext: { channelSessionKey: "web-session-async-final-answer-1" },
+      createdAt: "2026-04-01T10:05:00.000Z",
+    });
+
+    assert.equal(result.summary, "你好");
+    assert.equal(result.output, "你好\n\n这是异步完成的最终回答。");
   } finally {
     fixture.cleanup();
   }
@@ -714,6 +861,9 @@ test("AppServerTaskRuntime 会把 approval reverse request 转成等待中的 ac
         },
       });
       await approvalResolved.promise;
+      scheduleCompletedTurn(sessionState, "turn-app-approval-1", {
+        threadId: "thread-app-approval-1",
+      });
       return { turnId: "turn-app-approval-1" };
     },
   });
@@ -949,6 +1099,7 @@ test("AppServerTaskRuntime 会按顺序等待异步 onEvent，再进入 finalize
           delta: "hello from app server",
         },
       });
+      scheduleCompletedTurn(state, "turn-app-3");
       return { turnId: "turn-app-3" };
     },
   });
@@ -1034,6 +1185,95 @@ test("AppServerTaskRuntime 会按 session workspace 解析执行目录", async (
   }
 });
 
+test("AppServerTaskRuntime 会把同一 agentMessage item 的 delta 累计成完整文本并持久化", async () => {
+  const progressEvents: Array<{ message: string | undefined; itemText: string | undefined }> = [];
+  const { sessionFactory } = createSessionFactory({
+    startTurn: async (state) => {
+      state.notificationHandler?.({
+        method: "item/agentMessage/delta",
+        params: {
+          itemId: "item-app-accumulate-1",
+          delta: "你",
+        },
+      });
+      state.notificationHandler?.({
+        method: "item/agentMessage/delta",
+        params: {
+          itemId: "item-app-accumulate-1",
+          delta: "好",
+        },
+      });
+      state.notificationHandler?.({
+        method: "item/completed",
+        params: {
+          item: {
+            type: "agentMessage",
+            id: "msg-final-accumulate-1",
+            text: "你好",
+            phase: "final_answer",
+            memoryCitation: null,
+          },
+          threadId: "thread-app-accumulate-1",
+          turnId: "turn-app-accumulate-1",
+        },
+      });
+      scheduleCompletedTurn(state, "turn-app-accumulate-1", {
+        threadId: "thread-app-accumulate-1",
+      });
+      return { turnId: "turn-app-accumulate-1" };
+    },
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    await fixture.runtime.runTask({
+      requestId: "req-app-accumulate-1",
+      taskId: "task-app-accumulate-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "请打个招呼",
+      channelContext: { channelSessionKey: "web-session-accumulate-1" },
+      createdAt: "2026-04-01T10:15:00.000Z",
+    }, {
+      onEvent: async (event) => {
+        if (event.type !== "task.progress") {
+          return;
+        }
+
+        progressEvents.push({
+          message: event.message,
+          itemText: typeof event.payload?.itemText === "string" ? event.payload.itemText : undefined,
+        });
+      },
+    });
+
+    assert.deepEqual(progressEvents, [
+      {
+        message: "你",
+        itemText: "你",
+      },
+      {
+        message: "你好",
+        itemText: "你好",
+      },
+    ]);
+
+    const storedProgressEvents = fixture.runtimeStore
+      .listTurnEvents("req-app-accumulate-1")
+      .filter((event) => event.type === "task.progress");
+
+    assert.equal(storedProgressEvents.length, 1);
+    assert.equal(storedProgressEvents[0]?.message, "你好");
+    assert.deepEqual(JSON.parse(storedProgressEvents[0]?.payloadJson ?? "{}"), {
+      itemType: "agent_message",
+      itemId: "item-app-accumulate-1",
+      itemText: "你好",
+    });
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("AppServerTaskRuntime 在 onEvent 阻塞时也会响应外部 abort", { timeout: 400 }, async () => {
   const controller = new AbortController();
   const { state, sessionFactory } = createSessionFactory({
@@ -1109,6 +1349,7 @@ test("AppServerTaskRuntime 的 timeoutMs 会打断 notification event queue 阻�
           delta: "progress from notification",
         },
       });
+      scheduleCompletedTurn(sessionState, "turn-app-notification-timeout");
       return { turnId: "turn-app-notification-timeout" };
     },
   });

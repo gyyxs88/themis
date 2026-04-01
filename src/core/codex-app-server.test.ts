@@ -193,6 +193,33 @@ test("resumeThread 在缺少 threadId 时会抛明确错误", async () => {
   );
 });
 
+test("initialize 会声明 experimentalApi capability，允许后续线程启用扩展历史持久化", async () => {
+  const { session } = createSessionStub();
+  const calls: Array<{ method: string; params: unknown }> = [];
+
+  session.request = async (method: string, params: unknown) => {
+    calls.push({ method, params });
+    return {};
+  };
+
+  await session.initialize();
+
+  assert.deepEqual(calls, [
+    {
+      method: "initialize",
+      params: {
+        clientInfo: {
+          name: "themis-webui",
+          version: "0.1.0",
+        },
+        capabilities: {
+          experimentalApi: true,
+        },
+      },
+    },
+  ]);
+});
+
 test("startThread 和 resumeThread 会补齐持久化扩展历史所需参数", async () => {
   const { session } = createSessionStub();
   const calls: Array<{ method: string; params: unknown }> = [];
@@ -232,6 +259,34 @@ test("startThread 和 resumeThread 会补齐持久化扩展历史所需参数", 
       },
     },
   ]);
+});
+
+test("startThread 和 resumeThread 会兼容当前 app-server 返回的 thread.id 结构", async () => {
+  const { session } = createSessionStub();
+
+  session.request = async () => ({
+    thread: {
+      id: "thread-structured-1",
+    },
+  });
+
+  await assert.deepEqual(
+    await session.startThread({
+      cwd: "/workspace/demo",
+    }),
+    {
+      threadId: "thread-structured-1",
+    },
+  );
+
+  await assert.deepEqual(
+    await session.resumeThread("thread-source-1", {
+      cwd: "/workspace/demo",
+    }),
+    {
+      threadId: "thread-structured-1",
+    },
+  );
 });
 
 test("forkThread 和 readThread 会规范化 thread 响应", async () => {
@@ -296,6 +351,46 @@ test("forkThread 和 readThread 会规范化 thread 响应", async () => {
       },
     ],
   });
+});
+
+test("startTurn 会按当前 app-server 协议发送 input，并兼容 turn.id 响应", async () => {
+  const { session } = createSessionStub();
+  const calls: Array<{ method: string; params: unknown }> = [];
+
+  session.request = async (method: string, params: unknown) => {
+    calls.push({ method, params });
+
+    if (method === "turn/start") {
+      return {
+        turn: {
+          id: "turn-start-1",
+        },
+      };
+    }
+
+    throw new Error(`unexpected method: ${method}`);
+  };
+
+  const started = await session.startTurn("thread-1", "hello");
+
+  assert.deepEqual(started, {
+    turnId: "turn-start-1",
+  });
+  assert.deepEqual(calls, [
+    {
+      method: "turn/start",
+      params: {
+        threadId: "thread-1",
+        input: [
+          {
+            type: "text",
+            text: "hello",
+            text_elements: [],
+          },
+        ],
+      },
+    },
+  ]);
 });
 
 test("startReview 和 steerTurn 会按 app-server 协议发送最小参数", async () => {

@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.59.0",
-    "@openai/codex-sdk": "0.117.0-alpha.12",
+    "@openai/codex-sdk": "^0.118.0",
     "better-sqlite3": "^12.8.0"
   }
 }

@@ -339,6 +339,7 @@ export function createStore(app) {
     resolveTopRiskState: helpers.resolveTopRiskState,
     resolveTurnActionState: helpers.resolveTurnActionState,
     resolveComposerActionBarState: helpers.resolveComposerActionBarState,
+    resolveThreadControlState: helpers.resolveThreadControlState,
     setTransientStatus,
     clearTransientStatus,
     resolveTransientStatus,

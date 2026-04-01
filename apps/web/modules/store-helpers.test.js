@@ -429,6 +429,60 @@ test("setThreadComposerMode 会归一化并持久化线程级 composerMode，缺
   }
 });
 
+test("createStore 会暴露 resolveThreadControlState，供 UI 渲染线程控制面板使用", () => {
+  const storageKey = "themis-store-thread-control-export-test";
+  const storage = createLocalStorageMock({
+    [storageKey]: JSON.stringify({
+      activeThreadId: "thread-control",
+      threads: [
+        {
+          id: "thread-control",
+          title: "线程控制会话",
+          createdAt: "2026-03-29T00:00:00.000Z",
+          updatedAt: "2026-03-29T00:00:00.000Z",
+          composerMode: "chat",
+          threadOrigin: "attached",
+          serverThreadId: "server-thread-control",
+          settings: {},
+          turns: [
+            {
+              id: "turn-control",
+              state: "waiting",
+              pendingAction: {
+                actionId: "action-control",
+                actionType: "user-input",
+                prompt: "请补充信息",
+              },
+            },
+          ],
+        },
+      ],
+    }),
+  });
+  const originalLocalStorage = globalThis.localStorage;
+  globalThis.localStorage = storage;
+
+  try {
+    const app = createStoreAppHarness(storageKey);
+    const store = createStore(app);
+
+    assert.equal(typeof store.resolveThreadControlState, "function");
+    assert.deepEqual(store.resolveThreadControlState(store.getActiveThread()), {
+      status: { kind: "waiting", label: "等待处理中的 action" },
+      source: { kind: "attached", label: "已接入" },
+      conversationId: "thread-control",
+      joinHint: "切走后只是离开当前线程视图，不会改变目标线程真实执行状态。",
+      details: [
+        { label: "conversationId", value: "thread-control" },
+        { label: "serverThreadId", value: "server-thread-control" },
+        { label: "来源", value: "已接入" },
+      ],
+    });
+  } finally {
+    globalThis.localStorage = originalLocalStorage;
+  }
+});
+
 test("resolveTopRiskState 会按 waiting、当前恢复、其他恢复的优先级返回顶部任务条状态", () => {
   const app = createAppHarness();
   app.runtime.restoredActionHydrationThreadId = "thread-current";

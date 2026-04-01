@@ -99,6 +99,12 @@ export class AppServerTaskRuntime {
     let unsubscribeServerRequest: (() => void) | undefined;
     let sessionMode: "created" | "resumed" | "ephemeral" = "ephemeral";
     let resolvedThreadId: string | undefined;
+    const responseArtifacts: AppServerResponseArtifacts = {
+      latestAssistantMessage: "",
+      finalAnswer: "",
+    };
+    const agentMessageTextByItemId = new Map<string, string>();
+    const turnCompletion = createAppServerTurnCompletionState();
     const pendingServerRequests = new Set<Promise<void>>();
     const sessionId = normalizeSessionId(request.channelContext.sessionId);
 
@@ -116,7 +122,11 @@ export class AppServerTaskRuntime {
       await abortable(() => activeSession.initialize(), signal);
 
       unsubscribeNotification = toUnsubscribe(activeSession.onNotification((notification) => {
-        const event = translateAppServerNotification(taskId, request.requestId, notification);
+        collectAppServerResponseArtifacts(notification, responseArtifacts);
+        observeAppServerTurnCompletion(notification, turnCompletion);
+        const event = translateAppServerNotification(taskId, request.requestId, notification, {
+          agentMessageTextByItemId,
+        });
 
         if (!event) {
           return;
@@ -173,16 +183,20 @@ export class AppServerTaskRuntime {
       }));
       throwIfAborted(signal);
 
-      await abortable(() => activeSession.startTurn(threadId, request.goal), signal);
+      const turn = await abortable(() => activeSession.startTurn(threadId, request.goal), signal);
+      turnCompletion.targetTurnId = turn.turnId;
       await abortable(() => waitForPendingServerRequests(pendingServerRequests), signal);
+      await abortable(() => turnCompletion.promise, signal);
       await abortable(() => eventDelivery.flush(), signal);
       throwIfAborted(signal);
 
+      const output = resolveAppServerFinalOutput(responseArtifacts);
       const baseResult: TaskResult = {
         taskId,
         requestId: request.requestId,
         status: "completed",
-        summary: request.goal,
+        summary: summarizeAppServerResponse(output),
+        ...(output ? { output } : {}),
         structuredOutput: {
           session: {
             sessionId: sessionId || null,
@@ -473,13 +487,13 @@ export class AppServerTaskRuntime {
 
         if (input.signal.aborted) {
           await input.session.rejectServerRequest(input.serverRequest.id, rejectionError);
-        } else {
-          await abortable(
-            () => input.session.rejectServerRequest!(input.serverRequest.id, rejectionError),
-            input.signal,
-          );
+          return;
         }
-        return;
+
+        await abortable(
+          () => input.session.rejectServerRequest!(input.serverRequest.id, rejectionError),
+          input.signal,
+        );
       }
 
       throw error;
@@ -496,6 +510,19 @@ interface ResolvedServerRequestAction {
     submission: TaskPendingActionSubmitRequest,
     action: TaskActionDescriptor,
   ) => Promise<unknown> | unknown;
+}
+
+interface AppServerResponseArtifacts {
+  latestAssistantMessage: string;
+  finalAnswer: string;
+}
+
+interface AppServerTurnCompletionState {
+  targetTurnId: string;
+  settled: boolean;
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (error: Error) => void;
 }
 
 function resolveActionScopeFromRequest(request: TaskRequest, principalId?: string): TaskActionScope | undefined {
@@ -789,6 +816,116 @@ function normalizeTextValue(value: unknown): string | null {
 
   const normalized = value.trim();
   return normalized ? normalized : null;
+}
+
+function collectAppServerResponseArtifacts(
+  notification: CodexAppServerNotification,
+  artifacts: AppServerResponseArtifacts,
+): void {
+  if (notification.method !== "item/completed") {
+    return;
+  }
+
+  const params = asRecord(notification.params);
+  const item = asRecord(params?.item);
+
+  if (!item || normalizeTextValue(item.type) !== "agentMessage") {
+    return;
+  }
+
+  const text = normalizeTextValue(item.text);
+
+  if (!text) {
+    return;
+  }
+
+  artifacts.latestAssistantMessage = text;
+
+  if (normalizeTextValue(item.phase) === "final_answer") {
+    artifacts.finalAnswer = text;
+  }
+}
+
+function resolveAppServerFinalOutput(artifacts: AppServerResponseArtifacts): string {
+  return artifacts.finalAnswer || artifacts.latestAssistantMessage;
+}
+
+function summarizeAppServerResponse(finalResponse: string): string {
+  const normalized = finalResponse.trim();
+
+  if (!normalized) {
+    return "Codex completed the task but did not return a final text response.";
+  }
+
+  const [firstLine] = normalized.split("\n");
+  return firstLine ? firstLine.slice(0, 200) : normalized.slice(0, 200);
+}
+
+function createAppServerTurnCompletionState(): AppServerTurnCompletionState {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+
+  const promise = new Promise<void>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+
+  return {
+    targetTurnId: "",
+    settled: false,
+    promise,
+    resolve,
+    reject,
+  };
+}
+
+function observeAppServerTurnCompletion(
+  notification: CodexAppServerNotification,
+  state: AppServerTurnCompletionState,
+): void {
+  if (state.settled || !state.targetTurnId) {
+    return;
+  }
+
+  if (notification.method === "turn/completed") {
+    const params = asRecord(notification.params);
+    const turn = asRecord(params?.turn);
+
+    if (normalizeTextValue(turn?.id) !== state.targetTurnId) {
+      return;
+    }
+
+    const status = normalizeTextValue(turn?.status);
+
+    if (status === "completed") {
+      state.settled = true;
+      state.resolve();
+      return;
+    }
+
+    const errorRecord = asRecord(turn?.error);
+    state.settled = true;
+    state.reject(new Error(normalizeTextValue(errorRecord?.message) ?? "App-server turn failed."));
+    return;
+  }
+
+  if (notification.method === "error") {
+    const params = asRecord(notification.params);
+
+    if (normalizeTextValue(params?.turnId) !== state.targetTurnId) {
+      return;
+    }
+
+    const willRetry = params?.willRetry === true;
+
+    if (willRetry) {
+      return;
+    }
+
+    const errorRecord = asRecord(params?.error);
+    state.settled = true;
+    state.reject(new Error(normalizeTextValue(errorRecord?.message) ?? "App-server turn failed."));
+  }
 }
 
 function createExecutionSignal(
