@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { handleInputAssetUpload } from "./http-input-assets.js";
+import { handleInputAssetUpload, handleInputAssetUploadHttp } from "./http-input-assets.js";
 
 test("POST /api/input-assets 会把上传文件登记成 TaskInputAsset", async () => {
   const originalArrayBuffer = File.prototype.arrayBuffer;
@@ -91,3 +91,45 @@ test("POST /api/input-assets 会明确拒绝 PDF 上传", async () => {
   };
   assert.match(payload.error ?? "", /PDF|暂不支持|不支持/);
 });
+
+test("POST /api/input-assets 在 content-length 超限时会在 HTTP 层直接返回 413", async () => {
+  let bodyAccessed = false;
+  const request = {
+    method: "POST",
+    url: "/api/input-assets",
+    headers: {
+      "content-length": String((25 * 1024 * 1024) + 1),
+    },
+    get body() {
+      bodyAccessed = true;
+      throw new Error("multipart body should not be touched");
+    },
+  } as never;
+
+  const response = createResponseStub();
+
+  await handleInputAssetUploadHttp(request, response as never, {
+    workingDirectory: process.cwd(),
+  });
+
+  assert.equal(response.statusCode, 413);
+  assert.equal(bodyAccessed, false);
+  assert.match(response.body ?? "", /25MB|超过|大小限制/);
+});
+
+function createResponseStub() {
+  const headers: Record<string, string> = {};
+
+  return {
+    statusCode: 0,
+    headers,
+    body: "",
+    setHeader(name: string, value: string) {
+      headers[name] = value;
+    },
+    end(value?: string) {
+      this.body = typeof value === "string" ? value : "";
+      return this;
+    },
+  };
+}

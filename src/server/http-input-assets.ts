@@ -75,6 +75,13 @@ export async function handleInputAssetUploadHttp(
     workingDirectory: string;
   },
 ): Promise<void> {
+  if (isContentLengthTooLarge(request.headers)) {
+    writeJson(response, 413, {
+      error: "上传文件超过 25MB 限制，请压缩后再试。",
+    });
+    return;
+  }
+
   const webRequest = new Request(`http://localhost${request.url ?? "/api/input-assets"}`, {
     method: request.method ?? "POST",
     headers: request.headers as HeadersInit,
@@ -95,6 +102,28 @@ function isPdfUpload(mimeType: string, fileName: string): boolean {
   const normalizedFileName = fileName.toLowerCase();
 
   return normalizedMimeType === "application/pdf" || normalizedFileName.endsWith(".pdf");
+}
+
+function isContentLengthTooLarge(headers: IncomingMessage["headers"]): boolean {
+  const contentLength = resolveContentLength(headers["content-length"]);
+
+  return contentLength !== null && contentLength > MAX_INPUT_ASSET_BYTES;
+}
+
+function resolveContentLength(value: string | string[] | number | undefined): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  }
+
+  const token = Array.isArray(value) ? value[0] : value;
+
+  if (typeof token !== "string") {
+    return null;
+  }
+
+  const parsed = Number(token);
+
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function createId(prefix: string): string {
