@@ -74,6 +74,11 @@ test("FeishuAttachmentDraftStore 按 chatId + userId + sessionId 隔离不同会
     userId: "user-1",
     sessionId: "session-1",
   };
+  const keyD = {
+    chatId: "chat-1",
+    userId: "user-2",
+    sessionId: "session-1",
+  };
 
   try {
     store.append(keyA, [{
@@ -100,15 +105,25 @@ test("FeishuAttachmentDraftStore 按 chatId + userId + sessionId 隔离不同会
       sourceMessageId: "message-3",
       createdAt: "2026-04-01T08:01:00.000Z",
     }]);
+    store.append(keyD, [{
+      id: "file-2",
+      type: "file",
+      name: "d.pdf",
+      value: "/workspace/temp/feishu-attachments/session-1/message-3/d.pdf",
+      sourceMessageId: "message-4",
+      createdAt: "2026-04-01T08:00:45.000Z",
+    }]);
 
     assert.deepEqual(store.get(keyA)?.attachments.map((item) => item.id), ["img-1"]);
     assert.deepEqual(store.get(keyB)?.attachments.map((item) => item.id), ["file-1"]);
     assert.deepEqual(store.get(keyC)?.attachments.map((item) => item.id), ["img-2"]);
+    assert.deepEqual(store.get(keyD)?.attachments.map((item) => item.id), ["file-2"]);
 
     assert.deepEqual(store.consume(keyB)?.attachments.map((item) => item.id), ["file-1"]);
     assert.equal(store.get(keyB), null);
     assert.deepEqual(store.get(keyA)?.attachments.map((item) => item.id), ["img-1"]);
     assert.deepEqual(store.get(keyC)?.attachments.map((item) => item.id), ["img-2"]);
+    assert.deepEqual(store.get(keyD)?.attachments.map((item) => item.id), ["file-2"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
