@@ -59,6 +59,7 @@ export class WebAdapter implements ChannelAdapter<WebTaskPayload> {
       goal,
       ...(inputText ? { inputText } : {}),
       ...(historyContext ? { historyContext } : {}),
+      ...(input.inputEnvelope ? { inputEnvelope: input.inputEnvelope } : {}),
       ...(input.attachments?.length ? { attachments: input.attachments } : {}),
       ...(input.options ? { options: input.options } : {}),
       channelContext: {

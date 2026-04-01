@@ -122,3 +122,34 @@ test("buildLegacyAttachmentsFromEnvelope 只从非文本资产派生，并保留
     },
   ]);
 });
+
+test("listEnvelopeAssetsByOrder 与 buildLegacyAttachmentsFromEnvelope 在缺失 asset 时会显式报错", () => {
+  const envelope = createTaskInputEnvelope({
+    sourceChannel: "web",
+    createdAt: "2026-04-01T21:00:00.000Z",
+    parts: [
+      {
+        type: "text",
+        role: "user",
+        order: 1,
+        text: "请看这张图",
+      },
+      {
+        type: "image",
+        role: "user",
+        order: 2,
+        assetId: "asset-image-missing",
+      },
+    ],
+    assets: [],
+  });
+
+  assert.throws(
+    () => listEnvelopeAssetsByOrder(envelope),
+    /asset-image-missing/,
+  );
+  assert.throws(
+    () => buildLegacyAttachmentsFromEnvelope(envelope),
+    /asset-image-missing/,
+  );
+});

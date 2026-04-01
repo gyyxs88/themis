@@ -47,8 +47,15 @@ export function listEnvelopeAssetsByOrder(envelope: TaskInputEnvelope): TaskInpu
 
   return envelope.parts
     .filter((part): part is Extract<TaskInputPart, { type: "image" | "document" }> => part.type !== "text")
-    .map((part) => assetById.get(part.assetId))
-    .filter((asset): asset is TaskInputAsset => Boolean(asset));
+    .map((part) => {
+      const asset = assetById.get(part.assetId);
+
+      if (!asset) {
+        throw new Error(`Task input envelope is missing asset "${part.assetId}" for part "${part.partId}".`);
+      }
+
+      return asset;
+    });
 }
 
 export function buildLegacyAttachmentsFromEnvelope(envelope: TaskInputEnvelope): TaskAttachment[] {
