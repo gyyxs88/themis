@@ -400,6 +400,44 @@ test("Journey session rejectServerRequest 不应把 CLIENT_DISCONNECTED 直接�
   assert.equal(state.currentTurnStatus, "completed");
 });
 
+test("Journey session 在 user-input 完成后会发出 turn/completed，避免 runtime 一直等待", async () => {
+  const state = createJourneySessionState({
+    scenario: "single-user-input",
+    workingDirectory: "/tmp/themis-feishu-journey-complete",
+  });
+  const session = createJourneySession(state);
+  const notifications: Array<{ method: string; params?: unknown }> = [];
+  const requests: AppServerReverseRequest[] = [];
+
+  session.onNotification((notification) => {
+    notifications.push(notification);
+  });
+  session.onServerRequest((request) => {
+    requests.push(request);
+  });
+
+  const startTurnPromise = session.startTurn(JOURNEY_THREAD_ID, "请等待补充输入");
+  await waitFor(() => requests.length === 1, "missing user-input reverse request");
+  const respondToServerRequest = session.respondToServerRequest;
+  assert.ok(respondToServerRequest);
+  await respondToServerRequest(requests[0]?.id ?? "", {
+    answers: {
+      reply: {
+        answers: ["这是新的补充输入"],
+      },
+    },
+  });
+  await startTurnPromise;
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  assert.equal(
+    notifications.some((notification) => notification.method === "turn/completed"),
+    true,
+  );
+});
+
 test("真实 Web->飞书 mixed recovery 在 approval 后立即断流时仍会通过 /use + direct-text takeover 收口", async () => {
   await withHttpFeishuJourneyServer({
     scenario: "approval-then-input",
@@ -963,6 +1001,34 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
           },
         });
         state.currentTurnStatus = "completed";
+        setTimeout(() => {
+          notificationHandler?.({
+            method: "item/completed",
+            params: {
+              threadId: JOURNEY_THREAD_ID,
+              turnId: "turn-web-feishu-journey-1",
+              item: {
+                type: "agentMessage",
+                id: "item-app-feishu-journey-final-1",
+                text: `已按补充输入继续：${inputText}`,
+                phase: "final_answer",
+                memoryCitation: null,
+              },
+            },
+          });
+          notificationHandler?.({
+            method: "turn/completed",
+            params: {
+              threadId: JOURNEY_THREAD_ID,
+              turn: {
+                id: "turn-web-feishu-journey-1",
+                items: [],
+                status: "completed",
+                error: null,
+              },
+            },
+          });
+        }, 0);
         return { turnId: "turn-web-feishu-journey-1" };
       }
 
@@ -1046,6 +1112,34 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
         },
       });
       state.currentTurnStatus = "completed";
+      setTimeout(() => {
+        notificationHandler?.({
+          method: "item/completed",
+          params: {
+            threadId: JOURNEY_THREAD_ID,
+            turnId: "turn-web-feishu-mixed-1",
+            item: {
+              type: "agentMessage",
+              id: "item-app-feishu-mixed-final-1",
+              text: `mixed recovery 已按补充输入继续：${inputText}`,
+              phase: "final_answer",
+              memoryCitation: null,
+            },
+          },
+        });
+        notificationHandler?.({
+          method: "turn/completed",
+          params: {
+            threadId: JOURNEY_THREAD_ID,
+            turn: {
+              id: "turn-web-feishu-mixed-1",
+              items: [],
+              status: "completed",
+              error: null,
+            },
+          },
+        });
+      }, 0);
       return { turnId: "turn-web-feishu-mixed-1" };
     },
     close: async () => {

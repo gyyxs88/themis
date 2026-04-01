@@ -9,7 +9,10 @@ import type {
   AppServerTaskRuntimeOptions,
   AppServerTaskRuntimeSession,
 } from "./app-server-task-runtime.js";
-import { AppServerTaskRuntime } from "./app-server-task-runtime.js";
+import {
+  APP_SERVER_TASK_CONFIG_OVERRIDES,
+  AppServerTaskRuntime,
+} from "./app-server-task-runtime.js";
 
 interface SessionDoubleState {
   initialized: number;
@@ -1402,4 +1405,10 @@ test("AppServerTaskRuntime 在执行失败时也会关闭 session", async () => 
   } finally {
     fixture.cleanup();
   }
+});
+
+test("AppServerTaskRuntime 默认会为真实任务 session 打开 request_user_input feature gate", () => {
+  assert.deepEqual(APP_SERVER_TASK_CONFIG_OVERRIDES, {
+    "features.default_mode_request_user_input": true,
+  });
 });

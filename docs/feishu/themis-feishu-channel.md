@@ -25,6 +25,7 @@ Themis 已接入飞书长连接渠道，特点如下：
 - `task.action_required` 会转成移动端友好的 waiting action 文本，直接带出 actionId、命令提示和当前会话 / 线程摘要
 - `task.action_required` 里的 `user-input` 现在支持 direct-text takeover：如果当前 `sessionId + principalId` 作用域下只有 1 条 `user-input` pending action，且不存在 `approval` pending action，飞书里直接回复普通文本即可继续；如果同一作用域下有多条 `user-input` pending action，普通文本不会自动接管，会提示改用 `/reply <actionId> <内容>`
 - `resolvePendingActionScope(...)` 现在按 `sessionId + principalId` 匹配，不再要求 `sourceChannel = "feishu"` 作为前提；同一 principal 下的 Web-origin `user-input` 和 `approval` pending action 也可以由飞书接管，不同 principal 即使 `sessionId` 一样也不会命中
+- 审批和补充输入提交成功后的确认消息现在直接发送纯文本 `已提交审批。` / `已提交补充输入。`，不再额外附加 `[处理中]` 标签；真正的流式占位仍由原来的 `处理中...` 桥接链负责
 - 状态类 `task.progress` 会额外发出任务状态摘要，不会打断原来的 `处理中...` 占位链
 - `/new` 会继承当前激活会话的 `workspacePath`（只继承工作区字段）
 - `/sessions`、`/use`、`/current` 会展示当前会话与 native thread 摘要，`/use` 切换成功后会自动回显当前会话状态

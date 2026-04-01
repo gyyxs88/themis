@@ -1,5 +1,6 @@
 import { AppServerActionBridge } from "./app-server-action-bridge.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
+import type { CodexCliConfigOverrides } from "./auth-accounts.js";
 import type {
   RuntimeEngine,
   TaskActionDescriptor,
@@ -34,6 +35,9 @@ import { validateWorkspacePath } from "./session-workspace.js";
 
 const SESSION_WORKSPACE_UNAVAILABLE_ERROR = "当前会话绑定的工作区不可用，请新建会话后重新设置。";
 const APP_SERVER_AUX_TIMEOUT_MS = 15_000;
+export const APP_SERVER_TASK_CONFIG_OVERRIDES: CodexCliConfigOverrides = {
+  "features.default_mode_request_user_input": true,
+};
 
 export interface AppServerTaskRuntimeSession {
   initialize(): Promise<void>;
@@ -82,7 +86,9 @@ export class AppServerTaskRuntime {
       workingDirectory: this.workingDirectory,
       registry: this.runtimeStore,
     });
-    this.sessionFactory = async () => await options.sessionFactory?.() ?? new CodexAppServerSession(this.workingDirectory);
+    this.sessionFactory = async () => await options.sessionFactory?.() ?? new CodexAppServerSession(this.workingDirectory, {
+      configOverrides: APP_SERVER_TASK_CONFIG_OVERRIDES,
+    });
     this.actionBridge = options.actionBridge ?? new AppServerActionBridge();
   }
 

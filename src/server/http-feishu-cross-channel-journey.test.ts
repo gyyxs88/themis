@@ -999,6 +999,175 @@ test("真实飞书消息事件入口会让 Web waiting action 在 /use 后通过
   });
 });
 
+test("synthetic smoke 的 Web user-input waiting action 可以由飞书普通文本 direct-text takeover 恢复", async () => {
+  await withWebAndFeishuServer(async ({ baseUrl, authHeaders, feishu }) => {
+    const sessionId = "session-web-feishu-smoke-user-input-1";
+    const replyText = "这是 synthetic smoke 的普通文本补充输入";
+
+    const streamResponse = await fetch(`${baseUrl}/api/tasks/smoke`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sessionId,
+        goal: "/smoke user-input",
+        options: {
+          syntheticSmokeScenario: "user-input",
+        },
+      }),
+    });
+
+    assert.equal(streamResponse.status, 200);
+    assert.ok(streamResponse.body);
+
+    const reader = createNdjsonStreamReader(streamResponse.body!);
+    const partialLines = await withTimeout(
+      reader.readUntil((lines) => lines.some((line) => line.kind === "event" && line.title === "task.action_required")),
+      "missing synthetic smoke user-input action_required",
+    );
+    const actionRequiredLine = partialLines.find(
+      (line) => line.kind === "event" && line.title === "task.action_required",
+    );
+
+    assert.ok(actionRequiredLine);
+    assert.equal(actionRequiredLine?.metadata?.actionType, "user-input");
+    await reader.cancel();
+
+    const waitingHistory = await waitForHistoryTurnStatus(baseUrl, authHeaders, sessionId, "waiting");
+    const restoredAction = extractActionRequiredFromHistory(waitingHistory);
+    assert.ok(restoredAction);
+    assert.equal(restoredAction.actionType, "user-input");
+
+    await feishu.receiveTextMessage(`/use ${sessionId}`, {
+      messageId: "message-cross-event-smoke-user-input-use-1",
+    });
+    await waitFor(() => feishu.peekMessages().some((message) => message.includes("已切换到会话")));
+    feishu.takeMessages();
+
+    await feishu.receiveTextMessage(replyText, {
+      messageId: "message-cross-event-smoke-user-input-submit-1",
+    });
+    await waitFor(() => feishu.peekMessages().some((message) => message.includes("已提交补充输入")));
+    feishu.takeMessages();
+
+    const completedHistory = await waitForHistoryTurnStatus(baseUrl, authHeaders, sessionId, "completed");
+    assert.equal(completedHistory.turns?.length, 1);
+    assert.equal(completedHistory.turns?.[0]?.status, "completed");
+    assert.ok(completedHistory.turns?.[0]?.events?.some((event) => event.type === "task.action_required"));
+  });
+});
+
+test("synthetic smoke 的 Web mixed waiting action 可以由飞书 /approve 再普通文本恢复", async () => {
+  await withWebAndFeishuServer(async ({ baseUrl, authHeaders, feishu }) => {
+    const sessionId = "session-web-feishu-smoke-mixed-1";
+    const replyText = "这是 synthetic smoke mixed 的普通文本补充输入";
+
+    const streamResponse = await fetch(`${baseUrl}/api/tasks/smoke`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sessionId,
+        goal: "/smoke mixed",
+        options: {
+          syntheticSmokeScenario: "mixed",
+        },
+      }),
+    });
+
+    assert.equal(streamResponse.status, 200);
+    assert.ok(streamResponse.body);
+
+    const reader = createNdjsonStreamReader(streamResponse.body!);
+    const partialLines = await withTimeout(
+      reader.readUntil((lines) => lines.some((line) => line.kind === "event" && line.title === "task.action_required")),
+      "missing synthetic smoke mixed approval action_required",
+    );
+    const firstActionLine = partialLines.find(
+      (line) => line.kind === "event" && line.title === "task.action_required",
+    );
+
+    assert.ok(firstActionLine);
+    assert.equal(firstActionLine?.metadata?.actionType, "approval");
+    await reader.cancel();
+
+    const waitingHistory = await waitForHistoryTurnStatus(baseUrl, authHeaders, sessionId, "waiting");
+    const approvalAction = extractActionRequiredFromHistory(waitingHistory);
+    assert.ok(approvalAction);
+    assert.equal(approvalAction.actionType, "approval");
+
+    await feishu.receiveTextMessage(`/use ${sessionId}`, {
+      messageId: "message-cross-event-smoke-mixed-use-1",
+    });
+    await waitFor(() => feishu.peekMessages().some((message) => message.includes("已切换到会话")));
+    feishu.takeMessages();
+
+    await feishu.receiveTextMessage(`/approve ${approvalAction.actionId}`, {
+      messageId: "message-cross-event-smoke-mixed-approve-1",
+    });
+    await waitFor(() => feishu.peekMessages().some((message) => message.includes("已提交审批")));
+    feishu.takeMessages();
+
+    let inputAction: ReturnType<typeof extractActionRequiredFromHistory> = null;
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 1_000) {
+      const historyDetail = await readHistoryDetail(baseUrl, authHeaders, sessionId);
+      const waitingTurn = historyDetail.turns?.find((turn) => turn.status === "waiting");
+      const latestUserInputEvent = [...(waitingTurn?.events ?? [])]
+        .reverse()
+        .find((event) => {
+          if (event.type !== "task.action_required" || !event.payloadJson) {
+            return false;
+          }
+
+          const payload = JSON.parse(event.payloadJson) as {
+            actionId?: string;
+            actionType?: string;
+          };
+          return payload.actionType === "user-input";
+        });
+
+      const taskId = latestUserInputEvent?.taskId ?? waitingTurn?.taskId;
+      const requestId = latestUserInputEvent?.requestId ?? waitingTurn?.requestId;
+
+      if (latestUserInputEvent?.payloadJson && taskId && requestId) {
+        const payload = JSON.parse(latestUserInputEvent.payloadJson) as {
+          actionId?: string;
+          actionType?: string;
+        };
+        inputAction = {
+          taskId,
+          requestId,
+          actionId: payload.actionId ?? "",
+          ...(payload.actionType ? { actionType: payload.actionType } : {}),
+        };
+        break;
+      }
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 20);
+        timer.unref?.();
+      });
+    }
+
+    assert.ok(inputAction);
+
+    await feishu.receiveTextMessage(replyText, {
+      messageId: "message-cross-event-smoke-mixed-submit-1",
+    });
+    await waitFor(() => feishu.peekMessages().some((message) => message.includes("已提交补充输入")));
+    feishu.takeMessages();
+
+    const completedHistory = await waitForHistoryTurnStatus(baseUrl, authHeaders, sessionId, "completed");
+    assert.equal(completedHistory.turns?.length, 1);
+    assert.equal(completedHistory.turns?.[0]?.status, "completed");
+    assert.ok(completedHistory.turns?.[0]?.events?.filter((event) => event.type === "task.action_required").length === 2);
+  });
+});
+
 test("更长的 shared cross-channel E2E 会在 Web waiting action 由飞书接管后继续追加新 turn，并保持 history/detail 一致", async () => {
   await withWebAndFeishuServer(async ({ baseUrl, authHeaders, runtimeStore, appServerJourneyState, feishu }) => {
     const sessionId = "session-web-feishu-event-long-e2e-1";
@@ -2118,6 +2287,34 @@ async function withWebAndFeishuServer(
           turnId,
           status: "completed",
         });
+        setTimeout(() => {
+          appServerJourneyState.notificationHandler?.({
+            method: "item/completed",
+            params: {
+              threadId,
+              turnId,
+              item: {
+                type: "agentMessage",
+                id: `item-complete-${turnId}`,
+                text: `cross-channel task completed: ${prompt}`,
+                phase: "final_answer",
+                memoryCitation: null,
+              },
+            },
+          });
+          appServerJourneyState.notificationHandler?.({
+            method: "turn/completed",
+            params: {
+              threadId,
+              turn: {
+                id: turnId,
+                items: [],
+                status: "completed",
+                error: null,
+              },
+            },
+          });
+        }, 0);
         return { turnId };
       },
       close: async () => {},

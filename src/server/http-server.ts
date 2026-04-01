@@ -61,6 +61,7 @@ import {
   handleThirdPartyProbe,
   handleThirdPartyProviderCreate,
 } from "./http-third-party-probe.js";
+import { SyntheticSmokeTaskRuntime } from "./synthetic-smoke-task-runtime.js";
 
 const DEFAULT_PRIVATE_ASSISTANT_PRINCIPAL_ID = "principal-local-owner";
 
@@ -86,6 +87,10 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
   const defaultAppServerRuntime = new AppServerTaskRuntime({
     workingDirectory: runtime.getWorkingDirectory(),
     runtimeStore: runtime.getRuntimeStore(),
+    actionBridge,
+  });
+  const syntheticSmokeRuntime = new SyntheticSmokeTaskRuntime({
+    baseRuntime: runtime,
     actionBridge,
   });
   const runtimeRegistry = normalizeRuntimeRegistry(runtime, defaultAppServerRuntime, options.runtimeRegistry);
@@ -253,6 +258,12 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/tasks/stream") {
         return handleTaskStream(request, response, runtime, runtimeRegistry, authRuntime, actionBridge, taskTimeoutMs);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/tasks/smoke") {
+        return handleTaskStream(request, response, runtime, {
+          defaultRuntime: syntheticSmokeRuntime,
+        }, authRuntime, actionBridge, taskTimeoutMs);
       }
 
       if (request.method === "POST" && url.pathname === "/api/tasks/actions") {

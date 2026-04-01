@@ -300,71 +300,79 @@ export function createComposerActions(app, streamActions) {
       }
     }
 
-    const personaSaved = await app.identity.saveAssistantPersona({
-      assistantLanguageStyle: dom.assistantLanguageStyleInput.value,
-      assistantMbti: dom.assistantMbtiInput.value,
-      assistantStyleNotes: dom.assistantStyleNotesInput.value,
-      assistantSoul: dom.assistantSoulInput.value,
-    }, { quiet: false });
+    const personaSaved = await saveAssistantPersona();
 
     if (!personaSaved) {
       return;
     }
 
-    const turn = store.createTurn({
-      goal,
-      inputText: "",
-      options: store.buildTaskOptions(thread.settings),
+    const turn = beginStreamingTurn(thread, goal, {
+      pendingSubmission,
+      turnOptions: store.buildTaskOptions(thread.settings),
     });
-
-    thread.turns.push(turn);
-    thread.updatedAt = app.utils.nowIso();
-    clearSubmittedDraft(thread, pendingSubmission);
-
-    if (store.isDefaultThreadTitle(thread.title)) {
-      thread.title = app.utils.titleFromGoal(goal);
-    }
-
-    store.syncThreadStoredState(thread, turn);
-    app.runtime.activeRunRef = {
-      threadId: thread.id,
-      turnId: turn.id,
-    };
-    app.runtime.activeRequestController = new AbortController();
-    store.clearTransientStatus();
-    store.trimThreads();
-    store.saveState();
-    app.renderer.renderAll(shouldScrollThread(thread.id));
 
     try {
       const historyContext = store.shouldBootstrapThread(thread) ? thread.bootstrapTranscript : "";
       const identity = app.identity.getRequestIdentity();
-      const response = await fetch("/api/tasks/stream", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        signal: app.runtime.activeRequestController.signal,
-        body: JSON.stringify({
-          source: "web",
-          goal,
-          userId: identity.userId,
-          ...(identity.displayName ? { displayName: identity.displayName } : {}),
-          sessionId: thread.id,
-          ...(turn.options ? { options: turn.options } : {}),
-          ...(historyContext ? { historyContext } : {}),
-        }),
+      await submitStreamingRequest(thread, "/api/tasks/stream", {
+        source: "web",
+        goal,
+        userId: identity.userId,
+        ...(identity.displayName ? { displayName: identity.displayName } : {}),
+        sessionId: thread.id,
+        ...(turn.options ? { options: turn.options } : {}),
+        ...(historyContext ? { historyContext } : {}),
       });
-
-      if (!response.ok || !response.body) {
-        const data = await app.utils.safeReadJson(response);
-        throw new Error(data?.error?.message ?? "请求失败");
-      }
-
-      await streamActions.consumeNdjsonStream(response.body);
     } catch (error) {
       finalizeSubmitError(thread, error);
     }
+  }
+
+  async function submitSyntheticSmoke(thread, specialAction) {
+    const goal = typeof specialAction?.value === "string" ? specialAction.value.trim() : "";
+    const scenario = normalizeSyntheticSmokeScenario(specialAction?.scenario);
+
+    if (!goal) {
+      if (store.getActiveThread()?.id === thread.id) {
+        dom.goalInput.focus();
+      }
+      return { ok: false };
+    }
+
+    if (!scenario) {
+      store.setTransientStatus(thread.id, "用法：/smoke user-input | /smoke mixed");
+      app.renderer.renderAll();
+      return { ok: false };
+    }
+
+    const personaSaved = await saveAssistantPersona();
+
+    if (!personaSaved) {
+      return { ok: false };
+    }
+
+    beginStreamingTurn(thread, goal, {
+      turnOptions: store.buildTaskOptions(thread.settings),
+    });
+
+    try {
+      const identity = app.identity.getRequestIdentity();
+      await submitStreamingRequest(thread, "/api/tasks/smoke", {
+        source: "web",
+        goal,
+        userId: identity.userId,
+        ...(identity.displayName ? { displayName: identity.displayName } : {}),
+        sessionId: thread.id,
+        options: {
+          syntheticSmokeScenario: scenario,
+        },
+      });
+    } catch (error) {
+      finalizeSubmitError(thread, error);
+      return { ok: false };
+    }
+
+    return { ok: true };
   }
 
   async function submitWaitingAction(thread, turn, submission = {}, options = {}) {
@@ -568,6 +576,12 @@ export function createComposerActions(app, streamActions) {
 
   async function submitSpecialAction(thread, currentTurn, specialAction) {
     if (!specialAction.value) {
+      if (specialAction.errorMessage) {
+        store.setTransientStatus(thread.id, specialAction.errorMessage);
+        app.renderer.renderAll();
+        return { ok: false };
+      }
+
       if (store.getActiveThread()?.id === thread.id) {
         dom.goalInput.focus();
       }
@@ -582,6 +596,8 @@ export function createComposerActions(app, streamActions) {
         const steerTurn = resolveSteerTurn(thread, currentTurn);
         await actionInteraction.submitSteer(thread, specialAction.value, steerTurn?.serverTurnId);
         store.setTransientStatus(thread.id, "已发送 steer 请求。");
+      } else if (specialAction.mode === "smoke") {
+        return await submitSyntheticSmoke(thread, specialAction);
       } else {
         store.setTransientStatus(thread.id, `暂不支持指令：/${specialAction.mode}`);
         app.renderer.renderAll();
@@ -962,7 +978,91 @@ export function createComposerActions(app, streamActions) {
       };
     }
 
+    if (/^\/smoke(?:\s+user-input)?$/i.test(normalizedGoal)) {
+      return {
+        mode: "smoke",
+        scenario: "user-input",
+        value: normalizedGoal,
+      };
+    }
+
+    if (/^\/smoke\s+mixed$/i.test(normalizedGoal)) {
+      return {
+        mode: "smoke",
+        scenario: "mixed",
+        value: normalizedGoal,
+      };
+    }
+
+    if (/^\/smoke(?:\s|$)/i.test(normalizedGoal)) {
+      return {
+        mode: "smoke",
+        value: "",
+        errorMessage: "用法：/smoke user-input | /smoke mixed",
+      };
+    }
+
     return null;
+  }
+
+  async function saveAssistantPersona() {
+    return await app.identity.saveAssistantPersona({
+      assistantLanguageStyle: dom.assistantLanguageStyleInput.value,
+      assistantMbti: dom.assistantMbtiInput.value,
+      assistantStyleNotes: dom.assistantStyleNotesInput.value,
+      assistantSoul: dom.assistantSoulInput.value,
+    }, { quiet: false });
+  }
+
+  function beginStreamingTurn(thread, goal, options = {}) {
+    const turn = store.createTurn({
+      goal,
+      inputText: "",
+      options: options.turnOptions,
+    });
+
+    thread.turns.push(turn);
+    thread.updatedAt = app.utils.nowIso();
+    clearSubmittedDraft(thread, options.pendingSubmission ?? null);
+
+    if (store.isDefaultThreadTitle(thread.title)) {
+      thread.title = app.utils.titleFromGoal(goal);
+    }
+
+    store.syncThreadStoredState(thread, turn);
+    app.runtime.activeRunRef = {
+      threadId: thread.id,
+      turnId: turn.id,
+    };
+    app.runtime.activeRequestController = new AbortController();
+    store.clearTransientStatus();
+    store.trimThreads();
+    store.saveState();
+    app.renderer.renderAll(shouldScrollThread(thread.id));
+
+    return turn;
+  }
+
+  async function submitStreamingRequest(thread, url, payload) {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      signal: app.runtime.activeRequestController.signal,
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok || !response.body) {
+      const data = await app.utils.safeReadJson(response);
+      throw new Error(data?.error?.message ?? "请求失败");
+    }
+
+    await streamActions.consumeNdjsonStream(response.body);
+  }
+
+  function normalizeSyntheticSmokeScenario(value) {
+    return value === "user-input" || value === "mixed" ? value : null;
   }
 
   function resolveActiveComposerMode(thread) {

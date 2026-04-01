@@ -2306,7 +2306,7 @@ export class FeishuChannelService {
     }
 
     const message = decision === "approve" ? "已提交审批。" : "已提交拒绝。";
-    await this.safeSendTaggedText(context.chatId, message, "处理中");
+    await this.safeSendText(context.chatId, message);
   }
 
   private async replyActivePendingInput(context: FeishuIncomingContext): Promise<boolean> {
@@ -2367,7 +2367,7 @@ export class FeishuChannelService {
       return true;
     }
 
-    await this.safeSendTaggedText(context.chatId, "已提交补充输入。", "处理中");
+    await this.safeSendText(context.chatId, "已提交补充输入。");
     return true;
   }
 

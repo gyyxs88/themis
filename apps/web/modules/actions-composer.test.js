@@ -1104,6 +1104,82 @@ test("composer 输入 /steer 会走 /api/tasks/actions 的 steer 模式，而不
   }
 });
 
+test("composer 输入 /smoke user-input 会走 /api/tasks/smoke，而不是普通 stream", async () => {
+  const harness = createComposerHarness({
+    activeThreadDraftGoal: "/smoke user-input",
+    allowCreateTurn: true,
+  });
+
+  try {
+    const { app, dom } = harness;
+    const actions = createComposerActions(app, {
+      consumeNdjsonStream: async () => {},
+      finalizeTurnCancelled() {},
+      finalizeTurnError() {},
+    });
+    actions.bindComposerControls();
+
+    await dom.form.listeners.submit[0]({
+      preventDefault() {},
+    });
+
+    assert.equal(app.runtime.smokeRequestCount, 1);
+    assert.equal(app.runtime.streamRequestCount, 0);
+    assert.deepEqual(app.runtime.smokeRequests[0], {
+      url: "/api/tasks/smoke",
+      body: {
+        source: "web",
+        goal: "/smoke user-input",
+        userId: "user-1",
+        sessionId: "thread-a",
+        options: {
+          syntheticSmokeScenario: "user-input",
+        },
+      },
+    });
+  } finally {
+    harness.restore();
+  }
+});
+
+test("composer 输入 /smoke mixed 会走 /api/tasks/smoke 并携带 mixed 场景", async () => {
+  const harness = createComposerHarness({
+    activeThreadDraftGoal: "/smoke mixed",
+    allowCreateTurn: true,
+  });
+
+  try {
+    const { app, dom } = harness;
+    const actions = createComposerActions(app, {
+      consumeNdjsonStream: async () => {},
+      finalizeTurnCancelled() {},
+      finalizeTurnError() {},
+    });
+    actions.bindComposerControls();
+
+    await dom.form.listeners.submit[0]({
+      preventDefault() {},
+    });
+
+    assert.equal(app.runtime.smokeRequestCount, 1);
+    assert.equal(app.runtime.streamRequestCount, 0);
+    assert.deepEqual(app.runtime.smokeRequests[0], {
+      url: "/api/tasks/smoke",
+      body: {
+        source: "web",
+        goal: "/smoke mixed",
+        userId: "user-1",
+        sessionId: "thread-a",
+        options: {
+          syntheticSmokeScenario: "mixed",
+        },
+      },
+    });
+  } finally {
+    harness.restore();
+  }
+});
+
 test("composer 输入 /steer 时不会强依赖本地当前 turn 仍处于 running", async () => {
   const harness = createComposerHarness({
     activeThreadDraftGoal: "/steer keep going",
@@ -1193,6 +1269,8 @@ function createComposerHarness(options = {}) {
       },
       abortCount: 0,
       streamRequestCount: 0,
+      smokeRequestCount: 0,
+      smokeRequests: [],
       submitActionCalls: [],
     },
     utils: {
@@ -1451,6 +1529,13 @@ function createComposerHarness(options = {}) {
     }
     if (url === "/api/tasks/stream") {
       app.runtime.streamRequestCount += 1;
+    }
+    if (url === "/api/tasks/smoke") {
+      app.runtime.smokeRequestCount += 1;
+      app.runtime.smokeRequests.push({
+        url,
+        body: JSON.parse(init.body),
+      });
     }
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,
