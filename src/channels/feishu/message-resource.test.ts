@@ -55,6 +55,74 @@ test("extractFeishuMessageResources 会解析文件消息并保留文件名", ()
   }]);
 });
 
+test("extractFeishuMessageResources 会解析 post 富文本中的图片节点", () => {
+  const resources = extractFeishuMessageResources({
+    message: {
+      message_type: "post",
+      message_id: "msg-post-1",
+      create_time: "1711958400000",
+      content: JSON.stringify({
+        zh_cn: {
+          title: "",
+          content: [[
+            {
+              tag: "text",
+              text: "帮我看看这张图",
+            },
+            {
+              tag: "img",
+              image_key: "img-key-post-1",
+            },
+          ]],
+        },
+      }),
+    },
+  });
+
+  assert.deepEqual(resources, [{
+    id: "msg-post-1::img-key-post-1",
+    type: "image",
+    resourceKey: "img-key-post-1",
+    sourceMessageId: "msg-post-1",
+    createdAt: new Date(1711958400000).toISOString(),
+  }]);
+});
+
+test("extractFeishuMessageResources 也会解析真实入站 post 顶层结构中的图片节点", () => {
+  const resources = extractFeishuMessageResources({
+    message: {
+      message_type: "post",
+      message_id: "msg-post-2",
+      create_time: "1775040596104",
+      content: JSON.stringify({
+        title: "",
+        content: [[
+          {
+            tag: "img",
+            image_key: "img-key-post-2",
+            width: 1226,
+            height: 780,
+          },
+        ], [
+          {
+            tag: "text",
+            text: "帮我看看这张图",
+            style: [],
+          },
+        ]],
+      }),
+    },
+  });
+
+  assert.deepEqual(resources, [{
+    id: "msg-post-2::img-key-post-2",
+    type: "image",
+    resourceKey: "img-key-post-2",
+    sourceMessageId: "msg-post-2",
+    createdAt: new Date(1775040596104).toISOString(),
+  }]);
+});
+
 test("extractFeishuMessageResources 在非附件消息或缺少资源键时返回 null", () => {
   assert.equal(extractFeishuMessageResources({
     message: {

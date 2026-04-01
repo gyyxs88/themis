@@ -1453,6 +1453,121 @@ test("飞书附件草稿会在下一条普通文本中自动合并进任务请�
   }
 });
 
+test("飞书同一条 post 消息里的文本和图片会直接作为任务输入", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.setMessageResourceDownloader(async () => ({
+      headers: {
+        "content-type": "image/png",
+      },
+      async writeFile(filePath: string) {
+        await import("node:fs/promises").then(({ writeFile }) => writeFile(filePath, "fake-image"));
+      },
+      getReadableStream() {
+        throw new Error("not implemented");
+      },
+    }));
+
+    await harness.handleRawMessageEvent({
+      message: {
+        chat_id: "chat-1",
+        message_id: "message-post-1",
+        create_time: "1711958400000",
+        message_type: "post",
+        content: JSON.stringify({
+          zh_cn: {
+            title: "",
+            content: [[
+              {
+                tag: "text",
+                text: "帮我看看这张图",
+              },
+              {
+                tag: "img",
+                image_key: "img-key-post-1",
+              },
+            ]],
+          },
+        }),
+      },
+      sender: {
+        sender_id: {
+          user_id: "user-1",
+        },
+      },
+    });
+
+    const requests = harness.getTaskRequests();
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]?.goal, "帮我看看这张图");
+    assert.equal(requests[0]?.attachments?.length, 1);
+    assert.equal(requests[0]?.attachments?.[0]?.type, "image");
+    assert.match(requests[0]?.attachments?.[0]?.value ?? "", /temp\/feishu-attachments\/.+\/message-post-1\//);
+    assert.equal(harness.readAttachmentDraftStore(), null);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书真实入站 post 顶层结构里的文本和图片会直接作为任务输入", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.setMessageResourceDownloader(async () => ({
+      headers: {
+        "content-type": "image/png",
+      },
+      async writeFile(filePath: string) {
+        await import("node:fs/promises").then(({ writeFile }) => writeFile(filePath, "fake-image"));
+      },
+      getReadableStream() {
+        throw new Error("not implemented");
+      },
+    }));
+
+    await harness.handleRawMessageEvent({
+      message: {
+        chat_id: "chat-1",
+        message_id: "message-post-2",
+        create_time: "1775040596104",
+        message_type: "post",
+        content: JSON.stringify({
+          title: "",
+          content: [[
+            {
+              tag: "img",
+              image_key: "img-key-post-2",
+              width: 1226,
+              height: 780,
+            },
+          ], [
+            {
+              tag: "text",
+              text: "帮我看看这张图",
+              style: [],
+            },
+          ]],
+        }),
+      },
+      sender: {
+        sender_id: {
+          user_id: "user-1",
+        },
+      },
+    });
+
+    const requests = harness.getTaskRequests();
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]?.goal, "帮我看看这张图");
+    assert.equal(requests[0]?.attachments?.length, 1);
+    assert.equal(requests[0]?.attachments?.[0]?.type, "image");
+    assert.equal(harness.readAttachmentDraftStore(), null);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("飞书附件会落到当前 session 工作区，并把 sessionId 透传给 runtime 请求", async () => {
   const harness = createHarness();
   const sessionId = "session-image-workspace";

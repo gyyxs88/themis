@@ -19,6 +19,7 @@ interface SessionDoubleState {
   factoryCalls: number;
   started: Array<{ cwd: string }>;
   resumed: Array<{ threadId: string; cwd: string }>;
+  turns: Array<{ threadId: string; prompt: string }>;
   reviews: Array<{ threadId: string; instructions: string }>;
   steers: Array<{ threadId: string; turnId: string; message: string }>;
   readThreads: Array<{ threadId: string; includeTurns: boolean }>;
@@ -86,6 +87,7 @@ function createSessionFactory(overrides: {
     factoryCalls: 0,
     started: [],
     resumed: [],
+    turns: [],
     reviews: [],
     steers: [],
     readThreads: [],
@@ -144,7 +146,8 @@ function createSessionFactory(overrides: {
           turns: [{ turnId: "turn-app-active-1", status: "running" }],
         };
       },
-      startTurn: async () => {
+      startTurn: async (threadId, prompt) => {
+        state.turns.push({ threadId, prompt });
         if (overrides.startTurn) {
           return await overrides.startTurn(state);
         }
@@ -252,6 +255,38 @@ test("AppServerTaskRuntime 会按真实 Web channelSessionKey 解析 conversatio
     assert.equal(readSessionPayload(result).sessionId, "web-session-created-1");
     assert.equal(readSessionPayload(result).threadId, "thread-app-created");
     assert.equal(fixture.runtimeStore.resolveThreadId("web-session-created-1"), "thread-app-created");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 会把图片附件写进 startTurn prompt", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-image-1",
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    await fixture.runtime.runTask({
+      requestId: "req-app-image-1",
+      taskId: "task-app-image-1",
+      sourceChannel: "feishu",
+      user: { userId: "feishu-user-1" },
+      goal: "帮我看看这张图",
+      attachments: [{
+        id: "img-1",
+        type: "image",
+        name: "receipt.jpg",
+        value: "/workspace/temp/feishu-attachments/session-1/message-1/receipt.jpg",
+      }],
+      channelContext: { sessionId: "feishu-session-image-1" },
+      createdAt: "2026-04-01T10:55:00.000Z",
+    });
+
+    assert.equal(state.turns.length, 1);
+    assert.match(state.turns[0]?.prompt ?? "", /帮我看看这张图/);
+    assert.match(state.turns[0]?.prompt ?? "", /Attachments:/);
+    assert.match(state.turns[0]?.prompt ?? "", /receipt\.jpg/);
   } finally {
     fixture.cleanup();
   }

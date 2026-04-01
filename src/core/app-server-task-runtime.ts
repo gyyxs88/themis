@@ -30,6 +30,7 @@ import { ConversationService } from "./conversation-service.js";
 import { createTaskEvent, finalizeTaskResult } from "./codex-runtime.js";
 import { IdentityLinkService } from "./identity-link-service.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
+import { buildTaskPrompt } from "./prompt.js";
 import { resolveStoredSessionThreadReference } from "./session-thread-reference.js";
 import { validateWorkspacePath } from "./session-workspace.js";
 
@@ -189,7 +190,8 @@ export class AppServerTaskRuntime {
       }));
       throwIfAborted(signal);
 
-      const turn = await abortable(() => activeSession.startTurn(threadId, request.goal), signal);
+      const prompt = buildTaskPrompt(request);
+      const turn = await abortable(() => activeSession.startTurn(threadId, prompt), signal);
       turnCompletion.targetTurnId = turn.turnId;
       await abortable(() => waitForPendingServerRequests(pendingServerRequests), signal);
       await abortable(() => turnCompletion.promise, signal);

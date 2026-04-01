@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import type { Readable } from "node:stream";
 import { resolve } from "node:path";
 import type { FeishuAttachmentDraft } from "./attachment-draft-store.js";
+import { extractFeishuPostImageKeys } from "./message-content.js";
 
 export interface FeishuMessageResourceEvent {
   message?: {
@@ -59,6 +60,19 @@ export function extractFeishuMessageResources(event: FeishuMessageResourceEvent)
 
   if (!messageType || !messageId || !createdAt || !rawContent) {
     return null;
+  }
+
+  if (messageType === "post") {
+    const imageKeys = extractFeishuPostImageKeys(rawContent);
+    return imageKeys.length
+      ? imageKeys.map((imageKey) => ({
+        id: `${messageId}::${imageKey}`,
+        type: "image" as const,
+        resourceKey: imageKey,
+        sourceMessageId: messageId,
+        createdAt,
+      }))
+      : null;
   }
 
   if (messageType !== "image" && messageType !== "file") {

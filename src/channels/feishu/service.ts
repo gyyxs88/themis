@@ -41,6 +41,7 @@ import {
   type FeishuAttachmentDraftKey,
 } from "./attachment-draft-store.js";
 import { renderFeishuAssistantMessage, type FeishuRenderedMessageDraft } from "./message-renderer.js";
+import { extractFeishuPostText } from "./message-content.js";
 import {
   downloadFeishuMessageResources,
   extractFeishuMessageResources,
@@ -82,6 +83,7 @@ type FeishuIncomingContext =
   | (FeishuIncomingContextBase & {
     kind: "text";
     text: string;
+    attachments?: FeishuMessageResourceReference[];
   })
   | (FeishuIncomingContextBase & {
     kind: "attachment";
@@ -507,7 +509,12 @@ export class FeishuChannelService {
     const sessionId = this.sessionStore.ensureActiveSessionId(conversationKey);
     const draftKey = createAttachmentDraftKey(context, sessionId);
     const taskLease = await this.acquireSessionTaskLease(sessionId);
+    const inlineAttachments = await this.downloadInlineAttachments(context, sessionId);
     const reservedDraft = this.attachmentDraftStore.consume(draftKey);
+    const taskAttachments = [
+      ...(reservedDraft?.attachments ?? []),
+      ...inlineAttachments,
+    ];
     const bridge = new FeishuTaskMessageBridge({
       createText: async (text) => this.createAssistantMessage(context.chatId, text),
       updateText: async (messageId, text) => this.updateAssistantMessage(messageId, text),
@@ -532,17 +539,17 @@ export class FeishuChannelService {
     router.registerAdapter(adapter);
 
     let normalizedRequest: TaskRequest | null = null;
-    let shouldRestoreDraft = Boolean(reservedDraft?.attachments.length);
+    let shouldRestoreDraft = taskAttachments.length > 0;
     const discardReservedDraft = () => {
       shouldRestoreDraft = false;
     };
     const restoreReservedDraft = () => {
-      if (!shouldRestoreDraft || !reservedDraft?.attachments.length) {
+      if (!shouldRestoreDraft || taskAttachments.length === 0) {
         return;
       }
 
       try {
-        this.attachmentDraftStore.append(draftKey, reservedDraft.attachments);
+        this.attachmentDraftStore.append(draftKey, taskAttachments);
       } catch (error) {
         this.logger.error(`[themis/feishu] 恢复附件草稿失败：${toErrorMessage(error)}`);
       } finally {
@@ -552,7 +559,7 @@ export class FeishuChannelService {
 
     try {
       normalizedRequest = router.normalizeRequest(
-        this.createTaskPayload(context, sessionId, reservedDraft?.attachments),
+        this.createTaskPayload(context, sessionId, taskAttachments),
       );
       await bridge.prepareResponseSlot();
       await ensureAuthAvailable(this.authRuntime, normalizedRequest);
@@ -584,6 +591,27 @@ export class FeishuChannelService {
     } finally {
       taskLease.release();
     }
+  }
+
+  private async downloadInlineAttachments(
+    context: Extract<FeishuIncomingContext, { kind: "text" }>,
+    sessionId: string,
+  ): Promise<FeishuAttachmentDraft[]> {
+    if (!context.attachments?.length) {
+      return [];
+    }
+
+    return downloadFeishuMessageResources({
+      client: this.requireClient(),
+      resources: context.attachments,
+      targetDirectory: join(
+        this.resolveAttachmentWorkingDirectory(sessionId),
+        "temp",
+        "feishu-attachments",
+        sessionId,
+        context.messageId,
+      ),
+    });
   }
 
   private async decorateDeliveryMessageForMobile(
@@ -2620,6 +2648,7 @@ function normalizeIncomingContext(event: FeishuMessageReceiveEvent): FeishuIncom
       ...shared,
       kind: "text",
       text,
+      ...(attachments?.length ? { attachments } : {}),
     };
   }
 
@@ -2650,13 +2679,18 @@ function parseFeishuMessageCreateTime(value: unknown): number | null {
 }
 
 function extractFeishuText(event: FeishuMessageReceiveEvent): string | null {
-  if (normalizeText(event.message?.message_type) !== "text") {
+  const messageType = normalizeText(event.message?.message_type);
+  const rawContent = normalizeText(event.message?.content);
+
+  if (!messageType || !rawContent) {
     return null;
   }
 
-  const rawContent = normalizeText(event.message?.content);
+  if (messageType === "post") {
+    return extractFeishuPostText(rawContent);
+  }
 
-  if (!rawContent) {
+  if (messageType !== "text") {
     return null;
   }
 
