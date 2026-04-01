@@ -40,6 +40,8 @@ import type {
   PrincipalMainMemoryStatus,
   SessionTaskSettings,
   TaskEvent,
+  TaskInputAsset,
+  TaskInputEnvelope,
   TaskRequest,
   TaskResult,
   StoredActorRuntimeMemoryRecord,
@@ -48,7 +50,7 @@ import type {
   StoredPrincipalMainMemoryRecord,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 13;
+const DATABASE_SCHEMA_VERSION = 14;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -121,6 +123,33 @@ export interface StoredTaskEventRecord {
   status: string;
   message?: string;
   payloadJson?: string;
+  createdAt: string;
+}
+
+export interface StoredTurnInputCompileWarning {
+  code: string;
+  message: string;
+  assetId?: string;
+}
+
+export interface StoredTurnInputCompileSummary {
+  runtimeTarget: string;
+  degradationLevel: "native" | "lossless_textualization" | "controlled_fallback" | "blocked";
+  warnings: StoredTurnInputCompileWarning[];
+}
+
+export interface SaveTurnInputInput {
+  requestId: string;
+  envelope: TaskInputEnvelope;
+  compileSummary?: StoredTurnInputCompileSummary;
+  createdAt: string;
+}
+
+export interface StoredTurnInputRecord {
+  requestId: string;
+  envelope: TaskInputEnvelope;
+  assets: TaskInputAsset[];
+  compileSummary: StoredTurnInputCompileSummary;
   createdAt: string;
 }
 
@@ -523,6 +552,29 @@ interface EventRow {
   status: string;
   message: string | null;
   payload_json: string | null;
+  created_at: string;
+}
+
+interface TurnInputRow {
+  request_id: string;
+  envelope_json: string;
+  compile_summary_json: string | null;
+  created_at: string;
+}
+
+interface InputAssetRow {
+  request_id: string;
+  asset_id: string;
+  kind: string;
+  name: string | null;
+  mime_type: string;
+  local_path: string;
+  size_bytes: number | null;
+  source_channel: string;
+  source_message_id: string | null;
+  ingestion_status: string;
+  text_extraction_json: string | null;
+  metadata_json: string | null;
   created_at: string;
 }
 
@@ -2971,6 +3023,26 @@ export class SqliteCodexSessionRegistry {
           WHERE session_id = ?
         `,
       );
+      const deleteTurnInputs = this.db.prepare(
+        `
+          DELETE FROM themis_turn_inputs
+          WHERE request_id IN (
+            SELECT request_id
+            FROM themis_turns
+            WHERE session_id = ?
+          )
+        `,
+      );
+      const deleteInputAssets = this.db.prepare(
+        `
+          DELETE FROM themis_input_assets
+          WHERE request_id IN (
+            SELECT request_id
+            FROM themis_turns
+            WHERE session_id = ?
+          )
+        `,
+      );
       const deleteCodexSessions = this.db.prepare(
         `
           DELETE FROM codex_sessions
@@ -2981,6 +3053,8 @@ export class SqliteCodexSessionRegistry {
 
       for (const conversation of conversationIds) {
         clearedSessionSettingsCount += deleteSessionSettings.run(conversation.conversation_id).changes;
+        deleteInputAssets.run(conversation.conversation_id);
+        deleteTurnInputs.run(conversation.conversation_id);
         clearedTurnCount += deleteTurns.run(conversation.conversation_id).changes;
         clearedCodexSessionCount += deleteCodexSessions.run({
           session_id: conversation.conversation_id,
@@ -3740,6 +3814,164 @@ export class SqliteCodexSessionRegistry {
       .get(normalized) as TurnRow | undefined;
 
     return row ? mapTurnRow(row) : null;
+  }
+
+  saveTurnInput(input: SaveTurnInputInput): void {
+    const requestId = input.requestId.trim();
+
+    if (!requestId) {
+      return;
+    }
+
+    const insertAsset = this.db.prepare(
+      `
+        INSERT OR REPLACE INTO themis_input_assets (
+          request_id,
+          asset_id,
+          kind,
+          name,
+          mime_type,
+          local_path,
+          size_bytes,
+          source_channel,
+          source_message_id,
+          ingestion_status,
+          text_extraction_json,
+          metadata_json,
+          created_at
+        ) VALUES (
+          @request_id,
+          @asset_id,
+          @kind,
+          @name,
+          @mime_type,
+          @local_path,
+          @size_bytes,
+          @source_channel,
+          @source_message_id,
+          @ingestion_status,
+          @text_extraction_json,
+          @metadata_json,
+          @created_at
+        )
+      `,
+    );
+
+    const saveInput = this.db.transaction(() => {
+      this.db
+        .prepare(
+          `
+            INSERT OR REPLACE INTO themis_turn_inputs (
+              request_id,
+              envelope_json,
+              compile_summary_json,
+              created_at
+            ) VALUES (
+              @request_id,
+              @envelope_json,
+              @compile_summary_json,
+              @created_at
+            )
+          `,
+        )
+        .run({
+          request_id: requestId,
+          envelope_json: JSON.stringify(input.envelope),
+          compile_summary_json: stringifyJson(input.compileSummary),
+          created_at: input.createdAt,
+        });
+
+      this.db
+        .prepare(
+          `
+            DELETE FROM themis_input_assets
+            WHERE request_id = ?
+          `,
+        )
+        .run(requestId);
+
+      for (const asset of input.envelope.assets) {
+        insertAsset.run({
+          request_id: requestId,
+          asset_id: asset.assetId,
+          kind: asset.kind,
+          name: asset.name ?? null,
+          mime_type: asset.mimeType,
+          local_path: asset.localPath,
+          size_bytes: asset.sizeBytes ?? null,
+          source_channel: asset.sourceChannel,
+          source_message_id: asset.sourceMessageId ?? null,
+          ingestion_status: asset.ingestionStatus,
+          text_extraction_json: stringifyJson(asset.textExtraction),
+          metadata_json: stringifyJson(asset.metadata),
+          created_at: input.createdAt,
+        });
+      }
+    });
+
+    saveInput();
+  }
+
+  getTurnInput(requestId: string): StoredTurnInputRecord | null {
+    const normalized = requestId.trim();
+
+    if (!normalized) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT request_id, envelope_json, compile_summary_json, created_at
+          FROM themis_turn_inputs
+          WHERE request_id = ?
+        `,
+      )
+      .get(normalized) as TurnInputRow | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    const envelope = normalizeTaskInputEnvelope(safeParseJson(row.envelope_json));
+    const assetRows = this.db
+      .prepare(
+        `
+          SELECT
+            request_id,
+            asset_id,
+            kind,
+            name,
+            mime_type,
+            local_path,
+            size_bytes,
+            source_channel,
+            source_message_id,
+            ingestion_status,
+            text_extraction_json,
+            metadata_json,
+            created_at
+          FROM themis_input_assets
+          WHERE request_id = ?
+          ORDER BY created_at ASC, asset_id ASC
+        `,
+      )
+      .all(normalized) as InputAssetRow[];
+    const assets = orderTaskInputAssets(
+      assetRows.map(mapInputAssetRow),
+      envelope,
+    );
+
+    return {
+      requestId: row.request_id,
+      envelope: {
+        ...envelope,
+        assets,
+      },
+      assets,
+      compileSummary: normalizeTurnInputCompileSummary(safeParseJson(row.compile_summary_json ?? "")),
+      createdAt: row.created_at,
+    };
   }
 
   listTurnEvents(requestId: string): StoredTaskEventRecord[] {
@@ -4512,6 +4744,7 @@ export class SqliteCodexSessionRegistry {
 
     `);
 
+    this.createTurnInputTables(database);
     this.createActorMemoryTables(database);
   }
 
@@ -4860,6 +5093,7 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_web_audit_events_created_idx
       ON themis_web_audit_events(created_at DESC);
     `);
+    this.createTurnInputTables(database);
 
     const authAccountColumns = database
       .prepare(`PRAGMA table_info(themis_auth_accounts)`)
@@ -4904,6 +5138,40 @@ export class SqliteCodexSessionRegistry {
       `);
     }
 
+  }
+
+  private createTurnInputTables(database: Database.Database): void {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS themis_turn_inputs (
+        request_id TEXT PRIMARY KEY,
+        envelope_json TEXT NOT NULL,
+        compile_summary_json TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_turn_inputs_created_at_idx
+      ON themis_turn_inputs(created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS themis_input_assets (
+        request_id TEXT NOT NULL,
+        asset_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        name TEXT,
+        mime_type TEXT NOT NULL,
+        local_path TEXT NOT NULL,
+        size_bytes INTEGER,
+        source_channel TEXT NOT NULL,
+        source_message_id TEXT,
+        ingestion_status TEXT NOT NULL,
+        text_extraction_json TEXT,
+        metadata_json TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (request_id, asset_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_input_assets_request_id_idx
+      ON themis_input_assets(request_id, created_at ASC, asset_id ASC);
+    `);
   }
 
   private createDatabaseConnection(): Database.Database {
@@ -5235,6 +5503,163 @@ function mapSessionSummaryRow(row: SessionSummaryRow): StoredSessionHistorySumma
       updatedAt: row.latest_updated_at,
     },
   };
+}
+
+function mapInputAssetRow(row: InputAssetRow): TaskInputAsset {
+  return {
+    assetId: row.asset_id,
+    kind: row.kind === "document" ? "document" : "image",
+    ...(row.name ? { name: row.name } : {}),
+    mimeType: row.mime_type,
+    ...(typeof row.size_bytes === "number" ? { sizeBytes: row.size_bytes } : {}),
+    localPath: row.local_path,
+    sourceChannel: row.source_channel as TaskInputAsset["sourceChannel"],
+    ...(row.source_message_id ? { sourceMessageId: row.source_message_id } : {}),
+    ingestionStatus: row.ingestion_status as TaskInputAsset["ingestionStatus"],
+    ...(normalizeTaskInputTextExtraction(safeParseJson(row.text_extraction_json ?? "")) ? {
+      textExtraction: normalizeTaskInputTextExtraction(safeParseJson(row.text_extraction_json ?? "")),
+    } : {}),
+    ...(normalizeTaskInputMetadata(safeParseJson(row.metadata_json ?? "")) ? {
+      metadata: normalizeTaskInputMetadata(safeParseJson(row.metadata_json ?? "")),
+    } : {}),
+  };
+}
+
+function normalizeTaskInputEnvelope(value: unknown): TaskInputEnvelope {
+  const fallback: TaskInputEnvelope = {
+    envelopeId: "",
+    sourceChannel: "web",
+    parts: [],
+    assets: [],
+    createdAt: new Date(0).toISOString(),
+  };
+
+  if (!isRecord(value)) {
+    return fallback;
+  }
+
+  return value as TaskInputEnvelope;
+}
+
+function normalizeTurnInputCompileSummary(value: unknown): StoredTurnInputCompileSummary {
+  if (!isRecord(value)) {
+    return {
+      runtimeTarget: "unknown",
+      degradationLevel: "native",
+      warnings: [],
+    };
+  }
+
+  const runtimeTarget = normalizeText(typeof value.runtimeTarget === "string" ? value.runtimeTarget : undefined) ?? "unknown";
+  const degradationLevel = value.degradationLevel === "lossless_textualization" ||
+      value.degradationLevel === "controlled_fallback" ||
+      value.degradationLevel === "blocked"
+    ? value.degradationLevel
+    : "native";
+  const warnings = Array.isArray(value.warnings)
+    ? value.warnings
+      .map(normalizeTurnInputCompileWarning)
+      .filter((warning): warning is StoredTurnInputCompileWarning => warning !== null)
+    : [];
+
+  return {
+    runtimeTarget,
+    degradationLevel,
+    warnings,
+  };
+}
+
+function normalizeTurnInputCompileWarning(value: unknown): StoredTurnInputCompileWarning | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const code = normalizeText(typeof value.code === "string" ? value.code : undefined);
+  const message = normalizeText(typeof value.message === "string" ? value.message : undefined);
+
+  if (!code || !message) {
+    return null;
+  }
+
+  const assetId = normalizeText(typeof value.assetId === "string" ? value.assetId : undefined);
+
+  return {
+    code,
+    message,
+    ...(assetId ? { assetId } : {}),
+  };
+}
+
+function normalizeTaskInputTextExtraction(value: unknown): TaskInputAsset["textExtraction"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const status = value.status === "completed" || value.status === "failed" ? value.status : "not_started";
+  const textPath = normalizeText(typeof value.textPath === "string" ? value.textPath : undefined);
+  const textPreview = normalizeText(typeof value.textPreview === "string" ? value.textPreview : undefined);
+
+  return {
+    status,
+    ...(textPath ? { textPath } : {}),
+    ...(textPreview ? { textPreview } : {}),
+  };
+}
+
+function normalizeTaskInputMetadata(value: unknown): TaskInputAsset["metadata"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const width = typeof value.width === "number" && Number.isFinite(value.width) ? value.width : undefined;
+  const height = typeof value.height === "number" && Number.isFinite(value.height) ? value.height : undefined;
+  const pageCount = typeof value.pageCount === "number" && Number.isFinite(value.pageCount) ? value.pageCount : undefined;
+  const languageHint = normalizeText(typeof value.languageHint === "string" ? value.languageHint : undefined);
+
+  if (width === undefined && height === undefined && pageCount === undefined && !languageHint) {
+    return undefined;
+  }
+
+  return {
+    ...(width !== undefined ? { width } : {}),
+    ...(height !== undefined ? { height } : {}),
+    ...(pageCount !== undefined ? { pageCount } : {}),
+    ...(languageHint ? { languageHint } : {}),
+  };
+}
+
+function orderTaskInputAssets(assets: TaskInputAsset[], envelope: TaskInputEnvelope): TaskInputAsset[] {
+  if (!assets.length) {
+    return envelope.assets;
+  }
+
+  const assetById = new Map(assets.map((asset) => [asset.assetId, asset]));
+  const ordered: TaskInputAsset[] = [];
+  const seen = new Set<string>();
+
+  for (const part of envelope.parts) {
+    if (part.type === "text") {
+      continue;
+    }
+
+    const asset = assetById.get(part.assetId);
+    if (!asset || seen.has(asset.assetId)) {
+      continue;
+    }
+
+    ordered.push(asset);
+    seen.add(asset.assetId);
+  }
+
+  for (const asset of assets) {
+    if (seen.has(asset.assetId)) {
+      continue;
+    }
+
+    ordered.push(asset);
+  }
+
+  return ordered;
 }
 
 function mapThirdPartyProviderRow(row: ThirdPartyProviderRow): StoredThirdPartyProviderRecord {

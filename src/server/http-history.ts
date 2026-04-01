@@ -51,11 +51,16 @@ export async function handleHistorySessionDetail(
   const firstTurn = turns[0]!;
   const latestTurn = turns.at(-1) ?? firstTurn;
   const session = store.listRecentSessions(200).find((item) => item.sessionId === sessionId);
-  const detailedTurns = turns.map((turn) => ({
-    ...turn,
-    events: store.listTurnEvents(turn.requestId),
-    touchedFiles: store.listTurnFiles(turn.requestId),
-  }));
+  const detailedTurns = turns.map((turn) => {
+    const turnInput = store.getTurnInput(turn.requestId);
+
+    return {
+      ...turn,
+      events: store.listTurnEvents(turn.requestId),
+      touchedFiles: store.listTurnFiles(turn.requestId),
+      ...(turnInput ? { input: turnInput } : {}),
+    };
+  });
   const nativeThread = await readNativeThreadSummary(store, sessionId, runtimeRegistry);
 
   writeJson(response, 200, {

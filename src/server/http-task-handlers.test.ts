@@ -491,6 +491,103 @@ test("/api/tasks/stream 会记录任务已接受审计", async () => {
   }));
 });
 
+test("/api/history/sessions/:id 会返回 turn input 的降级摘要", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    runtimeStore.upsertTurnFromRequest({
+      requestId: "req-history-turn-input",
+      sourceChannel: "web",
+      channelContext: {
+        sessionId: "session-history-turn-input",
+      },
+      user: {
+        userId: "user-history-turn-input",
+      },
+      goal: "请基于图片总结内容",
+      createdAt: "2026-04-01T21:30:00.000Z",
+    }, "task-history-turn-input");
+    runtimeStore.saveTurnInput({
+      requestId: "req-history-turn-input",
+      envelope: {
+        envelopeId: "env-history-turn-input",
+        sourceChannel: "web",
+        parts: [
+          {
+            partId: "part-1",
+            type: "text",
+            role: "user",
+            order: 1,
+            text: "请基于图片总结内容",
+          },
+          {
+            partId: "part-2",
+            type: "image",
+            role: "user",
+            order: 2,
+            assetId: "asset-image-1",
+          },
+        ],
+        assets: [
+          {
+            assetId: "asset-image-1",
+            kind: "image",
+            mimeType: "image/png",
+            localPath: "/workspace/temp/input-assets/history.png",
+            sourceChannel: "web",
+            ingestionStatus: "ready",
+          },
+        ],
+        createdAt: "2026-04-01T21:30:00.000Z",
+      },
+      compileSummary: {
+        runtimeTarget: "sdk",
+        degradationLevel: "controlled_fallback",
+        warnings: [
+          {
+            code: "IMAGE_UPLOADED_AS_ATTACHMENT",
+            message: "当前 runtime 不支持原生图片输入，已降级为附件描述。",
+            assetId: "asset-image-1",
+          },
+        ],
+      },
+      createdAt: "2026-04-01T21:30:00.000Z",
+    });
+
+    const response = await fetch(`${baseUrl}/api/history/sessions/session-history-turn-input`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+
+    assert.equal(response.status, 200);
+
+    const payload = await response.json() as {
+      turns?: Array<{
+        requestId?: string;
+        input?: {
+          compileSummary?: {
+            runtimeTarget?: string;
+            degradationLevel?: string;
+            warnings?: Array<{
+              code?: string;
+              assetId?: string;
+            }>;
+          };
+        };
+      }>;
+    };
+
+    assert.equal(payload.turns?.[0]?.requestId, "req-history-turn-input");
+    assert.equal(payload.turns?.[0]?.input?.compileSummary?.runtimeTarget, "sdk");
+    assert.equal(payload.turns?.[0]?.input?.compileSummary?.degradationLevel, "controlled_fallback");
+    assert.equal(payload.turns?.[0]?.input?.compileSummary?.warnings?.[0]?.code, "IMAGE_UPLOADED_AS_ATTACHMENT");
+    assert.equal(payload.turns?.[0]?.input?.compileSummary?.warnings?.[0]?.assetId, "asset-image-1");
+  });
+});
+
 function listenServer(server: Server): Promise<Server> {
   return new Promise((resolve, reject) => {
     server.once("error", reject);
