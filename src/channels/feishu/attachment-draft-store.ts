@@ -73,23 +73,25 @@ export class FeishuAttachmentDraftStore {
       throw new Error("Feishu 附件草稿不能为空。");
     }
 
-    const store = this.readStore();
-    const now = this.now();
-    const cleaned = cleanupExpiredDrafts(store, now);
-    const record = store.drafts.find((entry) => entry.key === normalizedKey);
-    const normalizedAttachments = attachments
-      .map(normalizeAttachment)
-      .filter((item): item is FeishuAttachmentDraft => item !== null);
-
-    if (!normalizedAttachments.length) {
+    const normalizedAttachments = attachments.map(normalizeAttachment);
+    if (normalizedAttachments.some((item) => item === null)) {
+      throw new Error("Feishu 附件草稿包含无效附件。");
+    }
+    const validAttachments = normalizedAttachments.filter((item): item is FeishuAttachmentDraft => item !== null);
+    if (!validAttachments.length) {
       throw new Error("Feishu 附件草稿不包含可用字段。");
     }
+
+    const store = this.readStore();
+    const now = this.now();
+    cleanupExpiredDrafts(store, now);
+    const record = store.drafts.find((entry) => entry.key === normalizedKey);
 
     const nowMs = parseTimestamp(now, Date.now());
     const refreshedAt = new Date(nowMs).toISOString();
 
     if (record) {
-      record.attachments.push(...normalizedAttachments);
+      record.attachments.push(...validAttachments);
       record.updatedAt = refreshedAt;
       record.expiresAt = new Date(nowMs + this.ttlMs).toISOString();
     } else {
@@ -101,7 +103,7 @@ export class FeishuAttachmentDraftStore {
         createdAt: now,
         updatedAt: now,
         expiresAt: new Date(nowMs + this.ttlMs).toISOString(),
-        attachments: normalizedAttachments,
+        attachments: validAttachments,
       });
     }
 
