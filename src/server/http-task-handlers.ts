@@ -19,8 +19,6 @@ import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
 import { safeWriteNdjson, writeJson, writeNdjson } from "./http-responses.js";
 
-const DETACHED_ACTION_CLOSE_GRACE_MS = 63;
-
 export async function handleTaskStream(
   request: IncomingMessage,
   response: ServerResponse,
@@ -36,43 +34,48 @@ export async function handleTaskStream(
   let streamClosed = false;
   let streamCompleted = false;
   let detachedRecoveryActionId: string | null = null;
+  let detachedRecoveryCloseActionId: string | null = null;
+  const closeAbortGraceMs = 63;
   let closeAbortTimer: ReturnType<typeof setTimeout> | null = null;
-  const markClosed = (): void => {
-    streamClosed = true;
-
-    scheduleCloseAbort();
-  };
-
   const clearCloseAbortTimer = (): void => {
     if (closeAbortTimer) {
       clearTimeout(closeAbortTimer);
       closeAbortTimer = null;
     }
   };
-
-  const shouldAbortForClosedStream = (): boolean => {
-    return streamClosed
-      && !streamCompleted
-      && !abortController.signal.aborted
-      && !hasRecoverableDetachedAction(normalizedRequest, detachedRecoveryActionId, actionBridge);
+  const armDetachedRecoveryClose = (actionId: string): void => {
+    detachedRecoveryCloseActionId = actionId;
   };
+  const markClosed = (): void => {
+    streamClosed = true;
 
-  const scheduleCloseAbort = (): void => {
-    if (closeAbortTimer || !streamClosed || streamCompleted || abortController.signal.aborted) {
+    if (streamCompleted || abortController.signal.aborted) {
       return;
     }
 
     if (hasRecoverableDetachedAction(normalizedRequest, detachedRecoveryActionId, actionBridge)) {
+      if (detachedRecoveryActionId) {
+        armDetachedRecoveryClose(detachedRecoveryActionId);
+      }
+      return;
+    }
+
+    if (detachedRecoveryCloseActionId !== null) {
+      abortController.abort(new Error("CLIENT_DISCONNECTED"));
+      return;
+    }
+
+    if (closeAbortTimer) {
       return;
     }
 
     closeAbortTimer = setTimeout(() => {
       closeAbortTimer = null;
 
-      if (shouldAbortForClosedStream()) {
+      if (!streamCompleted && !abortController.signal.aborted && !hasRecoverableDetachedAction(normalizedRequest, detachedRecoveryActionId, actionBridge)) {
         abortController.abort(new Error("CLIENT_DISCONNECTED"));
       }
-    }, DETACHED_ACTION_CLOSE_GRACE_MS);
+    }, closeAbortGraceMs);
   };
 
   response.statusCode = 200;
@@ -120,21 +123,15 @@ export async function handleTaskStream(
       onEvent: async (event) => {
         if (event.type === "task.action_required" && typeof event.payload?.actionId === "string") {
           detachedRecoveryActionId = event.payload.actionId;
-        }
-
-        if (streamClosed) {
-          if (hasRecoverableDetachedAction(normalizedRequest, detachedRecoveryActionId, actionBridge)) {
+          if (streamClosed && hasRecoverableDetachedAction(normalizedRequest, event.payload.actionId, actionBridge)) {
+            armDetachedRecoveryClose(event.payload.actionId);
             clearCloseAbortTimer();
-          } else {
-            scheduleCloseAbort();
           }
         }
 
         await router.publishEvent(event);
       },
     });
-
-    clearCloseAbortTimer();
 
     if (result.status === "cancelled") {
       recordTaskCancelledAudit(selectedRuntime, request, normalizedRequest, result, "/api/tasks/stream");

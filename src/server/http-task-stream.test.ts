@@ -963,8 +963,8 @@ test("handleTaskStream 在 user-input task.action_required 后 close 不会丢�
   });
 });
 
-test("handleTaskStream 在 approval resolve 后延迟注册第二轮 user-input 时仍不会 CLIENT_DISCONNECTED", async () => {
-  const root = mkdtempSync(join(tmpdir(), "themis-http-task-stream-delayed-bridge-"));
+test("handleTaskStream 在 pending action resolve 后再次 close 会恢复 CLIENT_DISCONNECTED", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-http-task-stream-recovery-window-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
@@ -978,24 +978,20 @@ test("handleTaskStream 在 approval resolve 后延迟注册第二轮 user-input 
   });
   const actionBridge = new AppServerActionBridge();
   const request = createTaskStreamRequest({
-    goal: "请检查延迟注册 bridge 的恢复窗口",
-    sessionId: "session-task-stream-delayed-bridge",
+    goal: "请检查恢复窗口结束后再次断流",
+    sessionId: "session-task-stream-recovery-window",
   });
   const response = createTaskStreamResponse();
   let abortMessage: string | null = null;
   let capturedTaskId = "";
   let capturedRequestId = "";
-  let resolveFirstActionReady!: () => void;
-  const firstActionReady = new Promise<void>((resolve) => {
-    resolveFirstActionReady = resolve;
+  let resolveActionReady!: () => void;
+  const actionReady = new Promise<void>((resolve) => {
+    resolveActionReady = resolve;
   });
-  let resolveSecondActionReady!: () => void;
-  const secondActionReady = new Promise<void>((resolve) => {
-    resolveSecondActionReady = resolve;
-  });
-  let releaseSecondAction!: () => void;
-  const secondActionGate = new Promise<void>((resolve) => {
-    releaseSecondAction = resolve;
+  let resolveSubmissionObserved!: () => void;
+  const submissionObserved = new Promise<void>((resolve) => {
+    resolveSubmissionObserved = resolve;
   });
   let releaseCompletion!: () => void;
   const completionGate = new Promise<void>((resolve) => {
@@ -1008,7 +1004,7 @@ test("handleTaskStream 在 approval resolve 后延迟注册第二轮 user-input 
     }).runTask = async (taskRequest, hooks = {}) => {
       const { onEvent, signal } = hooks;
       assert.ok(signal);
-      capturedTaskId = taskRequest.taskId ?? "task-stream-delayed-bridge";
+      capturedTaskId = taskRequest.taskId ?? "task-stream-recovery-window";
       capturedRequestId = taskRequest.requestId;
 
       signal.addEventListener("abort", () => {
@@ -1017,73 +1013,41 @@ test("handleTaskStream 在 approval resolve 后延迟注册第二轮 user-input 
           : String(signal.reason);
       }, { once: true });
 
-      const firstAction = actionBridge.register({
+      const action = actionBridge.register({
         taskId: capturedTaskId,
         requestId: capturedRequestId,
-        actionId: "approval-delayed-1",
+        actionId: "approval-window-1",
         actionType: "approval",
         prompt: "Need approval",
       });
-      const firstSubmission = actionBridge.waitForSubmission(capturedTaskId, capturedRequestId, firstAction.actionId);
-      assert.ok(firstSubmission);
+      const submission = actionBridge.waitForSubmission(capturedTaskId, capturedRequestId, action.actionId);
+      assert.ok(submission);
 
       await onEvent?.({
-        eventId: "event-delayed-bridge-1",
+        eventId: "event-recovery-window-1",
         taskId: capturedTaskId,
         requestId: capturedRequestId,
         type: "task.action_required",
         status: "waiting",
         message: "Need approval",
         payload: {
-          actionId: firstAction.actionId,
-          actionType: firstAction.actionType,
+          actionId: action.actionId,
+          actionType: action.actionType,
         },
-        timestamp: "2026-03-31T10:00:00.000Z",
+        timestamp: "2026-03-29T09:00:00.000Z",
       });
-      resolveFirstActionReady();
+      resolveActionReady();
 
-      await firstSubmission;
-      await secondActionGate;
-
-      const secondAction = actionBridge.register({
-        taskId: capturedTaskId,
-        requestId: capturedRequestId,
-        actionId: "input-delayed-bridge-2",
-        actionType: "user-input",
-        prompt: "Need more input",
-      });
-      const secondSubmission = actionBridge.waitForSubmission(capturedTaskId, capturedRequestId, secondAction.actionId);
-      assert.ok(secondSubmission);
-
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-
-      await onEvent?.({
-        eventId: "event-delayed-bridge-2",
-        taskId: capturedTaskId,
-        requestId: capturedRequestId,
-        type: "task.action_required",
-        status: "waiting",
-        message: "Need more input",
-        payload: {
-          actionId: secondAction.actionId,
-          actionType: secondAction.actionType,
-        },
-        timestamp: "2026-03-31T10:00:01.000Z",
-      });
-      resolveSecondActionReady();
-
-      const secondPayload = await secondSubmission;
-      assert.equal(secondPayload.inputText, "补充来自延迟 bridge 的输入");
-      releaseCompletion();
+      await submission;
+      resolveSubmissionObserved();
+      await completionGate;
 
       return {
         taskId: capturedTaskId,
         requestId: capturedRequestId,
-        status: signal.aborted ? "cancelled" as const : "completed" as const,
-        summary: signal.aborted ? "任务已取消" : `已处理 ${secondPayload.inputText}`,
-        completedAt: "2026-03-31T10:00:02.000Z",
+        status: signal.aborted ? "cancelled" : "completed",
+        summary: signal.aborted ? "任务已取消" : "任务已完成",
+        completedAt: "2026-03-29T09:00:02.000Z",
       };
     };
 
@@ -1099,43 +1063,191 @@ test("handleTaskStream 在 approval resolve 后延迟注册第二轮 user-input 
       5_000,
     );
 
-    await firstActionReady;
-    assert.ok(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-delayed-1"));
+    await actionReady;
+    assert.ok(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-window-1"));
+
+    response.emit("close");
+    assert.equal(abortMessage, null);
 
     assert.equal(actionBridge.resolve({
       taskId: capturedTaskId,
       requestId: capturedRequestId,
-      actionId: "approval-delayed-1",
+      actionId: "approval-window-1",
       decision: "approve",
     }), true);
 
-    await waitFor(() => actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-delayed-1") === null);
-    response.emit("close");
-    assert.equal(abortMessage, null);
+    await submissionObserved;
+    assert.equal(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-window-1"), null);
 
+    response.emit("close");
+    assert.equal(abortMessage, "CLIENT_DISCONNECTED");
+
+    releaseCompletion();
+    await streamPromise;
+
+    assert.equal(abortMessage, "CLIENT_DISCONNECTED");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("handleTaskStream 在 approval resolve 后延迟注册第二轮 user-input 时仍不会 CLIENT_DISCONNECTED", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-http-task-stream-detached-mixed-window-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: root,
+    runtimeStore,
+  });
+  const authRuntime = createAuthRuntime({
+    authenticated: false,
+    requiresOpenaiAuth: false,
+  });
+  const actionBridge = new AppServerActionBridge();
+  const request = createTaskStreamRequest({
+    goal: "请验证 detached mixed recovery grace window",
+    sessionId: "session-task-stream-detached-mixed-window",
+  });
+  const response = createTaskStreamResponse();
+  let abortMessage: string | null = null;
+  let capturedTaskId = "";
+  let capturedRequestId = "";
+  let releaseSecondAction!: () => void;
+  const secondActionGate = new Promise<void>((resolve) => {
+    releaseSecondAction = resolve;
+  });
+  let streamFailure: unknown = null;
+
+  try {
+    (runtime as CodexTaskRuntime & { runTask: CodexTaskRuntime["runTask"] }).runTask = async (taskRequest, hooks = {}) => {
+      const { onEvent, signal } = hooks;
+      assert.ok(signal);
+      capturedTaskId = taskRequest.taskId ?? "task-stream-detached-mixed-window";
+      capturedRequestId = taskRequest.requestId;
+
+      signal.addEventListener("abort", () => {
+        abortMessage = signal.reason instanceof Error ? signal.reason.message : String(signal.reason);
+      }, { once: true });
+
+      const approval = actionBridge.register({
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        actionId: "approval-detached-mixed-1",
+        actionType: "approval",
+        prompt: "Need approval 1",
+      });
+      const approvalSubmission = actionBridge.waitForSubmission(capturedTaskId, capturedRequestId, approval.actionId);
+      assert.ok(approvalSubmission);
+
+      await onEvent?.({
+        eventId: "event-detached-mixed-approval-1",
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        type: "task.action_required",
+        status: "waiting",
+        message: "Need approval 1",
+        payload: {
+          actionId: approval.actionId,
+          actionType: approval.actionType,
+        },
+        timestamp: "2026-03-31T12:00:00.000Z",
+      });
+
+      await approvalSubmission;
+      await secondActionGate;
+
+      const input = actionBridge.register({
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        actionId: "input-detached-mixed-2",
+        actionType: "user-input",
+        prompt: "Need final input",
+      });
+      const inputSubmission = actionBridge.waitForSubmission(capturedTaskId, capturedRequestId, input.actionId);
+      assert.ok(inputSubmission);
+
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      await onEvent?.({
+        eventId: "event-detached-mixed-input-2",
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        type: "task.action_required",
+        status: "waiting",
+        message: "Need final input",
+        payload: {
+          actionId: input.actionId,
+          actionType: input.actionType,
+        },
+        timestamp: "2026-03-31T12:00:01.000Z",
+      });
+
+      const inputPayload = await inputSubmission;
+      assert.equal(inputPayload.inputText, "来自飞书的恢复补充");
+
+      return {
+        taskId: capturedTaskId,
+        requestId: capturedRequestId,
+        status: "completed",
+        summary: "detached mixed recovery completed",
+        completedAt: "2026-03-31T12:00:02.000Z",
+      };
+    };
+    const streamPromise = handleTaskStream(
+      request as unknown as import("node:http").IncomingMessage,
+      response as unknown as import("node:http").ServerResponse,
+      runtime,
+      { defaultRuntime: runtime },
+      authRuntime,
+      actionBridge,
+      5_000,
+    );
+    const streamCompletion = streamPromise.then(
+      () => undefined,
+      (error) => {
+        streamFailure = error;
+      },
+    );
+
+    await waitFor(
+      () => actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "approval-detached-mixed-1") !== null,
+      "approval detached mixed action did not register",
+    );
+
+    assert.equal(actionBridge.resolve({
+      taskId: capturedTaskId,
+      requestId: capturedRequestId,
+      actionId: "approval-detached-mixed-1",
+      decision: "approve",
+    }), true);
+
+    response.emit("close");
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
         setImmediate(resolve);
       }, 60);
-      timer.unref?.();
     });
     releaseSecondAction();
 
-    await secondActionReady;
-    assert.ok(actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "input-delayed-bridge-2"));
+    await waitFor(
+      () => actionBridge.findBySubmission(capturedTaskId, capturedRequestId, "input-detached-mixed-2") !== null,
+      "second detached mixed user-input action did not register",
+    );
+
     assert.equal(abortMessage, null);
 
     assert.equal(actionBridge.resolve({
       taskId: capturedTaskId,
       requestId: capturedRequestId,
-      actionId: "input-delayed-bridge-2",
-      inputText: "补充来自延迟 bridge 的输入",
+      actionId: "input-detached-mixed-2",
+      inputText: "来自飞书的恢复补充",
     }), true);
 
-    await completionGate;
-    await streamPromise;
-
-    assert.equal(abortMessage, null);
+    await streamCompletion;
+    assert.equal(streamFailure, null);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1408,6 +1520,99 @@ test("handleTaskStream 仅收到无 bridge pending action 的 task.action_requir
   }
 });
 
+test("handleTaskStream 在 streamClosed 后收到非 bridge 的 task.action_required 不能清掉 grace timer", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-http-task-stream-non-bridge-grace-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: root,
+    runtimeStore,
+  });
+  const authRuntime = createAuthRuntime({
+    authenticated: false,
+    requiresOpenaiAuth: false,
+  });
+  const actionBridge = new AppServerActionBridge();
+  const request = createTaskStreamRequest({
+    goal: "请检查非 bridge action_required 不应清理 grace",
+    sessionId: "session-task-stream-non-bridge-grace",
+  });
+  const response = createTaskStreamResponse(({ writeCount, chunk }) => {
+    const line = parseNdjson(String(chunk))[0];
+
+    if (writeCount === 1 && line?.kind === "ack") {
+      request.emit("close");
+    }
+  });
+  let abortMessage: string | null = null;
+
+  try {
+    (runtime as CodexTaskRuntime & {
+      runTask: CodexTaskRuntime["runTask"];
+    }).runTask = async (taskRequest, hooks = {}) => {
+      const { onEvent, signal } = hooks;
+      assert.ok(signal);
+
+      const abortObserved = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error("timeout waiting CLIENT_DISCONNECTED"));
+        }, 200);
+
+        signal.addEventListener("abort", () => {
+          clearTimeout(timer);
+          abortMessage = signal.reason instanceof Error
+            ? signal.reason.message
+            : String(signal.reason);
+          resolve();
+        }, { once: true });
+      });
+
+      await onEvent?.({
+        eventId: "event-non-bridge-grace-1",
+        taskId: taskRequest.taskId ?? "task-stream-non-bridge-grace",
+        requestId: taskRequest.requestId,
+        type: "task.action_required",
+        status: "waiting",
+        message: "Need follow-up answer",
+        payload: {
+          actionId: "fake-non-bridge-grace-1",
+          actionType: "approval",
+        },
+        timestamp: "2026-04-01T09:00:00.000Z",
+      });
+
+      await abortObserved;
+
+      return {
+        taskId: taskRequest.taskId ?? "task-stream-non-bridge-grace",
+        requestId: taskRequest.requestId,
+        status: "cancelled",
+        summary: "任务已取消",
+        completedAt: "2026-04-01T09:00:01.000Z",
+      };
+    };
+
+    await handleTaskStream(
+      request as unknown as import("node:http").IncomingMessage,
+      response as unknown as import("node:http").ServerResponse,
+      runtime,
+      {
+        defaultRuntime: runtime,
+      },
+      authRuntime,
+      actionBridge,
+      5_000,
+    );
+
+    assert.equal(abortMessage, "CLIENT_DISCONNECTED");
+    const lines = parseNdjson(response.lines.join(""));
+    assert.deepEqual(lines.map((line) => line.kind), ["ack"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function parseNdjson(body: string): Array<{
   kind?: string;
   title?: string;
@@ -1507,17 +1712,22 @@ function listenServer(server: Server): Promise<Server> {
   });
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMsOrMessage: number | string = 1_000,
+  errorMessage = "waitFor timeout",
+): Promise<void> {
+  const timeoutMs = typeof timeoutMsOrMessage === "number" ? timeoutMsOrMessage : 1_000;
+  const timeoutMessage = typeof timeoutMsOrMessage === "string" ? timeoutMsOrMessage : errorMessage;
   const startedAt = Date.now();
 
   while (!predicate()) {
     if (Date.now() - startedAt >= timeoutMs) {
-      throw new Error("waitFor timeout");
+      throw new Error(timeoutMessage);
     }
 
     await new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, 10);
-      timer.unref?.();
     });
   }
 }

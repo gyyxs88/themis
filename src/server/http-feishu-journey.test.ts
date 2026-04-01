@@ -245,104 +245,243 @@ test("真实 Web->飞书 mixed recovery journey 在 app-server 下会走通 appr
   });
 });
 
-test("Journey session respondToServerRequest 会按 request id 严格匹配当前 waiting reverse request", async () => {
-  const singleState = createJourneySessionState({
-    scenario: "single-user-input",
-    workingDirectory: "/tmp/themis-feishu-journey-single",
-  });
-  const singleSession = createJourneySession(singleState);
-  const singleRequests: AppServerReverseRequest[] = [];
+test("Journey session respondToServerRequest 会按 request id 严格匹配当前 waiting reverse request", async (t) => {
+  await t.test("single-user-input strict match", async () => {
+    const singleState = createJourneySessionState({
+      scenario: "single-user-input",
+      workingDirectory: "/tmp/themis-feishu-journey-single",
+    });
+    const singleSession = createJourneySession(singleState);
+    const singleRequests: AppServerReverseRequest[] = [];
 
-  singleSession.onServerRequest((request) => {
-    singleRequests.push(request);
-  });
+    singleSession.onServerRequest((request) => {
+      singleRequests.push(request);
+    });
 
-  await singleSession.initialize();
-  await singleSession.startThread({
-    cwd: singleState.workingDirectory,
-    persistExtendedHistory: true,
-  });
-  const singleTurn = singleSession.startTurn(JOURNEY_THREAD_ID, "single journey");
-  const singleRespondToServerRequest = singleSession.respondToServerRequest;
+    await singleSession.initialize();
+    await singleSession.startThread({
+      cwd: singleState.workingDirectory,
+      persistExtendedHistory: true,
+    });
+    const singleTurn = singleSession.startTurn(JOURNEY_THREAD_ID, "single journey");
+    const singleRespondToServerRequest = singleSession.respondToServerRequest;
 
-  assert.ok(singleRespondToServerRequest);
-  await waitFor(() => singleRequests.length === 1, "single scenario did not emit requestUserInput");
+    assert.ok(singleRespondToServerRequest);
+    await waitFor(() => singleRequests.length === 1, "single scenario did not emit requestUserInput");
 
-  await assert.rejects(
-    singleRespondToServerRequest("wrong-single-request-id", {
+    await assert.rejects(
+      singleRespondToServerRequest("wrong-single-request-id", {
+        answers: {
+          reply: {
+            answers: ["ignored"],
+          },
+        },
+      }),
+      /Unexpected reverse request id/,
+    );
+
+    await singleRespondToServerRequest(singleRequests[0]?.id ?? "", {
       answers: {
         reply: {
-          answers: ["ignored"],
+          answers: ["single strict match"],
         },
       },
-    }),
-    /Unexpected reverse request id/,
-  );
-
-  await singleRespondToServerRequest(singleRequests[0]?.id ?? "", {
-    answers: {
-      reply: {
-        answers: ["single strict match"],
-      },
-    },
-  });
-  await singleTurn;
-  await singleSession.close();
-
-  const mixedState = createJourneySessionState({
-    scenario: "approval-then-input",
-    workingDirectory: "/tmp/themis-feishu-journey-mixed",
-  });
-  const mixedSession = createJourneySession(mixedState);
-  const mixedRequests: AppServerReverseRequest[] = [];
-
-  mixedSession.onServerRequest((request) => {
-    mixedRequests.push(request);
+    });
+    await singleTurn;
+    await singleSession.close();
   });
 
-  await mixedSession.initialize();
-  await mixedSession.startThread({
-    cwd: mixedState.workingDirectory,
-    persistExtendedHistory: true,
-  });
-  const mixedTurn = mixedSession.startTurn(JOURNEY_THREAD_ID, "mixed journey");
-  const mixedRespondToServerRequest = mixedSession.respondToServerRequest;
+  await t.test("approval-then-input strict match", async () => {
+    const mixedState = createJourneySessionState({
+      scenario: "approval-then-input",
+      workingDirectory: "/tmp/themis-feishu-journey-mixed",
+      mixedRecoveryInputDelayMs: 0,
+    });
+    const mixedSession = createJourneySession(mixedState);
+    const mixedRequests: AppServerReverseRequest[] = [];
 
-  assert.ok(mixedRespondToServerRequest);
-  await waitFor(() => mixedRequests.length === 1, "mixed scenario did not emit approval request");
+    mixedSession.onServerRequest((request) => {
+      mixedRequests.push(request);
+    });
 
-  await assert.rejects(
-    mixedRespondToServerRequest("wrong-mixed-approval-id", {
+    await mixedSession.initialize();
+    await mixedSession.startThread({
+      cwd: mixedState.workingDirectory,
+      persistExtendedHistory: true,
+    });
+    const mixedTurn = mixedSession.startTurn(JOURNEY_THREAD_ID, "mixed journey");
+    const mixedRespondToServerRequest = mixedSession.respondToServerRequest;
+
+    assert.ok(mixedRespondToServerRequest);
+    await waitFor(() => mixedRequests.length === 1, "mixed scenario did not emit approval request");
+
+    await assert.rejects(
+      mixedRespondToServerRequest("wrong-mixed-approval-id", {
+        decision: "accept",
+      }),
+      /Unexpected reverse request id/,
+    );
+
+    await mixedRespondToServerRequest(mixedRequests[0]?.id ?? "", {
       decision: "accept",
-    }),
-    /Unexpected reverse request id/,
-  );
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    await waitFor(() => mixedRequests.length === 2, "mixed scenario did not emit user-input request");
 
-  await mixedRespondToServerRequest(mixedRequests[0]?.id ?? "", {
-    decision: "accept",
-  });
-  await waitFor(() => mixedRequests.length === 2, "mixed scenario did not emit user-input request");
+    await assert.rejects(
+      mixedRespondToServerRequest("wrong-mixed-input-id", {
+        answers: {
+          reply: {
+            answers: ["ignored"],
+          },
+        },
+      }),
+      /Unexpected reverse request id/,
+    );
 
-  await assert.rejects(
-    mixedRespondToServerRequest("wrong-mixed-input-id", {
+    await mixedRespondToServerRequest(mixedRequests[1]?.id ?? "", {
       answers: {
         reply: {
-          answers: ["ignored"],
+          answers: ["mixed strict match"],
         },
       },
-    }),
-    /Unexpected reverse request id/,
-  );
+    });
+    await mixedTurn;
+    await mixedSession.close();
+  });
 
-  await mixedRespondToServerRequest(mixedRequests[1]?.id ?? "", {
-    answers: {
-      reply: {
-        answers: ["mixed strict match"],
-      },
+});
+
+test("Journey session rejectServerRequest 不应把 CLIENT_DISCONNECTED 直接等价成 session closed", async () => {
+  const state = createJourneySessionState({
+    scenario: "approval-then-input",
+    workingDirectory: "/tmp/themis-feishu-journey-reject-close",
+    mixedRecoveryInputDelayMs: 0,
+  });
+  const session = createJourneySession(state);
+  const requests: AppServerReverseRequest[] = [];
+
+  session.onServerRequest((request) => {
+    requests.push(request);
+  });
+
+  await session.initialize();
+  await session.startThread({
+    cwd: state.workingDirectory,
+    persistExtendedHistory: true,
+  });
+
+  const turnPromise = session.startTurn(JOURNEY_THREAD_ID, "journey reject close semantics");
+  let turnSettled = false;
+  void turnPromise.finally(() => {
+    turnSettled = true;
+  });
+  await waitFor(() => requests.length === 1, "approval request was not emitted");
+  const rejectServerRequest = session.rejectServerRequest;
+  assert.ok(rejectServerRequest);
+
+  await rejectServerRequest(requests[0]?.id ?? "", new Error("CLIENT_DISCONNECTED"));
+
+  assert.equal(state.feishuState.lastRejectedServerRequestError, "CLIENT_DISCONNECTED");
+  assert.equal(requests.length, 1);
+  assert.equal(state.currentTurnStatus, "waiting");
+
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  assert.equal(requests.length, 1);
+  assert.equal(state.currentTurnStatus, "waiting");
+  assert.equal(turnSettled, false);
+
+  await session.close();
+  await turnPromise;
+  assert.equal(state.currentTurnStatus, "completed");
+});
+
+test("真实 Web->飞书 mixed recovery 在 approval 后立即断流时仍会通过 /use + direct-text takeover 收口", async () => {
+  await withHttpFeishuJourneyServer({
+    scenario: "approval-then-input",
+    run: async ({ baseUrl, root, runtimeStore, authHeaders, feishu }) => {
+      const sessionId = "session-web-feishu-detached-mixed-journey-1";
+      const workspace = join(root, "workspace-feishu-detached-mixed-journey");
+      seedCompletedWebOwnerPersona(runtimeStore);
+      writeWorkspaceDocs(workspace, {
+        readmeTitle: "workspace-feishu-detached-mixed-journey",
+      });
+
+      try {
+        const saveWorkspaceResponse = await fetch(`${baseUrl}/api/sessions/${sessionId}/settings`, {
+          method: "PUT",
+          headers: {
+            ...authHeaders,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            settings: {
+              workspacePath: workspace,
+            },
+          }),
+        });
+        assert.equal(saveWorkspaceResponse.status, 200);
+
+        const streamResponse = await fetch(`${baseUrl}/api/tasks/stream`, {
+          method: "POST",
+          headers: {
+            ...authHeaders,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            sessionId,
+            goal: "请先等待审批，再等待我补充输入，最后继续执行",
+            options: {
+              runtimeEngine: "app-server",
+            },
+          }),
+        });
+        assert.equal(streamResponse.status, 200);
+        assert.ok(streamResponse.body);
+
+        const reader = createNdjsonStreamReader(streamResponse.body!);
+        await withTimeout(
+          reader.readUntil((lines) => lines.some((line) => line.kind === "event" && line.title === "task.action_required")),
+          "missing detached mixed approval action_required",
+        );
+
+        const firstAction = await waitForHistoryActionId(baseUrl, authHeaders, sessionId, MIXED_APPROVAL_ACTION_ID);
+        assert.equal(firstAction.actionType, "approval");
+
+        await feishu.handleCommand("use", [sessionId]);
+        const switchMessages = feishu.takeMessages().join("\n");
+        assert.match(switchMessages, new RegExp(`已切换到会话：${sessionId}`));
+        assert.equal(feishu.getCurrentSessionId(), sessionId);
+        const beforeTaskRuntimeCalls = feishu.getTaskRuntimeCalls();
+
+        await feishu.handleCommand("approve", [MIXED_APPROVAL_ACTION_ID]);
+        await reader.cancel();
+
+        const restoredSecondAction = await waitForHistoryActionId(baseUrl, authHeaders, sessionId, MIXED_INPUT_ACTION_ID, 200);
+        assert.ok(restoredSecondAction);
+        assert.equal(restoredSecondAction.actionType, "user-input");
+
+        await feishu.handleMessageEventText("这是 detached mixed recovery 的最终补充");
+
+        const messages = feishu.takeMessages().join("\n");
+        assert.match(messages, /已提交补充输入。/);
+        assert.deepEqual(feishu.getTaskRuntimeCalls(), beforeTaskRuntimeCalls);
+
+        const completedHistory = await waitForHistoryTurnStatus(baseUrl, authHeaders, sessionId, "completed");
+        assert.equal(completedHistory.turns?.[0]?.status, "completed");
+        assert.equal(
+          completedHistory.turns?.[0]?.events?.filter((event) => event.type === "task.action_required").length,
+          2,
+        );
+      } finally {
+        await feishu.closeActiveSession();
+      }
     },
   });
-  await mixedTurn;
-  await mixedSession.close();
 });
 
 interface FeishuJourneyHarnessContext {
@@ -369,6 +508,8 @@ interface FeishuJourneyHarness {
   getTaskRuntimeCalls(): { sdk: number; appServer: number };
   getResolvedActionSubmissions(): TaskPendingActionSubmitRequest[];
   getCurrentSessionId(): string | null;
+  getLastRejectedServerRequestError(): string | null;
+  closeActiveSession(): Promise<void>;
 }
 
 type FeishuJourneyScenario = "single-user-input" | "approval-then-input";
@@ -376,12 +517,17 @@ type FeishuJourneyScenario = "single-user-input" | "approval-then-input";
 interface UserInputJourneySessionState {
   taskRuntimeCalls: { sdk: number; appServer: number };
   resolvedActionSubmissions: TaskPendingActionSubmitRequest[];
+  lastRejectedServerRequestError: string | null;
 }
 
 interface JourneyScenarioState {
   scenario: FeishuJourneyScenario;
   workingDirectory: string;
+  mixedRecoveryInputDelayMs: number;
   feishuState: UserInputJourneySessionState;
+  activeSession: AppServerTaskRuntimeSession | null;
+  activeRunTaskPromise: Promise<TaskResult> | null;
+  activeRunTaskSettledPromise: Promise<void> | null;
   currentTaskId: string;
   currentRequestId: string;
   currentThreadId: string;
@@ -603,23 +749,46 @@ function createFeishuJourneyHarness(input: {
     getCurrentSessionId() {
       return sessionStore.getActiveSessionId(conversationKey());
     },
+    getLastRejectedServerRequestError() {
+      return input.state.feishuState.lastRejectedServerRequestError;
+    },
+    async closeActiveSession() {
+      const session = input.state.activeSession;
+
+      if (!session) {
+        return;
+      }
+
+      input.state.activeSession = null;
+      await session.close();
+
+      if (input.state.activeRunTaskSettledPromise) {
+        await input.state.activeRunTaskSettledPromise;
+      }
+    },
   };
 }
 
 function createJourneySessionState(input: {
   scenario: FeishuJourneyScenario;
   workingDirectory: string;
+  mixedRecoveryInputDelayMs?: number;
 }): JourneyScenarioState {
   return {
     scenario: input.scenario,
     workingDirectory: input.workingDirectory,
+    mixedRecoveryInputDelayMs: input.mixedRecoveryInputDelayMs ?? 30,
     feishuState: {
       taskRuntimeCalls: {
         sdk: 0,
         appServer: 0,
       },
       resolvedActionSubmissions: [],
+      lastRejectedServerRequestError: null,
     },
+    activeSession: null,
+    activeRunTaskPromise: null,
+    activeRunTaskSettledPromise: null,
     currentTaskId: "task-web-feishu-journey-1",
     currentRequestId: "request-web-feishu-journey-1",
     currentThreadId: JOURNEY_THREAD_ID,
@@ -640,7 +809,11 @@ function createJourneyRuntime(input: {
     workingDirectory: input.state.workingDirectory,
     runtimeStore: input.runtimeStore,
     actionBridge: input.actionBridge,
-    sessionFactory: async (): Promise<AppServerTaskRuntimeSession> => createJourneySession(input.state),
+    sessionFactory: async (): Promise<AppServerTaskRuntimeSession> => {
+      const session = createJourneySession(input.state);
+      input.state.activeSession = session;
+      return session;
+    },
   });
 
   return {
@@ -653,7 +826,21 @@ function createJourneyRuntime(input: {
         input.state.currentThreadId = JOURNEY_THREAD_ID;
         input.state.currentTurnStatus = "queued";
         input.state.currentInputText = null;
-        return await appServerRuntime.runTask(request, hooks);
+        const runTaskPromise = appServerRuntime.runTask(request, hooks);
+        const runTaskSettledPromise = runTaskPromise.then(() => undefined, () => undefined);
+        input.state.activeRunTaskPromise = runTaskPromise;
+        input.state.activeRunTaskSettledPromise = runTaskSettledPromise;
+
+        try {
+          return await runTaskPromise;
+        } finally {
+          if (input.state.activeRunTaskPromise === runTaskPromise) {
+            input.state.activeRunTaskPromise = null;
+          }
+          if (input.state.activeRunTaskSettledPromise === runTaskSettledPromise) {
+            input.state.activeRunTaskSettledPromise = null;
+          }
+        }
       },
       getRuntimeStore: () => appServerRuntime.getRuntimeStore(),
       getIdentityLinkService: () => appServerRuntime.getIdentityLinkService(),
@@ -675,6 +862,28 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
   let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | null = null;
   let serverRequestHandler: ((request: AppServerReverseRequest) => void) | null = null;
   let pendingServerRequest: JourneyPendingServerRequest | null = null;
+  let sessionClosed = false;
+  let resolveSessionClosed!: () => void;
+  const sessionClosedPromise = new Promise<void>((resolve) => {
+    resolveSessionClosed = resolve;
+  });
+  const waitForSessionClosedOrDelay = (promise: Promise<void>, delayMs: number): Promise<void> => new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      setImmediate(finish);
+    }, delayMs);
+    promise.then(() => {
+      clearTimeout(timer);
+      finish();
+    });
+  });
 
   const waitForApprovalResponse = (requestId: string | number): Promise<{ decision?: string } | null> => new Promise((resolve) => {
     assert.equal(pendingServerRequest, null, "Unexpected overlapping reverse requests.");
@@ -774,7 +983,14 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
       });
       state.currentTurnStatus = "waiting";
 
-      const approvalResponse = await approvalResponsePromise;
+      const approvalResponse = await Promise.race([
+        approvalResponsePromise,
+        sessionClosedPromise,
+      ]);
+      if (sessionClosed) {
+        state.currentTurnStatus = "completed";
+        return { turnId: "turn-web-feishu-mixed-1" };
+      }
       assert.equal(approvalResponse?.decision, "accept");
       notificationHandler?.({
         method: "item/agentMessage/delta",
@@ -783,6 +999,15 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
           text: "第一轮审批已通过，继续等待补充输入。",
         },
       });
+
+      if (state.mixedRecoveryInputDelayMs > 0) {
+        await waitForSessionClosedOrDelay(sessionClosedPromise, state.mixedRecoveryInputDelayMs);
+      }
+
+      if (sessionClosed) {
+        state.currentTurnStatus = "completed";
+        return { turnId: "turn-web-feishu-mixed-1" };
+      }
 
       const inputRequestId = "server-input-web-feishu-mixed-2";
       const inputResponsePromise = waitForInputResponse(inputRequestId, MIXED_INPUT_ACTION_ID);
@@ -803,7 +1028,14 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
       });
       state.currentTurnStatus = "waiting";
 
-      const inputResponse = await inputResponsePromise;
+      const inputResponse = await Promise.race([
+        inputResponsePromise,
+        sessionClosedPromise,
+      ]);
+      if (sessionClosed) {
+        state.currentTurnStatus = "completed";
+        return { turnId: "turn-web-feishu-mixed-1" };
+      }
       const inputText = requireJourneyInputText(inputResponse);
 
       notificationHandler?.({
@@ -816,7 +1048,11 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
       state.currentTurnStatus = "completed";
       return { turnId: "turn-web-feishu-mixed-1" };
     },
-    close: async () => {},
+    close: async () => {
+      sessionClosed = true;
+      resolveSessionClosed();
+      state.activeSession = null;
+    },
     onNotification: (handler) => {
       notificationHandler = handler;
     },
@@ -862,6 +1098,15 @@ function createJourneySession(state: JourneyScenarioState): AppServerTaskRuntime
       if (pendingServerRequest && pendingServerRequest.id === id) {
         pendingServerRequest = null;
       }
+
+      state.feishuState.lastRejectedServerRequestError = error instanceof Error
+        ? error.message
+        : String(error);
+
+      if (state.feishuState.lastRejectedServerRequestError === "CLIENT_DISCONNECTED") {
+        return;
+      }
+
       throw error;
     },
   };
@@ -969,7 +1214,6 @@ async function waitForHistoryActionId(
 
     await new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, 20);
-      timer.unref?.();
     });
   }
 }
