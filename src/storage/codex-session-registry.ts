@@ -149,7 +149,7 @@ export interface StoredTurnInputRecord {
   requestId: string;
   envelope: TaskInputEnvelope;
   assets: TaskInputAsset[];
-  compileSummary: StoredTurnInputCompileSummary;
+  compileSummary: StoredTurnInputCompileSummary | null;
   createdAt: string;
 }
 
@@ -3858,6 +3858,20 @@ export class SqliteCodexSessionRegistry {
     );
 
     const saveInput = this.db.transaction(() => {
+      const parentTurnExists = this.db
+        .prepare(
+          `
+            SELECT 1
+            FROM themis_turns
+            WHERE request_id = ?
+          `,
+        )
+        .get(requestId);
+
+      if (!parentTurnExists) {
+        throw new Error(`Cannot save turn input without parent turn: ${requestId}`);
+      }
+
       this.db
         .prepare(
           `
@@ -3969,7 +3983,9 @@ export class SqliteCodexSessionRegistry {
         assets,
       },
       assets,
-      compileSummary: normalizeTurnInputCompileSummary(safeParseJson(row.compile_summary_json ?? "")),
+      compileSummary: row.compile_summary_json === null
+        ? null
+        : normalizeTurnInputCompileSummary(safeParseJson(row.compile_summary_json)),
       createdAt: row.created_at,
     };
   }
@@ -5593,9 +5609,9 @@ function normalizeTaskInputPart(value: unknown): TaskInputEnvelope["parts"][numb
   }
 
   if (value.type === "text") {
-    const text = normalizeText(typeof value.text === "string" ? value.text : undefined);
+    const text = readRawString(value.text);
 
-    if (!text) {
+    if (text === null) {
       return null;
     }
 
@@ -5618,7 +5634,7 @@ function normalizeTaskInputPart(value: unknown): TaskInputEnvelope["parts"][numb
     return null;
   }
 
-  const caption = normalizeText(typeof value.caption === "string" ? value.caption : undefined);
+  const caption = readRawString(value.caption);
 
   return {
     partId,
@@ -5626,7 +5642,7 @@ function normalizeTaskInputPart(value: unknown): TaskInputEnvelope["parts"][numb
     role: "user",
     order,
     assetId,
-    ...(caption ? { caption } : {}),
+    ...(caption !== null ? { caption } : {}),
   };
 }
 
@@ -5686,32 +5702,48 @@ function normalizeTaskInputAsset(value: unknown): TaskInputAsset | null {
   return asset;
 }
 
-function normalizeTurnInputCompileSummary(value: unknown): StoredTurnInputCompileSummary {
+function normalizeTurnInputCompileSummary(value: unknown): StoredTurnInputCompileSummary | null {
   if (!isRecord(value)) {
-    return {
-      runtimeTarget: "unknown",
-      degradationLevel: "native",
-      warnings: [],
-    };
+    return null;
   }
 
-  const runtimeTarget = normalizeText(typeof value.runtimeTarget === "string" ? value.runtimeTarget : undefined) ?? "unknown";
+  const runtimeTarget = normalizeText(typeof value.runtimeTarget === "string" ? value.runtimeTarget : undefined);
+
+  if (!runtimeTarget) {
+    return null;
+  }
+
   const degradationLevel = value.degradationLevel === "lossless_textualization" ||
       value.degradationLevel === "controlled_fallback" ||
       value.degradationLevel === "blocked"
     ? value.degradationLevel
-    : "native";
+    : value.degradationLevel === "native"
+      ? "native"
+      : null;
+
+  if (degradationLevel === null) {
+    return null;
+  }
+
   const warnings = Array.isArray(value.warnings)
     ? value.warnings
       .map(normalizeTurnInputCompileWarning)
       .filter((warning): warning is StoredTurnInputCompileWarning => warning !== null)
-    : [];
+    : null;
+
+  if (warnings === null) {
+    return null;
+  }
 
   return {
     runtimeTarget,
     degradationLevel,
     warnings,
   };
+}
+
+function readRawString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
 }
 
 function normalizeTurnInputCompileWarning(value: unknown): StoredTurnInputCompileWarning | null {
