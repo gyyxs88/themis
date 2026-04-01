@@ -396,9 +396,10 @@ export function createComposerActions(app, streamActions) {
     try {
       const historyContext = store.shouldBootstrapThread(thread) ? thread.bootstrapTranscript : "";
       const identity = app.identity.getRequestIdentity();
-      const inputEnvelope = draftInputAssets.length
+    const inputEnvelope = draftInputAssets.length
         ? await app.inputAssets.buildDraftEnvelope({
           sourceChannel: "web",
+          sourceSessionId: thread.id,
           createdAt: app.utils.nowIso(),
           draftGoal: goal,
           draftAssets: draftInputAssets,
@@ -677,6 +678,15 @@ export function createComposerActions(app, streamActions) {
       if (store.getActiveThread()?.id === thread.id) {
         dom.goalInput.focus();
       }
+      return { ok: false };
+    }
+
+    if (hasDraftInputAssets(thread) && isDraftBlockingSpecialAction(specialAction.mode)) {
+      store.setTransientStatus(
+        thread.id,
+        buildDraftBlockingMessage(specialAction.mode),
+      );
+      app.renderer.renderAll();
       return { ok: false };
     }
 
@@ -1265,6 +1275,22 @@ export function createComposerActions(app, streamActions) {
     return currentAssets.every((asset, index) => (
       asset?.assetId === pendingAssets[index]?.assetId && asset?.localPath === pendingAssets[index]?.localPath
     ));
+  }
+
+  function hasDraftInputAssets(thread) {
+    return Array.isArray(thread?.draftInputAssets) && thread.draftInputAssets.length > 0;
+  }
+
+  function isDraftBlockingSpecialAction(mode) {
+    return mode === "review" || mode === "steer" || mode === "smoke";
+  }
+
+  function buildDraftBlockingMessage(mode) {
+    if (mode === "smoke") {
+      return "当前草稿里还有附件，/smoke 不能直接提交。请先移除附件，或改用普通发送。";
+    }
+
+    return `当前草稿里还有附件，/${mode} 不能直接提交。请先移除附件，或改用普通发送。`;
   }
 
   function resetInputAssetControl() {

@@ -186,6 +186,11 @@ export function createStoreModelHelpers() {
           return null;
         }
 
+        const metadata = asset.metadata && typeof asset.metadata === "object" ? asset.metadata : null;
+        const textExtraction = asset.textExtraction && typeof asset.textExtraction === "object"
+          ? asset.textExtraction
+          : null;
+
         return {
           ...(typeof asset.assetId === "string" ? { assetId: asset.assetId } : {}),
           ...(asset.kind === "image" || asset.kind === "document" ? { kind: asset.kind } : {}),
@@ -194,6 +199,10 @@ export function createStoreModelHelpers() {
           ...(Number.isFinite(asset.sizeBytes) ? { sizeBytes: Number(asset.sizeBytes) } : {}),
           ...(typeof asset.localPath === "string" ? { localPath: asset.localPath } : {}),
           ...(typeof asset.sourceChannel === "string" ? { sourceChannel: asset.sourceChannel } : {}),
+          ...(typeof asset.sourceMessageId === "string" ? { sourceMessageId: asset.sourceMessageId } : {}),
+          ...(typeof asset.createdAt === "string" ? { createdAt: asset.createdAt } : {}),
+          ...(textExtraction ? { textExtraction } : {}),
+          ...(metadata ? { metadata } : {}),
           ...(typeof asset.ingestionStatus === "string" ? { ingestionStatus: asset.ingestionStatus } : {}),
         };
       })

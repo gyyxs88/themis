@@ -10,6 +10,7 @@ test("createInputAssetsApi 会把草稿文本与上传资产组装成 inputEnvel
 
   const envelope = await api.buildDraftEnvelope({
     sourceChannel: "web",
+    sourceSessionId: "thread-a",
     createdAt: "2026-04-01T22:00:00.000Z",
     draftGoal: "帮我看图",
     draftAssets: [
@@ -27,6 +28,7 @@ test("createInputAssetsApi 会把草稿文本与上传资产组装成 inputEnvel
   assert.equal(envelope.parts[0].type, "text");
   assert.equal(envelope.parts[1].type, "image");
   assert.equal(envelope.assets[0].assetId, "asset-image-1");
+  assert.equal(envelope.sourceSessionId, "thread-a");
 });
 
 test("createInputAssetsApi 会上传文件并返回 asset metadata", async () => {

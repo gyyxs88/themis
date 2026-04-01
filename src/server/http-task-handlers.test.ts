@@ -491,6 +491,80 @@ test("/api/tasks/stream 会记录任务已接受审计", async () => {
   }));
 });
 
+test("/api/tasks/stream 会把 inputEnvelope 送进真实提交链", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore, runtime }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+    let receivedEnvelope: unknown = null;
+
+    (runtime as CodexTaskRuntime & {
+      runTask: CodexTaskRuntime["runTask"];
+    }).runTask = async (request) => {
+      receivedEnvelope = request.inputEnvelope ?? null;
+      return {
+        taskId: request.taskId ?? "task-stream-envelope",
+        requestId: request.requestId,
+        status: "completed",
+        summary: "envelope accepted",
+        completedAt: "2026-03-28T09:10:00.000Z",
+      };
+    };
+
+    const response = await fetch(`${baseUrl}/api/tasks/stream`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请检查 inputEnvelope",
+        sessionId: "session-task-stream-envelope",
+        inputEnvelope: {
+          envelopeId: "env-stream-1",
+          sourceChannel: "web",
+          sourceSessionId: "thread-a",
+          createdAt: "2026-04-01T22:00:00.000Z",
+          parts: [
+            {
+              partId: "part-1",
+              type: "text",
+              role: "user",
+              order: 1,
+              text: "请检查 inputEnvelope",
+            },
+          ],
+          assets: [],
+        },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(receivedEnvelope, {
+      envelopeId: "env-stream-1",
+      sourceChannel: "web",
+      sourceSessionId: "thread-a",
+      createdAt: "2026-04-01T22:00:00.000Z",
+      parts: [
+        {
+          partId: "part-1",
+          type: "text",
+          role: "user",
+          order: 1,
+          text: "请检查 inputEnvelope",
+        },
+      ],
+      assets: [],
+    });
+  }, ({ runtime }) => ({
+    defaultRuntime: runtime,
+    runtimes: {
+      sdk: runtime,
+    },
+  }));
+});
+
 test("/api/history/sessions/:id 会返回 turn input 的降级摘要", async () => {
   await withHttpServer(async ({ baseUrl, runtimeStore }) => {
     const authHeaders = await createAuthenticatedWebHeaders({

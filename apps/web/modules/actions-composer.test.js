@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createComposerActions } from "./actions-composer.js";
+import { createStoreModelHelpers } from "./store-models.js";
 
 test("waiting action 只允许当前会话提交，切换线程后会阻止串单", async () => {
   const harness = createComposerHarness({
@@ -183,6 +184,94 @@ test("submitActiveComposerMode() 会在当前 mode 不可用时直接返回 ok f
   }
 });
 
+test("draftInputAssets 存在时，review 提交会被阻止并保留草稿附件", async () => {
+  const harness = createComposerHarness({
+    activeTurnState: "completed",
+    activeTurnAction: null,
+    activeThreadDraftGoal: "review 目标",
+    activeThreadDraftAssets: [
+      {
+        assetId: "asset-doc-1",
+        kind: "document",
+        name: "report.pdf",
+        mimeType: "application/pdf",
+        localPath: "/workspace/temp/input-assets/report.pdf",
+        sourceChannel: "web",
+        sourceMessageId: "msg-1",
+        createdAt: "2026-04-01T20:00:00.000Z",
+        textExtraction: {
+          status: "completed",
+          textPath: "/workspace/temp/input-assets/report.txt",
+          textPreview: "report preview",
+        },
+        metadata: {
+          pageCount: 4,
+        },
+        ingestionStatus: "ready",
+      },
+    ],
+  });
+
+  try {
+    const { app, activeThread, activeTurn } = harness;
+    const actions = createComposerActions(app, {});
+    actions.bindComposerControls();
+
+    const result = await actions.submitActiveComposerMode(activeThread, activeTurn, "review");
+
+    assert.deepEqual(result, { ok: false });
+    assert.equal(app.runtime.submitActionCalls.length, 0);
+    assert.equal(app.runtime.streamRequestCount, 0);
+    assert.equal(activeThread.draftInputAssets.length, 1);
+    assert.equal(activeThread.draftInputAssets[0]?.sourceMessageId, "msg-1");
+    assert.equal(activeThread.draftInputAssets[0]?.metadata?.pageCount, 4);
+    assert.equal(activeThread.draftInputAssets[0]?.textExtraction?.textPreview, "report preview");
+    assert.match(app.store.transientStatus?.text ?? "", /附件/);
+  } finally {
+    harness.restore();
+  }
+});
+
+test("normalizeState 会保留 draftInputAssets 的 canonical 字段", () => {
+  const models = createStoreModelHelpers();
+  const normalized = models.normalizeState({
+    activeThreadId: "thread-a",
+    threads: [
+      {
+        id: "thread-a",
+        title: "线程 A",
+        draftInputAssets: [
+          {
+            assetId: "asset-doc-1",
+            kind: "document",
+            name: "report.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 1024,
+            localPath: "/workspace/temp/input-assets/report.pdf",
+            sourceChannel: "web",
+            sourceMessageId: "msg-123",
+            createdAt: "2026-04-01T20:00:00.000Z",
+            textExtraction: {
+              status: "completed",
+              textPath: "/workspace/temp/input-assets/report.txt",
+              textPreview: "report preview",
+            },
+            metadata: {
+              pageCount: 4,
+            },
+            ingestionStatus: "ready",
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(normalized.threads[0]?.draftInputAssets[0]?.sourceMessageId, "msg-123");
+  assert.equal(normalized.threads[0]?.draftInputAssets[0]?.createdAt, "2026-04-01T20:00:00.000Z");
+  assert.equal(normalized.threads[0]?.draftInputAssets[0]?.metadata?.pageCount, 4);
+  assert.equal(normalized.threads[0]?.draftInputAssets[0]?.textExtraction?.textPreview, "report preview");
+});
+
 test("persisted review mode 在当前 latest turn running 时会回退到普通发送", async () => {
   const harness = createComposerHarness({
     activeRunRef: null,
@@ -253,6 +342,49 @@ test("submitThread 会在存在 draftInputAssets 时向 /api/tasks/stream 提交
     assert.equal(app.runtime.streamRequestCount, 1);
     assert.equal(app.runtime.streamRequests[0]?.url, "/api/tasks/stream");
     assert.equal(app.runtime.streamRequests[0]?.body.inputEnvelope.parts[1].type, "image");
+    assert.equal(app.runtime.streamRequests[0]?.body.inputEnvelope.sourceSessionId, "thread-a");
+  } finally {
+    harness.restore();
+  }
+});
+
+test("draftInputAssets 存在时，/smoke 不能静默清空附件", async () => {
+  const harness = createComposerHarness({
+    activeThreadDraftGoal: "/smoke user-input",
+    activeThreadDraftAssets: [
+      {
+        assetId: "asset-image-1",
+        kind: "image",
+        mimeType: "image/png",
+        localPath: "/workspace/temp/input-assets/shot.png",
+        sourceChannel: "web",
+        sourceMessageId: "msg-2",
+        ingestionStatus: "ready",
+      },
+    ],
+    allowCreateTurn: true,
+  });
+
+  try {
+    const { app, dom, activeThread } = harness;
+    const actions = createComposerActions(app, {
+      consumeNdjsonStream: async () => {
+        throw new Error("smoke should be blocked when draft assets exist");
+      },
+      finalizeTurnCancelled() {},
+      finalizeTurnError() {},
+    });
+    actions.bindComposerControls();
+
+    await dom.form.listeners.submit[0]({
+      preventDefault() {},
+    });
+
+    assert.equal(app.runtime.smokeRequestCount, 0);
+    assert.equal(app.runtime.streamRequestCount, 0);
+    assert.equal(activeThread.draftInputAssets.length, 1);
+    assert.equal(activeThread.draftInputAssets[0]?.sourceMessageId, "msg-2");
+    assert.match(app.store.transientStatus?.text ?? "", /附件/);
   } finally {
     harness.restore();
   }
@@ -1348,11 +1480,12 @@ function createComposerHarness(options = {}) {
       ensureAuthenticated: async () => ({ ok: true }),
     },
     inputAssets: {
-      async buildDraftEnvelope({ sourceChannel, createdAt, draftGoal, draftAssets }) {
+      async buildDraftEnvelope({ sourceChannel, sourceSessionId, createdAt, draftGoal, draftAssets }) {
         const assets = Array.isArray(draftAssets) ? draftAssets.map((asset) => ({ ...asset })) : [];
         return {
           envelopeId: "input-envelope-test-1",
           sourceChannel,
+          ...(sourceSessionId ? { sourceSessionId } : {}),
           createdAt,
           parts: [
             { partId: "part-1", type: "text", role: "user", order: 1, text: draftGoal },

@@ -25,6 +25,7 @@ export function createInputAssetsApi(options = {}) {
 
     async buildDraftEnvelope({
       sourceChannel,
+      sourceSessionId,
       createdAt,
       draftGoal,
       draftAssets,
@@ -60,6 +61,7 @@ export function createInputAssetsApi(options = {}) {
       return {
         envelopeId: createEnvelopeId(),
         sourceChannel,
+        ...(typeof sourceSessionId === "string" && sourceSessionId ? { sourceSessionId } : {}),
         parts,
         assets,
         createdAt,
