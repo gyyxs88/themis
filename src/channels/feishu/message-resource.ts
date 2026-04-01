@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import type { Readable } from "node:stream";
 import { resolve } from "node:path";
-import type { FeishuAttachmentDraft } from "./attachment-draft-store.js";
+import type { TaskInputAsset } from "../../types/index.js";
 import { extractFeishuPostImageKeys } from "./message-content.js";
 
 export interface FeishuMessageResourceEvent {
@@ -19,6 +19,13 @@ export interface FeishuMessageResourceReference {
   resourceKey: string;
   name?: string;
   sourceMessageId: string;
+  createdAt: string;
+}
+
+export interface FeishuMessageResourceAsset extends TaskInputAsset {
+  id: string;
+  type: "image" | "file";
+  value: string;
   createdAt: string;
 }
 
@@ -104,10 +111,10 @@ export function extractFeishuMessageResources(event: FeishuMessageResourceEvent)
 
 export async function downloadFeishuMessageResources(
   options: DownloadFeishuMessageResourcesOptions,
-): Promise<FeishuAttachmentDraft[]> {
+): Promise<FeishuMessageResourceAsset[]> {
   mkdirSync(options.targetDirectory, { recursive: true });
 
-  const attachments: FeishuAttachmentDraft[] = [];
+  const attachments: FeishuMessageResourceAsset[] = [];
 
   for (const resource of options.resources) {
     const response = await options.client.im.v1.messageResource.get({
@@ -121,14 +128,21 @@ export async function downloadFeishuMessageResources(
     });
     const fileName = resolveResourceName(resource, response.headers);
     const filePath = resolve(options.targetDirectory, `${sanitizeSegment(resource.id)}-${sanitizeFileName(fileName)}`);
+    const mimeType = resolveMimeType(response.headers, resource.type);
 
     await response.writeFile(filePath);
     attachments.push({
+      assetId: resource.id,
+      kind: resource.type === "image" ? "image" : "document",
+      ...(fileName ? { name: fileName } : {}),
+      mimeType,
+      localPath: filePath,
+      sourceChannel: "feishu",
+      sourceMessageId: resource.sourceMessageId,
+      ingestionStatus: "ready",
       id: resource.id,
       type: resource.type,
-      ...(fileName ? { name: fileName } : {}),
       value: filePath,
-      sourceMessageId: resource.sourceMessageId,
       createdAt: resource.createdAt,
     });
   }
@@ -171,6 +185,16 @@ function inferExtension(headers: unknown, resourceType: FeishuMessageResourceRef
     default:
       return resourceType === "image" ? ".bin" : "";
   }
+}
+
+function resolveMimeType(headers: unknown, resourceType: FeishuMessageResourceReference["type"]): string {
+  const contentType = readHeader(headers, "content-type")?.toLowerCase();
+
+  if (contentType) {
+    return contentType;
+  }
+
+  return resourceType === "image" ? "image/png" : "application/octet-stream";
 }
 
 function extractFilenameFromHeaders(headers: unknown): string | null {

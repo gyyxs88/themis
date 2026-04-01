@@ -1,6 +1,6 @@
 # Themis 飞书渠道说明
 
-更新日期：2026-04-01
+更新日期：2026-04-02
 
 ## 当前实现
 
@@ -11,7 +11,7 @@ Themis 已接入飞书长连接渠道，特点如下：
 - 飞书入站 `post` 富文本当前会提取其中的文本和图片节点；如果同一条 `post` 里同时有正文和图片，会直接把正文与图片一起作为本次任务输入
 - 飞书真实入站 `post` 已验证会出现顶层 `{"title":"","content":[...]}` 结构，而不一定带 `zh_cn` 这类 locale 包裹；当前解析已兼容这两种形态
 - 飞书 `image` / `file` 消息会先下载到当前会话实际执行工作目录下的 `temp/feishu-attachments/<sessionId>/<messageId>/`
-- 飞书附件不会立刻起任务，而是先按 `chatId + userId + activeSessionId` 写入本地附件草稿，等下一条真正进入普通任务路径的文本自动合并发送
+- 飞书附件不会立刻起任务，而是先按 `chatId + userId + activeSessionId` 写入本地附件草稿；草稿当前以 `parts + assets` 作为 canonical 结构，等下一条真正进入普通任务路径的文本时会构造 `inputEnvelope`，同时保留 legacy `attachments[]` 兼容
 - 命令和 waiting action 恢复优先级高于附件草稿消费；只有普通任务文本才会自动拼接附件
 - 附件任务真正开始执行后会清空已消费草稿；附件下载失败会直接返回错误且不留下脏草稿
 - 飞书发任务前会读取当前 principal 保存的 Themis 默认任务配置，并带上对应 `options`
@@ -126,7 +126,7 @@ infra/local/feishu-sessions.json
 infra/local/feishu-attachment-drafts.json
 ```
 
-- 这个 JSON 只保存待发送附件元数据，不保存附件二进制；真实文件落在当前会话执行目录下的 `temp/feishu-attachments/...`
+- 这个 JSON 只保存待发送附件元数据，不保存附件二进制；当前 canonical 结构是 `parts + assets`，`attachments[]` 只作为 legacy 兼容视图；真实文件落在当前会话执行目录下的 `temp/feishu-attachments/...`
 - 真正的统一 conversation、channel binding、identity 和历史数据都保存在：
 
 ```text
@@ -154,6 +154,7 @@ infra/local/feishu-attachment-drafts.json
 - 如果同一条入站 `post` 富文本已经同时带了正文和图片，这些图片不会先进草稿，而是会直接和该条正文一起进入任务。
 - `/new`、`/use` 切会话后不会把旧草稿带到新会话。
 - 附件草稿只有在普通文本真正进入任务路径时才会被消费；命令和 waiting action 恢复不会消费草稿。
+- 任务请求会同时携带 `inputEnvelope` 和 legacy `attachments[]`，下游 runtime 先消费 `inputEnvelope`，旧路径仍可继续读 `attachments[]`。
 
 ## 飞书命令
 

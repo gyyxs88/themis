@@ -23,6 +23,7 @@ import {
   type PrincipalTaskSettings,
   type SessionTaskSettings,
   type TaskActionDescriptor,
+  type TaskInputEnvelope,
   SANDBOX_MODES,
   WEB_SEARCH_MODES,
   type ApprovalPolicy,
@@ -37,14 +38,20 @@ import {
 import { FeishuAdapter } from "./adapter.js";
 import {
   FeishuAttachmentDraftStore,
-  type FeishuAttachmentDraft,
+  type FeishuAttachmentDraftPart,
+  type FeishuAttachmentDraftSnapshot,
   type FeishuAttachmentDraftKey,
 } from "./attachment-draft-store.js";
 import { renderFeishuAssistantMessage, type FeishuRenderedMessageDraft } from "./message-renderer.js";
 import { extractFeishuPostText } from "./message-content.js";
 import {
+  buildLegacyAttachmentsFromEnvelope,
+  createTaskInputEnvelope,
+} from "../../core/task-input.js";
+import {
   downloadFeishuMessageResources,
   extractFeishuMessageResources,
+  type FeishuMessageResourceAsset,
   type FeishuMessageResourceReference,
 } from "./message-resource.js";
 import { FeishuSessionStore, type FeishuConversationKey } from "./session-store.js";
@@ -307,7 +314,7 @@ export class FeishuChannelService {
     context: Extract<FeishuIncomingContext, { kind: "attachment" }>,
   ): Promise<void> {
     const sessionId = this.sessionStore.ensureActiveSessionId(toConversationKey(context));
-    const attachments = await downloadFeishuMessageResources({
+    const assets = await downloadFeishuMessageResources({
       client: this.requireClient(),
       resources: context.attachments,
       targetDirectory: join(
@@ -319,10 +326,13 @@ export class FeishuChannelService {
       ),
     });
 
-    this.attachmentDraftStore.append(createAttachmentDraftKey(context, sessionId), attachments);
+    this.attachmentDraftStore.appendEnvelope(createAttachmentDraftKey(context, sessionId), {
+      parts: buildFeishuDraftPartsFromAssets(assets),
+      assets,
+    });
     await this.safeSendText(
       context.chatId,
-      `已收到 ${attachments.length} 个附件，${FEISHU_ATTACHMENT_DRAFT_CONFIRMATION}`,
+      `已收到 ${assets.length} 个附件，${FEISHU_ATTACHMENT_DRAFT_CONFIRMATION}`,
     );
   }
 
@@ -509,12 +519,9 @@ export class FeishuChannelService {
     const sessionId = this.sessionStore.ensureActiveSessionId(conversationKey);
     const draftKey = createAttachmentDraftKey(context, sessionId);
     const taskLease = await this.acquireSessionTaskLease(sessionId);
-    const inlineAttachments = await this.downloadInlineAttachments(context, sessionId);
+    const inlineAssets = await this.downloadInlineAttachments(context, sessionId);
     const reservedDraft = this.attachmentDraftStore.consume(draftKey);
-    const taskAttachments = [
-      ...(reservedDraft?.attachments ?? []),
-      ...inlineAttachments,
-    ];
+    const inputEnvelope = buildFeishuInputEnvelope(context, sessionId, reservedDraft, inlineAssets);
     const bridge = new FeishuTaskMessageBridge({
       createText: async (text) => this.createAssistantMessage(context.chatId, text),
       updateText: async (messageId, text) => this.updateAssistantMessage(messageId, text),
@@ -539,17 +546,20 @@ export class FeishuChannelService {
     router.registerAdapter(adapter);
 
     let normalizedRequest: TaskRequest | null = null;
-    let shouldRestoreDraft = taskAttachments.length > 0;
+    let shouldRestoreDraft = Boolean(reservedDraft);
     const discardReservedDraft = () => {
       shouldRestoreDraft = false;
     };
     const restoreReservedDraft = () => {
-      if (!shouldRestoreDraft || taskAttachments.length === 0) {
+      if (!shouldRestoreDraft || !reservedDraft) {
         return;
       }
 
       try {
-        this.attachmentDraftStore.append(draftKey, taskAttachments);
+        this.attachmentDraftStore.appendEnvelope(draftKey, {
+          parts: reservedDraft.parts,
+          assets: reservedDraft.assets,
+        });
       } catch (error) {
         this.logger.error(`[themis/feishu] 恢复附件草稿失败：${toErrorMessage(error)}`);
       } finally {
@@ -559,7 +569,9 @@ export class FeishuChannelService {
 
     try {
       normalizedRequest = router.normalizeRequest(
-        this.createTaskPayload(context, sessionId, taskAttachments),
+        this.createTaskPayload(context, sessionId, {
+          ...(inputEnvelope ? { inputEnvelope } : {}),
+        }),
       );
       await bridge.prepareResponseSlot();
       await ensureAuthAvailable(this.authRuntime, normalizedRequest);
@@ -596,7 +608,7 @@ export class FeishuChannelService {
   private async downloadInlineAttachments(
     context: Extract<FeishuIncomingContext, { kind: "text" }>,
     sessionId: string,
-  ): Promise<FeishuAttachmentDraft[]> {
+  ): Promise<FeishuMessageResourceAsset[]> {
     if (!context.attachments?.length) {
       return [];
     }
@@ -754,10 +766,15 @@ export class FeishuChannelService {
   private createTaskPayload(
     context: Extract<FeishuIncomingContext, { kind: "text" }>,
     sessionId: string,
-    attachments?: FeishuAttachmentDraft[],
+    input?: {
+      inputEnvelope?: TaskInputEnvelope;
+      attachments?: FeishuTaskPayload["attachments"];
+    },
   ): FeishuTaskPayload {
     const principalSettings = this.readPrincipalTaskSettings(context);
     const options = isPrincipalTaskSettingsEmpty(principalSettings) ? undefined : principalSettings;
+    const inputEnvelope = input?.inputEnvelope;
+    const attachments = input?.attachments ?? (inputEnvelope ? buildLegacyAttachmentsFromEnvelope(inputEnvelope) : undefined);
 
     return {
       source: "feishu",
@@ -776,6 +793,7 @@ export class FeishuChannelService {
         ...(context.threadId ? { threadId: context.threadId } : {}),
         text: context.text,
       },
+      ...(inputEnvelope ? { inputEnvelope } : {}),
       ...(attachments?.length ? { attachments } : {}),
       ...(options ? { options } : {}),
       createdAt: new Date().toISOString(),
@@ -2769,6 +2787,84 @@ function createAttachmentDraftKey(
     userId: context.userId,
     sessionId,
   };
+}
+
+function buildFeishuDraftPartsFromAssets(assets: FeishuMessageResourceAsset[]): FeishuAttachmentDraftPart[] {
+  return assets.map((asset, order) => ({
+    type: asset.kind === "image" ? "image" : "document",
+    role: "user",
+    order,
+    assetId: asset.assetId,
+    ...(asset.name ? { caption: asset.name } : {}),
+  }));
+}
+
+function buildFeishuInputEnvelope(
+  context: Extract<FeishuIncomingContext, { kind: "text" }>,
+  sessionId: string,
+  draft: FeishuAttachmentDraftSnapshot | null,
+  inlineAssets: FeishuMessageResourceAsset[],
+): TaskInputEnvelope | undefined {
+  const parts: FeishuAttachmentDraftPart[] = [];
+  const assets = [...(draft?.assets ?? []), ...inlineAssets];
+
+  if (context.text.trim()) {
+    parts.push({
+      type: "text",
+      role: "user",
+      order: 0,
+      text: context.text,
+    });
+  }
+
+  let order = 1;
+  for (const part of draft?.parts ?? []) {
+    if (part.type === "text") {
+      if (part.text?.trim()) {
+        parts.push({
+          type: "text",
+          role: "user",
+          order,
+          text: part.text,
+        });
+        order += 1;
+      }
+      continue;
+    }
+
+    parts.push({
+      type: part.type,
+      role: "user",
+      order,
+      assetId: part.assetId,
+      ...(part.caption ? { caption: part.caption } : {}),
+    });
+    order += 1;
+  }
+
+  for (const asset of inlineAssets) {
+    parts.push({
+      type: asset.kind === "image" ? "image" : "document",
+      role: "user",
+      order,
+      assetId: asset.assetId,
+      ...(asset.name ? { caption: asset.name } : {}),
+    });
+    order += 1;
+  }
+
+  if (assets.length === 0 || parts.length === 0) {
+    return undefined;
+  }
+
+  return createTaskInputEnvelope({
+    sourceChannel: "feishu",
+    sourceSessionId: sessionId,
+    sourceMessageId: context.messageId,
+    createdAt: new Date().toISOString(),
+    parts,
+    assets,
+  });
 }
 
 function decorateTaggedChunks(text: string, tag: string): string[] {

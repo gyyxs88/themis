@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import type { TaskInputAsset } from "../../types/index.js";
 import type { TaskAttachmentType } from "../../types/task.js";
 
 export interface FeishuAttachmentDraft {
@@ -8,6 +9,28 @@ export interface FeishuAttachmentDraft {
   name?: string;
   value: string;
   sourceMessageId: string;
+  createdAt: string;
+}
+
+export type FeishuAttachmentDraftPart =
+  | {
+      type: "text";
+      role: "user";
+      order: number;
+      text: string;
+    }
+  | {
+      type: "image" | "document";
+      role: "user";
+      order: number;
+      assetId: string;
+      caption?: string;
+    };
+
+export interface FeishuAttachmentDraftAsset extends TaskInputAsset {
+  id: string;
+  type: TaskAttachmentType;
+  value: string;
   createdAt: string;
 }
 
@@ -28,6 +51,8 @@ interface FeishuAttachmentDraftStoreRecord {
   chatId: string;
   userId: string;
   sessionId: string;
+  parts: FeishuAttachmentDraftPart[];
+  assets: FeishuAttachmentDraftAsset[];
   attachments: FeishuAttachmentDraft[];
   createdAt: string;
   updatedAt: string;
@@ -41,6 +66,8 @@ interface FeishuAttachmentDraftStoreData {
 
 export interface FeishuAttachmentDraftSnapshot {
   key: FeishuAttachmentDraftKey;
+  parts: FeishuAttachmentDraftPart[];
+  assets: FeishuAttachmentDraftAsset[];
   attachments: FeishuAttachmentDraft[];
 }
 
@@ -63,35 +90,76 @@ export class FeishuAttachmentDraftStore {
     mkdirSync(dirname(this.filePath), { recursive: true });
   }
 
-  append(key: FeishuAttachmentDraftKey, attachments: FeishuAttachmentDraft[]): void {
+  append(key: FeishuAttachmentDraftKey, attachments: FeishuAttachmentDraft[]): void;
+  append(key: FeishuAttachmentDraftKey, input: {
+    parts: FeishuAttachmentDraftPart[];
+    assets: FeishuAttachmentDraftAsset[];
+  }): void;
+  append(
+    key: FeishuAttachmentDraftKey,
+    input: FeishuAttachmentDraft[] | {
+      parts: FeishuAttachmentDraftPart[];
+      assets: FeishuAttachmentDraftAsset[];
+    },
+  ): void {
+    if (Array.isArray(input)) {
+      this.appendEnvelope(key, {
+        parts: buildDraftPartsFromLegacyAttachments(input),
+        assets: buildDraftAssetsFromLegacyAttachments(input),
+      });
+      return;
+    }
+
+    this.appendEnvelope(key, input);
+  }
+
+  appendEnvelope(
+    key: FeishuAttachmentDraftKey,
+    input: {
+      parts: FeishuAttachmentDraftPart[];
+      assets: FeishuAttachmentDraftAsset[];
+    },
+  ): void {
     const normalizedKey = createDraftKey(key);
     if (!normalizedKey) {
       throw new Error("Feishu 会话映射缺少必要字段。");
     }
 
-    if (attachments.length === 0) {
+    if (input.parts.length === 0 || input.assets.length === 0) {
       throw new Error("Feishu 附件草稿不能为空。");
     }
 
-    const normalizedAttachments = attachments.map(normalizeAttachment);
-    if (normalizedAttachments.some((item) => item === null)) {
-      throw new Error("Feishu 附件草稿包含无效附件。");
+    const validParts = input.parts.map(normalizeDraftPart);
+    if (validParts.some((item) => item === null)) {
+      throw new Error("Feishu 附件草稿包含无效 part。");
     }
-    const validAttachments = normalizedAttachments.filter((item): item is FeishuAttachmentDraft => item !== null);
-    if (!validAttachments.length) {
-      throw new Error("Feishu 附件草稿不包含可用字段。");
+
+    const normalizedParts = validParts.filter((item): item is FeishuAttachmentDraftPart => item !== null);
+    if (!normalizedParts.length) {
+      throw new Error("Feishu 附件草稿不包含可用 part。");
+    }
+
+    const validAssets = input.assets.map(normalizeDraftAsset);
+    if (validAssets.some((item) => item === null)) {
+      throw new Error("Feishu 附件草稿包含无效 asset。");
+    }
+
+    const normalizedAssets = validAssets.filter((item): item is FeishuAttachmentDraftAsset => item !== null);
+    if (!normalizedAssets.length) {
+      throw new Error("Feishu 附件草稿不包含可用 asset。");
     }
 
     const store = this.readStore();
     const now = this.now();
     cleanupExpiredDrafts(store, now);
     const record = store.drafts.find((entry) => entry.key === normalizedKey);
-
     const nowMs = parseTimestamp(now, Date.now());
     const refreshedAt = new Date(nowMs).toISOString();
 
     if (record) {
-      record.attachments.push(...validAttachments);
+      record.parts.push(...normalizedParts);
+      record.assets.push(...normalizedAssets);
+      record.attachments = buildLegacyAttachmentsFromAssets(record.assets);
       record.updatedAt = refreshedAt;
       record.expiresAt = new Date(nowMs + this.ttlMs).toISOString();
     } else {
@@ -103,7 +171,9 @@ export class FeishuAttachmentDraftStore {
         createdAt: now,
         updatedAt: now,
         expiresAt: new Date(nowMs + this.ttlMs).toISOString(),
-        attachments: validAttachments,
+        parts: normalizedParts,
+        assets: normalizedAssets,
+        attachments: buildLegacyAttachmentsFromAssets(normalizedAssets),
       });
     }
 
@@ -128,14 +198,7 @@ export class FeishuAttachmentDraftStore {
       return null;
     }
 
-    return {
-      key: {
-        chatId: record.chatId,
-        userId: record.userId,
-        sessionId: record.sessionId,
-      },
-      attachments: [...record.attachments],
-    };
+    return snapshotDraftRecord(record);
   }
 
   consume(key: FeishuAttachmentDraftKey): FeishuAttachmentDraftSnapshot | null {
@@ -160,20 +223,13 @@ export class FeishuAttachmentDraftStore {
       return null;
     }
 
-    if (record.attachments.length === 0) {
+    if (record.parts.length === 0 || record.assets.length === 0) {
       this.writeStore(store);
       return null;
     }
 
     this.writeStore(store);
-    return {
-      key: {
-        chatId: record.chatId,
-        userId: record.userId,
-        sessionId: record.sessionId,
-      },
-      attachments: [...record.attachments],
-    };
+    return snapshotDraftRecord(record);
   }
 
   private readStore(): FeishuAttachmentDraftStoreData {
@@ -225,6 +281,87 @@ function cleanupExpiredDrafts(store: FeishuAttachmentDraftStoreData, now: string
   return afterLength !== beforeLength;
 }
 
+function snapshotDraftRecord(record: FeishuAttachmentDraftStoreRecord): FeishuAttachmentDraftSnapshot {
+  return {
+    key: {
+      chatId: record.chatId,
+      userId: record.userId,
+      sessionId: record.sessionId,
+    },
+    parts: [...record.parts],
+    assets: [...record.assets],
+    attachments: [...record.attachments],
+  };
+}
+
+function buildDraftPartsFromLegacyAttachments(attachments: FeishuAttachmentDraft[]): FeishuAttachmentDraftPart[] {
+  return attachments.map((attachment, order) => ({
+    type: attachment.type === "image" ? "image" : "document",
+    role: "user",
+    order,
+    assetId: attachment.id,
+    ...(attachment.name ? { caption: attachment.name } : {}),
+  }));
+}
+
+function buildDraftAssetsFromLegacyAttachments(attachments: FeishuAttachmentDraft[]): FeishuAttachmentDraftAsset[] {
+  return attachments.map((attachment) => ({
+    assetId: attachment.id,
+    kind: attachment.type === "image" ? "image" : "document",
+    ...(attachment.name ? { name: attachment.name } : {}),
+    mimeType: inferMimeTypeFromLegacyAttachment(attachment),
+    localPath: attachment.value,
+    sourceChannel: "feishu",
+    ...(attachment.sourceMessageId ? { sourceMessageId: attachment.sourceMessageId } : {}),
+    ingestionStatus: "ready",
+    id: attachment.id,
+    type: attachment.type,
+    value: attachment.value,
+    createdAt: attachment.createdAt,
+  }));
+}
+
+function buildLegacyAttachmentsFromAssets(assets: FeishuAttachmentDraftAsset[]): FeishuAttachmentDraft[] {
+  return assets.map((asset) => ({
+    id: asset.assetId,
+    type: asset.kind === "image" ? "image" : "file",
+    ...(asset.name ? { name: asset.name } : {}),
+    value: asset.localPath,
+    sourceMessageId: normalizeText(asset.sourceMessageId) ?? "",
+    createdAt: normalizeText(asset.createdAt) ?? new Date().toISOString(),
+  }));
+}
+
+function inferMimeTypeFromLegacyAttachment(attachment: FeishuAttachmentDraft): string {
+  if (attachment.type === "image") {
+    return inferMimeTypeFromPath(attachment.value, "image/png");
+  }
+
+  return inferMimeTypeFromPath(attachment.value, "application/octet-stream");
+}
+
+function inferMimeTypeFromPath(filePath: string, fallback: string): string {
+  const lower = filePath.toLowerCase();
+
+  if (lower.endsWith(".png")) {
+    return "image/png";
+  }
+
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+
+  if (lower.endsWith(".webp")) {
+    return "image/webp";
+  }
+
+  if (lower.endsWith(".pdf")) {
+    return "application/pdf";
+  }
+
+  return fallback;
+}
+
 function normalizeAttachment(value: unknown): FeishuAttachmentDraft | null {
   if (!isRecord(value)) {
     return null;
@@ -251,6 +388,87 @@ function normalizeAttachment(value: unknown): FeishuAttachmentDraft | null {
   };
 }
 
+function normalizeDraftPart(value: unknown): FeishuAttachmentDraftPart | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const type = normalizeDraftPartType(value.type);
+  const role = normalizeText(value.role);
+  const order = normalizeOrder(value.order);
+  const assetId = normalizeText(value.assetId);
+  const text = normalizeText(value.text);
+  const caption = normalizeText(value.caption);
+
+  if (!type || role !== "user" || !Number.isFinite(order)) {
+    return null;
+  }
+
+  if (type === "text") {
+    if (!text) {
+      return null;
+    }
+
+    return {
+      type,
+      role: "user",
+      order,
+      text,
+    };
+  }
+
+  if (!assetId) {
+    return null;
+  }
+
+  return {
+    type,
+    role: "user",
+    order,
+    assetId,
+    ...(caption ? { caption } : {}),
+  };
+}
+
+function normalizeDraftAsset(value: unknown): FeishuAttachmentDraftAsset | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const assetId = normalizeText(value.assetId) ?? normalizeText(value.id);
+  const kind = normalizeDraftAssetKind(value.kind ?? value.type);
+  const name = normalizeText(value.name);
+  const mimeType = normalizeText(value.mimeType);
+  const localPath = normalizeText(value.localPath) ?? normalizeText(value.value);
+  const sourceChannel = normalizeText(value.sourceChannel);
+  const sourceMessageId = normalizeText(value.sourceMessageId);
+  const ingestionStatus = normalizeIngestionStatus(value.ingestionStatus);
+  const createdAt = normalizeText(value.createdAt);
+  const textExtraction = isRecord(value.textExtraction) ? normalizeTextExtraction(value.textExtraction) : null;
+  const metadata = isRecord(value.metadata) ? normalizeMetadata(value.metadata) : null;
+
+  if (!assetId || !kind || !mimeType || !localPath || sourceChannel !== "feishu" || !ingestionStatus || !createdAt) {
+    return null;
+  }
+
+  return {
+    assetId,
+    kind,
+    ...(name ? { name } : {}),
+    mimeType,
+    localPath,
+    sourceChannel: "feishu",
+    ...(sourceMessageId ? { sourceMessageId } : {}),
+    ingestionStatus,
+    ...(textExtraction ? { textExtraction } : {}),
+    ...(metadata ? { metadata } : {}),
+    id: normalizeText(value.id) ?? assetId,
+    type: normalizeDraftAttachmentType(value.type) ?? (kind === "image" ? "image" : "file"),
+    value: localPath,
+    createdAt,
+  };
+}
+
 function normalizeDraftRecord(
   value: unknown,
   now: string,
@@ -263,26 +481,20 @@ function normalizeDraftRecord(
   const chatId = normalizeText(value.chatId);
   const userId = normalizeText(value.userId);
   const sessionId = normalizeText(value.sessionId);
-  const rawAttachments = Array.isArray(value.attachments) ? value.attachments : [];
-  const attachments = rawAttachments
-    .map(normalizeAttachment)
-    .filter((item): item is FeishuAttachmentDraft => item !== null);
   const createdAt = normalizeText(value.createdAt);
   const updatedAt = normalizeText(value.updatedAt);
   const expiresAt = normalizeText(value.expiresAt);
   const key = createDraftKey({ chatId: chatId ?? "", userId: userId ?? "", sessionId: sessionId ?? "" });
-  const attachmentLatestCreatedAt = attachments.reduce<number | null>((max, item) => {
-    const next = Date.parse(item.createdAt);
-    if (Number.isNaN(next)) {
-      return max;
-    }
-    return max === null || next > max ? next : max;
-  }, null);
-  const fallbackUpdatedAtMs = parseTimestamp(updatedAt, parseTimestamp(createdAt, attachmentLatestCreatedAt ?? parseTimestamp(now, Date.now())));
-  const fallbackCreatedAtMs = parseTimestamp(createdAt, fallbackUpdatedAtMs);
+  const parts = normalizeDraftParts(value.parts);
+  const assets = normalizeDraftAssets(value.assets);
+  const attachments = normalizeLegacyAttachments(value.attachments);
+  const normalizedParts = parts.length ? parts : (attachments.length ? buildDraftPartsFromLegacyAttachments(attachments) : []);
+  const normalizedAssets = assets.length ? assets : (attachments.length ? buildDraftAssetsFromLegacyAttachments(attachments) : []);
+  const fallbackCreatedAtMs = parseTimestamp(createdAt, parseTimestamp(now, Date.now()));
+  const fallbackUpdatedAtMs = parseTimestamp(updatedAt, fallbackCreatedAtMs);
   const fallbackExpiresAtMs = parseTimestamp(expiresAt, fallbackUpdatedAtMs + ttlMs);
 
-  if (!key || !chatId || !userId || !sessionId || attachments.length === 0) {
+  if (!key || !chatId || !userId || !sessionId || normalizedParts.length === 0 || normalizedAssets.length === 0) {
     return null;
   }
   if (Number.isNaN(fallbackUpdatedAtMs) || Number.isNaN(fallbackCreatedAtMs) || Number.isNaN(fallbackExpiresAtMs)) {
@@ -297,8 +509,122 @@ function normalizeDraftRecord(
     createdAt: new Date(fallbackCreatedAtMs).toISOString(),
     updatedAt: new Date(fallbackUpdatedAtMs).toISOString(),
     expiresAt: new Date(fallbackExpiresAtMs).toISOString(),
-    attachments,
+    parts: normalizedParts,
+    assets: normalizedAssets,
+    attachments: attachments.length ? attachments : buildLegacyAttachmentsFromAssets(normalizedAssets),
   };
+}
+
+function normalizeDraftParts(value: unknown): FeishuAttachmentDraftPart[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map(normalizeDraftPart).filter((item): item is FeishuAttachmentDraftPart => item !== null);
+}
+
+function normalizeDraftAssets(value: unknown): FeishuAttachmentDraftAsset[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map(normalizeDraftAsset).filter((item): item is FeishuAttachmentDraftAsset => item !== null);
+}
+
+function normalizeLegacyAttachments(value: unknown): FeishuAttachmentDraft[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map(normalizeAttachment).filter((item): item is FeishuAttachmentDraft => item !== null);
+}
+
+function normalizeDraftPartType(value: unknown): FeishuAttachmentDraftPart["type"] | null {
+  const text = normalizeText(value);
+  if (text === "text" || text === "image" || text === "document") {
+    return text;
+  }
+
+  return null;
+}
+
+function normalizeDraftAssetKind(value: unknown): FeishuAttachmentDraftAsset["kind"] | null {
+  const text = normalizeText(value);
+  if (text === "image" || text === "document") {
+    return text;
+  }
+
+  if (text === "file") {
+    return "document";
+  }
+
+  return null;
+}
+
+function normalizeDraftAttachmentType(value: unknown): FeishuAttachmentDraft["type"] | null {
+  const text = normalizeText(value);
+  if (text === "image" || text === "file") {
+    return text;
+  }
+
+  if (text === "document") {
+    return "file";
+  }
+
+  return null;
+}
+
+function normalizeIngestionStatus(value: unknown): FeishuAttachmentDraftAsset["ingestionStatus"] | null {
+  const text = normalizeText(value);
+  if (text === "ready" || text === "processing" || text === "failed") {
+    return text;
+  }
+
+  return null;
+}
+
+function normalizeTextExtraction(value: unknown): FeishuAttachmentDraftAsset["textExtraction"] | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const status = normalizeText(value.status);
+  if (status !== "not_started" && status !== "completed" && status !== "failed") {
+    return null;
+  }
+
+  const textPath = normalizeText(value.textPath);
+  const textPreview = normalizeText(value.textPreview);
+
+  return {
+    status,
+    ...(textPath ? { textPath } : {}),
+    ...(textPreview ? { textPreview } : {}),
+  };
+}
+
+function normalizeMetadata(value: unknown): FeishuAttachmentDraftAsset["metadata"] | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const languageHint = normalizeText(value.languageHint);
+
+  return {
+    ...(Number.isFinite(Number(value.width)) ? { width: Number(value.width) } : {}),
+    ...(Number.isFinite(Number(value.height)) ? { height: Number(value.height) } : {}),
+    ...(Number.isFinite(Number(value.pageCount)) ? { pageCount: Number(value.pageCount) } : {}),
+    ...(languageHint ? { languageHint } : {}),
+  };
+}
+
+function normalizeOrder(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
 }
 
 function createDraftKey(key: FeishuAttachmentDraftKey): string {
