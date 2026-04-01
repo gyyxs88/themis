@@ -332,6 +332,7 @@ infra/local/themis.db
 - `task.action_required` 到达时，飞书会输出“等待你处理”的摘要消息，并直接给出 `/approve`、`/deny` 或 `/reply` 的命令提示。
 - `task.action_required` 到达时，如果当前 `sessionId + principalId` scope 下只有 1 条 `user-input` pending action 且没有 `approval` pending action，飞书会优先把普通文本当成补充输入；如果同一 scope 下有多条 `user-input` pending action，则会明确提示改用 `/reply <actionId> <内容>`。
 - waiting action 摘要会同时带出当前 `sessionId` 与 native thread 摘要，减少移动端来回切 `/current` 的成本。
+- Web / 飞书之间的 waiting action 虽然支持跨端接管，但边界不是裸 `sessionId`；飞书侧会同时按当前激活 `sessionId` 和当前 `principalId` 查找 pending action，所以同一会话里属于其他 principal 的 action 不会被误接管。
 - action 提交后的 `running / restoring / completed / failed` 这类状态变化，会额外落一条状态摘要消息。
 - 状态摘要不会打断原有的 `处理中...` 占位链路；正文流和状态流会分开表达。
 
@@ -344,6 +345,10 @@ infra/local/themis.db
 - 如果当前 principal 保存过默认任务配置，这些配置会随任务请求一起带入 Codex runtime
 - 当前实现只处理文本消息
 - 非文本消息暂不进入任务执行链路
+- 相同 `message_id` 的飞书文本事件会在去重窗口内被忽略，当前窗口是 10 分钟，避免长连接重放时重复启动任务或重复提交 action
+- 同一 `chatId + userId` 下，如果一条消息的 `message.create_time` 早于最近已处理消息，但又更晚到达服务端，这类延迟旧消息也会在同一个 10 分钟窗口内被静默忽略，避免乱序重放把旧文本或旧 slash 命令重新执行；它不是永久顺序保证
+- 如果两条不同消息的 `message.create_time` 恰好相等，它们不会因为这条规则互相误伤，仍会继续按正常消息处理
+- 这层 `create_time` 保护是入口级的，所以跨会话更旧的 `/use` 也不会把当前激活会话切回旧 session；同一批次里更旧的 `/use` + 旧普通文本、`/approve` 或 `/reply` 组合晚到时，也会一起被静默吞掉，不再制造“切回旧会话”“追加过时 turn”或“未找到等待中的 action”噪音
 - 如果同一会话里上一条任务还没跑完，新消息会先打断旧任务，再自动进入当前会话
 - 被打断的旧任务如果已经有回复消息，通常会把那条消息原地改成“任务已取消”
 
@@ -361,6 +366,7 @@ infra/local/themis.db
 - `npm run typecheck`
 - `npm run build`
 - `timeout 5s npm run dev:web:once`
+- `node --test --import tsx src/server/http-feishu-cross-channel-journey.test.ts`
 - 带飞书凭证启动冒烟
 
 其中冒烟启动已验证：
@@ -368,6 +374,7 @@ infra/local/themis.db
 - HTTP 主服务可正常启动
 - 未配置飞书凭证时会优雅跳过飞书长连接服务
 - 配置飞书凭证后，SDK 会尝试建立长连接
+- shared cross-channel 自动化回归已覆盖真实飞书消息事件入口：通过 `acceptMessageReceiveEvent` 驱动 `/use`、普通文本续跑、重复 `message_id` 去重、`create_time` 延迟旧消息忽略、`create_time` 相等消息不误丢、跨会话旧 `/use` 不回切、旧 `/use` + 旧普通文本 / `/approve` / `/reply` 组合晚到静默忽略，以及旧 `/use` + 旧普通文本 + 旧 `/approve` 小批量晚到静默忽略、`/approve`、`/reply`、`/review`、`/steer`、双 waiting action 长恢复链，以及“Web waiting action 由飞书接管后继续追加新 turn”“Web -> Feishu -> Web 连续三轮 history/detail 一致”和“Web -> Feishu -> Web -> Feishu 连续四轮 history/detail 一致”的长链 E2E，验证 Web / 飞书会继续复用同一 session 与 native thread，并保持跨端恢复语义一致
 
 ## 长连接排障
 

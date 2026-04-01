@@ -58,6 +58,7 @@ interface FeishuChannelLogger {
 interface FeishuIncomingContext {
   chatId: string;
   messageId: string;
+  messageCreateTimeMs?: number;
   userId: string;
   openId?: string;
   tenantKey?: string;
@@ -120,6 +121,10 @@ export class FeishuChannelService {
   private readonly wsClient: Lark.WSClient | null;
   private readonly eventDispatcher: Lark.EventDispatcher | null;
   private readonly recentMessageIds = new Map<string, number>();
+  private readonly recentConversationMessageTimes = new Map<string, {
+    latestCreateTimeMs: number;
+    seenAt: number;
+  }>();
   private readonly activeSessionTasks = new Map<string, FeishuActiveSessionTask>();
   private readonly sessionMutationLocks = new Map<string, Promise<void>>();
   private started = false;
@@ -224,6 +229,15 @@ export class FeishuChannelService {
       return;
     }
 
+    const staleInfo = this.markConversationMessageAndDetectStale(context);
+
+    if (staleInfo) {
+      this.logger.info(
+        `[themis/feishu] 忽略乱序旧消息：message=${context.messageId} createTime=${staleInfo.messageCreateTimeMs} latestCreateTime=${staleInfo.latestCreateTimeMs}`,
+      );
+      return;
+    }
+
     this.logger.info(
       `[themis/feishu] 收到消息事件：chat=${context.chatId} user=${context.userId} message=${context.messageId} text=${truncateText(context.text, 120)}`,
     );
@@ -271,6 +285,42 @@ export class FeishuChannelService {
         this.recentMessageIds.delete(messageId);
       }
     }
+
+    for (const [conversationKey, state] of this.recentConversationMessageTimes.entries()) {
+      if (now - state.seenAt >= FEISHU_MESSAGE_DEDUPE_TTL_MS) {
+        this.recentConversationMessageTimes.delete(conversationKey);
+      }
+    }
+  }
+
+  private markConversationMessageAndDetectStale(context: FeishuIncomingContext): {
+    messageCreateTimeMs: number;
+    latestCreateTimeMs: number;
+  } | null {
+    if (typeof context.messageCreateTimeMs !== "number" || !Number.isFinite(context.messageCreateTimeMs)) {
+      return null;
+    }
+
+    const conversationKey = `${context.chatId}::${context.userId}`;
+    const existing = this.recentConversationMessageTimes.get(conversationKey);
+    const now = Date.now();
+
+    if (existing && context.messageCreateTimeMs < existing.latestCreateTimeMs) {
+      this.recentConversationMessageTimes.set(conversationKey, {
+        latestCreateTimeMs: existing.latestCreateTimeMs,
+        seenAt: now,
+      });
+      return {
+        messageCreateTimeMs: context.messageCreateTimeMs,
+        latestCreateTimeMs: existing.latestCreateTimeMs,
+      };
+    }
+
+    this.recentConversationMessageTimes.set(conversationKey, {
+      latestCreateTimeMs: Math.max(existing?.latestCreateTimeMs ?? context.messageCreateTimeMs, context.messageCreateTimeMs),
+      seenAt: now,
+    });
+    return null;
   }
 
   private async handleCommand(command: ParsedFeishuCommand, context: FeishuIncomingContext): Promise<void> {
@@ -2415,6 +2465,7 @@ function normalizeFeishuRuntimeRegistry(
 function normalizeIncomingContext(event: FeishuMessageReceiveEvent): FeishuIncomingContext | null {
   const chatId = normalizeText(event.message?.chat_id);
   const messageId = normalizeText(event.message?.message_id);
+  const messageCreateTimeMs = parseFeishuMessageCreateTime(event.message?.create_time);
   const userId = normalizeText(event.sender?.sender_id?.user_id)
     ?? normalizeText(event.sender?.sender_id?.open_id);
   const text = extractFeishuText(event);
@@ -2430,6 +2481,7 @@ function normalizeIncomingContext(event: FeishuMessageReceiveEvent): FeishuIncom
   return {
     chatId,
     messageId,
+    ...(typeof messageCreateTimeMs === "number" ? { messageCreateTimeMs } : {}),
     userId,
     ...(openId ? { openId } : {}),
     ...(tenantKey ? { tenantKey } : {}),
@@ -2437,6 +2489,20 @@ function normalizeIncomingContext(event: FeishuMessageReceiveEvent): FeishuIncom
     ...(chatType ? { chatType } : {}),
     text,
   };
+}
+
+function parseFeishuMessageCreateTime(value: unknown): number | null {
+  if (typeof value !== "string" && typeof value !== "number") {
+    return null;
+  }
+
+  const numeric = Number(value);
+
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return null;
+  }
+
+  return numeric;
 }
 
 function extractFeishuText(event: FeishuMessageReceiveEvent): string | null {

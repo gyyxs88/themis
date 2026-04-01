@@ -1029,6 +1029,59 @@ test("飞书 /reply <actionId> <内容> 会提交等待中的 user-input action"
   }
 });
 
+test("飞书 /reply 在 Web-origin waiting action 的 userId 不同时仍能按 principal 接管", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.injectPendingAction({
+      actionId: "reply-web-command-1",
+      actionType: "user-input",
+      prompt: "Please add web details",
+      sourceChannel: "web",
+      userId: "web-user-1",
+      principalId: harness.getCurrentPrincipalId(),
+    });
+
+    await harness.handleCommand("reply", ["reply-web-command-1", "跨端", "继续"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /已提交补充输入/);
+    assert.equal(harness.findPendingAction("reply-web-command-1"), null);
+    assert.deepEqual(harness.getResolvedActionSubmissions(), [{
+      taskId: "task-pending-action",
+      requestId: "req-pending-action",
+      actionId: "reply-web-command-1",
+      inputText: "跨端 继续",
+    }]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书 /reply 不会命中同一会话里属于其他 principal 的 Web-origin user-input action", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.injectPendingAction({
+      actionId: "reply-web-command-other-principal-1",
+      actionType: "user-input",
+      prompt: "Please add details",
+      sourceChannel: "web",
+      userId: "web-user-1",
+      principalId: "principal-other",
+    });
+
+    await harness.handleCommand("reply", ["reply-web-command-other-principal-1", "这条", "不该命中"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /未找到等待中的 action：reply-web-command-other-principal-1/);
+    assert.notEqual(harness.findPendingAction("reply-web-command-other-principal-1"), null);
+    assert.deepEqual(harness.getResolvedActionSubmissions(), []);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("飞书普通文本在当前会话存在唯一 user-input waiting action 时会直接提交补充输入", async () => {
   const harness = createHarness();
 
@@ -1519,6 +1572,222 @@ test("飞书切到其他会话后不会误接管非当前会话的 waiting input
       sdk: beforeTaskRuntimeCalls.sdk,
       appServer: beforeTaskRuntimeCalls.appServer + 1,
     });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书切回已有 app-server 会话后，继续发送普通消息会复用同一 native thread", async () => {
+  const resumedThreadIds: string[] = [];
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      taskRuntimeCalls,
+    }) => ({
+      ...createTaskRuntimeDouble({
+        engine: "app-server",
+        runtimeStore,
+        identityService,
+        principalSkillsService,
+        taskRuntimeCalls,
+      }),
+      readThreadSnapshot: async ({ threadId }) => ({
+        threadId,
+        preview: "shared web-feishu thread",
+        status: "completed",
+        cwd: "/workspace/themis",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        turnCount: 2,
+        turns: [],
+      }),
+      async runTask(request, hooks = {}) {
+        taskRuntimeCalls.appServer += 1;
+        const sessionId = request.channelContext.channelSessionKey ?? "session-feishu-existing";
+        const existingThreadId = runtimeStore.getSession(sessionId)?.threadId ?? null;
+        const threadId = existingThreadId ?? "thread-feishu-existing-1";
+
+        if (existingThreadId) {
+          resumedThreadIds.push(existingThreadId);
+        }
+
+        const storedRequest = {
+          ...request,
+          channelContext: {
+            ...request.channelContext,
+            sessionId,
+          },
+        };
+        runtimeStore.upsertTurnFromRequest(storedRequest, request.taskId ?? "task-feishu-existing");
+        runtimeStore.saveSession({
+          sessionId,
+          threadId,
+          createdAt: request.createdAt,
+          updatedAt: request.createdAt,
+        });
+
+        const result: TaskResult = {
+          taskId: request.taskId ?? "task-feishu-existing",
+          requestId: request.requestId,
+          status: "completed",
+          summary: request.goal,
+          output: request.goal,
+          structuredOutput: {
+            session: {
+              engine: "app-server",
+              threadId,
+            },
+          },
+          completedAt: new Date().toISOString(),
+        };
+        const finalized = hooks.finalizeResult ? await hooks.finalizeResult(request, result) : result;
+        runtimeStore.completeTaskTurn({
+          request: storedRequest,
+          result: finalized,
+          sessionMode: "resumed",
+          threadId,
+        });
+        return finalized;
+      },
+    }),
+  } as FeishuHarnessConfig);
+
+  try {
+    const sessionId = "session-web-feishu-shared";
+    harness.seedAppServerSession(sessionId, {
+      threadId: "thread-feishu-existing-1",
+      sourceChannel: "web",
+      goal: "web 先建立共享会话",
+      summary: "web 已完成首轮",
+      status: "completed",
+    });
+
+    await harness.handleCommand("use", [sessionId]);
+    const switched = harness.takeMessages().join("\n");
+    assert.match(switched, /thread-feishu-existing-1/);
+
+    await harness.handleIncomingText("飞书继续这个共享会话");
+    harness.takeMessages();
+
+    assert.deepEqual(resumedThreadIds, ["thread-feishu-existing-1"]);
+
+    await harness.handleCommand("current", []);
+    const current = harness.takeSingleMessage();
+    assert.match(current, /thread-feishu-existing-1/);
+    assert.match(current, /shared web-feishu thread/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书切回已有 web app-server 会话后，/review 会命中同一 sessionId", async () => {
+  const reviewCalls: Array<{ sessionId: string; instructions: string }> = [];
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      taskRuntimeCalls,
+    }) => ({
+      ...createTaskRuntimeDouble({
+        engine: "app-server",
+        runtimeStore,
+        identityService,
+        principalSkillsService,
+        taskRuntimeCalls,
+      }),
+      startReview: async (request) => {
+        reviewCalls.push(request);
+        return {
+          reviewThreadId: "review-thread-shared-1",
+          turnId: "review-turn-shared-1",
+        };
+      },
+    }),
+  } as FeishuHarnessConfig);
+
+  try {
+    const sessionId = "session-review-from-web";
+    harness.seedAppServerSession(sessionId, {
+      threadId: "thread-review-from-web-1",
+      sourceChannel: "web",
+      goal: "web 先建立 review 会话",
+      status: "completed",
+    });
+
+    await harness.handleCommand("use", [sessionId]);
+    harness.takeMessages();
+    await harness.handleCommand("review", ["请复查 Web 建立的这条会话"]);
+
+    assert.deepEqual(reviewCalls, [{
+      sessionId,
+      instructions: "请复查 Web 建立的这条会话",
+    }]);
+    assert.match(harness.takeSingleMessage(), /已发起 Review/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书切回已有 web app-server 会话后，/steer 会命中同一 sessionId", async () => {
+  const steerCalls: Array<{ sessionId: string; message: string; turnId?: string }> = [];
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      taskRuntimeCalls,
+    }) => ({
+      ...createTaskRuntimeDouble({
+        engine: "app-server",
+        runtimeStore,
+        identityService,
+        principalSkillsService,
+        taskRuntimeCalls,
+      }),
+      readThreadSnapshot: async ({ threadId }) => ({
+        threadId,
+        preview: "running shared thread",
+        status: "running",
+        cwd: "/workspace/themis",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        turnCount: 1,
+        turns: [],
+      }),
+      steerTurn: async (request) => {
+        steerCalls.push(request);
+        return {
+          turnId: "turn-steer-shared-1",
+        };
+      },
+    }),
+  } as FeishuHarnessConfig);
+
+  try {
+    const sessionId = "session-steer-from-web";
+    harness.seedAppServerSession(sessionId, {
+      threadId: "thread-steer-from-web-1",
+      sourceChannel: "web",
+      goal: "web 先建立 steer 会话",
+      summary: "正在执行中的共享会话",
+      status: "running",
+    });
+
+    await harness.handleCommand("use", [sessionId]);
+    harness.takeMessages();
+    await harness.handleCommand("steer", ["请把范围收窄到回归和 history 校验"]);
+
+    assert.deepEqual(steerCalls, [{
+      sessionId,
+      message: "请把范围收窄到回归和 history 校验",
+    }]);
+    assert.match(harness.takeSingleMessage(), /已发送 Steer/);
   } finally {
     harness.cleanup();
   }
@@ -3085,6 +3354,77 @@ function createHarness(
         settings,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
+      });
+    },
+    seedAppServerSession(sessionId: string, input: {
+      threadId: string;
+      sourceChannel?: "web" | "feishu";
+      goal?: string;
+      summary?: string;
+      status?: "completed" | "running";
+    }) {
+      const now = new Date().toISOString();
+      const requestId = `request-seed-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      const taskId = `task-seed-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      const goal = input.goal ?? "seed app-server session";
+      const request = {
+        requestId,
+        sourceChannel: input.sourceChannel ?? "web",
+        user: {
+          userId: context.userId,
+        },
+        goal,
+        channelContext: {
+          sessionId,
+        },
+        createdAt: now,
+      } satisfies TaskRequest;
+
+      runtimeStore.upsertTurnFromRequest(request, taskId);
+      runtimeStore.saveSession({
+        sessionId,
+        threadId: input.threadId,
+        createdAt: now,
+        updatedAt: now,
+        ...(input.status === "running" ? { activeTaskId: taskId } : {}),
+      });
+
+      if (input.status === "running") {
+        runtimeStore.appendTaskEvent({
+          eventId: `event-seed-running-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+          taskId,
+          requestId,
+          type: "task.progress",
+          status: "running",
+          message: input.summary ?? goal,
+          payload: {
+            itemType: "agent_message",
+            threadEventType: "item.completed",
+            itemId: `item-seed-running-${Math.random().toString(36).slice(2, 10)}`,
+          },
+          timestamp: now,
+        });
+        return;
+      }
+
+      runtimeStore.completeTaskTurn({
+        request,
+        result: {
+          taskId,
+          requestId,
+          status: "completed",
+          summary: input.summary ?? goal,
+          output: input.summary ?? goal,
+          structuredOutput: {
+            session: {
+              engine: "app-server",
+              threadId: input.threadId,
+            },
+          },
+          completedAt: now,
+        },
+        sessionMode: "resumed",
+        threadId: input.threadId,
       });
     },
     appendTurn(sessionId: string, goal = "hello") {
