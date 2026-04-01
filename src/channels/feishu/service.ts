@@ -272,7 +272,7 @@ export class FeishuChannelService {
         : `[themis/feishu] 收到消息事件：chat=${context.chatId} user=${context.userId} message=${context.messageId} kind=text text=${truncateText(context.text, 120)}`,
     );
 
-    await this.handleMessageReceiveEvent(context);
+    void this.handleMessageReceiveEvent(context);
   }
 
   private async handleMessageReceiveEvent(context: FeishuIncomingContext): Promise<void> {
@@ -362,6 +362,20 @@ export class FeishuChannelService {
     const conversationKey = `${context.chatId}::${context.userId}`;
     const existing = this.recentConversationMessageTimes.get(conversationKey);
     const now = Date.now();
+    const latestCreateTimeMs = Math.max(
+      existing?.latestCreateTimeMs ?? context.messageCreateTimeMs,
+      context.messageCreateTimeMs,
+    );
+
+    // Attachments are staged for the next task, so we should still accept them even if
+    // a newer text message has already been processed.
+    if (context.kind === "attachment") {
+      this.recentConversationMessageTimes.set(conversationKey, {
+        latestCreateTimeMs,
+        seenAt: now,
+      });
+      return null;
+    }
 
     if (existing && context.messageCreateTimeMs < existing.latestCreateTimeMs) {
       this.recentConversationMessageTimes.set(conversationKey, {
@@ -375,7 +389,7 @@ export class FeishuChannelService {
     }
 
     this.recentConversationMessageTimes.set(conversationKey, {
-      latestCreateTimeMs: Math.max(existing?.latestCreateTimeMs ?? context.messageCreateTimeMs, context.messageCreateTimeMs),
+      latestCreateTimeMs,
       seenAt: now,
     });
     return null;
@@ -492,8 +506,8 @@ export class FeishuChannelService {
     const conversationKey = toConversationKey(context);
     const sessionId = this.sessionStore.ensureActiveSessionId(conversationKey);
     const draftKey = createAttachmentDraftKey(context, sessionId);
-    const pendingDraft = this.attachmentDraftStore.get(draftKey);
     const taskLease = await this.acquireSessionTaskLease(sessionId);
+    const reservedDraft = this.attachmentDraftStore.consume(draftKey);
     const bridge = new FeishuTaskMessageBridge({
       createText: async (text) => this.createAssistantMessage(context.chatId, text),
       updateText: async (messageId, text) => this.updateAssistantMessage(messageId, text),
@@ -518,19 +532,27 @@ export class FeishuChannelService {
     router.registerAdapter(adapter);
 
     let normalizedRequest: TaskRequest | null = null;
-    let shouldClearDraft = Boolean(pendingDraft?.attachments.length);
-    const clearAttachmentDraft = () => {
-      if (!shouldClearDraft) {
+    let shouldRestoreDraft = Boolean(reservedDraft?.attachments.length);
+    const discardReservedDraft = () => {
+      shouldRestoreDraft = false;
+    };
+    const restoreReservedDraft = () => {
+      if (!shouldRestoreDraft || !reservedDraft?.attachments.length) {
         return;
       }
 
-      this.attachmentDraftStore.consume(draftKey);
-      shouldClearDraft = false;
+      try {
+        this.attachmentDraftStore.append(draftKey, reservedDraft.attachments);
+      } catch (error) {
+        this.logger.error(`[themis/feishu] 恢复附件草稿失败：${toErrorMessage(error)}`);
+      } finally {
+        shouldRestoreDraft = false;
+      }
     };
 
     try {
       normalizedRequest = router.normalizeRequest(
-        this.createTaskPayload(context, sessionId, pendingDraft?.attachments),
+        this.createTaskPayload(context, sessionId, reservedDraft?.attachments),
       );
       await bridge.prepareResponseSlot();
       await ensureAuthAvailable(this.authRuntime, normalizedRequest);
@@ -541,16 +563,17 @@ export class FeishuChannelService {
         timeoutMs: this.taskTimeoutMs,
         finalizeResult: (request, taskResult) => appendTaskReplyQuotaFooter(this.authRuntime, request, taskResult),
         onEvent: async (taskEvent) => {
-          if (shouldClearDraft && taskEvent.type === "task.started") {
-            clearAttachmentDraft();
+          if (shouldRestoreDraft && taskEvent.type === "task.started") {
+            discardReservedDraft();
           }
           await router.publishEvent(taskEvent);
         },
       });
 
-      clearAttachmentDraft();
+      discardReservedDraft();
       await router.publishResult(result);
     } catch (error) {
+      restoreReservedDraft();
       const taskError = createTaskError(error, Boolean(normalizedRequest));
 
       if (normalizedRequest) {

@@ -1720,6 +1720,244 @@ test("飞书附件下载失败时会提示错误且不留下脏草稿", async ()
   }
 });
 
+test("飞书原始入站回调会先返回，再在后台继续处理任务", async () => {
+  let releaseTask = (): void => {};
+  const taskReleased = new Promise<void>((resolve) => {
+    releaseTask = resolve;
+  });
+  let markTaskStarted = (): void => {};
+  const taskStarted = new Promise<void>((resolve) => {
+    markTaskStarted = resolve;
+  });
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      taskRuntimeCalls,
+    }) => ({
+      ...createTaskRuntimeDouble({
+        engine: "app-server",
+        runtimeStore,
+        identityService,
+        principalSkillsService,
+        taskRuntimeCalls,
+      }),
+      async runTask(request, hooks = {}) {
+        taskRuntimeCalls.appServer += 1;
+        markTaskStarted();
+        await taskReleased;
+        const result = {
+          taskId: request.taskId ?? "task-feishu-raw-ack",
+          requestId: request.requestId,
+          status: "completed" as const,
+          summary: request.goal,
+          output: request.goal,
+          completedAt: new Date().toISOString(),
+        };
+        return hooks.finalizeResult ? await hooks.finalizeResult(request, result) : result;
+      },
+    }),
+  });
+
+  try {
+    let settled = false;
+    const accepted = harness.acceptRawMessageEvent({
+      message: {
+        chat_id: "chat-1",
+        message_id: "message-text-ack-1",
+        create_time: "1711958400000",
+        message_type: "text",
+        content: JSON.stringify({
+          text: "请慢慢处理这条消息",
+        }),
+      },
+      sender: {
+        sender_id: {
+          user_id: "user-1",
+        },
+      },
+    });
+    void accepted.then(() => {
+      settled = true;
+    });
+
+    await taskStarted;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, true);
+
+    releaseTask();
+    await accepted;
+    await harness.waitForBackgroundMessages();
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书较早到达的附件即使晚于文本处理完成，也仍会进入草稿", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.setMessageResourceDownloader(async () => ({
+      headers: {
+        "content-type": "image/png",
+      },
+      async writeFile(filePath: string) {
+        await import("node:fs/promises").then(({ writeFile }) => writeFile(filePath, "fake-image"));
+      },
+      getReadableStream() {
+        throw new Error("not implemented");
+      },
+    }));
+
+    await harness.handleRawMessageEvent({
+      message: {
+        chat_id: "chat-1",
+        message_id: "message-text-before-attachment",
+        create_time: "1711958460000",
+        message_type: "text",
+        content: JSON.stringify({
+          text: "先看这段说明",
+        }),
+      },
+      sender: {
+        sender_id: {
+          user_id: "user-1",
+        },
+      },
+    });
+    harness.takeMessages();
+
+    await harness.handleRawMessageEvent({
+      message: {
+        chat_id: "chat-1",
+        message_id: "message-image-after-text",
+        create_time: "1711958400000",
+        message_type: "image",
+        content: JSON.stringify({
+          image_key: "img-key-after-text",
+        }),
+      },
+      sender: {
+        sender_id: {
+          user_id: "user-1",
+        },
+      },
+    });
+
+    assert.match(harness.takeSingleMessage(), /已收到 1 个附件，请直接回复你的问题/);
+    assert.equal(harness.readAttachmentDraftStore()?.drafts.length, 1);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书后续普通文本不会重复消费同一份附件草稿", async () => {
+  let releaseFirstTask = (): void => {};
+  const firstTaskReleased = new Promise<void>((resolve) => {
+    releaseFirstTask = resolve;
+  });
+  let markFirstTaskEntered = (): void => {};
+  const firstTaskEntered = new Promise<void>((resolve) => {
+    markFirstTaskEntered = resolve;
+  });
+  const startedAttachmentCounts: number[] = [];
+  let runIndex = 0;
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      taskRuntimeCalls,
+    }) => ({
+      ...createTaskRuntimeDouble({
+        engine: "app-server",
+        runtimeStore,
+        identityService,
+        principalSkillsService,
+        taskRuntimeCalls,
+      }),
+      async runTask(request, hooks = {}) {
+        taskRuntimeCalls.appServer += 1;
+        runIndex += 1;
+
+        if (runIndex === 1) {
+          markFirstTaskEntered();
+          await firstTaskReleased;
+        }
+
+        startedAttachmentCounts.push(request.attachments?.length ?? 0);
+        await hooks.onEvent?.({
+          eventId: `event-task-started-${runIndex}`,
+          taskId: request.taskId ?? `task-feishu-attachment-race-${runIndex}`,
+          requestId: request.requestId,
+          type: "task.started",
+          status: "running",
+          message: request.goal,
+          timestamp: new Date().toISOString(),
+        });
+
+        const result = {
+          taskId: request.taskId ?? `task-feishu-attachment-race-${runIndex}`,
+          requestId: request.requestId,
+          status: "completed" as const,
+          summary: request.goal,
+          output: request.goal,
+          completedAt: new Date().toISOString(),
+        };
+        return hooks.finalizeResult ? await hooks.finalizeResult(request, result) : result;
+      },
+    }),
+  });
+
+  try {
+    harness.setMessageResourceDownloader(async () => ({
+      headers: {
+        "content-type": "image/png",
+      },
+      async writeFile(filePath: string) {
+        await import("node:fs/promises").then(({ writeFile }) => writeFile(filePath, "fake-image"));
+      },
+      getReadableStream() {
+        throw new Error("not implemented");
+      },
+    }));
+
+    await harness.handleRawMessageEvent({
+      message: {
+        chat_id: "chat-1",
+        message_id: "message-image-race-1",
+        create_time: "1711958400000",
+        message_type: "image",
+        content: JSON.stringify({
+          image_key: "img-key-race-1",
+        }),
+      },
+      sender: {
+        sender_id: {
+          user_id: "user-1",
+        },
+      },
+    });
+    harness.takeSingleMessage();
+
+    const first = harness.handleMessageEventText("第一条普通文本");
+    await firstTaskEntered;
+
+    const second = harness.handleMessageEventText("第二条普通文本");
+    await new Promise((resolve) => setImmediate(resolve));
+
+    releaseFirstTask();
+    await Promise.all([first, second]);
+
+    assert.deepEqual(startedAttachmentCounts, [1, 0]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("飞书普通任务在未显式指定 runtimeEngine 时默认走 app-server runtime", async () => {
   const harness = createHarness();
 
@@ -3729,6 +3967,26 @@ function createHarness(
       },
     },
   };
+  const backgroundMessageTasks = new Set<Promise<void>>();
+  const originalHandleMessageReceiveEvent = (service as unknown as {
+    handleMessageReceiveEvent(incomingContext: typeof context): Promise<void>;
+  }).handleMessageReceiveEvent.bind(service);
+  (service as unknown as {
+    handleMessageReceiveEvent(incomingContext: typeof context): Promise<void>;
+  }).handleMessageReceiveEvent = (incomingContext) => {
+    const task = Promise.resolve(originalHandleMessageReceiveEvent(incomingContext));
+    backgroundMessageTasks.add(task);
+    void task.finally(() => {
+      backgroundMessageTasks.delete(task);
+    });
+    return task;
+  };
+
+  async function waitForBackgroundMessages() {
+    while (backgroundMessageTasks.size > 0) {
+      await Promise.allSettled([...backgroundMessageTasks]);
+    }
+  }
 
   function ensurePrincipalId(): string {
     return identityService.ensureIdentity({
@@ -3759,6 +4017,12 @@ function createHarness(
       await (service as unknown as {
         acceptMessageReceiveEvent(event: unknown): Promise<void>;
       }).acceptMessageReceiveEvent(event);
+      await waitForBackgroundMessages();
+    },
+    async acceptRawMessageEvent(event: unknown) {
+      await (service as unknown as {
+        acceptMessageReceiveEvent(event: unknown): Promise<void>;
+      }).acceptMessageReceiveEvent(event);
     },
     async handleIncomingText(text: string) {
       await (service as unknown as {
@@ -3782,6 +4046,9 @@ function createHarness(
     },
     getTaskRequests() {
       return [...taskRequests];
+    },
+    async waitForBackgroundMessages() {
+      await waitForBackgroundMessages();
     },
     setMessageResourceDownloader(
       downloader: (
