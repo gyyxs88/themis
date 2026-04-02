@@ -55,10 +55,20 @@ export const FEISHU_RERUN_SEQUENCE = [
   "./themis doctor smoke feishu",
 ] as const;
 
+const FEISHU_SMOKE_NEXT_STEP_PREFIXES = [
+  "建议先运行：",
+  "再运行：",
+  "最后运行：",
+] as const;
+
 export function buildFeishuSmokeNextSteps(): string[] {
-  return [
-    "建议先运行：./themis doctor feishu",
-    "再运行：./themis doctor smoke web",
-    "最后运行：./themis doctor smoke feishu，并按文档里的 A/B 手工路径继续接力。",
-  ];
+  return FEISHU_RERUN_SEQUENCE.map((command, index) => {
+    const prefix = FEISHU_SMOKE_NEXT_STEP_PREFIXES[index];
+
+    if (index === FEISHU_RERUN_SEQUENCE.length - 1) {
+      return `${prefix}${command}，并按文档里的 A/B 手工路径继续接力。`;
+    }
+
+    return `${prefix}${command}`;
+  });
 }
