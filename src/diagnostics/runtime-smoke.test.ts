@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
+import { buildFeishuSmokeNextSteps } from "./feishu-verification-guide.js";
 import { RuntimeSmokeService } from "./runtime-smoke.js";
 
 test("RuntimeSmokeService.runWebSmoke 在 action_required -> completed 的真实链路下返回成功结果", async () => {
@@ -317,11 +318,7 @@ test("RuntimeSmokeService.runFeishuSmoke 在缺少 FEISHU_APP_ID / FEISHU_APP_SE
     assert.equal(result.serviceReachable, true);
     assert.equal(result.feishuConfigReady, false);
     assert.equal(result.docPath, "docs/feishu/themis-feishu-real-journey-smoke.md");
-    assert.deepEqual(result.nextSteps, [
-      "./themis doctor feishu",
-      "./themis doctor smoke web",
-      "./themis doctor smoke feishu",
-    ]);
+    assert.deepEqual(result.nextSteps, buildFeishuSmokeNextSteps());
     assert.match(result.message, /FEISHU_APP_ID/);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -403,11 +400,7 @@ test("RuntimeSmokeService.runFeishuSmoke 在根路径返回 302/login 时仍判�
     assert.equal(result.statusCode, 302);
     assert.equal(result.sessionBindingCount, 1);
     assert.equal(result.attachmentDraftCount, 1);
-    assert.deepEqual(result.nextSteps, [
-      "./themis doctor feishu",
-      "./themis doctor smoke web",
-      "./themis doctor smoke feishu",
-    ]);
+    assert.deepEqual(result.nextSteps, buildFeishuSmokeNextSteps());
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -551,11 +544,7 @@ test("RuntimeSmokeService.runFeishuSmoke 会输出固定复跑顺序和诊断摘
     assert.equal(result.ok, true);
     assert.equal(result.diagnosisId, "healthy");
     assert.equal(result.diagnosisSummary, "飞书配置、服务可达性和最近窗口摘要看起来正常，继续按固定复跑顺序验证即可。");
-    assert.deepEqual(result.nextSteps, [
-      "./themis doctor feishu",
-      "./themis doctor smoke web",
-      "./themis doctor smoke feishu",
-    ]);
+    assert.deepEqual(result.nextSteps, buildFeishuSmokeNextSteps());
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
