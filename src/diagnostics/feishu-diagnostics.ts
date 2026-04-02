@@ -37,11 +37,21 @@ export interface FeishuDiagnosticsSummary {
   diagnostics: {
     store: FeishuDiagnosticFileStatus;
     currentConversation: FeishuDiagnosticsConversationSummary | null;
-    recentEvents: FeishuDiagnosticsEvent[];
+    recentEvents: FeishuDiagnosticsEventSummary[];
   };
   docs: {
     smokeDocExists: boolean;
   };
+}
+
+export interface FeishuDiagnosticsPendingActionSummary {
+  actionId: string;
+  actionType: string;
+  taskId: string;
+  requestId: string;
+  sourceChannel: string;
+  sessionId: string;
+  principalId: string;
 }
 
 export interface FeishuDiagnosticsConversationSummary {
@@ -55,7 +65,22 @@ export interface FeishuDiagnosticsConversationSummary {
   lastMessageId: string | null;
   lastEventType: string | null;
   pendingActionCount: number;
+  pendingActions: FeishuDiagnosticsPendingActionSummary[];
   updatedAt: string;
+}
+
+export interface FeishuDiagnosticsEventSummary {
+  id: string;
+  type: string;
+  chatId: string;
+  userId: string;
+  sessionId: string | null;
+  principalId: string | null;
+  messageId: string | null;
+  actionId: string | null;
+  requestId: string | null;
+  summary: string;
+  createdAt: string;
 }
 
 export interface ReadFeishuDiagnosticsOptions {
@@ -120,7 +145,7 @@ export async function readFeishuDiagnosticsSnapshot(
         selectCurrentConversation(diagnosticsSnapshot.conversations),
         runtimeStore,
       ),
-      recentEvents: diagnosticsSnapshot.recentEvents.slice(-5).map(cloneEvent),
+      recentEvents: diagnosticsSnapshot.recentEvents.slice(-5).map(cloneEventSummary),
     },
     docs: {
       smokeDocExists: existsSync(join(workingDirectory, FEISHU_SMOKE_DOC_PATH)),
@@ -231,6 +256,7 @@ function summarizeConversation(
     lastMessageId: conversation.lastMessageId ?? null,
     lastEventType: conversation.lastEventType ?? null,
     pendingActionCount: conversation.pendingActions.length,
+    pendingActions: conversation.pendingActions.map(clonePendingAction),
     updatedAt: conversation.updatedAt,
   };
 }
@@ -315,17 +341,37 @@ function parseTimestamp(value: string): number {
   return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
 }
 
-function cloneEvent(event: FeishuDiagnosticsEvent): FeishuDiagnosticsEvent {
+function clonePendingAction(action: {
+  actionId: string;
+  actionType: string;
+  taskId: string;
+  requestId: string;
+  sourceChannel: string;
+  sessionId: string;
+  principalId: string;
+}): FeishuDiagnosticsPendingActionSummary {
+  return {
+    actionId: action.actionId,
+    actionType: action.actionType,
+    taskId: action.taskId,
+    requestId: action.requestId,
+    sourceChannel: action.sourceChannel,
+    sessionId: action.sessionId,
+    principalId: action.principalId,
+  };
+}
+
+function cloneEventSummary(event: FeishuDiagnosticsEvent): FeishuDiagnosticsEventSummary {
   return {
     id: event.id,
     type: event.type,
     chatId: event.chatId,
     userId: event.userId,
-    sessionId: event.sessionId,
-    principalId: event.principalId,
-    messageId: event.messageId,
-    actionId: event.actionId,
-    requestId: event.requestId,
+    sessionId: event.sessionId ?? null,
+    principalId: event.principalId ?? null,
+    messageId: event.messageId ?? null,
+    actionId: event.actionId ?? null,
+    requestId: event.requestId ?? null,
     summary: event.summary,
     createdAt: event.createdAt,
   };

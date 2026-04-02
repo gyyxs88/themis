@@ -235,7 +235,17 @@ test("RuntimeDiagnosticsService.readSummary 会汇总 feishu diagnostics 快照"
               lastMessageId: "message-2",
               lastEventType: "message.received",
               updatedAt: "2026-04-01T01:00:00.000Z",
-              pendingActions: [],
+              pendingActions: [
+                {
+                  actionId: "action-2",
+                  actionType: "approval",
+                  taskId: "task-2",
+                  requestId: "request-2",
+                  sourceChannel: "web",
+                  sessionId: "session-2",
+                  principalId: "principal-2",
+                },
+              ],
             },
           ],
           recentEvents: [
@@ -332,8 +342,32 @@ test("RuntimeDiagnosticsService.readSummary 会汇总 feishu diagnostics 快照"
       threadStatus: "running",
       lastMessageId: "message-2",
       lastEventType: "message.received",
-      pendingActionCount: 0,
+      pendingActionCount: 1,
+      pendingActions: [
+        {
+          actionId: "action-2",
+          actionType: "approval",
+          taskId: "task-2",
+          requestId: "request-2",
+          sourceChannel: "web",
+          sessionId: "session-2",
+          principalId: "principal-2",
+        },
+      ],
       updatedAt: "2026-04-01T01:00:00.000Z",
+    });
+    assert.deepEqual(summary.feishu.diagnostics.recentEvents[1], {
+      id: "event-2",
+      type: "task.progress",
+      chatId: "chat-2",
+      userId: "user-2",
+      sessionId: "session-2",
+      principalId: "principal-2",
+      messageId: null,
+      actionId: null,
+      requestId: null,
+      summary: "任务推进中",
+      createdAt: "2026-04-01T01:00:01.000Z",
     });
     assert.deepEqual(summary.feishu.diagnostics.recentEvents.map((event) => event.id), ["event-1", "event-2"]);
     assert.equal(summary.feishu.docs.smokeDocExists, true);

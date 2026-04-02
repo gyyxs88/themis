@@ -188,7 +188,17 @@ test("GET /api/diagnostics 会返回 feishu summary", async () => {
               lastMessageId: "message-1",
               lastEventType: "message.created",
               updatedAt: "2026-04-02T00:00:00.000Z",
-              pendingActions: [],
+              pendingActions: [
+                {
+                  actionId: "action-1",
+                  actionType: "user-input",
+                  taskId: "task-1",
+                  requestId: "request-1",
+                  sourceChannel: "web",
+                  sessionId: "session-1",
+                  principalId: "principal-1",
+                },
+              ],
             },
           ],
           recentEvents: [
@@ -327,8 +337,32 @@ test("GET /api/diagnostics 会返回 feishu summary", async () => {
       threadStatus: "running",
       lastMessageId: "message-1",
       lastEventType: "message.created",
-      pendingActionCount: 0,
+      pendingActionCount: 1,
+      pendingActions: [
+        {
+          actionId: "action-1",
+          actionType: "user-input",
+          taskId: "task-1",
+          requestId: "request-1",
+          sourceChannel: "web",
+          sessionId: "session-1",
+          principalId: "principal-1",
+        },
+      ],
       updatedAt: "2026-04-02T00:00:00.000Z",
+    });
+    assert.deepEqual(payload.summary?.feishu?.diagnostics?.recentEvents?.[1], {
+      id: "event-2",
+      type: "task.progress",
+      chatId: "chat-1",
+      userId: "user-1",
+      sessionId: "session-1",
+      principalId: "principal-1",
+      messageId: null,
+      actionId: null,
+      requestId: null,
+      summary: "任务推进中",
+      createdAt: "2026-04-02T00:00:02.000Z",
     });
     assert.deepEqual(payload.summary?.feishu?.diagnostics?.recentEvents?.map((event) => event.id), ["event-1", "event-2"]);
     assert.equal(payload.summary?.feishu?.docs?.smokeDocExists, true);

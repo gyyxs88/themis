@@ -334,7 +334,17 @@ test("readFeishuDiagnosticsSnapshot 会返回 diagnostics store 状态、current
               lastMessageId: "message-2",
               lastEventType: "message.received",
               updatedAt: "2026-04-02T09:00:00.000Z",
-              pendingActions: [],
+              pendingActions: [
+                {
+                  actionId: "action-2",
+                  actionType: "user-input",
+                  taskId: "task-2",
+                  requestId: "request-2",
+                  sourceChannel: "feishu",
+                  sessionId: "session-2",
+                  principalId: "principal-2",
+                },
+              ],
             },
           ],
           recentEvents: [
@@ -433,10 +443,45 @@ test("readFeishuDiagnosticsSnapshot 会返回 diagnostics store 状态、current
       threadStatus: "running",
       lastMessageId: "message-2",
       lastEventType: "message.received",
-      pendingActionCount: 0,
+      pendingActionCount: 1,
+      pendingActions: [
+        {
+          actionId: "action-2",
+          actionType: "user-input",
+          taskId: "task-2",
+          requestId: "request-2",
+          sourceChannel: "feishu",
+          sessionId: "session-2",
+          principalId: "principal-2",
+        },
+      ],
       updatedAt: "2026-04-02T09:00:00.000Z",
     });
-    assert.equal(result.diagnostics.currentConversation?.pendingActionCount, 0);
+    assert.equal(result.diagnostics.currentConversation?.pendingActionCount, 1);
+    assert.deepEqual(result.diagnostics.currentConversation?.pendingActions, [
+      {
+        actionId: "action-2",
+        actionType: "user-input",
+        taskId: "task-2",
+        requestId: "request-2",
+        sourceChannel: "feishu",
+        sessionId: "session-2",
+        principalId: "principal-2",
+      },
+    ]);
+    assert.deepEqual(result.diagnostics.recentEvents[0], {
+      id: "event-2",
+      type: "task.progress",
+      chatId: "chat-2",
+      userId: "user-2",
+      sessionId: "session-2",
+      principalId: "principal-2",
+      messageId: null,
+      actionId: null,
+      requestId: null,
+      summary: "任务仍在推进",
+      createdAt: "2026-04-02T09:00:01.000Z",
+    });
     assert.deepEqual(result.diagnostics.recentEvents.map((event) => event.id), [
       "event-2",
       "event-3",
@@ -444,7 +489,6 @@ test("readFeishuDiagnosticsSnapshot 会返回 diagnostics store 状态、current
       "event-5",
       "event-6",
     ]);
-    assert.equal("pendingActions" in (result.diagnostics.currentConversation ?? {}), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
