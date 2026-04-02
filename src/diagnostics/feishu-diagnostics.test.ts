@@ -411,13 +411,42 @@ test("readFeishuDiagnosticsSnapshot 会把 submit_failed action 纳入 lastActio
   }
 });
 
-test("readFeishuDiagnosticsSnapshot 会把 pending_input.blocked_by_approval 归类成 approval_blocking_takeover", async () => {
+test("readFeishuDiagnosticsSnapshot 会基于当前 pendingActions 归类 approval_blocking_takeover", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-feishu-diagnostics-blocked-"));
   const store = new FeishuDiagnosticsStateStore({
     filePath: join(root, "infra", "local", "feishu-diagnostics.json"),
   });
 
   try {
+    store.upsertConversation({
+      key: "chat-1::user-1",
+      chatId: "chat-1",
+      userId: "user-1",
+      principalId: "principal-1",
+      activeSessionId: "session-1",
+      lastEventType: "pending_input.blocked_by_approval",
+      updatedAt: "2026-04-02T08:00:00.000Z",
+      pendingActions: [
+        {
+          actionId: "approval-1",
+          actionType: "approval",
+          taskId: "task-1",
+          requestId: "request-1",
+          sourceChannel: "feishu",
+          sessionId: "session-1",
+          principalId: "principal-1",
+        },
+        {
+          actionId: "reply-1",
+          actionType: "user-input",
+          taskId: "task-2",
+          requestId: "request-2",
+          sourceChannel: "feishu",
+          sessionId: "session-1",
+          principalId: "principal-1",
+        },
+      ],
+    });
     store.appendEvent({
       id: "event-blocked-1",
       type: "pending_input.blocked_by_approval",
@@ -451,13 +480,42 @@ test("readFeishuDiagnosticsSnapshot 会把 pending_input.blocked_by_approval 归
   }
 });
 
-test("readFeishuDiagnosticsSnapshot 会把 pending_input.ambiguous 归类成 pending_input_ambiguous", async () => {
+test("readFeishuDiagnosticsSnapshot 会基于当前 pendingActions 归类 pending_input_ambiguous", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-feishu-diagnostics-ambiguous-"));
   const store = new FeishuDiagnosticsStateStore({
     filePath: join(root, "infra", "local", "feishu-diagnostics.json"),
   });
 
   try {
+    store.upsertConversation({
+      key: "chat-1::user-1",
+      chatId: "chat-1",
+      userId: "user-1",
+      principalId: "principal-1",
+      activeSessionId: "session-1",
+      lastEventType: "pending_input.ambiguous",
+      updatedAt: "2026-04-02T08:00:00.000Z",
+      pendingActions: [
+        {
+          actionId: "reply-1",
+          actionType: "user-input",
+          taskId: "task-1",
+          requestId: "request-1",
+          sourceChannel: "feishu",
+          sessionId: "session-1",
+          principalId: "principal-1",
+        },
+        {
+          actionId: "reply-2",
+          actionType: "user-input",
+          taskId: "task-2",
+          requestId: "request-2",
+          sourceChannel: "feishu",
+          sessionId: "session-1",
+          principalId: "principal-1",
+        },
+      ],
+    });
     store.appendEvent({
       id: "event-ambiguous-1",
       type: "pending_input.ambiguous",
@@ -485,6 +543,113 @@ test("readFeishuDiagnosticsSnapshot 会把 pending_input.ambiguous 归类成 pen
     assert.equal(result.diagnostics.primaryDiagnosis?.severity, "warning");
     assert.deepEqual(result.diagnostics.secondaryDiagnoses, []);
     assert.ok(result.diagnostics.recommendedNextSteps.some((step) => step.includes("/reply <actionId> <内容>")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readFeishuDiagnosticsSnapshot 在当前状态恢复后不会继续报旧 blocked 或 ambiguous 主诊断", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-feishu-diagnostics-recovered-"));
+  const store = new FeishuDiagnosticsStateStore({
+    filePath: join(root, "infra", "local", "feishu-diagnostics.json"),
+  });
+
+  try {
+    store.upsertConversation({
+      key: "chat-1::user-1",
+      chatId: "chat-1",
+      userId: "user-1",
+      principalId: "principal-1",
+      activeSessionId: "session-1",
+      lastEventType: "message.received",
+      updatedAt: "2026-04-02T08:00:03.000Z",
+      pendingActions: [],
+    });
+    store.appendEvent({
+      id: "event-blocked-1",
+      type: "pending_input.blocked_by_approval",
+      chatId: "chat-1",
+      userId: "user-1",
+      sessionId: "session-1",
+      principalId: "principal-1",
+      summary: "历史 blocked 事件",
+      createdAt: "2026-04-02T08:00:01.000Z",
+    });
+    store.appendEvent({
+      id: "event-ambiguous-1",
+      type: "pending_input.ambiguous",
+      chatId: "chat-1",
+      userId: "user-1",
+      sessionId: "session-1",
+      principalId: "principal-1",
+      summary: "历史 ambiguous 事件",
+      createdAt: "2026-04-02T08:00:02.000Z",
+    });
+
+    const result = await readFeishuDiagnosticsSnapshot({
+      workingDirectory: root,
+      env: {
+        FEISHU_APP_ID: "cli_xxx",
+        FEISHU_APP_SECRET: "secret_xxx",
+      },
+      fetchImpl: async () =>
+        new Response(null, {
+          status: 200,
+        }),
+    });
+
+    assert.notEqual(result.diagnostics.primaryDiagnosis?.id, "approval_blocking_takeover");
+    assert.notEqual(result.diagnostics.primaryDiagnosis?.id, "pending_input_ambiguous");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readFeishuDiagnosticsSnapshot 会把 pending_input.not_found 暴露成诊断并保留 secondary 信息", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-feishu-diagnostics-not-found-"));
+  const store = new FeishuDiagnosticsStateStore({
+    filePath: join(root, "infra", "local", "feishu-diagnostics.json"),
+  });
+
+  try {
+    store.appendEvent({
+      id: "event-not-found-1",
+      type: "pending_input.not_found",
+      chatId: "chat-1",
+      userId: "user-1",
+      sessionId: "session-1",
+      principalId: "principal-1",
+      summary: "没有匹配到 pending action",
+      createdAt: "2026-04-02T08:00:01.000Z",
+    });
+    store.appendEvent({
+      id: "event-ignored-1",
+      type: "message.stale_ignored",
+      chatId: "chat-1",
+      userId: "user-1",
+      sessionId: "session-1",
+      principalId: "principal-1",
+      messageId: "message-1",
+      summary: "旧消息被忽略",
+      createdAt: "2026-04-02T08:00:02.000Z",
+    });
+
+    const result = await readFeishuDiagnosticsSnapshot({
+      workingDirectory: root,
+      env: {
+        FEISHU_APP_ID: "cli_xxx",
+        FEISHU_APP_SECRET: "secret_xxx",
+      },
+      fetchImpl: async () =>
+        new Response(null, {
+          status: 200,
+        }),
+    });
+
+    assert.equal(result.diagnostics.primaryDiagnosis?.id, "pending_input_not_found");
+    assert.equal(result.diagnostics.primaryDiagnosis?.severity, "warning");
+    assert.ok(result.diagnostics.secondaryDiagnoses.some((item) => item.id === "ignored_message_window"));
+    assert.ok(result.diagnostics.recommendedNextSteps.some((step) => step.includes("./themis doctor feishu")));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
