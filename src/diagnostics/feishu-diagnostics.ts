@@ -37,6 +37,7 @@ export interface ReadFeishuDiagnosticsOptions {
   env?: NodeJS.ProcessEnv;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
+  serviceProbeTimeoutMs?: number;
 }
 
 const FEISHU_SMOKE_DOC_PATH = "docs/feishu/themis-feishu-real-journey-smoke.md";
@@ -50,11 +51,12 @@ export async function readFeishuDiagnosticsSnapshot(
   const workingDirectory = options.workingDirectory;
   const baseUrl = normalizeText(options.baseUrl ?? env.THEMIS_BASE_URL ?? "http://127.0.0.1:3100") ?? "http://127.0.0.1:3100";
   const fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const serviceProbeTimeoutMs = normalizePositiveInteger(options.serviceProbeTimeoutMs, 1_000);
   const sessionStorePath = join(workingDirectory, FEISHU_SESSION_STORE_PATH);
   const attachmentDraftStorePath = join(workingDirectory, FEISHU_ATTACHMENT_DRAFT_STORE_PATH);
 
   const [service, sessionStore, attachmentDraftStore] = await Promise.all([
-    probeServiceReachability(baseUrl, fetchImpl),
+    probeServiceReachability(baseUrl, fetchImpl, serviceProbeTimeoutMs),
     readFeishuFileStatus(sessionStorePath, FEISHU_SESSION_STORE_PATH, "bindings"),
     readFeishuFileStatus(attachmentDraftStorePath, FEISHU_ATTACHMENT_DRAFT_STORE_PATH, "drafts"),
   ]);
@@ -82,12 +84,28 @@ export async function readFeishuDiagnosticsSnapshot(
 async function probeServiceReachability(
   baseUrl: string,
   fetchImpl: typeof fetch,
+  timeoutMs: number,
 ): Promise<FeishuDiagnosticsSummary["service"]> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<Response>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error("feishu service probe timed out"));
+    }, timeoutMs);
+    timer.unref?.();
+  });
+
   try {
-    const response = await fetchImpl(new URL("/", baseUrl), {
-      method: "GET",
-      redirect: "manual",
-    });
+    const response = await Promise.race([
+      fetchImpl(new URL("/", baseUrl), {
+        method: "GET",
+        redirect: "manual",
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+
     return {
       serviceReachable: response.status < 500,
       statusCode: response.status,
@@ -97,7 +115,40 @@ async function probeServiceReachability(
       serviceReachable: false,
       statusCode: null,
     };
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
   }
+}
+
+function parseBooleanEnv(value: string | undefined): boolean {
+  const normalized = normalizeText(value)?.toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function parseIntegerEnv(value: string | undefined): number | undefined {
+  const normalized = normalizeText(value);
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  const parsed = Number.parseInt(normalized, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+
+  return Math.max(1, Math.round(value));
+}
+
+function normalizeText(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
 }
 
 async function readFeishuFileStatus(
@@ -130,25 +181,4 @@ async function readFeishuFileStatus(
       count: 0,
     };
   }
-}
-
-function parseBooleanEnv(value: string | undefined): boolean {
-  const normalized = normalizeText(value)?.toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
-
-function parseIntegerEnv(value: string | undefined): number | undefined {
-  const normalized = normalizeText(value);
-
-  if (!normalized) {
-    return undefined;
-  }
-
-  const parsed = Number.parseInt(normalized, 10);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function normalizeText(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
 }
