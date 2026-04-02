@@ -41,6 +41,8 @@ Themis 已接入飞书长连接渠道，特点如下：
 - 已支持 `/review <指令>`、`/steer <指令>` 对当前会话发起最小控制动作
 - `/current` 会展示当前会话 ID、工作区、principal、认证账号、最近任务状态和 native thread 摘要
 - `themis doctor feishu` 现在会额外输出飞书深层诊断：
+  - 主诊断和诊断摘要：先把问题归类成服务、会话、action、消息顺序或恢复边界问题
+  - 建议动作：给出下一步该看什么，而不是只贴原始状态
   - 当前会话快照：`sessionId / principalId / threadId / threadStatus / lastMessageId / lastEventType / pendingActions`
   - 最近窗口统计：`recentWindow.duplicateIgnoredCount / staleIgnoredCount / approvalSubmittedCount / replySubmittedCount / takeoverSubmittedCount / pendingInputNotFoundCount / pendingInputAmbiguousCount`
   - 最近一次 action 尝试：`lastActionAttempt.type / requestId`，并附带 `actionId / sessionId / principalId / createdAt / summary`；这里既可能是 `*.submitted`，也可能是 `*.submit_failed`
@@ -93,6 +95,15 @@ npm run dev:web
 启动后如果配置了飞书凭证，会额外拉起飞书长连接服务。
 
 ## 常见排障
+
+### 先按固定复跑顺序来
+
+- 先跑 `./themis doctor feishu`
+- 再跑 `./themis doctor smoke web`
+- 再跑 `./themis doctor smoke feishu`
+- 最后才做手工 A/B
+
+这个顺序的核心不是追求更长的自动化链路，而是先用最便宜的方式确认问题落在哪一层。
 
 ### 斜杠命令已收到，但飞书回复明显偏慢
 
