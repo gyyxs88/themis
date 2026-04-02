@@ -53,7 +53,8 @@ infra/local/feishu-diagnostics.json
 ```
 
 - 这份 JSON 只承担本地排障快照用途，CLI 和 HTTP diagnostics 都会从它读出当前会话与最近事件；它不是审计日志，也不是长期存档。
-- 如果 `doctor feishu` 里看不到当前会话快照或最近窗口统计，先确认这份文件存在且内容有效，再看 `infra/local/feishu-sessions.json` 和 `infra/local/themis.db` 是否同步到了同一条会话。
+- 如果 `recentWindow` 统计缺失，优先看 `infra/local/feishu-diagnostics.json` 是否存在且内容有效。
+- 如果 `threadId / threadStatus` 缺失，再看 `infra/local/feishu-sessions.json` 和 `infra/local/themis.db` 是否同步到了同一条会话。
 
 ## 配置方式
 
