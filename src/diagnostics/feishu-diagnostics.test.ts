@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { FeishuDiagnosticsStateStore } from "../channels/feishu/diagnostics-state-store.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import type { TaskRequest } from "../types/task.js";
 import { readFeishuDiagnosticsSnapshot } from "./feishu-diagnostics.js";
@@ -218,6 +219,79 @@ test("readFeishuDiagnosticsSnapshot 会正常统计 sessions 和 drafts 数量",
     assert.equal(result.state.sessionBindingCount, 2);
     assert.equal(result.state.attachmentDraftCount, 3);
     assert.equal(result.docs.smokeDocExists, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readFeishuDiagnosticsSnapshot 会派生 recentWindowStats、lastActionAttempt 和 lastIgnoredMessage", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-feishu-diagnostics-summary-"));
+  const store = new FeishuDiagnosticsStateStore({
+    filePath: join(root, "infra", "local", "feishu-diagnostics.json"),
+  });
+
+  try {
+    store.upsertConversation({
+      key: "chat-1::user-1",
+      chatId: "chat-1",
+      userId: "user-1",
+      principalId: "principal-1",
+      activeSessionId: "session-1",
+      lastMessageId: "message-1",
+      lastEventType: "takeover.submitted",
+      updatedAt: "2026-04-02T08:00:00.000Z",
+      pendingActions: [],
+    });
+    store.appendEvent({
+      id: "event-1",
+      type: "message.stale_ignored",
+      chatId: "chat-1",
+      userId: "user-1",
+      sessionId: "session-1",
+      principalId: "principal-1",
+      messageId: "message-1",
+      summary: "旧消息被忽略",
+      createdAt: "2026-04-02T08:00:01.000Z",
+      details: {
+        messageId: "message-1",
+        reason: "stale",
+        retryCount: 1,
+        approved: false,
+        note: null,
+      },
+    });
+    store.appendEvent({
+      id: "event-2",
+      type: "takeover.submitted",
+      chatId: "chat-1",
+      userId: "user-1",
+      sessionId: "session-1",
+      principalId: "principal-1",
+      actionId: "action-1",
+      requestId: "request-1",
+      summary: "takeover 已提交",
+      createdAt: "2026-04-02T08:00:02.000Z",
+      details: {
+        actionId: "action-1",
+        requestId: "request-1",
+        sessionId: "session-1",
+        principalId: "principal-1",
+      },
+    });
+
+    const summary = await readFeishuDiagnosticsSnapshot({
+      workingDirectory: root,
+      fetchImpl: async () =>
+        new Response(null, {
+          status: 200,
+        }),
+    });
+
+    assert.equal(summary.diagnostics.recentWindowStats.staleIgnoredCount, 1);
+    assert.equal(summary.diagnostics.recentWindowStats.takeoverSubmittedCount, 1);
+    assert.equal(summary.diagnostics.lastActionAttempt?.type, "takeover.submitted");
+    assert.equal(summary.diagnostics.lastActionAttempt?.requestId, "request-1");
+    assert.equal(summary.diagnostics.lastIgnoredMessage?.type, "message.stale_ignored");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
