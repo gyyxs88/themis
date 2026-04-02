@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import type { Readable } from "node:stream";
 import { resolve } from "node:path";
 import type { TaskInputAsset } from "../../types/index.js";
+import { enrichDocumentInputAsset } from "../../core/document-input-asset.js";
 import { enrichPdfInputAsset } from "../../core/pdf-input-asset.js";
 import { extractFeishuPostImageKeys } from "./message-content.js";
 
@@ -58,6 +59,7 @@ export interface DownloadFeishuMessageResourcesOptions {
   client: FeishuMessageResourceClient;
   resources: FeishuMessageResourceReference[];
   targetDirectory: string;
+  enrichDocumentAsset?: (asset: FeishuMessageResourceAsset) => Promise<TaskInputAsset>;
   enrichPdfAsset?: (asset: FeishuMessageResourceAsset) => Promise<TaskInputAsset>;
 }
 
@@ -150,18 +152,18 @@ export async function downloadFeishuMessageResources(
       createdAt: resource.createdAt,
     };
 
-    if (isPdf) {
-      const enrichPdfAsset = options.enrichPdfAsset ?? (async (pdfAsset: FeishuMessageResourceAsset) => {
-        return await enrichPdfInputAsset(pdfAsset);
+    if (asset.kind === "document") {
+      const enrichDocumentAsset = options.enrichDocumentAsset ?? (async (documentAsset: FeishuMessageResourceAsset) => {
+        return await enrichDocumentInputAsset(documentAsset, {
+          enrichPdfAsset: options.enrichPdfAsset ?? enrichPdfInputAsset,
+        });
       });
 
       try {
-        const enrichedAsset = await enrichPdfAsset(asset);
+        const enrichedAsset = await enrichDocumentAsset(asset);
         attachments.push({
+          ...enrichedAsset,
           ...asset,
-          ingestionStatus: enrichedAsset.ingestionStatus,
-          ...(enrichedAsset.textExtraction ? { textExtraction: enrichedAsset.textExtraction } : {}),
-          ...(enrichedAsset.metadata ? { metadata: enrichedAsset.metadata } : {}),
         });
       } catch {
         attachments.push({

@@ -205,6 +205,68 @@ test("downloadFeishuMessageResources 会下载附件并返回标准化结果", a
   }
 });
 
+test("downloadFeishuMessageResources 会把 markdown 文件资源交给共享文档富化器", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-feishu-message-resource-text-"));
+  const resources: FeishuMessageResourceReference[] = [{
+    id: "msg-file-text::file-key-text",
+    type: "file",
+    resourceKey: "file-key-text",
+    name: "guide.md",
+    sourceMessageId: "msg-file-text",
+    createdAt: "2026-04-03T08:00:00.000Z",
+  }];
+  let enrichCalls = 0;
+
+  const client: FeishuMessageResourceClient = {
+    im: {
+      v1: {
+        messageResource: {
+          async get() {
+            return {
+              headers: {
+                "content-type": "text/markdown",
+              },
+              async writeFile(filePath: string) {
+                await import("node:fs/promises").then(({ writeFile }) => writeFile(filePath, "# Guide\n\nhello"));
+              },
+              getReadableStream() {
+                throw new Error("not implemented");
+              },
+            };
+          },
+        },
+      },
+    },
+  };
+
+  try {
+    const attachments = await downloadFeishuMessageResources({
+      client,
+      resources,
+      targetDirectory: join(root, "downloads"),
+      enrichDocumentAsset: async (asset) => {
+        enrichCalls += 1;
+        return {
+          ...asset,
+          ingestionStatus: "ready",
+          textExtraction: {
+            status: "completed",
+            textPath: `${asset.localPath}.themis.txt`,
+            textPreview: "# Guide",
+          },
+        };
+      },
+    });
+
+    assert.equal(enrichCalls, 1);
+    assert.equal(attachments[0]?.mimeType, "text/markdown");
+    assert.equal(attachments[0]?.textExtraction?.status, "completed");
+    assert.equal(attachments[0]?.textExtraction?.textPreview, "# Guide");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("downloadFeishuMessageResources 会在显式 PDF 文件上调用富化器并返回富化结果", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-feishu-message-resource-pdf-"));
   const resources: FeishuMessageResourceReference[] = [{
