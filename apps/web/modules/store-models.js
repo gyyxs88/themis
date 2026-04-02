@@ -1,5 +1,8 @@
 import { createId, nowIso } from "./utils.js";
 
+const FALLBACK_TASK_INPUT_ENVELOPE_SOURCE_CHANNEL = "web";
+const FALLBACK_TASK_INPUT_ENVELOPE_CREATED_AT = "1970-01-01T00:00:00.000Z";
+
 export function createStoreModelHelpers() {
   function createDefaultThreadSettings() {
     return {
@@ -229,12 +232,12 @@ export function createStoreModelHelpers() {
     }
 
     const envelopeId = typeof value.envelopeId === "string" ? value.envelopeId : "";
-    const sourceChannel = typeof value.sourceChannel === "string" ? value.sourceChannel : "";
-    const createdAt = typeof value.createdAt === "string" ? value.createdAt : "";
-
-    if (!envelopeId || !sourceChannel || !createdAt) {
-      return null;
-    }
+    const sourceChannel = typeof value.sourceChannel === "string" && value.sourceChannel
+      ? value.sourceChannel
+      : FALLBACK_TASK_INPUT_ENVELOPE_SOURCE_CHANNEL;
+    const createdAt = typeof value.createdAt === "string" && value.createdAt
+      ? value.createdAt
+      : FALLBACK_TASK_INPUT_ENVELOPE_CREATED_AT;
 
     const parts = Array.isArray(value.parts)
       ? value.parts.map(normalizeTaskInputPart).filter(Boolean)

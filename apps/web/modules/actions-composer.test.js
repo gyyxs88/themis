@@ -342,6 +342,99 @@ test("normalizeState 会保留 turn.inputEnvelope 的 canonical 字段", () => {
   assert.equal(normalized.threads[0]?.turns[0]?.inputEnvelope?.assets?.[0]?.metadata?.pageCount, 3);
 });
 
+test("createTurn({ inputEnvelope }) 会保留并规范化 envelope", () => {
+  const models = createStoreModelHelpers();
+  const turn = models.createTurn({
+    goal: "分析这份文档",
+    inputText: "",
+    inputEnvelope: {
+      parts: [
+        {
+          partId: "part-1",
+          type: "text",
+          role: "user",
+          order: 1,
+          text: "请总结",
+        },
+        {
+          partId: "part-2",
+          type: "document",
+          role: "user",
+          order: 2,
+          assetId: "asset-doc-1",
+        },
+      ],
+      assets: [
+        {
+          assetId: "asset-doc-1",
+          kind: "document",
+          mimeType: "application/pdf",
+          localPath: "/workspace/temp/input-assets/report.pdf",
+          sourceChannel: "web",
+          ingestionStatus: "ready",
+        },
+      ],
+    },
+  });
+
+  assert.equal(turn.inputEnvelope?.envelopeId, "");
+  assert.equal(turn.inputEnvelope?.sourceChannel, "web");
+  assert.equal(turn.inputEnvelope?.createdAt, "1970-01-01T00:00:00.000Z");
+  assert.equal(turn.inputEnvelope?.parts?.[1]?.assetId, "asset-doc-1");
+  assert.equal(turn.inputEnvelope?.assets?.[0]?.assetId, "asset-doc-1");
+});
+
+test("normalizeTaskInputEnvelope 对部分字段缺失时会补默认值并保留有效内容", () => {
+  const models = createStoreModelHelpers();
+  const normalized = models.normalizeTaskInputEnvelope({
+    sourceSessionId: "thread-a",
+    sourceMessageId: "msg-1",
+    parts: [
+      {
+        partId: "part-1",
+        type: "text",
+        role: "user",
+        order: 1,
+        text: "补充说明",
+      },
+      {
+        partId: "",
+        type: "document",
+        role: "user",
+        order: 2,
+        assetId: "asset-ignored",
+      },
+    ],
+    assets: [
+      {
+        assetId: "asset-doc-1",
+        kind: "document",
+        mimeType: "application/pdf",
+        localPath: "/workspace/temp/input-assets/report.pdf",
+        sourceChannel: "web",
+        ingestionStatus: "ready",
+        textExtraction: {
+          status: "completed",
+          textPreview: "第一页摘要",
+        },
+        metadata: {
+          pageCount: 3,
+        },
+      },
+    ],
+  });
+
+  assert.equal(normalized?.envelopeId, "");
+  assert.equal(normalized?.sourceChannel, "web");
+  assert.equal(normalized?.createdAt, "1970-01-01T00:00:00.000Z");
+  assert.equal(normalized?.sourceSessionId, "thread-a");
+  assert.equal(normalized?.sourceMessageId, "msg-1");
+  assert.equal(normalized?.parts?.length, 1);
+  assert.equal(normalized?.parts?.[0]?.text, "补充说明");
+  assert.equal(normalized?.assets?.[0]?.textExtraction?.textPreview, "第一页摘要");
+  assert.equal(normalized?.assets?.[0]?.metadata?.pageCount, 3);
+});
+
 test("persisted review mode 在当前 latest turn running 时会回退到普通发送", async () => {
   const harness = createComposerHarness({
     activeRunRef: null,
