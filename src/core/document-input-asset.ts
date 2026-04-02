@@ -84,12 +84,12 @@ export async function enrichDocumentInputAsset(
 }
 
 function isPdfAsset(asset: TaskInputAsset): boolean {
-  const mimeType = asset.mimeType.split(";", 1)[0].trim().toLowerCase();
+  const mimeType = normalizeMimeType(asset.mimeType);
   return mimeType === "application/pdf" || asset.localPath.toLowerCase().endsWith(".pdf");
 }
 
 async function shouldTreatAsTextDocument(asset: TaskInputAsset): Promise<boolean> {
-  const mimeType = asset.mimeType.split(";", 1)[0].trim().toLowerCase();
+  const mimeType = normalizeMimeType(asset.mimeType);
 
   if (TEXT_MIME_TYPE_WHITELIST.has(mimeType)) {
     return true;
@@ -101,6 +101,11 @@ async function shouldTreatAsTextDocument(asset: TaskInputAsset): Promise<boolean
   }
 
   return await looksLikeUtf8Text(asset.localPath);
+}
+
+function normalizeMimeType(mimeType: string | undefined): string {
+  const baseMimeType = mimeType?.split(";", 1).at(0);
+  return baseMimeType?.trim().toLowerCase() ?? "";
 }
 
 async function looksLikeUtf8Text(filePath: string): Promise<boolean> {
