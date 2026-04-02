@@ -2666,6 +2666,7 @@ export class FeishuChannelService {
         context,
         sessionId,
         principalId: principal.principalId,
+        lastMessageId: context.messageId,
         summary: "当前会话存在审批待处理，普通文本不会自动接管。",
         details: {
           blockingReason: "approval_pending",
@@ -2683,6 +2684,7 @@ export class FeishuChannelService {
           context,
           sessionId,
           principalId: principal.principalId,
+          lastMessageId: context.messageId,
           summary: "当前会话没有可接管的等待输入。",
           details: {
             blockingReason: "approval_pending_without_takeover",
@@ -2700,6 +2702,7 @@ export class FeishuChannelService {
         context,
         sessionId,
         principalId: principal.principalId,
+        lastMessageId: context.messageId,
         summary: "当前会话没有可接管的等待输入。",
         details: {
           blockingReason: "no_pending_input",

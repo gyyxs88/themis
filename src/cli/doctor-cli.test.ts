@@ -883,6 +883,156 @@ test("themis doctor feishu 会输出当前会话快照和最近 5 条事件轨�
   }
 });
 
+test("themis doctor feishu 会输出失败 action 摘要", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "themis-doctor-cli-feishu-failed-action-"));
+  let server: ReturnType<typeof createServer> | null = null;
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: resolve(workspace, "infra/local/themis.db"),
+  });
+
+  try {
+    mkdirSync(resolve(workspace, "docs", "feishu"), { recursive: true });
+    mkdirSync(resolve(workspace, "infra", "local"), { recursive: true });
+    writeFileSync(resolve(workspace, "docs/feishu/themis-feishu-real-journey-smoke.md"), "# smoke\n", "utf8");
+    writeFileSync(
+      resolve(workspace, "infra/local/feishu-sessions.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          bindings: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              activeSessionId: "session-1",
+              updatedAt: "2026-04-02T00:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    writeFileSync(
+      resolve(workspace, "infra/local/feishu-attachment-drafts.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          drafts: [],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    writeFileSync(
+      resolve(workspace, "infra/local/feishu-diagnostics.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          conversations: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              principalId: "principal-1",
+              activeSessionId: "session-1",
+              lastMessageId: "message-7",
+              lastEventType: "takeover.submit_failed",
+              updatedAt: "2026-04-02T10:00:00.000Z",
+              pendingActions: [],
+            },
+          ],
+          recentEvents: [
+            {
+              id: "event-1",
+              type: "takeover.submit_failed",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              actionId: "action-1",
+              requestId: "request-1",
+              summary: "takeover 提交失败",
+              createdAt: "2026-04-02T09:00:03.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    server = createServer((req, res) => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+
+      if (req.method === "GET" && url.pathname === "/") {
+        res.writeHead(200, {
+          "content-type": "text/plain; charset=utf-8",
+        });
+        res.end("ok");
+        return;
+      }
+
+      res.writeHead(404);
+      res.end();
+    });
+
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+
+    if (!address || typeof address === "string") {
+      throw new Error("test server failed to bind");
+    }
+
+    runtimeStore.saveSession({
+      sessionId: "session-1",
+      threadId: "thread-1",
+      createdAt: "2026-04-02T09:00:00.000Z",
+      updatedAt: "2026-04-02T10:00:00.000Z",
+    });
+    runtimeStore.upsertTurnFromRequest(createFeishuTaskRequest("session-1", "request-1"), "task-1");
+    runtimeStore.appendTaskEvent({
+      eventId: "event-runtime-1",
+      taskId: "task-1",
+      requestId: "request-1",
+      type: "task.started",
+      status: "running",
+      message: "Task started",
+      payload: {
+        session: {
+          threadId: "thread-1",
+        },
+      },
+      timestamp: "2026-04-02T10:00:00.000Z",
+    });
+
+    const result = await runCliAsync(["doctor", "feishu"], workspace, {
+      THEMIS_BASE_URL: `http://127.0.0.1:${address.port}`,
+      FEISHU_APP_ID: "cli_xxx",
+      FEISHU_APP_SECRET: "secret_xxx",
+      FEISHU_USE_ENV_PROXY: "true",
+      FEISHU_PROGRESS_FLUSH_TIMEOUT_MS: "1500",
+    });
+
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /lastActionAttempt\.type：takeover\.submit_failed/);
+    assert.match(result.stdout, /lastActionAttempt\.requestId：request-1/);
+  } finally {
+    if (server) {
+      server.closeAllConnections?.();
+      server.closeIdleConnections?.();
+      server.unref();
+      server.close();
+    }
+
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 function createFeishuTaskRequest(sessionId: string, requestId: string): TaskRequest {
   return {
     requestId,

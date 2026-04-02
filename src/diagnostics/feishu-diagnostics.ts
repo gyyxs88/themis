@@ -442,12 +442,21 @@ function summarizeDiagnosticsWindow(events: FeishuDiagnosticsEvent[]): {
         recentWindowStats.staleIgnoredCount += 1;
         lastIgnoredMessage = summarizeIgnoredMessage(event);
         break;
+      case "reply.submit_failed":
+        lastActionAttempt = summarizeActionAttempt(event);
+        break;
       case "reply.submitted":
         recentWindowStats.replySubmittedCount += 1;
         lastActionAttempt = summarizeActionAttempt(event);
         break;
+      case "takeover.submit_failed":
+        lastActionAttempt = summarizeActionAttempt(event);
+        break;
       case "takeover.submitted":
         recentWindowStats.takeoverSubmittedCount += 1;
+        lastActionAttempt = summarizeActionAttempt(event);
+        break;
+      case "approval.submit_failed":
         lastActionAttempt = summarizeActionAttempt(event);
         break;
       case "approval.submitted":

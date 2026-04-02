@@ -320,6 +320,78 @@ test("readFeishuDiagnosticsSnapshot 会派生 recentWindowStats、lastActionAtte
   }
 });
 
+test("readFeishuDiagnosticsSnapshot 会把 submit_failed action 纳入 lastActionAttempt", async () => {
+  const cases = [
+    {
+      type: "approval.submit_failed",
+      actionId: "approval-action",
+      requestId: "approval-request",
+      summary: "approval 提交失败",
+      createdAt: "2026-04-02T08:00:01.000Z",
+    },
+    {
+      type: "reply.submit_failed",
+      actionId: "reply-action",
+      requestId: "reply-request",
+      summary: "reply 提交失败",
+      createdAt: "2026-04-02T08:00:02.000Z",
+    },
+    {
+      type: "takeover.submit_failed",
+      actionId: "takeover-action",
+      requestId: "takeover-request",
+      summary: "takeover 提交失败",
+      createdAt: "2026-04-02T08:00:03.000Z",
+    },
+  ] as const;
+
+  for (const currentCase of cases) {
+    const root = mkdtempSync(join(tmpdir(), `themis-feishu-diagnostics-${currentCase.type.replaceAll(".", "-")}-`));
+    const store = new FeishuDiagnosticsStateStore({
+      filePath: join(root, "infra", "local", "feishu-diagnostics.json"),
+    });
+
+    try {
+      store.upsertConversation({
+        key: "chat-1::user-1",
+        chatId: "chat-1",
+        userId: "user-1",
+        principalId: "principal-1",
+        activeSessionId: "session-1",
+        updatedAt: "2026-04-02T08:00:00.000Z",
+        pendingActions: [],
+      });
+      store.appendEvent({
+        id: "event-1",
+        type: currentCase.type,
+        chatId: "chat-1",
+        userId: "user-1",
+        sessionId: "session-1",
+        principalId: "principal-1",
+        actionId: currentCase.actionId,
+        requestId: currentCase.requestId,
+        summary: currentCase.summary,
+        createdAt: currentCase.createdAt,
+      });
+
+      const summary = await readFeishuDiagnosticsSnapshot({
+        workingDirectory: root,
+        fetchImpl: async () =>
+          new Response(null, {
+            status: 200,
+          }),
+      });
+
+      assert.equal(summary.diagnostics.lastActionAttempt?.type, currentCase.type);
+      assert.equal(summary.diagnostics.lastActionAttempt?.actionId, currentCase.actionId);
+      assert.equal(summary.diagnostics.lastActionAttempt?.requestId, currentCase.requestId);
+      assert.equal(summary.diagnostics.lastActionAttempt?.summary, currentCase.summary);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("readFeishuDiagnosticsSnapshot 会返回 diagnostics store 状态、currentConversation summary 和最近 5 条事件", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-feishu-diagnostics-store-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
