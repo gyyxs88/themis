@@ -1,10 +1,11 @@
 # 飞书 Bot 调研与接入建议
 
-更新日期：2026-04-01
+更新日期：2026-04-02
 
 相关实现文档：
 
 - [Themis 飞书渠道说明](./themis-feishu-channel.md)
+- [飞书相关改动的固定复跑顺序](../memory/2026/04/feishu-stability-rerun-order.md)
 - [飞书与 Web 跨端 waiting action 恢复边界](../memory/2026/03/feishu-cross-channel-action-recovery-boundary.md)
 - [飞书消息入口去重与顺序保护](../memory/2026/03/feishu-message-ingress-ordering.md)
 - [飞书 waiting user-input 直接文本接管约束](../memory/2026/03/feishu-direct-text-user-input-takeover.md)
@@ -16,6 +17,7 @@
 
 ## 当前落地状态
 
+- 当前主线已经明确收束为“稳定性与复验”，不是继续扩 Web，也不是提前开 `card.action.trigger`。
 - Themis 已接入飞书长连接，`im.message.receive_v1` 能进入现有 runtime 主链路。
 - 当前已支持飞书文本收发、`/help`、`/sessions`、`/new`、`/use`、`/current`、`/review`、`/steer`、`/link`、`/settings` 命令树、`/msgupdate`、`/quota`，以及 `/account`、`/sandbox`、`/search`、`/network`、`/approval` 这些兼容入口。
 - Codex 在飞书里已改成“占位槽位 + 顺序延迟缓冲”体验：用户发消息后先立刻返回 `处理中...`；第一条中途回复先缓存；只有切到新的正文 item、静默超时或最终结果收口时，缓存才会真正发送；同一 `agent_message itemId` 的连续 delta 只会覆盖当前缓存，不会把半句增量一条条刷到飞书里。
@@ -30,6 +32,29 @@
 - 飞书与 Web 现在共用同一份 principal 级 Themis 默认任务配置；`sandbox / search / network / approval / account` 都不再是会话配置，而是会同时影响两个渠道后续新任务的长期默认值。
 - Web 仍保留浏览器级 identity 与绑定码，但它已降级为可选能力，主要用于认领旧浏览器身份，不再是跨渠道共享会话的前提。
 - 默认任务执行主链路已经切到 `codex app-server`；飞书当前用户可达路径走默认 runtime，`@openai/codex-sdk` 仅保留显式兼容入口。
+
+## 推荐复跑顺序
+
+飞书相关改动的固定复跑顺序已经收口为：
+
+1. `./themis doctor feishu`
+2. `./themis doctor smoke web`
+3. `./themis doctor smoke feishu`
+4. 手工 A/B 验收
+
+这个顺序的分工是：
+
+- `doctor feishu`：先看主诊断和深层排障信息，判断是服务、会话、action 还是消息顺序问题。
+- `doctor smoke web`：只验证真实 Web / HTTP 主链路，确认还能稳定进入 `task.action_required` 并收口为 `completed`。
+- `doctor smoke feishu`：只做飞书前置检查和手工 smoke 接力提示，不假装自己是全自动飞书 E2E。
+- 手工 A/B：最后才在飞书里继续真实接管和收口。
+
+## 诊断边界
+
+- `doctor feishu` 现在已经能输出主诊断、诊断摘要、建议动作、当前会话、recent window、最后一次 action 尝试、最近被忽略消息和最近 5 条事件轨迹。
+- `doctor smoke feishu` 现在带统一 `next steps` 和 `diagnosis` 字段，但它仍然只是前置检查 + 手工接力入口。
+- `doctor smoke web` 负责真实 Web / HTTP 金路径，不负责飞书最后一跳。
+- `doctor smoke feishu` 负责飞书最后一跳的前置检查，不负责自动发消息。
 
 ## 目标
 
@@ -190,7 +215,7 @@
 ## 下一步建议
 
 1. 文本态主链路 P0 收口后，继续低成本复跑 direct-text + mixed recovery，优先确认 waiting `user-input` 和 `approval -> user-input` 两条恢复链都稳定。
-2. 当前仍不进入 `card.action.trigger` 实现阶段；只有等文本态主链路、准入条件和真实需求都满足后，再单独开 PoC。
+2. 当前仍不进入 `card.action.trigger` 实现阶段；现在的主线是保住稳定性与复验，不是扩面。
 3. 如果以后要追桌面版那种 guide 行为，先做 `turn/steer` 的最小 PoC，再决定是否迁移到底层 `app-server`。
 
 ## 本次实际验证记录
