@@ -1307,16 +1307,68 @@
 
 .composer-input-assets-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.composer-input-assets-summary {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 6px;
 }
 
 .composer-input-assets-name {
   min-width: 0;
   font-size: 13px;
+  font-weight: 600;
   line-height: 1.5;
   word-break: break-all;
+}
+
+.composer-input-assets-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.composer-input-assets-preview {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+  word-break: break-word;
+}
+
+.turn-input-assets-shell {
+  margin-top: 12px;
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.turn-input-assets-shell .composer-input-assets-label,
+.turn-input-assets-shell .composer-input-assets-preview {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.turn-input-assets-shell .composer-input-assets-name {
+  color: #ffffff;
+}
+
+.turn-input-assets-shell .badge {
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.84);
+}
+
+.turn-input-assets-shell .badge.busy {
+  background: rgba(255, 245, 230, 0.18);
+  color: #ffd08a;
+}
+
+.turn-input-assets-shell .badge.error {
+  background: rgba(255, 240, 240, 0.16);
+  color: #ffc2bb;
 }
 
 .composer textarea:focus {
