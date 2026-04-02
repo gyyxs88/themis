@@ -40,6 +40,17 @@ Themis 已接入飞书长连接渠道，特点如下：
 - `/sessions`、`/use`、`/current` 会展示当前会话与 native thread 摘要，`/use` 切换成功后会自动回显当前会话状态
 - 已支持 `/review <指令>`、`/steer <指令>` 对当前会话发起最小控制动作
 - `/current` 会展示当前会话 ID、工作区、principal、认证账号、最近任务状态和 native thread 摘要
+- `themis doctor feishu` 现在会额外输出飞书深层诊断：
+  - 当前会话快照：`sessionId / principalId / threadId / threadStatus / lastMessageId / lastEventType / pendingActions`
+  - 最近 `5` 条事件轨迹：只保留对排障最有用的最近事件，不会把完整本地事件表都打印出来
+- 飞书深层诊断数据保存在：
+
+```text
+infra/local/feishu-diagnostics.json
+```
+
+- 这份 JSON 只承担本地排障快照用途，CLI 和 HTTP diagnostics 都会从它读出当前会话与最近事件；它不是审计日志，也不是长期存档。
+- 如果 `doctor feishu` 里看不到当前会话快照，先确认这份文件存在且内容有效，再看 `infra/local/feishu-sessions.json` 和 `infra/local/themis.db` 是否同步到了同一条会话。
 
 ## 配置方式
 

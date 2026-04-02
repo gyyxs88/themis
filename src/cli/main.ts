@@ -622,6 +622,36 @@ function printFeishuDiagnosticsSummary(summary: FeishuDiagnosticsSummary): void 
   console.log(`sessionBindingCount：${summary.state.sessionBindingCount}`);
   console.log(`attachmentDraftCount：${summary.state.attachmentDraftCount}`);
   console.log(`smokeDoc：${summary.docs.smokeDocExists ? "yes" : "no"}`);
+  console.log(`diagnosticsStore：${summary.diagnostics.store.status}`);
+  console.log("当前会话快照");
+
+  const currentConversation = summary.diagnostics.currentConversation;
+  console.log(`sessionId：${currentConversation?.activeSessionId ?? "<none>"}`);
+  console.log(`principalId：${currentConversation?.principalId ?? "<none>"}`);
+  console.log(`threadId：${currentConversation?.threadId ?? "<none>"}`);
+  console.log(`threadStatus：${currentConversation?.threadStatus ?? "<none>"}`);
+  console.log(`lastMessageId：${currentConversation?.lastMessageId ?? "<none>"}`);
+  console.log(`lastEventType：${currentConversation?.lastEventType ?? "<none>"}`);
+  console.log(`pendingActionCount：${currentConversation?.pendingActionCount ?? 0}`);
+
+  for (const action of currentConversation?.pendingActions ?? []) {
+    console.log(
+      `- actionId：${action.actionId} actionType：${action.actionType} requestId：${action.requestId} taskId：${action.taskId} sourceChannel：${action.sourceChannel}`,
+    );
+  }
+
+  console.log("最近 5 条事件轨迹");
+
+  if (summary.diagnostics.recentEvents.length === 0) {
+    console.log("- <none>");
+    return;
+  }
+
+  for (const event of summary.diagnostics.recentEvents) {
+    console.log(
+      `- ${event.createdAt} ${event.type} sessionId：${event.sessionId ?? "<none>"} principalId：${event.principalId ?? "<none>"} messageId：${event.messageId ?? "<none>"} actionId：${event.actionId ?? "<none>"} requestId：${event.requestId ?? "<none>"} summary：${event.summary}`,
+    );
+  }
 }
 
 function countOk(files: RuntimeDiagnosticFileStatus[]): number {
