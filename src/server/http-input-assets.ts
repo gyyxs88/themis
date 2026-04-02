@@ -5,7 +5,7 @@ import { basename, join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
-import { enrichPdfInputAsset } from "../core/pdf-input-asset.js";
+import { enrichDocumentInputAsset } from "../core/document-input-asset.js";
 import type { TaskInputAsset } from "../types/index.js";
 import { writeJson } from "./http-responses.js";
 
@@ -15,7 +15,7 @@ export async function handleInputAssetUpload(
   request: Request,
   options: {
     workingDirectory: string;
-    enrichPdfAsset?: (asset: TaskInputAsset) => Promise<TaskInputAsset>;
+    enrichDocumentAsset?: (asset: TaskInputAsset) => Promise<TaskInputAsset>;
   },
 ): Promise<Response> {
   const formData = await request.formData();
@@ -61,8 +61,8 @@ export async function handleInputAssetUpload(
     ingestionStatus: "ready",
   };
 
-  const enrichedAsset = isPdf
-    ? await (options.enrichPdfAsset ?? enrichPdfInputAsset)(asset)
+  const enrichedAsset = asset.kind === "document"
+    ? await (options.enrichDocumentAsset ?? enrichDocumentInputAsset)(asset)
     : asset;
 
   return Response.json({ asset: enrichedAsset });
@@ -73,7 +73,7 @@ export async function handleInputAssetUploadHttp(
   response: ServerResponse,
   options: {
     workingDirectory: string;
-    enrichPdfAsset?: (asset: TaskInputAsset) => Promise<TaskInputAsset>;
+    enrichDocumentAsset?: (asset: TaskInputAsset) => Promise<TaskInputAsset>;
   },
 ): Promise<void> {
   if (isContentLengthTooLarge(request.headers)) {

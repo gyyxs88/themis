@@ -51,6 +51,54 @@ test("POST /api/input-assets 会把上传文件登记成 TaskInputAsset", async 
   }
 });
 
+test("POST /api/input-assets 会把 markdown 上传交给共享文档富化器", async () => {
+  let enrichCalls = 0;
+  let receivedMimeType = "";
+
+  const form = new FormData();
+  form.set("file", new File(["# Guide\n\nhello"], "guide.md", {
+    type: "text/markdown",
+  }));
+
+  const request = new Request("http://localhost/api/input-assets", {
+    method: "POST",
+    body: form,
+  });
+
+  const response = await handleInputAssetUpload(request, {
+    workingDirectory: process.cwd(),
+    enrichDocumentAsset: async (asset) => {
+      enrichCalls += 1;
+      receivedMimeType = asset.mimeType;
+      return {
+        ...asset,
+        ingestionStatus: "ready",
+        textExtraction: {
+          status: "completed",
+          textPath: `${asset.localPath}.themis.txt`,
+          textPreview: "# Guide",
+        },
+      };
+    },
+  });
+
+  const payload = await response.json() as {
+    asset: {
+      mimeType: string;
+      textExtraction?: {
+        status: string;
+        textPreview?: string;
+      };
+    };
+  };
+
+  assert.equal(response.status, 200);
+  assert.equal(enrichCalls, 1);
+  assert.equal(receivedMimeType, "text/markdown");
+  assert.equal(payload.asset.textExtraction?.status, "completed");
+  assert.equal(payload.asset.textExtraction?.textPreview, "# Guide");
+});
+
 test("POST /api/input-assets 会拒绝超过大小限制的文件", async () => {
   const form = new FormData();
   form.set("file", new File([new Uint8Array(26 * 1024 * 1024)], "too-big.bin", {
@@ -93,7 +141,7 @@ test("POST /api/input-assets 会在注入的 PDF 富化成功后返回 completed
 
   const response = await handleInputAssetUpload(request, {
     workingDirectory: process.cwd(),
-    enrichPdfAsset: async (asset) => {
+    enrichDocumentAsset: async (asset) => {
       capturedAsset = {
         assetId: asset.assetId,
         mimeType: asset.mimeType,
@@ -153,7 +201,7 @@ test("POST /api/input-assets 会在 PDF 富化失败时仍返回 200 和 failed 
 
   const response = await handleInputAssetUpload(request, {
     workingDirectory: process.cwd(),
-    enrichPdfAsset: async (asset) => ({
+    enrichDocumentAsset: async (asset) => ({
       ...asset,
       ingestionStatus: "ready",
       textExtraction: {
@@ -189,7 +237,7 @@ test("POST /api/input-assets 会把仅靠 .PDF 后缀识别出的文件归一化
 
   const response = await handleInputAssetUpload(request, {
     workingDirectory: process.cwd(),
-    enrichPdfAsset: async (asset) => ({
+    enrichDocumentAsset: async (asset) => ({
       ...asset,
       textExtraction: {
         status: "completed",
