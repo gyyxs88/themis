@@ -51,6 +51,37 @@ test("未知后缀但内容像 UTF-8 文本时也会进入文本富化", async (
   assert.match(result.textExtraction?.textPreview ?? "", /alpha/);
 });
 
+test("文本型文档在读取全文失败时会回退为 ready/failed", async () => {
+  const localPath = createTempFile("guide.txt", "alpha\nbeta\n");
+  const result = await enrichDocumentInputAsset(createDocumentAsset({
+    mimeType: "text/plain",
+    localPath,
+  }), {
+    readWholeFile: async () => {
+      throw new Error("read failed");
+    },
+  });
+
+  assert.equal(result.ingestionStatus, "ready");
+  assert.equal(result.textExtraction?.status, "failed");
+});
+
+test("文本型文档在写 sidecar 失败时会回退为 ready/failed", async () => {
+  const localPath = createTempFile("guide.txt", "alpha\nbeta\n");
+  const result = await enrichDocumentInputAsset(createDocumentAsset({
+    mimeType: "text/plain",
+    localPath,
+  }), {
+    readWholeFile: async () => Buffer.from("alpha\nbeta\n"),
+    writeTextFile: async () => {
+      throw new Error("write failed");
+    },
+  });
+
+  assert.equal(result.ingestionStatus, "ready");
+  assert.equal(result.textExtraction?.status, "failed");
+});
+
 test("明显二进制内容不会误判成文本文档", async () => {
   const localPath = createTempFile("blob.bin", new Uint8Array([0, 159, 146, 150, 0, 1, 2, 3]));
   const result = await enrichDocumentInputAsset(createDocumentAsset({

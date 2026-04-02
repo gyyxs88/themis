@@ -8,6 +8,8 @@ import { enrichPdfInputAsset } from "./pdf-input-asset.js";
 
 export interface DocumentInputAssetTools {
   enrichPdfAsset?: typeof enrichPdfInputAsset;
+  readWholeFile?: (filePath: string) => Promise<Uint8Array>;
+  writeTextFile?: (filePath: string, text: string, encoding: BufferEncoding) => Promise<void>;
 }
 
 const TEXT_PREVIEW_LIMIT = 2000;
@@ -54,10 +56,12 @@ export async function enrichDocumentInputAsset(
   }
 
   const textPath = createDocumentTextPath(asset.localPath);
+  const readWholeFile = tools.readWholeFile ?? readFile;
+  const writeTextFile = tools.writeTextFile ?? writeFile;
 
   try {
-    const text = await readUtf8Text(asset.localPath);
-    await writeFile(textPath, text, "utf8");
+    const text = await readUtf8Text(asset.localPath, readWholeFile);
+    await writeTextFile(textPath, text, "utf8");
 
     return {
       ...asset,
@@ -86,7 +90,7 @@ function isPdfAsset(asset: TaskInputAsset): boolean {
 async function shouldTreatAsTextDocument(asset: TaskInputAsset): Promise<boolean> {
   const mimeType = asset.mimeType.split(";", 1)[0].trim().toLowerCase();
 
-  if (TEXT_MIME_TYPE_WHITELIST.has(mimeType) || mimeType.startsWith("text/")) {
+  if (TEXT_MIME_TYPE_WHITELIST.has(mimeType)) {
     return true;
   }
 
@@ -152,8 +156,11 @@ function isLikelyUtf8Text(buffer: Uint8Array): boolean {
   }
 }
 
-async function readUtf8Text(filePath: string): Promise<string> {
-  const buffer = await readFile(filePath);
+async function readUtf8Text(
+  filePath: string,
+  readWholeFile: (filePath: string) => Promise<Uint8Array> = readFile,
+): Promise<string> {
+  const buffer = await readWholeFile(filePath);
   return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
 }
 
