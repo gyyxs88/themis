@@ -511,6 +511,16 @@ test("RuntimeDiagnosticsService.readSummary 会透出飞书最近窗口统计和
               createdAt: "2026-04-01T00:00:02.000Z",
             },
             {
+              id: "event-2",
+              type: "pending_input.not_found",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              summary: "没有找到匹配的 pending action",
+              createdAt: "2026-04-01T00:00:02.500Z",
+            },
+            {
               id: "event-3",
               type: "takeover.submitted",
               chatId: "chat-1",
@@ -596,6 +606,9 @@ test("RuntimeDiagnosticsService.readSummary 会透出飞书最近窗口统计和
     assert.equal(summary.feishu.diagnostics.lastActionAttempt?.requestId, "request-1");
     assert.equal(summary.feishu.diagnostics.lastIgnoredMessage?.type, "message.stale_ignored");
     assert.equal(summary.feishu.diagnostics.lastIgnoredMessage?.messageId, "message-6");
+    assert.equal(summary.feishu.diagnostics.primaryDiagnosis?.id, "pending_input_not_found");
+    assert.ok(summary.feishu.diagnostics.secondaryDiagnoses.some((item) => item.id === "ignored_message_window"));
+    assert.ok(summary.feishu.diagnostics.recommendedNextSteps.length > 0);
   } finally {
     restoreEnv("FEISHU_APP_ID", previousEnv.feishuAppId);
     restoreEnv("FEISHU_APP_SECRET", previousEnv.feishuAppSecret);

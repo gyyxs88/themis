@@ -52,6 +52,7 @@ export interface FeishuDiagnosticsDiagnosisSummary {
     | "service_unreachable"
     | "approval_blocking_takeover"
     | "pending_input_ambiguous"
+    | "pending_input_not_found"
     | "action_submit_failed"
     | "ignored_message_window";
   severity: "info" | "warning" | "error";
@@ -171,12 +172,16 @@ export async function readFeishuDiagnosticsSnapshot(
     readFeishuFileStatus(attachmentDraftStorePath, FEISHU_ATTACHMENT_DRAFT_STORE_PATH, "drafts"),
   ]);
   const diagnosticsWindow = summarizeDiagnosticsWindow(diagnosticsSnapshot.recentEvents);
+  const currentConversation = summarizeConversation(
+    selectCurrentConversation(diagnosticsSnapshot.conversations),
+    runtimeStore,
+  );
   const diagnosis = classifyFeishuDiagnostics({
     appIdConfigured: Boolean(normalizeText(env.FEISHU_APP_ID)),
     appSecretConfigured: Boolean(normalizeText(env.FEISHU_APP_SECRET)),
     serviceReachable: service.serviceReachable,
     recentWindowStats: diagnosticsWindow.recentWindowStats,
-    recentEvents: diagnosticsSnapshot.recentEvents,
+    currentConversation,
     lastActionAttempt: diagnosticsWindow.lastActionAttempt,
     lastIgnoredMessage: diagnosticsWindow.lastIgnoredMessage,
   });
@@ -200,10 +205,7 @@ export async function readFeishuDiagnosticsSnapshot(
         path: diagnosticsSnapshot.path,
         status: diagnosticsSnapshot.status,
       },
-      currentConversation: summarizeConversation(
-        selectCurrentConversation(diagnosticsSnapshot.conversations),
-        runtimeStore,
-      ),
+      currentConversation,
       recentEvents: diagnosticsSnapshot.recentEvents.slice(-5).map(cloneEventSummary),
       recentWindowStats: diagnosticsWindow.recentWindowStats,
       lastActionAttempt: diagnosticsWindow.lastActionAttempt,
@@ -515,7 +517,7 @@ function classifyFeishuDiagnostics(summary: {
   appSecretConfigured: boolean;
   serviceReachable: boolean;
   recentWindowStats: FeishuDiagnosticsRecentWindowStats;
-  recentEvents: FeishuDiagnosticsEvent[];
+  currentConversation: FeishuDiagnosticsConversationSummary | null;
   lastActionAttempt: FeishuDiagnosticsLastActionAttemptSummary | null;
   lastIgnoredMessage: FeishuDiagnosticsLastIgnoredMessageSummary | null;
 }): {
@@ -572,7 +574,11 @@ function classifyFeishuDiagnostics(summary: {
     };
   }
 
-  if (summary.recentEvents.some((event) => event.type === "pending_input.blocked_by_approval")) {
+  const currentPendingActions = summary.currentConversation?.pendingActions ?? [];
+  const approvalPendingActions = currentPendingActions.filter((action) => action.actionType === "approval");
+  const userInputPendingActions = currentPendingActions.filter((action) => action.actionType === "user-input");
+
+  if (approvalPendingActions.length > 0 && userInputPendingActions.length > 0) {
     return {
       primaryDiagnosis: {
         id: "approval_blocking_takeover",
@@ -588,7 +594,7 @@ function classifyFeishuDiagnostics(summary: {
     };
   }
 
-  if (summary.recentWindowStats.pendingInputAmbiguousCount > 0) {
+  if (userInputPendingActions.length > 1) {
     return {
       primaryDiagnosis: {
         id: "pending_input_ambiguous",
@@ -604,6 +610,25 @@ function classifyFeishuDiagnostics(summary: {
     };
   }
 
+  if (summary.recentWindowStats.pendingInputNotFoundCount > 0) {
+    return {
+      primaryDiagnosis: {
+        id: "pending_input_not_found",
+        severity: "warning",
+        title: "最近未匹配到 pending action",
+        summary: "最近的消息没有匹配到当前会话里的 pending action，请检查当前 scope 是否已经恢复。",
+      },
+      secondaryDiagnoses: buildSecondaryDiagnoses({
+        lastIgnoredMessage: summary.lastIgnoredMessage,
+        includePendingInputNotFound: false,
+      }),
+      recommendedNextSteps: [
+        "先运行 ./themis doctor feishu 查看 currentConversation.pendingActions",
+        "如果只是旧消息干扰，再运行 ./themis doctor smoke feishu",
+      ],
+    };
+  }
+
   if (summary.lastIgnoredMessage) {
     return {
       primaryDiagnosis: {
@@ -612,7 +637,10 @@ function classifyFeishuDiagnostics(summary: {
         title: "最近有飞书消息被忽略",
         summary: summary.lastIgnoredMessage.summary,
       },
-      secondaryDiagnoses: [],
+      secondaryDiagnoses: buildSecondaryDiagnoses({
+        lastIgnoredMessage: null,
+        includePendingInputNotFound: summary.recentWindowStats.pendingInputNotFoundCount > 0,
+      }),
       recommendedNextSteps: [
         "./themis doctor feishu",
         "./themis doctor smoke feishu",
@@ -627,7 +655,10 @@ function classifyFeishuDiagnostics(summary: {
       title: "当前未发现明显阻塞",
       summary: "飞书配置、服务可达性和最近窗口摘要看起来正常，继续按固定复跑顺序验证即可。",
     },
-    secondaryDiagnoses: [],
+    secondaryDiagnoses: buildSecondaryDiagnoses({
+      lastIgnoredMessage: null,
+      includePendingInputNotFound: summary.recentWindowStats.pendingInputNotFoundCount > 0,
+    }),
     recommendedNextSteps: [
       "./themis doctor feishu",
       "./themis doctor smoke web",
@@ -659,6 +690,33 @@ function summarizeIgnoredMessage(
     createdAt: event.createdAt,
     summary: event.summary,
   };
+}
+
+function buildSecondaryDiagnoses(options: {
+  lastIgnoredMessage: FeishuDiagnosticsLastIgnoredMessageSummary | null;
+  includePendingInputNotFound: boolean;
+}): FeishuDiagnosticsDiagnosisSummary[] {
+  const secondaryDiagnoses: FeishuDiagnosticsDiagnosisSummary[] = [];
+
+  if (options.includePendingInputNotFound) {
+    secondaryDiagnoses.push({
+      id: "pending_input_not_found",
+      severity: "warning",
+      title: "最近未匹配到 pending action",
+      summary: "最近有消息没能匹配到当前会话里的 pending action。",
+    });
+  }
+
+  if (options.lastIgnoredMessage) {
+    secondaryDiagnoses.push({
+      id: "ignored_message_window",
+      severity: "warning",
+      title: "最近有飞书消息被忽略",
+      summary: options.lastIgnoredMessage.summary,
+    });
+  }
+
+  return secondaryDiagnoses;
 }
 
 function cloneEventDetails(
