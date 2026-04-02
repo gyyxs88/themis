@@ -389,6 +389,231 @@ test("RuntimeDiagnosticsService.readSummary 会汇总 feishu diagnostics 快照"
   }
 });
 
+test("RuntimeDiagnosticsService.readSummary 会透出飞书最近窗口统计和最后一次 action / ignored message", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-diagnostics-feishu-window-"));
+  const previousEnv = {
+    feishuAppId: process.env.FEISHU_APP_ID,
+    feishuAppSecret: process.env.FEISHU_APP_SECRET,
+    feishuUseEnvProxy: process.env.FEISHU_USE_ENV_PROXY,
+    feishuProgressFlushTimeoutMs: process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS,
+    themisBaseUrl: process.env.THEMIS_BASE_URL,
+  };
+  let server: ReturnType<typeof createServer> | null = null;
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+
+  try {
+    writeFileSync(join(root, "README.md"), "# demo\n", "utf8");
+    mkdirSync(join(root, "memory", "architecture"), { recursive: true });
+    writeFileSync(join(root, "memory", "architecture", "overview.md"), "# arch\n", "utf8");
+    mkdirSync(join(root, "memory", "tasks"), { recursive: true });
+    writeFileSync(join(root, "memory", "tasks", "backlog.md"), "# backlog\n", "utf8");
+    writeFileSync(join(root, "memory", "tasks", "in-progress.md"), "# in-progress\n", "utf8");
+    writeFileSync(join(root, "memory", "tasks", "done.md"), "# done\n", "utf8");
+    mkdirSync(join(root, "docs", "feishu"), { recursive: true });
+    writeFileSync(join(root, "docs", "feishu", "themis-feishu-real-journey-smoke.md"), "# smoke\n", "utf8");
+    mkdirSync(join(root, "infra", "local"), { recursive: true });
+    writeFileSync(
+      join(root, "infra", "local", "feishu-sessions.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          bindings: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              activeSessionId: "session-1",
+              updatedAt: "2026-04-01T00:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    writeFileSync(
+      join(root, "infra", "local", "feishu-attachment-drafts.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          drafts: [
+            {
+              key: "chat-1::user-1::session-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              parts: [],
+              assets: [],
+              attachments: [],
+              createdAt: "2026-04-01T00:00:00.000Z",
+              updatedAt: "2026-04-01T00:00:00.000Z",
+              expiresAt: "2026-04-01T01:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    writeFileSync(
+      join(root, "infra", "local", "feishu-diagnostics.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          conversations: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              principalId: "principal-1",
+              activeSessionId: "session-1",
+              lastMessageId: "message-6",
+              lastEventType: "takeover.submitted",
+              updatedAt: "2026-04-01T00:00:05.000Z",
+              pendingActions: [
+                {
+                  actionId: "action-1",
+                  actionType: "user-input",
+                  taskId: "task-1",
+                  requestId: "request-1",
+                  sourceChannel: "web",
+                  sessionId: "session-1",
+                  principalId: "principal-1",
+                },
+              ],
+            },
+          ],
+          recentEvents: [
+            {
+              id: "event-1",
+              type: "message.duplicate_ignored",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              messageId: "message-5",
+              summary: "重复消息被忽略",
+              createdAt: "2026-04-01T00:00:01.000Z",
+            },
+            {
+              id: "event-2",
+              type: "message.stale_ignored",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              messageId: "message-6",
+              summary: "旧消息被忽略",
+              createdAt: "2026-04-01T00:00:02.000Z",
+            },
+            {
+              id: "event-3",
+              type: "takeover.submitted",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              actionId: "action-1",
+              requestId: "request-1",
+              summary: "takeover 已提交",
+              createdAt: "2026-04-01T00:00:03.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    runtimeStore.saveSession({
+      sessionId: "session-1",
+      threadId: "thread-1",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z",
+    });
+    runtimeStore.upsertTurnFromRequest(createFeishuTaskRequest("session-1", "request-1"), "task-1");
+    runtimeStore.appendTaskEvent({
+      eventId: "event-runtime-1",
+      taskId: "task-1",
+      requestId: "request-1",
+      type: "task.started",
+      status: "running",
+      message: "Task started",
+      payload: {
+        session: {
+          threadId: "thread-1",
+        },
+      },
+      timestamp: "2026-04-01T00:00:01.000Z",
+    });
+
+    server = createServer((req, res) => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+
+      if (req.method === "GET" && url.pathname === "/") {
+        res.writeHead(200, {
+          "content-type": "text/plain; charset=utf-8",
+        });
+        res.end("ok");
+        return;
+      }
+
+      res.writeHead(404);
+      res.end();
+    });
+
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+
+    if (!address || typeof address === "string") {
+      throw new Error("test server failed to bind");
+    }
+
+    process.env.FEISHU_APP_ID = "cli_xxx";
+    process.env.FEISHU_APP_SECRET = "secret_xxx";
+    process.env.FEISHU_USE_ENV_PROXY = "1";
+    process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS = "60000";
+    process.env.THEMIS_BASE_URL = `http://127.0.0.1:${address.port}`;
+
+    const service = new RuntimeDiagnosticsService({
+      workingDirectory: root,
+      runtimeStore,
+      mcpInspector: {
+        list: async () => ({ servers: [] }),
+      } as never,
+    });
+    const summary = await service.readSummary();
+
+    assert.equal(summary.feishu.diagnostics.recentWindowStats.duplicateIgnoredCount, 1);
+    assert.equal(summary.feishu.diagnostics.recentWindowStats.staleIgnoredCount, 1);
+    assert.equal(summary.feishu.diagnostics.recentWindowStats.takeoverSubmittedCount, 1);
+    assert.equal(summary.feishu.diagnostics.lastActionAttempt?.type, "takeover.submitted");
+    assert.equal(summary.feishu.diagnostics.lastActionAttempt?.requestId, "request-1");
+    assert.equal(summary.feishu.diagnostics.lastIgnoredMessage?.type, "message.stale_ignored");
+    assert.equal(summary.feishu.diagnostics.lastIgnoredMessage?.messageId, "message-6");
+  } finally {
+    restoreEnv("FEISHU_APP_ID", previousEnv.feishuAppId);
+    restoreEnv("FEISHU_APP_SECRET", previousEnv.feishuAppSecret);
+    restoreEnv("FEISHU_USE_ENV_PROXY", previousEnv.feishuUseEnvProxy);
+    restoreEnv("FEISHU_PROGRESS_FLUSH_TIMEOUT_MS", previousEnv.feishuProgressFlushTimeoutMs);
+    restoreEnv("THEMIS_BASE_URL", previousEnv.themisBaseUrl);
+
+    if (server) {
+      server.closeAllConnections?.();
+      server.closeIdleConnections?.();
+      server.unref();
+      server.close();
+    }
+
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("RuntimeDiagnosticsService 会接入 mcp inspector 输出", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-runtime-diagnostics-mcp-"));
 

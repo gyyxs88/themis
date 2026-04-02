@@ -379,6 +379,85 @@ test("themis doctor smoke feishu 会输出前置检查和 nextSteps", async () =
       ),
       "utf8",
     );
+    writeFileSync(
+      resolve(workspace, "infra/local/feishu-diagnostics.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          conversations: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              principalId: "principal-1",
+              activeSessionId: "session-1",
+              lastMessageId: "message-6",
+              lastEventType: "takeover.submitted",
+              updatedAt: "2026-04-02T10:00:00.000Z",
+              pendingActions: [
+                {
+                  actionId: "action-1",
+                  actionType: "user-input",
+                  taskId: "task-1",
+                  requestId: "request-1",
+                  sourceChannel: "web",
+                  sessionId: "session-1",
+                  principalId: "principal-1",
+                },
+                {
+                  actionId: "action-2",
+                  actionType: "approval",
+                  taskId: "task-2",
+                  requestId: "request-2",
+                  sourceChannel: "feishu",
+                  sessionId: "session-1",
+                  principalId: "principal-1",
+                },
+              ],
+            },
+          ],
+          recentEvents: [
+            {
+              id: "event-1",
+              type: "message.duplicate_ignored",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              messageId: "message-5",
+              summary: "重复消息被忽略",
+              createdAt: "2026-04-02T09:00:01.000Z",
+            },
+            {
+              id: "event-2",
+              type: "message.stale_ignored",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              messageId: "message-6",
+              summary: "旧消息被忽略",
+              createdAt: "2026-04-02T09:00:02.000Z",
+            },
+            {
+              id: "event-3",
+              type: "takeover.submitted",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              actionId: "action-1",
+              requestId: "request-1",
+              summary: "takeover 已提交",
+              createdAt: "2026-04-02T09:00:03.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
 
     server = createServer((req, res) => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -760,6 +839,7 @@ test("themis doctor feishu 会输出当前会话快照和最近 5 条事件轨�
     });
 
     assert.equal(result.code, 0);
+    assert.match(result.stdout, /当前会话摘要/);
     assert.match(result.stdout, /当前会话快照/);
     assert.match(result.stdout, /sessionId：session-1/);
     assert.match(result.stdout, /principalId：principal-1/);
@@ -768,6 +848,15 @@ test("themis doctor feishu 会输出当前会话快照和最近 5 条事件轨�
     assert.match(result.stdout, /pendingActionCount：2/);
     assert.match(result.stdout, /actionId：action-1/);
     assert.match(result.stdout, /actionId：action-2/);
+    assert.match(result.stdout, /最近窗口统计/);
+    assert.match(result.stdout, /recentWindow\.duplicateIgnoredCount：1/);
+    assert.match(result.stdout, /recentWindow\.staleIgnoredCount：1/);
+    assert.match(result.stdout, /recentWindow\.replySubmittedCount：0/);
+    assert.match(result.stdout, /recentWindow\.takeoverSubmittedCount：1/);
+    assert.match(result.stdout, /lastActionAttempt\.type：takeover\.submitted/);
+    assert.match(result.stdout, /lastActionAttempt\.requestId：request-1/);
+    assert.match(result.stdout, /lastIgnoredMessage\.type：message\.stale_ignored/);
+    assert.match(result.stdout, /lastIgnoredMessage\.messageId：message-3/);
     assert.match(result.stdout, /最近 5 条事件轨迹/);
     assert.doesNotMatch(result.stdout, /应被丢弃的第 1 条/);
     assert.match(result.stdout, /第 2 条/);

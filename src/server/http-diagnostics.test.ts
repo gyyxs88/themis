@@ -377,6 +377,274 @@ test("GET /api/diagnostics 会返回 feishu summary", async () => {
   }
 });
 
+test("GET /api/diagnostics 会返回 feishu 最近窗口统计和最后一次 action / ignored message", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-http-diagnostics-feishu-window-"));
+  const previousEnv = {
+    baseUrl: process.env.THEMIS_BASE_URL,
+    appId: process.env.FEISHU_APP_ID,
+    appSecret: process.env.FEISHU_APP_SECRET,
+    useEnvProxy: process.env.FEISHU_USE_ENV_PROXY,
+    progressFlushTimeoutMs: process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS,
+  };
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: root,
+    runtimeStore,
+  });
+  const server = createThemisHttpServer({
+    runtime,
+    createMcpInspector: () => ({
+      list: async () => ({
+        servers: [],
+      }),
+      probe: async () => ({
+        servers: [],
+      }),
+      reload: async () => ({
+        servers: [],
+      }),
+    }),
+  });
+  const listeningServer = await listenServer(server);
+  const address = listeningServer.address();
+
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to resolve server address.");
+  }
+
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  try {
+    process.env.THEMIS_BASE_URL = baseUrl;
+    process.env.FEISHU_APP_ID = "cli_xxx";
+    process.env.FEISHU_APP_SECRET = "secret_xxx";
+    process.env.FEISHU_USE_ENV_PROXY = "true";
+    process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS = "1500";
+    mkdirSync(join(root, "docs", "feishu"), { recursive: true });
+    writeFileSync(join(root, "docs", "feishu", "themis-feishu-real-journey-smoke.md"), "# smoke\n", "utf8");
+    mkdirSync(join(root, "infra", "local"), { recursive: true });
+    writeFileSync(
+      join(root, "infra", "local", "feishu-sessions.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          bindings: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              activeSessionId: "session-1",
+              updatedAt: "2026-04-02T00:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    writeFileSync(
+      join(root, "infra", "local", "feishu-attachment-drafts.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          drafts: [
+            {
+              key: "chat-1::user-1::session-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              parts: [],
+              assets: [],
+              attachments: [],
+              createdAt: "2026-04-02T00:00:00.000Z",
+              updatedAt: "2026-04-02T00:00:00.000Z",
+              expiresAt: "2026-04-02T01:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    writeFileSync(
+      join(root, "infra", "local", "feishu-diagnostics.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          conversations: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              principalId: "principal-1",
+              activeSessionId: "session-1",
+              lastMessageId: "message-6",
+              lastEventType: "takeover.submitted",
+              updatedAt: "2026-04-02T10:00:00.000Z",
+              pendingActions: [
+                {
+                  actionId: "action-1",
+                  actionType: "user-input",
+                  taskId: "task-1",
+                  requestId: "request-1",
+                  sourceChannel: "web",
+                  sessionId: "session-1",
+                  principalId: "principal-1",
+                },
+                {
+                  actionId: "action-2",
+                  actionType: "approval",
+                  taskId: "task-2",
+                  requestId: "request-2",
+                  sourceChannel: "feishu",
+                  sessionId: "session-1",
+                  principalId: "principal-1",
+                },
+              ],
+            },
+          ],
+          recentEvents: [
+            {
+              id: "event-1",
+              type: "message.duplicate_ignored",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              messageId: "message-5",
+              summary: "重复消息被忽略",
+              createdAt: "2026-04-02T09:00:01.000Z",
+            },
+            {
+              id: "event-2",
+              type: "message.stale_ignored",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              messageId: "message-6",
+              summary: "旧消息被忽略",
+              createdAt: "2026-04-02T09:00:02.000Z",
+            },
+            {
+              id: "event-3",
+              type: "takeover.submitted",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              actionId: "action-1",
+              requestId: "request-1",
+              summary: "takeover 已提交",
+              createdAt: "2026-04-02T09:00:03.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    runtimeStore.saveSession({
+      sessionId: "session-1",
+      threadId: "thread-1",
+      createdAt: "2026-04-02T00:00:00.000Z",
+      updatedAt: "2026-04-02T00:00:00.000Z",
+    });
+    runtimeStore.upsertTurnFromRequest(createFeishuTaskRequest("session-1", "request-1"), "task-1");
+    runtimeStore.appendTaskEvent({
+      eventId: "event-runtime-1",
+      taskId: "task-1",
+      requestId: "request-1",
+      type: "task.started",
+      status: "running",
+      message: "Task started",
+      payload: {
+        session: {
+          threadId: "thread-1",
+        },
+      },
+      timestamp: "2026-04-02T09:00:00.000Z",
+    });
+    writeFileSync(
+      join(root, "infra", "local", "feishu-attachment-drafts.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          drafts: [
+            {
+              key: "chat-1::user-1::session-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              parts: [],
+              assets: [],
+              attachments: [],
+              createdAt: "2026-04-02T00:00:00.000Z",
+              updatedAt: "2026-04-02T00:00:00.000Z",
+              expiresAt: "2026-04-02T01:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const headers = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+    const response = await fetch(`${baseUrl}/api/diagnostics`, {
+      method: "GET",
+      headers,
+    });
+
+    assert.equal(response.status, 200);
+    const payload = await response.json() as {
+      summary?: {
+        feishu?: {
+          diagnostics?: {
+            recentWindowStats?: {
+              duplicateIgnoredCount?: number;
+              staleIgnoredCount?: number;
+              takeoverSubmittedCount?: number;
+            };
+            lastActionAttempt?: {
+              type?: string;
+              requestId?: string | null;
+            } | null;
+            lastIgnoredMessage?: {
+              type?: string;
+              messageId?: string | null;
+            } | null;
+          };
+        };
+      };
+    };
+    assert.equal(payload.summary?.feishu?.diagnostics?.recentWindowStats?.duplicateIgnoredCount, 1);
+    assert.equal(payload.summary?.feishu?.diagnostics?.recentWindowStats?.staleIgnoredCount, 1);
+    assert.equal(payload.summary?.feishu?.diagnostics?.recentWindowStats?.takeoverSubmittedCount, 1);
+    assert.equal(payload.summary?.feishu?.diagnostics?.lastActionAttempt?.type, "takeover.submitted");
+    assert.equal(payload.summary?.feishu?.diagnostics?.lastActionAttempt?.requestId, "request-1");
+    assert.equal(payload.summary?.feishu?.diagnostics?.lastIgnoredMessage?.type, "message.stale_ignored");
+    assert.equal(payload.summary?.feishu?.diagnostics?.lastIgnoredMessage?.messageId, "message-6");
+  } finally {
+    restoreEnv("THEMIS_BASE_URL", previousEnv.baseUrl);
+    restoreEnv("FEISHU_APP_ID", previousEnv.appId);
+    restoreEnv("FEISHU_APP_SECRET", previousEnv.appSecret);
+    restoreEnv("FEISHU_USE_ENV_PROXY", previousEnv.useEnvProxy);
+    restoreEnv("FEISHU_PROGRESS_FLUSH_TIMEOUT_MS", previousEnv.progressFlushTimeoutMs);
+    await closeServer(listeningServer);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("GET /api/diagnostics/mcp 与 POST /api/diagnostics/mcp/probe/reload 可用", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-http-diagnostics-mcp-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
