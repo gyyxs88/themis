@@ -153,9 +153,17 @@ export async function downloadFeishuMessageResources(
     };
 
     if (asset.kind === "document") {
+      const enrichPdfAsset: typeof enrichPdfInputAsset = async (pdfAsset, tools) => {
+        if (options.enrichPdfAsset) {
+          return await options.enrichPdfAsset(pdfAsset as FeishuMessageResourceAsset);
+        }
+
+        return await enrichPdfInputAsset(pdfAsset, tools);
+      };
+
       const enrichDocumentAsset = options.enrichDocumentAsset ?? (async (documentAsset: FeishuMessageResourceAsset) => {
         return await enrichDocumentInputAsset(documentAsset, {
-          enrichPdfAsset: options.enrichPdfAsset ?? enrichPdfInputAsset,
+          enrichPdfAsset,
         });
       });
 
@@ -163,9 +171,9 @@ export async function downloadFeishuMessageResources(
         const enrichedAsset = await enrichDocumentAsset(asset);
         attachments.push({
           ...asset,
-          ingestionStatus: enrichedAsset.ingestionStatus ?? asset.ingestionStatus,
-          textExtraction: enrichedAsset.textExtraction ?? asset.textExtraction,
-          metadata: enrichedAsset.metadata ?? asset.metadata,
+          ingestionStatus: enrichedAsset.ingestionStatus,
+          ...(enrichedAsset.textExtraction ? { textExtraction: enrichedAsset.textExtraction } : {}),
+          ...(enrichedAsset.metadata ? { metadata: enrichedAsset.metadata } : {}),
         });
       } catch {
         attachments.push({
