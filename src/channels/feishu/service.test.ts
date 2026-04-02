@@ -356,6 +356,7 @@ test("飞书 /use 会把当前会话快照和 session.switched 写入诊断状�
     assert.equal(snapshot.conversations[0]?.activeSessionId, sessionA);
     assert.equal(snapshot.conversations[0]?.lastEventType, "session.switched");
     assert.equal(snapshot.recentEvents.at(-1)?.type, "session.switched");
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.switchedSessionId, sessionA);
   } finally {
     harness.cleanup();
   }
@@ -477,6 +478,9 @@ test("飞书 /reply 会写入 reply.submitted 并刷新 pendingActions", async (
     assert.equal(snapshot.conversations[0]?.lastEventType, "reply.submitted");
     assert.equal(snapshot.conversations[0]?.pendingActions.length, 0);
     assert.equal(snapshot.recentEvents.at(-1)?.type, "reply.submitted");
+    assert.equal(snapshot.recentEvents.at(-1)?.requestId, "req-pending-action");
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.matchedPendingActionCount, 1);
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.sourceSessionId, harness.getCurrentSessionId());
   } finally {
     harness.cleanup();
   }
@@ -1241,6 +1245,13 @@ test("飞书 /approve 在 Web-origin waiting action 的 userId 不同时仍能�
       actionId: "approval-web-1",
       decision: "approve",
     }]);
+
+    const snapshot = harness.readFeishuDiagnosticsStore();
+    assert.equal(snapshot.status, "ok");
+    assert.equal(snapshot.recentEvents.at(-1)?.type, "approval.submitted");
+    assert.equal(snapshot.recentEvents.at(-1)?.requestId, "req-pending-action");
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.matchedPendingActionCount, 1);
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.sourceSessionId, harness.getCurrentSessionId());
   } finally {
     harness.cleanup();
   }
@@ -1393,6 +1404,11 @@ test("飞书普通文本在没有 pending action 时仍按现有语义进入任�
     const snapshot = harness.readFeishuDiagnosticsStore();
     assert.equal(snapshot.status, "ok");
     assert.equal(snapshot.recentEvents.at(-1)?.type, "pending_input.not_found");
+    assert.equal(snapshot.recentEvents.at(-1)?.sessionId, harness.getCurrentSessionId());
+    assert.equal(snapshot.recentEvents.at(-1)?.principalId, harness.getCurrentPrincipalId());
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.blockingReason, "no_pending_input");
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.approvalPendingActionCount, 0);
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.matchedPendingActionCount, 0);
   } finally {
     harness.cleanup();
   }
@@ -1416,6 +1432,51 @@ test("飞书普通文本在当前会话存在 approval waiting action 时不会�
       sdk: 0,
       appServer: 1,
     });
+
+    const snapshot = harness.readFeishuDiagnosticsStore();
+    assert.equal(snapshot.status, "ok");
+    assert.equal(snapshot.recentEvents.at(-1)?.type, "pending_input.not_found");
+    assert.equal(snapshot.recentEvents.at(-1)?.sessionId, harness.getCurrentSessionId());
+    assert.equal(snapshot.recentEvents.at(-1)?.principalId, harness.getCurrentPrincipalId());
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.blockingReason, "approval_pending_without_takeover");
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.approvalPendingActionCount, 1);
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.matchedPendingActionCount, 0);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书普通文本在同一会话同时存在 approval 和 user-input waiting action 时会记录阻塞诊断", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.injectPendingAction({
+      actionId: "approval-block-1",
+      actionType: "approval",
+      prompt: "Allow command?",
+    });
+    harness.injectPendingAction({
+      actionId: "reply-block-1",
+      actionType: "user-input",
+      prompt: "Please add details",
+    });
+
+    await harness.handleMessageEventText("我补充一句");
+
+    assert.deepEqual(harness.getResolvedActionSubmissions(), []);
+    assert.deepEqual(harness.getTaskRuntimeCalls(), {
+      sdk: 0,
+      appServer: 1,
+    });
+
+    const snapshot = harness.readFeishuDiagnosticsStore();
+    assert.equal(snapshot.status, "ok");
+    assert.equal(snapshot.recentEvents.at(-1)?.type, "pending_input.blocked_by_approval");
+    assert.equal(snapshot.recentEvents.at(-1)?.sessionId, harness.getCurrentSessionId());
+    assert.equal(snapshot.recentEvents.at(-1)?.principalId, harness.getCurrentPrincipalId());
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.blockingReason, "approval_pending");
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.approvalPendingActionCount, 1);
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.matchedPendingActionCount, 1);
   } finally {
     harness.cleanup();
   }

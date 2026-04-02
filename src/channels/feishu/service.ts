@@ -2646,33 +2646,44 @@ export class FeishuChannelService {
   }
 
   private async replyActivePendingInput(context: FeishuIncomingContext): Promise<boolean> {
-    const actionScope = this.resolvePendingActionScope(context);
-
-    if (!actionScope) {
-      this.recordFeishuDiagnosticsEvent({
-        type: "pending_input.not_found",
-        context,
-        summary: "当前会话没有可接管的等待输入。",
-        details: {
-          matchedPendingActionCount: 0,
-        },
-      });
-      return false;
-    }
+    const sessionId = this.sessionStore.ensureActiveSessionId(toConversationKey(context));
+    const principal = this.ensurePrincipalIdentity(context);
+    const actionScope = {
+      sessionId,
+      principalId: principal.principalId,
+    };
 
     const scopedActions = this.actionBridge.list(actionScope);
     const approvals = scopedActions.filter((action) => action.actionType === "approval");
     const inputActions = scopedActions.filter((action) => action.actionType === "user-input");
+
+    if (approvals.length > 0 && inputActions.length > 0) {
+      this.recordFeishuDiagnosticsEvent({
+        type: "pending_input.blocked_by_approval",
+        context,
+        sessionId,
+        principalId: principal.principalId,
+        summary: "当前会话存在审批待处理，普通文本不会自动接管。",
+        details: {
+          blockingReason: "approval_pending",
+          approvalPendingActionCount: approvals.length,
+          matchedPendingActionCount: inputActions.length,
+        },
+      });
+      return false;
+    }
 
     if (approvals.length > 0) {
       if (inputActions.length === 0) {
         this.recordFeishuDiagnosticsEvent({
           type: "pending_input.not_found",
           context,
-          sessionId: actionScope.sessionId,
-          principalId: actionScope.principalId,
+          sessionId,
+          principalId: principal.principalId,
           summary: "当前会话没有可接管的等待输入。",
           details: {
+            blockingReason: "approval_pending_without_takeover",
+            approvalPendingActionCount: approvals.length,
             matchedPendingActionCount: 0,
           },
         });
@@ -2684,10 +2695,12 @@ export class FeishuChannelService {
       this.recordFeishuDiagnosticsEvent({
         type: "pending_input.not_found",
         context,
-        sessionId: actionScope.sessionId,
-        principalId: actionScope.principalId,
+        sessionId,
+        principalId: principal.principalId,
         summary: "当前会话没有可接管的等待输入。",
         details: {
+          blockingReason: "no_pending_input",
+          approvalPendingActionCount: 0,
           matchedPendingActionCount: 0,
         },
       });
@@ -2698,10 +2711,11 @@ export class FeishuChannelService {
       this.recordFeishuDiagnosticsEvent({
         type: "pending_input.ambiguous",
         context,
-        sessionId: actionScope.sessionId,
-        principalId: actionScope.principalId,
+        sessionId,
+        principalId: principal.principalId,
         summary: "当前会话存在多条可接管的等待输入。",
         details: {
+          blockingReason: "multiple_user_input_pending",
           matchedPendingActionCount: inputActions.length,
         },
       });
