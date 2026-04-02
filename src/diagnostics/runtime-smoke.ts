@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { WebAccessService } from "../core/web-access.js";
 import { readFeishuDiagnosticsSnapshot } from "./feishu-diagnostics.js";
+import { buildFeishuSmokeNextSteps } from "./feishu-verification-guide.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 
 export interface WebSmokeResult {
@@ -75,11 +76,6 @@ const WEB_SMOKE_PROMPT = `你接下来要继续做当前仓库里的一个具体
 5. 当我回复文件路径后，你只需确认“已收到路径”，然后结束本轮，不要继续分析代码，不要继续提出新的问题。`;
 
 const FEISHU_DOC_PATH = "docs/feishu/themis-feishu-real-journey-smoke.md";
-const FEISHU_SMOKE_RERUN_SEQUENCE = [
-  "./themis doctor feishu",
-  "./themis doctor smoke web",
-  "./themis doctor smoke feishu",
-];
 
 export class RuntimeSmokeService {
   private readonly workingDirectory: string;
@@ -333,7 +329,7 @@ export class RuntimeSmokeService {
       summary: "飞书配置、服务可达性和最近窗口摘要看起来正常，继续按固定复跑顺序验证即可。",
     };
     const feishuConfigReady = snapshot.env.appIdConfigured && snapshot.env.appSecretConfigured;
-    const nextSteps = [...FEISHU_SMOKE_RERUN_SEQUENCE];
+    const nextSteps = buildFeishuSmokeNextSteps();
 
     if (!feishuConfigReady) {
       return {

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { buildFeishuSmokeNextSteps } from "../diagnostics/feishu-verification-guide.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import type { TaskRequest } from "../types/task.js";
 
@@ -114,6 +115,10 @@ function runCliAsync(
       });
     });
   });
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 test("themis doctor smoke 缺少目标时会提示用法", () => {
@@ -497,9 +502,9 @@ test("themis doctor smoke feishu 会输出前置检查和 nextSteps", async () =
     assert.match(result.stdout, /diagnosisSummary：当前 scope 里还有 approval pending action/);
     assert.match(result.stdout, /sessionBindingCount：1/);
     assert.match(result.stdout, /attachmentDraftCount：1/);
-    assert.match(result.stdout, /1\. \.\/themis doctor feishu/);
-    assert.match(result.stdout, /2\. \.\/themis doctor smoke web/);
-    assert.match(result.stdout, /3\. \.\/themis doctor smoke feishu/);
+    for (const [index, step] of buildFeishuSmokeNextSteps().entries()) {
+      assert.match(result.stdout, new RegExp(`${index + 1}\\. ${escapeRegExp(step)}`));
+    }
   } finally {
     if (server) {
       server.closeAllConnections?.();
