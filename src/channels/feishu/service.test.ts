@@ -513,6 +513,9 @@ test("飞书 /approve 提交失败时会写入结构化 approval.submit_failed �
     assert.equal(snapshot.recentEvents.at(-1)?.type, "approval.submit_failed");
     assert.equal(snapshot.recentEvents.at(-1)?.actionId, "approval-fail-1");
     assert.equal(snapshot.recentEvents.at(-1)?.requestId, "request-approval-fail-1");
+    assert.equal(snapshot.recentEvents.at(-1)?.messageId, "message-1");
+    assert.equal(snapshot.recentEvents.at(-1)?.sessionId, harness.getCurrentSessionId());
+    assert.equal(snapshot.recentEvents.at(-1)?.principalId, harness.getCurrentPrincipalId());
     assert.equal(snapshot.recentEvents.at(-1)?.summary, "审批提交失败：approval-fail-1 已失效。");
     assert.equal(snapshot.recentEvents.at(-1)?.details?.matchedPendingActionCount, 1);
     assert.equal(snapshot.recentEvents.at(-1)?.details?.sourceSessionId, harness.getCurrentSessionId());
@@ -541,6 +544,9 @@ test("飞书 direct-text takeover 提交失败时会写入结构化 takeover.sub
     assert.equal(snapshot.recentEvents.at(-1)?.type, "takeover.submit_failed");
     assert.equal(snapshot.recentEvents.at(-1)?.actionId, "takeover-fail-1");
     assert.equal(snapshot.recentEvents.at(-1)?.requestId, "request-takeover-fail-1");
+    assert.equal(snapshot.recentEvents.at(-1)?.messageId, "message-1");
+    assert.equal(snapshot.recentEvents.at(-1)?.sessionId, harness.getCurrentSessionId());
+    assert.equal(snapshot.recentEvents.at(-1)?.principalId, harness.getCurrentPrincipalId());
     assert.equal(snapshot.recentEvents.at(-1)?.summary, "普通文本补充输入失败：takeover-fail-1 已失效。");
     assert.equal(snapshot.recentEvents.at(-1)?.details?.matchedPendingActionCount, 1);
     assert.equal(snapshot.recentEvents.at(-1)?.details?.sourceSessionId, harness.getCurrentSessionId());
@@ -569,6 +575,9 @@ test("飞书 /reply 提交失败时会写入结构化 reply.submit_failed 事件
     assert.equal(snapshot.recentEvents.at(-1)?.type, "reply.submit_failed");
     assert.equal(snapshot.recentEvents.at(-1)?.actionId, "reply-fail-1");
     assert.equal(snapshot.recentEvents.at(-1)?.requestId, "request-reply-fail-1");
+    assert.equal(snapshot.recentEvents.at(-1)?.messageId, "message-1");
+    assert.equal(snapshot.recentEvents.at(-1)?.sessionId, harness.getCurrentSessionId());
+    assert.equal(snapshot.recentEvents.at(-1)?.principalId, harness.getCurrentPrincipalId());
     assert.equal(snapshot.recentEvents.at(-1)?.summary, "命令式回复失败：reply-fail-1 已失效。");
     assert.equal(snapshot.recentEvents.at(-1)?.details?.matchedPendingActionCount, 1);
     assert.equal(snapshot.recentEvents.at(-1)?.details?.sourceSessionId, harness.getCurrentSessionId());
