@@ -261,6 +261,57 @@ test("POST /api/input-assets 会把仅靠 .PDF 后缀识别出的文件归一化
   assert.equal(payload.asset.textExtraction?.status, "completed");
 });
 
+test("POST /api/input-assets 会把 .pdf 且 MIME 伪装成 image/png 的文件仍识别为 document 并富化", async () => {
+  let enrichCalls = 0;
+  let capturedKind = "";
+  let capturedMimeType = "";
+
+  const form = new FormData();
+  form.set("file", new File([createMinimalPdfContent("Spoofed MIME PDF")], "spoofed.pdf", {
+    type: "image/png",
+  }));
+
+  const request = new Request("http://localhost/api/input-assets", {
+    method: "POST",
+    body: form,
+  });
+
+  const response = await handleInputAssetUpload(request, {
+    workingDirectory: process.cwd(),
+    enrichDocumentAsset: async (asset) => {
+      enrichCalls += 1;
+      capturedKind = asset.kind;
+      capturedMimeType = asset.mimeType;
+      return {
+        ...asset,
+        textExtraction: {
+          status: "completed",
+          textPath: `${asset.localPath}.themis.txt`,
+          textPreview: "Spoofed MIME PDF",
+        },
+      };
+    },
+  });
+
+  assert.equal(response.status, 200);
+  const payload = await response.json() as {
+    asset: {
+      kind: string;
+      mimeType: string;
+      textExtraction?: {
+        status: string;
+      };
+    };
+  };
+
+  assert.equal(enrichCalls, 1);
+  assert.equal(capturedKind, "document");
+  assert.equal(capturedMimeType, "application/pdf");
+  assert.equal(payload.asset.kind, "document");
+  assert.equal(payload.asset.mimeType, "application/pdf");
+  assert.equal(payload.asset.textExtraction?.status, "completed");
+});
+
 const hasPdfinfo = hasSystemCommand("pdfinfo");
 const hasPdftotext = hasSystemCommand("pdftotext");
 const maybeIntegrationTest = hasPdfinfo && hasPdftotext ? test : test.skip;

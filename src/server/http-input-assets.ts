@@ -52,7 +52,7 @@ export async function handleInputAssetUpload(
 
   const asset: TaskInputAsset = {
     assetId,
-    kind: resolveAssetKind(file.type),
+    kind: resolveAssetKind(assetMimeType),
     name: safeName,
     mimeType: assetMimeType,
     sizeBytes: file.size,
