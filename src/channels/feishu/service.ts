@@ -42,6 +42,10 @@ import {
   type FeishuAttachmentDraftSnapshot,
   type FeishuAttachmentDraftKey,
 } from "./attachment-draft-store.js";
+import {
+  FeishuDiagnosticsStateStore,
+  type FeishuDiagnosticsPendingAction,
+} from "./diagnostics-state-store.js";
 import { renderFeishuAssistantMessage, type FeishuRenderedMessageDraft } from "./message-renderer.js";
 import { extractFeishuPostText } from "./message-content.js";
 import {
@@ -127,6 +131,7 @@ export interface FeishuChannelServiceOptions {
   useEnvProxy?: boolean;
   progressFlushTimeoutMs?: number;
   sessionStore?: FeishuSessionStore;
+  diagnosticsStateStore?: FeishuDiagnosticsStateStore;
   logger?: FeishuChannelLogger;
 }
 
@@ -149,6 +154,7 @@ export class FeishuChannelService {
   private readonly useEnvProxy: boolean;
   private readonly progressFlushTimeoutMs: number;
   private readonly sessionStore: FeishuSessionStore;
+  private readonly diagnosticsStateStore: FeishuDiagnosticsStateStore;
   private readonly attachmentDraftStore: FeishuAttachmentDraftStore;
   private readonly logger: FeishuChannelLogger;
   private readonly client: Lark.Client | null;
@@ -183,6 +189,9 @@ export class FeishuChannelService {
       DEFAULT_FEISHU_PROGRESS_FLUSH_TIMEOUT_MS,
     );
     this.sessionStore = options.sessionStore ?? new FeishuSessionStore();
+    this.diagnosticsStateStore = options.diagnosticsStateStore ?? new FeishuDiagnosticsStateStore({
+      filePath: join(this.runtime.getWorkingDirectory(), "infra/local/feishu-diagnostics.json"),
+    });
     this.attachmentDraftStore = new FeishuAttachmentDraftStore({
       filePath: join(this.runtime.getWorkingDirectory(), "infra/local/feishu-attachment-drafts.json"),
     });
@@ -262,6 +271,11 @@ export class FeishuChannelService {
     this.pruneRecentMessageIds();
 
     if (this.isDuplicateMessage(context.messageId)) {
+      this.recordFeishuDiagnosticsEvent({
+        type: "message.duplicate_ignored",
+        context,
+        summary: "重复消息已忽略。",
+      });
       this.logger.info(`[themis/feishu] 忽略重复消息：message=${context.messageId}`);
       return;
     }
@@ -269,6 +283,11 @@ export class FeishuChannelService {
     const staleInfo = this.markConversationMessageAndDetectStale(context);
 
     if (staleInfo) {
+      this.recordFeishuDiagnosticsEvent({
+        type: "message.stale_ignored",
+        context,
+        summary: "乱序旧消息已忽略。",
+      });
       this.logger.info(
         `[themis/feishu] 忽略乱序旧消息：message=${context.messageId} createTime=${staleInfo.messageCreateTimeMs} latestCreateTime=${staleInfo.latestCreateTimeMs}`,
       );
@@ -1972,8 +1991,90 @@ export class FeishuChannelService {
     }
 
     this.sessionStore.setActiveSessionId(toConversationKey(context), resolvedSessionId);
+    this.recordFeishuDiagnosticsEvent({
+      type: "session.switched",
+      context,
+      sessionId: resolvedSessionId,
+      summary: `已切换到会话：${resolvedSessionId}`,
+      lastMessageId: context.messageId,
+    });
     await this.safeSendText(context.chatId, `已切换到会话：${resolvedSessionId}`);
     await this.sendCurrentSession(context.chatId, context);
+  }
+
+  private recordFeishuDiagnosticsEvent(input: {
+    type: string;
+    context: FeishuIncomingContext;
+    sessionId?: string | null;
+    principalId?: string | null;
+    actionId?: string | null;
+    requestId?: string | null;
+    summary: string;
+    lastMessageId?: string | null;
+  }): void {
+    const now = new Date().toISOString();
+    const chatId = input.context.chatId;
+    const userId = input.context.userId;
+    const sessionId = input.sessionId ?? this.sessionStore.getActiveSessionId(toConversationKey(input.context)) ?? null;
+    const principalId = input.principalId ?? this.ensurePrincipalIdentity(input.context).principalId;
+
+    try {
+      if (sessionId) {
+        this.diagnosticsStateStore.upsertConversation({
+          key: `${chatId}::${userId}`,
+          chatId,
+          userId,
+          principalId,
+          activeSessionId: sessionId,
+          ...(input.lastMessageId ? { lastMessageId: input.lastMessageId } : {}),
+          lastEventType: input.type,
+          updatedAt: now,
+          pendingActions: this.snapshotPendingActions({
+            chatId,
+            userId,
+            sessionId,
+            principalId,
+          }),
+        });
+      }
+
+      this.diagnosticsStateStore.appendEvent({
+        id: createId("feishu-diagnostics-event"),
+        type: input.type,
+        chatId,
+        userId,
+        ...(sessionId ? { sessionId } : {}),
+        principalId,
+        ...(input.lastMessageId ? { messageId: input.lastMessageId } : {}),
+        ...(input.actionId ? { actionId: input.actionId } : {}),
+        ...(input.requestId ? { requestId: input.requestId } : {}),
+        summary: input.summary,
+        createdAt: now,
+      });
+    } catch (error) {
+      this.logger.warn(`[themis/feishu] 写入飞书诊断状态失败：${toErrorMessage(error)}`);
+    }
+  }
+
+  private snapshotPendingActions(scope: {
+    chatId: string;
+    userId: string;
+    sessionId: string;
+    principalId: string;
+  }): FeishuDiagnosticsPendingAction[] {
+    return this.actionBridge.list({
+      sessionId: scope.sessionId,
+      principalId: scope.principalId,
+      userId: scope.userId,
+    }).map((action) => ({
+      actionId: action.actionId,
+      actionType: action.actionType,
+      taskId: action.taskId,
+      requestId: action.requestId,
+      sourceChannel: action.scope?.sourceChannel ?? "feishu",
+      sessionId: action.scope?.sessionId ?? scope.sessionId,
+      principalId: action.scope?.principalId ?? scope.principalId,
+    }));
   }
 
   private async sendCurrentSession(chatId: string, context: FeishuIncomingContext): Promise<void> {
@@ -2492,10 +2593,28 @@ export class FeishuChannelService {
       actionId,
       decision,
     })) {
+      this.recordFeishuDiagnosticsEvent({
+        type: "approval.submit_failed",
+        context,
+        sessionId: action.scope?.sessionId ?? null,
+        principalId: action.scope?.principalId ?? null,
+        actionId: action.actionId,
+        requestId: action.requestId,
+        summary: `审批提交失败：${actionId} 已失效。`,
+      });
       await this.safeSendText(context.chatId, `提交审批失败：${actionId} 已失效。`);
       return;
     }
 
+    this.recordFeishuDiagnosticsEvent({
+      type: "approval.submitted",
+      context,
+      sessionId: action.scope?.sessionId ?? null,
+      principalId: action.scope?.principalId ?? null,
+      actionId: action.actionId,
+      requestId: action.requestId,
+      summary: decision === "approve" ? "审批已通过提交。" : "审批已拒绝提交。",
+    });
     const message = decision === "approve" ? "已提交审批。" : "已提交拒绝。";
     await this.safeSendText(context.chatId, message);
   }
@@ -2541,6 +2660,7 @@ export class FeishuChannelService {
     action: TaskActionDescriptor & { taskId: string; requestId: string },
     rawInputText: string,
     context: FeishuIncomingContext,
+    eventType: "reply.submitted" | "takeover.submitted" = "takeover.submitted",
   ): Promise<boolean> {
     const inputText = normalizeText(rawInputText);
 
@@ -2554,10 +2674,32 @@ export class FeishuChannelService {
       actionId: action.actionId,
       inputText,
     })) {
+      this.recordFeishuDiagnosticsEvent({
+        type: eventType === "takeover.submitted" ? "takeover.submit_failed" : "reply.submit_failed",
+        context,
+        sessionId: action.scope?.sessionId ?? null,
+        principalId: action.scope?.principalId ?? null,
+        actionId: action.actionId,
+        requestId: action.requestId,
+        summary: eventType === "takeover.submitted"
+          ? `普通文本补充输入失败：${action.actionId} 已失效。`
+          : `命令式回复失败：${action.actionId} 已失效。`,
+      });
       await this.safeSendText(context.chatId, `提交补充输入失败：${action.actionId} 已失效。`);
       return true;
     }
 
+    this.recordFeishuDiagnosticsEvent({
+      type: eventType,
+      context,
+      sessionId: action.scope?.sessionId ?? null,
+      principalId: action.scope?.principalId ?? null,
+      actionId: action.actionId,
+      requestId: action.requestId,
+      summary: eventType === "takeover.submitted"
+        ? "普通文本已提交补充输入。"
+        : "命令式 reply 已提交补充输入。",
+    });
     await this.safeSendText(context.chatId, "已提交补充输入。");
     return true;
   }
@@ -2590,7 +2732,7 @@ export class FeishuChannelService {
       return;
     }
 
-    await this.submitPendingUserInput(action, inputText, context);
+    await this.submitPendingUserInput(action, inputText, context, "reply.submitted");
   }
 
   private resolvePendingActionScope(context: FeishuIncomingContext): {

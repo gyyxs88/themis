@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { SqliteCodexSessionRegistry } from "../storage/index.js";
+import type { TaskRequest } from "../types/task.js";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const cliEntryPath = resolve(repoRoot, "src/cli/main.ts");
@@ -338,6 +340,46 @@ test("themis doctor smoke feishu 会输出前置检查和 nextSteps", async () =
   let server: ReturnType<typeof createServer> | null = null;
 
   try {
+    mkdirSync(resolve(workspace, "infra", "local"), { recursive: true });
+    writeFileSync(
+      resolve(workspace, "infra/local/feishu-sessions.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          bindings: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              activeSessionId: "session-1",
+              updatedAt: "2026-04-02T00:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    writeFileSync(
+      resolve(workspace, "infra/local/feishu-attachment-drafts.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          drafts: [
+            {
+              draftId: "draft-1",
+              sessionId: "session-1",
+              updatedAt: "2026-04-02T00:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
     server = createServer((req, res) => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
@@ -371,6 +413,10 @@ test("themis doctor smoke feishu 会输出前置检查和 nextSteps", async () =
     assert.match(result.stdout, /Feishu smoke 前置检查通过/);
     assert.match(result.stdout, /docs\/feishu\/themis-feishu-real-journey-smoke\.md/);
     assert.match(result.stdout, /nextSteps/);
+    assert.match(result.stdout, /statusCode：302/);
+    assert.match(result.stdout, /sessionBindingCount：1/);
+    assert.match(result.stdout, /attachmentDraftCount：1/);
+    assert.match(result.stdout, /建议先运行：\.\/themis doctor feishu/);
   } finally {
     if (server) {
       server.closeAllConnections?.();
@@ -382,6 +428,377 @@ test("themis doctor smoke feishu 会输出前置检查和 nextSteps", async () =
     rmSync(workspace, { recursive: true, force: true });
   }
 });
+
+test("themis doctor feishu 会输出配置、服务和本地状态摘要", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "themis-doctor-cli-feishu-"));
+  let server: ReturnType<typeof createServer> | null = null;
+
+  try {
+    mkdirSync(resolve(workspace, "docs", "feishu"), { recursive: true });
+    mkdirSync(resolve(workspace, "infra", "local"), { recursive: true });
+    writeFileSync(resolve(workspace, "docs/feishu/themis-feishu-real-journey-smoke.md"), "# smoke\n", "utf8");
+    writeFileSync(
+      resolve(workspace, "infra/local/feishu-sessions.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          bindings: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              activeSessionId: "session-1",
+              updatedAt: "2026-04-02T00:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    writeFileSync(
+      resolve(workspace, "infra/local/feishu-attachment-drafts.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          drafts: [
+            {
+              key: "chat-1::user-1::session-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              parts: [],
+              assets: [],
+              attachments: [],
+              createdAt: "2026-04-02T00:00:00.000Z",
+              updatedAt: "2026-04-02T00:00:00.000Z",
+              expiresAt: "2026-04-02T01:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    server = createServer((req, res) => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+
+      if (req.method === "GET" && url.pathname === "/") {
+        res.writeHead(200, {
+          "content-type": "text/plain; charset=utf-8",
+        });
+        res.end("ok");
+        return;
+      }
+
+      res.writeHead(404);
+      res.end();
+    });
+
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+
+    if (!address || typeof address === "string") {
+      throw new Error("test server failed to bind");
+    }
+
+    const result = await runCliAsync(["doctor", "feishu"], workspace, {
+      THEMIS_BASE_URL: `http://127.0.0.1:${address.port}`,
+      FEISHU_APP_ID: "cli_xxx",
+      FEISHU_APP_SECRET: "secret_xxx",
+      FEISHU_USE_ENV_PROXY: "true",
+      FEISHU_PROGRESS_FLUSH_TIMEOUT_MS: "1500",
+    });
+
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /Themis 诊断 - feishu/);
+    assert.match(result.stdout, /appIdConfigured：yes/);
+    assert.match(result.stdout, /appSecretConfigured：yes/);
+    assert.match(result.stdout, /useEnvProxy：yes/);
+    assert.match(result.stdout, /progressFlushTimeoutMs：1500/);
+    assert.match(result.stdout, /serviceReachable：yes/);
+    assert.match(result.stdout, /statusCode：200/);
+    assert.match(result.stdout, /sessionStore：ok/);
+    assert.match(result.stdout, /attachmentDraftStore：ok/);
+    assert.match(result.stdout, /sessionBindingCount：1/);
+    assert.match(result.stdout, /attachmentDraftCount：1/);
+    assert.match(result.stdout, /smokeDoc：yes/);
+  } finally {
+    if (server) {
+      server.closeAllConnections?.();
+      server.closeIdleConnections?.();
+      server.unref();
+      server.close();
+    }
+
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("themis doctor feishu 会输出当前会话快照和最近 5 条事件轨迹", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "themis-doctor-cli-feishu-deep-"));
+  let server: ReturnType<typeof createServer> | null = null;
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: resolve(workspace, "infra/local/themis.db"),
+  });
+
+  try {
+    mkdirSync(resolve(workspace, "docs", "feishu"), { recursive: true });
+    mkdirSync(resolve(workspace, "infra", "local"), { recursive: true });
+    writeFileSync(resolve(workspace, "docs/feishu/themis-feishu-real-journey-smoke.md"), "# smoke\n", "utf8");
+    writeFileSync(
+      resolve(workspace, "infra/local/feishu-sessions.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          bindings: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              activeSessionId: "session-1",
+              updatedAt: "2026-04-02T00:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    writeFileSync(
+      resolve(workspace, "infra/local/feishu-attachment-drafts.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          drafts: [
+            {
+              key: "chat-1::user-1::session-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              parts: [],
+              assets: [],
+              attachments: [],
+              createdAt: "2026-04-02T00:00:00.000Z",
+              updatedAt: "2026-04-02T00:00:00.000Z",
+              expiresAt: "2026-04-02T01:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    writeFileSync(
+      resolve(workspace, "infra/local/feishu-diagnostics.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          conversations: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              principalId: "principal-1",
+              activeSessionId: "session-1",
+              lastMessageId: "message-6",
+              lastEventType: "takeover.submitted",
+              updatedAt: "2026-04-02T10:00:00.000Z",
+              pendingActions: [
+                {
+                  actionId: "action-1",
+                  actionType: "user-input",
+                  taskId: "task-1",
+                  requestId: "request-1",
+                  sourceChannel: "web",
+                  sessionId: "session-1",
+                  principalId: "principal-1",
+                },
+                {
+                  actionId: "action-2",
+                  actionType: "approval",
+                  taskId: "task-2",
+                  requestId: "request-2",
+                  sourceChannel: "feishu",
+                  sessionId: "session-1",
+                  principalId: "principal-1",
+                },
+              ],
+            },
+          ],
+          recentEvents: [
+            {
+              id: "event-1",
+              type: "message.received",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              messageId: "message-1",
+              summary: "应被丢弃的第 1 条",
+              createdAt: "2026-04-02T09:00:00.000Z",
+            },
+            {
+              id: "event-2",
+              type: "message.duplicate_ignored",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              messageId: "message-2",
+              summary: "第 2 条",
+              createdAt: "2026-04-02T09:00:01.000Z",
+            },
+            {
+              id: "event-3",
+              type: "message.stale_ignored",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              messageId: "message-3",
+              summary: "第 3 条",
+              createdAt: "2026-04-02T09:00:02.000Z",
+            },
+            {
+              id: "event-4",
+              type: "session.switched",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              summary: "第 4 条",
+              createdAt: "2026-04-02T09:00:03.000Z",
+            },
+            {
+              id: "event-5",
+              type: "waiting_action.snapshot",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              summary: "第 5 条",
+              createdAt: "2026-04-02T09:00:04.000Z",
+            },
+            {
+              id: "event-6",
+              type: "takeover.submitted",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              actionId: "action-1",
+              requestId: "request-1",
+              summary: "第 6 条",
+              createdAt: "2026-04-02T09:00:05.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    server = createServer((req, res) => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+
+      if (req.method === "GET" && url.pathname === "/") {
+        res.writeHead(200, {
+          "content-type": "text/plain; charset=utf-8",
+        });
+        res.end("ok");
+        return;
+      }
+
+      res.writeHead(404);
+      res.end();
+    });
+
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+
+    if (!address || typeof address === "string") {
+      throw new Error("test server failed to bind");
+    }
+
+    runtimeStore.saveSession({
+      sessionId: "session-1",
+      threadId: "thread-1",
+      createdAt: "2026-04-02T09:00:00.000Z",
+      updatedAt: "2026-04-02T10:00:00.000Z",
+    });
+    runtimeStore.upsertTurnFromRequest(createFeishuTaskRequest("session-1", "request-1"), "task-1");
+    runtimeStore.appendTaskEvent({
+      eventId: "event-runtime-1",
+      taskId: "task-1",
+      requestId: "request-1",
+      type: "task.started",
+      status: "running",
+      message: "Task started",
+      payload: {
+        session: {
+          threadId: "thread-1",
+        },
+      },
+      timestamp: "2026-04-02T10:00:00.000Z",
+    });
+
+    const result = await runCliAsync(["doctor", "feishu"], workspace, {
+      THEMIS_BASE_URL: `http://127.0.0.1:${address.port}`,
+      FEISHU_APP_ID: "cli_xxx",
+      FEISHU_APP_SECRET: "secret_xxx",
+      FEISHU_USE_ENV_PROXY: "true",
+      FEISHU_PROGRESS_FLUSH_TIMEOUT_MS: "1500",
+    });
+
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /当前会话快照/);
+    assert.match(result.stdout, /sessionId：session-1/);
+    assert.match(result.stdout, /principalId：principal-1/);
+    assert.match(result.stdout, /threadId：thread-1/);
+    assert.match(result.stdout, /threadStatus：running/);
+    assert.match(result.stdout, /pendingActionCount：2/);
+    assert.match(result.stdout, /actionId：action-1/);
+    assert.match(result.stdout, /actionId：action-2/);
+    assert.match(result.stdout, /最近 5 条事件轨迹/);
+    assert.doesNotMatch(result.stdout, /应被丢弃的第 1 条/);
+    assert.match(result.stdout, /第 2 条/);
+    assert.match(result.stdout, /第 6 条/);
+  } finally {
+    if (server) {
+      server.closeAllConnections?.();
+      server.closeIdleConnections?.();
+      server.unref();
+      server.close();
+    }
+
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+function createFeishuTaskRequest(sessionId: string, requestId: string): TaskRequest {
+  return {
+    requestId,
+    taskId: "task-1",
+    sourceChannel: "feishu",
+    user: {
+      userId: "user-1",
+    },
+    goal: "diagnostics",
+    channelContext: {
+      sessionId,
+    },
+    createdAt: "2026-04-02T09:00:00.000Z",
+  };
+}
 
 test("themis doctor context 会输出 README/AGENTS 状态", () => {
   const workspace = mkdtempSync(join(tmpdir(), "themis-doctor-cli-"));

@@ -102,7 +102,12 @@ test("真实 Web->飞书 journey 在 app-server 下会走通 /use + direct-text 
     const feishuMessages = feishu.takeMessages().join("\n");
     assert.match(feishuMessages, /已提交补充输入。/);
     assert.deepEqual(feishu.getTaskRuntimeCalls(), beforeTaskRuntimeCalls);
-    assert.deepEqual(feishu.getResolvedActionSubmissions().at(-1), {
+    await waitFor(
+      () => feishu.getResolvedActionSubmissions().some((entry) => entry.actionId === JOURNEY_ACTION_ID),
+      "single journey did not record resolved input submission",
+    );
+    const singleSubmission = feishu.getResolvedActionSubmissions().find((entry) => entry.actionId === JOURNEY_ACTION_ID);
+    assert.deepEqual(singleSubmission, {
       taskId: restoredAction.taskId,
       requestId: restoredAction.requestId,
       actionId: JOURNEY_ACTION_ID,
@@ -194,7 +199,11 @@ test("真实 Web->飞书 mixed recovery journey 在 app-server 下会走通 appr
 
     await feishu.handleCommand("approve", [MIXED_APPROVAL_ACTION_ID]);
 
-    const firstSubmission = feishu.getResolvedActionSubmissions().at(-1);
+    await waitFor(
+      () => feishu.getResolvedActionSubmissions().some((entry) => entry.actionId === MIXED_APPROVAL_ACTION_ID),
+      "mixed journey did not record approval submission",
+    );
+    const firstSubmission = feishu.getResolvedActionSubmissions().find((entry) => entry.actionId === MIXED_APPROVAL_ACTION_ID);
     assert.deepEqual(firstSubmission, {
       taskId: firstAction.taskId,
       requestId: firstAction.requestId,
@@ -224,9 +233,13 @@ test("真实 Web->飞书 mixed recovery journey 在 app-server 下会走通 appr
     assert.match(messages, /已提交补充输入。/);
     assert.deepEqual(feishu.getTaskRuntimeCalls(), beforeTaskRuntimeCalls);
 
+    await waitFor(
+      () => feishu.getResolvedActionSubmissions().some((entry) => entry.actionId === MIXED_INPUT_ACTION_ID),
+      "mixed journey did not record input submission",
+    );
     const submissions = feishu.getResolvedActionSubmissions();
     assert.equal(submissions.length, 2);
-    assert.deepEqual(submissions.at(-1), {
+    assert.deepEqual(submissions.find((entry) => entry.actionId === MIXED_INPUT_ACTION_ID), {
       taskId: firstAction.taskId,
       requestId: firstAction.requestId,
       actionId: MIXED_INPUT_ACTION_ID,

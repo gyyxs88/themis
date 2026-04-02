@@ -5,6 +5,7 @@ import type { CodexAuthRuntime } from "../core/codex-auth.js";
 import { readOpenAICompatibleProviderConfigs } from "../core/openai-compatible-provider.js";
 import { McpInspector, type McpInspectorListResult } from "../mcp/mcp-inspector.js";
 import type { SqliteCodexSessionRegistry } from "../storage/index.js";
+import { readFeishuDiagnosticsSnapshot, type FeishuDiagnosticsSummary } from "./feishu-diagnostics.js";
 
 export interface RuntimeDiagnosticFileStatus {
   path: string;
@@ -33,6 +34,7 @@ export interface RuntimeDiagnosticsSummary {
   memory: {
     files: RuntimeDiagnosticFileStatus[];
   };
+  feishu: FeishuDiagnosticsSummary;
   service: {
     sqlite: {
       path: string;
@@ -112,6 +114,11 @@ export class RuntimeDiagnosticsService {
     }
 
     const mcpSummary = await this.readMcpSummary();
+    const feishuSummary = await readFeishuDiagnosticsSnapshot({
+      workingDirectory: this.workingDirectory,
+      runtimeStore: this.runtimeStore,
+      sqliteFilePath: this.sqliteFilePath,
+    });
 
     return {
       generatedAt: new Date().toISOString(),
@@ -137,6 +144,7 @@ export class RuntimeDiagnosticsService {
       memory: {
         files: MEMORY_FILES.map((path) => readPathStatus(this.workingDirectory, path)),
       },
+      feishu: feishuSummary,
       service: {
         sqlite: {
           path: this.sqliteFilePath,

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -315,9 +315,9 @@ test("RuntimeSmokeService.runFeishuSmoke 在缺少 FEISHU_APP_ID / FEISHU_APP_SE
     assert.equal(result.serviceReachable, true);
     assert.equal(result.feishuConfigReady, false);
     assert.equal(result.docPath, "docs/feishu/themis-feishu-real-journey-smoke.md");
-    assert.ok(result.nextSteps.some((step) => step.includes("/msgupdate")));
-    assert.ok(result.nextSteps.some((step) => step.includes("/smoke user-input")));
-    assert.ok(result.nextSteps.some((step) => step.includes("/smoke mixed")));
+    assert.ok(result.nextSteps.some((step) => step.includes("./themis doctor feishu")));
+    assert.ok(result.nextSteps.some((step) => step.includes("./themis doctor smoke feishu")));
+    assert.ok(result.nextSteps.some((step) => step.includes("A/B 手工路径")));
     assert.match(result.message, /FEISHU_APP_ID/);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -328,6 +328,46 @@ test("RuntimeSmokeService.runFeishuSmoke 在根路径返回 302/login 时仍判�
   const root = mkdtempSync(join(tmpdir(), "themis-runtime-smoke-feishu-login-redirect-"));
 
   try {
+    mkdirSync(join(root, "infra", "local"), { recursive: true });
+    writeFileSync(
+      join(root, "infra/local/feishu-sessions.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          bindings: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              activeSessionId: "session-1",
+              updatedAt: "2026-04-02T00:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    writeFileSync(
+      join(root, "infra/local/feishu-attachment-drafts.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          drafts: [
+            {
+              draftId: "draft-1",
+              sessionId: "session-1",
+              updatedAt: "2026-04-02T00:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
     const service = createService(root, {
       env: {
         FEISHU_APP_ID: "cli_xxx",
@@ -354,6 +394,85 @@ test("RuntimeSmokeService.runFeishuSmoke 在根路径返回 302/login 时仍判�
     assert.equal(result.ok, true);
     assert.equal(result.serviceReachable, true);
     assert.equal(result.feishuConfigReady, true);
+    assert.equal(result.statusCode, 302);
+    assert.equal(result.sessionBindingCount, 1);
+    assert.equal(result.attachmentDraftCount, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("RuntimeSmokeService.runFeishuSmoke 会复用快照里的配置就绪状态", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-smoke-feishu-snapshot-env-"));
+
+  try {
+    mkdirSync(join(root, "infra", "local"), { recursive: true });
+    writeFileSync(
+      join(root, "infra/local/feishu-sessions.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          bindings: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              activeSessionId: "session-1",
+              updatedAt: "2026-04-02T00:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    writeFileSync(
+      join(root, "infra/local/feishu-attachment-drafts.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          drafts: [
+            {
+              draftId: "draft-1",
+              sessionId: "session-1",
+              updatedAt: "2026-04-02T00:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const env = createSnapshotAwareEnv();
+    const service = createService(root, {
+      env,
+      fetchImpl: async (input) => {
+        const url = normalizeUrl(input);
+
+        if (url === "http://127.0.0.1:3100/") {
+          return new Response(null, {
+            status: 302,
+            headers: {
+              location: "/login",
+            },
+          });
+        }
+
+        throw new Error(`unexpected fetch: ${url}`);
+      },
+    });
+
+    const result = await service.runFeishuSmoke();
+
+    assert.equal(result.ok, true);
+    assert.equal(result.feishuConfigReady, true);
+    assert.equal(result.statusCode, 302);
+    assert.equal(result.sessionBindingCount, 1);
+    assert.equal(result.attachmentDraftCount, 1);
+    assert.equal(env.getAccessCount(), 2);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -494,6 +613,39 @@ function createSingleChunkNdjsonResponse(lines: Array<Record<string, unknown>>):
     status: 200,
     headers: {
       "content-type": "application/x-ndjson; charset=utf-8",
+    },
+  });
+}
+
+function createSnapshotAwareEnv(): NodeJS.ProcessEnv & { getAccessCount(): number } {
+  let accessCount = 0;
+  const backing = new Map<string, string>([
+    ["FEISHU_APP_ID", "cli_xxx"],
+    ["FEISHU_APP_SECRET", "secret_xxx"],
+  ]);
+
+  return new Proxy({} as NodeJS.ProcessEnv & { getAccessCount(): number }, {
+    get(_target, property) {
+      if (typeof property !== "string") {
+        return undefined;
+      }
+
+      if (property === "getAccessCount") {
+        return () => accessCount;
+      }
+
+      if (property === "FEISHU_APP_ID" || property === "FEISHU_APP_SECRET") {
+        accessCount += 1;
+        if (accessCount > 2) {
+          throw new Error(`unexpected extra env access: ${property}`);
+        }
+        return backing.get(property);
+      }
+
+      return backing.get(property);
+    },
+    has(_target, property) {
+      return typeof property === "string" && (backing.has(property) || property === "getAccessCount");
     },
   });
 }

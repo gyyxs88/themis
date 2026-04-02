@@ -7,6 +7,7 @@ import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { resolveCodexAuthFilePath, resolveDefaultCodexHome } from "../core/auth-accounts.js";
 import { RuntimeDiagnosticsService, type RuntimeDiagnosticFileStatus } from "../diagnostics/runtime-diagnostics.js";
+import type { FeishuDiagnosticsSummary } from "../diagnostics/feishu-diagnostics.js";
 import { RuntimeSmokeService } from "../diagnostics/runtime-smoke.js";
 import { McpInspector } from "../mcp/mcp-inspector.js";
 import { PrincipalSkillsService } from "../core/principal-skills-service.js";
@@ -257,12 +258,12 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
 
   const sections = [subcommand, ...args].filter((item): item is string => Boolean(item && item.trim()));
   if (sections.length > 1) {
-    throw new Error("用法：themis doctor [context|auth|provider|memory|service|mcp|smoke]");
+    throw new Error("用法：themis doctor [context|auth|provider|memory|service|mcp|feishu|smoke]");
   }
 
   const selectedSection = sections[0]?.trim().toLowerCase();
-  if (selectedSection && !["context", "auth", "provider", "memory", "service", "mcp"].includes(selectedSection)) {
-    throw new Error("doctor 子命令仅支持 context / auth / provider / memory / service / mcp。");
+  if (selectedSection && !["context", "auth", "provider", "memory", "service", "mcp", "feishu"].includes(selectedSection)) {
+    throw new Error("doctor 子命令仅支持 context / auth / provider / memory / service / mcp / feishu。");
   }
 
   const dbPath = resolve(cwd, "infra/local/themis.db");
@@ -336,6 +337,9 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
       if (summary.mcp.readError) {
         console.log(`readError：${summary.mcp.readError}`);
       }
+      return;
+    case "feishu":
+      printFeishuDiagnosticsSummary(summary.feishu);
       return;
     default:
       return;
@@ -547,7 +551,7 @@ function printHelp(): void {
   console.log("- ./themis status");
   console.log("- ./themis check");
   console.log("- ./themis doctor");
-  console.log("- ./themis doctor <context|auth|provider|memory|service|mcp>");
+  console.log("- ./themis doctor <context|auth|provider|memory|service|mcp|feishu>");
   console.log("- ./themis doctor smoke <web|feishu|all>");
   console.log("- ./themis config list [--show-secrets]");
   console.log("- ./themis config set <KEY> <VALUE>");
@@ -592,13 +596,61 @@ function printFeishuSmokeResult(result: Awaited<ReturnType<RuntimeSmokeService["
   console.log("Themis smoke - feishu");
   console.log(`ok：${result.ok ? "yes" : "no"}`);
   console.log(`serviceReachable：${result.serviceReachable ? "yes" : "no"}`);
+  console.log(`statusCode：${result.statusCode ?? "null"}`);
   console.log(`feishuConfigReady：${result.feishuConfigReady ? "yes" : "no"}`);
+  console.log(`sessionBindingCount：${result.sessionBindingCount}`);
+  console.log(`attachmentDraftCount：${result.attachmentDraftCount}`);
   console.log(`docPath：${result.docPath}`);
   console.log(`message：${result.message}`);
   console.log("nextSteps：");
 
   for (const [index, step] of result.nextSteps.entries()) {
     console.log(`${index + 1}. ${step}`);
+  }
+}
+
+function printFeishuDiagnosticsSummary(summary: FeishuDiagnosticsSummary): void {
+  console.log("Themis 诊断 - feishu");
+  console.log(`appIdConfigured：${summary.env.appIdConfigured ? "yes" : "no"}`);
+  console.log(`appSecretConfigured：${summary.env.appSecretConfigured ? "yes" : "no"}`);
+  console.log(`useEnvProxy：${summary.env.useEnvProxy ? "yes" : "no"}`);
+  console.log(`progressFlushTimeoutMs：${summary.env.progressFlushTimeoutMs ?? "null"}`);
+  console.log(`serviceReachable：${summary.service.serviceReachable ? "yes" : "no"}`);
+  console.log(`statusCode：${summary.service.statusCode ?? "null"}`);
+  console.log(`sessionStore：${summary.state.sessionStore.status}`);
+  console.log(`attachmentDraftStore：${summary.state.attachmentDraftStore.status}`);
+  console.log(`sessionBindingCount：${summary.state.sessionBindingCount}`);
+  console.log(`attachmentDraftCount：${summary.state.attachmentDraftCount}`);
+  console.log(`smokeDoc：${summary.docs.smokeDocExists ? "yes" : "no"}`);
+  console.log(`diagnosticsStore：${summary.diagnostics.store.status}`);
+  console.log("当前会话快照");
+
+  const currentConversation = summary.diagnostics.currentConversation;
+  console.log(`sessionId：${currentConversation?.activeSessionId ?? "<none>"}`);
+  console.log(`principalId：${currentConversation?.principalId ?? "<none>"}`);
+  console.log(`threadId：${currentConversation?.threadId ?? "<none>"}`);
+  console.log(`threadStatus：${currentConversation?.threadStatus ?? "<none>"}`);
+  console.log(`lastMessageId：${currentConversation?.lastMessageId ?? "<none>"}`);
+  console.log(`lastEventType：${currentConversation?.lastEventType ?? "<none>"}`);
+  console.log(`pendingActionCount：${currentConversation?.pendingActionCount ?? 0}`);
+
+  for (const action of currentConversation?.pendingActions ?? []) {
+    console.log(
+      `- actionId：${action.actionId} actionType：${action.actionType} requestId：${action.requestId} taskId：${action.taskId} sourceChannel：${action.sourceChannel}`,
+    );
+  }
+
+  console.log("最近 5 条事件轨迹");
+
+  if (summary.diagnostics.recentEvents.length === 0) {
+    console.log("- <none>");
+    return;
+  }
+
+  for (const event of summary.diagnostics.recentEvents) {
+    console.log(
+      `- ${event.createdAt} ${event.type} sessionId：${event.sessionId ?? "<none>"} principalId：${event.principalId ?? "<none>"} messageId：${event.messageId ?? "<none>"} actionId：${event.actionId ?? "<none>"} requestId：${event.requestId ?? "<none>"} summary：${event.summary}`,
+    );
   }
 }
 
