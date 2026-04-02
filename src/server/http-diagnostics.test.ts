@@ -107,6 +107,7 @@ test("GET /api/diagnostics 会返回结构化 summary", async () => {
 test("GET /api/diagnostics 会返回 feishu summary", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-http-diagnostics-feishu-"));
   const previousEnv = {
+    baseUrl: process.env.THEMIS_BASE_URL,
     appId: process.env.FEISHU_APP_ID,
     appSecret: process.env.FEISHU_APP_SECRET,
     useEnvProxy: process.env.FEISHU_USE_ENV_PROXY,
@@ -143,6 +144,7 @@ test("GET /api/diagnostics 会返回 feishu summary", async () => {
   const baseUrl = `http://127.0.0.1:${address.port}`;
 
   try {
+    process.env.THEMIS_BASE_URL = baseUrl;
     process.env.FEISHU_APP_ID = "cli_xxx";
     process.env.FEISHU_APP_SECRET = "secret_xxx";
     process.env.FEISHU_USE_ENV_PROXY = "true";
@@ -210,16 +212,27 @@ test("GET /api/diagnostics 会返回 feishu summary", async () => {
         feishu?: {
           env?: {
             appIdConfigured?: boolean;
+            useEnvProxy?: boolean;
+          };
+          service?: {
+            serviceReachable?: boolean;
           };
           state?: {
             sessionBindingCount?: number;
+          };
+          docs?: {
+            smokeDocExists?: boolean;
           };
         };
       };
     };
     assert.equal(payload.summary?.feishu?.env?.appIdConfigured, true);
+    assert.equal(payload.summary?.feishu?.env?.useEnvProxy, true);
+    assert.equal(payload.summary?.feishu?.service?.serviceReachable, true);
     assert.equal(payload.summary?.feishu?.state?.sessionBindingCount, 1);
+    assert.equal(payload.summary?.feishu?.docs?.smokeDocExists, true);
   } finally {
+    restoreEnv("THEMIS_BASE_URL", previousEnv.baseUrl);
     restoreEnv("FEISHU_APP_ID", previousEnv.appId);
     restoreEnv("FEISHU_APP_SECRET", previousEnv.appSecret);
     restoreEnv("FEISHU_USE_ENV_PROXY", previousEnv.useEnvProxy);
