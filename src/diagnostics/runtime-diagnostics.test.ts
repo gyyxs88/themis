@@ -773,6 +773,7 @@ test("RuntimeDiagnosticsService.readSummary 会把失败 action 纳入 feishu la
     assert.equal(summary.feishu.diagnostics.lastActionAttempt?.requestId, "request-1");
     assert.equal(summary.feishu.diagnostics.lastActionAttempt?.actionId, "action-1");
     assert.equal(summary.feishu.diagnostics.lastActionAttempt?.summary, "reply 提交失败");
+    assert.equal(summary.feishu.diagnostics.primaryDiagnosis?.id, "action_submit_failed");
   } finally {
     restoreEnv("FEISHU_APP_ID", previousEnv.feishuAppId);
     restoreEnv("FEISHU_APP_SECRET", previousEnv.feishuAppSecret);

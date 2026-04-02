@@ -35,6 +35,10 @@ test("readFeishuDiagnosticsSnapshot 会在服务黑洞地址上超时返回不�
     const result = await Promise.race([
       readFeishuDiagnosticsSnapshot({
         workingDirectory: root,
+        env: {
+          FEISHU_APP_ID: "cli_xxx",
+          FEISHU_APP_SECRET: "secret_xxx",
+        },
         baseUrl: `http://127.0.0.1:${address.port}`,
         serviceProbeTimeoutMs: 50,
       }),
@@ -45,6 +49,10 @@ test("readFeishuDiagnosticsSnapshot 会在服务黑洞地址上超时返回不�
       serviceReachable: false,
       statusCode: null,
     });
+    assert.equal(result.diagnostics.primaryDiagnosis?.id, "service_unreachable");
+    assert.deepEqual(result.diagnostics.secondaryDiagnoses, []);
+    assert.ok(result.diagnostics.recommendedNextSteps.includes("npm run dev:web"));
+    assert.ok(result.diagnostics.recommendedNextSteps.includes("./themis doctor feishu"));
   } finally {
     if (server) {
       server.closeAllConnections?.();
@@ -73,6 +81,10 @@ test("readFeishuDiagnosticsSnapshot 会把缺失的状态文件标记为 missing
     assert.equal(result.state.attachmentDraftStore.status, "missing");
     assert.equal(result.state.sessionBindingCount, 0);
     assert.equal(result.state.attachmentDraftCount, 0);
+    assert.equal(result.diagnostics.primaryDiagnosis?.id, "config_missing");
+    assert.deepEqual(result.diagnostics.secondaryDiagnoses, []);
+    assert.ok(result.diagnostics.recommendedNextSteps.some((step) => step.startsWith("./themis config set FEISHU_APP_ID")));
+    assert.ok(result.diagnostics.recommendedNextSteps.some((step) => step.startsWith("./themis config set FEISHU_APP_SECRET")));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -376,6 +388,10 @@ test("readFeishuDiagnosticsSnapshot 会把 submit_failed action 纳入 lastActio
 
       const summary = await readFeishuDiagnosticsSnapshot({
         workingDirectory: root,
+        env: {
+          FEISHU_APP_ID: "cli_xxx",
+          FEISHU_APP_SECRET: "secret_xxx",
+        },
         fetchImpl: async () =>
           new Response(null, {
             status: 200,
@@ -386,9 +402,172 @@ test("readFeishuDiagnosticsSnapshot 会把 submit_failed action 纳入 lastActio
       assert.equal(summary.diagnostics.lastActionAttempt?.actionId, currentCase.actionId);
       assert.equal(summary.diagnostics.lastActionAttempt?.requestId, currentCase.requestId);
       assert.equal(summary.diagnostics.lastActionAttempt?.summary, currentCase.summary);
+      assert.equal(summary.diagnostics.primaryDiagnosis?.id, "action_submit_failed");
+      assert.deepEqual(summary.diagnostics.secondaryDiagnoses, []);
+      assert.ok(summary.diagnostics.recommendedNextSteps.includes("./themis doctor smoke feishu"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  }
+});
+
+test("readFeishuDiagnosticsSnapshot 会把 pending_input.blocked_by_approval 归类成 approval_blocking_takeover", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-feishu-diagnostics-blocked-"));
+  const store = new FeishuDiagnosticsStateStore({
+    filePath: join(root, "infra", "local", "feishu-diagnostics.json"),
+  });
+
+  try {
+    store.appendEvent({
+      id: "event-blocked-1",
+      type: "pending_input.blocked_by_approval",
+      chatId: "chat-1",
+      userId: "user-1",
+      sessionId: "session-1",
+      principalId: "principal-1",
+      summary: "approval 仍在阻挡 direct-text takeover",
+      createdAt: "2026-04-02T08:00:01.000Z",
+    });
+
+    const result = await readFeishuDiagnosticsSnapshot({
+      workingDirectory: root,
+      env: {
+        FEISHU_APP_ID: "cli_xxx",
+        FEISHU_APP_SECRET: "secret_xxx",
+      },
+      fetchImpl: async () =>
+        new Response(null, {
+          status: 200,
+        }),
+    });
+
+    assert.equal(result.diagnostics.primaryDiagnosis?.id, "approval_blocking_takeover");
+    assert.equal(result.diagnostics.primaryDiagnosis?.severity, "warning");
+    assert.deepEqual(result.diagnostics.secondaryDiagnoses, []);
+    assert.ok(result.diagnostics.recommendedNextSteps.some((step) => step.includes("/approve <actionId>")));
+    assert.ok(result.diagnostics.recommendedNextSteps.some((step) => step.includes("/deny <actionId>")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readFeishuDiagnosticsSnapshot 会把 pending_input.ambiguous 归类成 pending_input_ambiguous", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-feishu-diagnostics-ambiguous-"));
+  const store = new FeishuDiagnosticsStateStore({
+    filePath: join(root, "infra", "local", "feishu-diagnostics.json"),
+  });
+
+  try {
+    store.appendEvent({
+      id: "event-ambiguous-1",
+      type: "pending_input.ambiguous",
+      chatId: "chat-1",
+      userId: "user-1",
+      sessionId: "session-1",
+      principalId: "principal-1",
+      summary: "存在多条待补充输入",
+      createdAt: "2026-04-02T08:00:01.000Z",
+    });
+
+    const result = await readFeishuDiagnosticsSnapshot({
+      workingDirectory: root,
+      env: {
+        FEISHU_APP_ID: "cli_xxx",
+        FEISHU_APP_SECRET: "secret_xxx",
+      },
+      fetchImpl: async () =>
+        new Response(null, {
+          status: 200,
+        }),
+    });
+
+    assert.equal(result.diagnostics.primaryDiagnosis?.id, "pending_input_ambiguous");
+    assert.equal(result.diagnostics.primaryDiagnosis?.severity, "warning");
+    assert.deepEqual(result.diagnostics.secondaryDiagnoses, []);
+    assert.ok(result.diagnostics.recommendedNextSteps.some((step) => step.includes("/reply <actionId> <内容>")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readFeishuDiagnosticsSnapshot 会把 duplicate/stale ignored 场景归类成 ignored_message_window", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-feishu-diagnostics-ignored-"));
+  const store = new FeishuDiagnosticsStateStore({
+    filePath: join(root, "infra", "local", "feishu-diagnostics.json"),
+  });
+
+  try {
+    store.appendEvent({
+      id: "event-ignored-1",
+      type: "message.duplicate_ignored",
+      chatId: "chat-1",
+      userId: "user-1",
+      sessionId: "session-1",
+      principalId: "principal-1",
+      messageId: "message-1",
+      summary: "重复消息被忽略",
+      createdAt: "2026-04-02T08:00:01.000Z",
+    });
+    store.appendEvent({
+      id: "event-ignored-2",
+      type: "message.stale_ignored",
+      chatId: "chat-1",
+      userId: "user-1",
+      sessionId: "session-1",
+      principalId: "principal-1",
+      messageId: "message-2",
+      summary: "旧消息被忽略",
+      createdAt: "2026-04-02T08:00:02.000Z",
+    });
+
+    const result = await readFeishuDiagnosticsSnapshot({
+      workingDirectory: root,
+      env: {
+        FEISHU_APP_ID: "cli_xxx",
+        FEISHU_APP_SECRET: "secret_xxx",
+      },
+      fetchImpl: async () =>
+        new Response(null, {
+          status: 200,
+        }),
+    });
+
+    assert.equal(result.diagnostics.primaryDiagnosis?.id, "ignored_message_window");
+    assert.equal(result.diagnostics.primaryDiagnosis?.severity, "warning");
+    assert.deepEqual(result.diagnostics.secondaryDiagnoses, []);
+    assert.equal(result.diagnostics.lastIgnoredMessage?.type, "message.stale_ignored");
+    assert.ok(result.diagnostics.recommendedNextSteps.includes("./themis doctor smoke feishu"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readFeishuDiagnosticsSnapshot 在健康场景下返回固定推荐顺序", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-feishu-diagnostics-healthy-"));
+
+  try {
+    const result = await readFeishuDiagnosticsSnapshot({
+      workingDirectory: root,
+      env: {
+        FEISHU_APP_ID: "cli_xxx",
+        FEISHU_APP_SECRET: "secret_xxx",
+      },
+      fetchImpl: async () =>
+        new Response(null, {
+          status: 200,
+        }),
+    });
+
+    assert.equal(result.diagnostics.primaryDiagnosis?.id, "healthy");
+    assert.equal(result.diagnostics.primaryDiagnosis?.severity, "info");
+    assert.deepEqual(result.diagnostics.secondaryDiagnoses, []);
+    assert.deepEqual(result.diagnostics.recommendedNextSteps, [
+      "./themis doctor feishu",
+      "./themis doctor smoke web",
+      "./themis doctor smoke feishu",
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
