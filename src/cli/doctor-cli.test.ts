@@ -80,7 +80,7 @@ function runCliAsync(
       settled = true;
       child.kill("SIGKILL");
       reject(new Error(`CLI 超时：${args.join(" ")}`));
-    }, 15000);
+    }, 30000);
 
     child.stdout?.on("data", (chunk) => {
       stdout += chunk.toString();
