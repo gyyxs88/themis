@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -99,6 +99,131 @@ test("GET /api/diagnostics 会返回结构化 summary", async () => {
     restoreEnv("THEMIS_OPENAI_COMPAT_BASE_URL", previousEnv.baseUrl);
     restoreEnv("THEMIS_OPENAI_COMPAT_API_KEY", previousEnv.apiKey);
     restoreEnv("THEMIS_OPENAI_COMPAT_MODEL", previousEnv.model);
+    await closeServer(listeningServer);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("GET /api/diagnostics 会返回 feishu summary", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-http-diagnostics-feishu-"));
+  const previousEnv = {
+    appId: process.env.FEISHU_APP_ID,
+    appSecret: process.env.FEISHU_APP_SECRET,
+    useEnvProxy: process.env.FEISHU_USE_ENV_PROXY,
+    progressFlushTimeoutMs: process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS,
+  };
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: root,
+    runtimeStore,
+  });
+  const server = createThemisHttpServer({
+    runtime,
+    createMcpInspector: () => ({
+      list: async () => ({
+        servers: [],
+      }),
+      probe: async () => ({
+        servers: [],
+      }),
+      reload: async () => ({
+        servers: [],
+      }),
+    }),
+  });
+  const listeningServer = await listenServer(server);
+  const address = listeningServer.address();
+
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to resolve server address.");
+  }
+
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  try {
+    process.env.FEISHU_APP_ID = "cli_xxx";
+    process.env.FEISHU_APP_SECRET = "secret_xxx";
+    process.env.FEISHU_USE_ENV_PROXY = "true";
+    process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS = "1500";
+    mkdirSync(join(root, "docs", "feishu"), { recursive: true });
+    writeFileSync(join(root, "docs", "feishu", "themis-feishu-real-journey-smoke.md"), "# smoke\n", "utf8");
+    mkdirSync(join(root, "infra", "local"), { recursive: true });
+    writeFileSync(
+      join(root, "infra", "local", "feishu-sessions.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          bindings: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              activeSessionId: "session-1",
+              updatedAt: "2026-04-02T00:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    writeFileSync(
+      join(root, "infra", "local", "feishu-attachment-drafts.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          drafts: [
+            {
+              key: "chat-1::user-1::session-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              parts: [],
+              assets: [],
+              attachments: [],
+              createdAt: "2026-04-02T00:00:00.000Z",
+              updatedAt: "2026-04-02T00:00:00.000Z",
+              expiresAt: "2026-04-02T01:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    const headers = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+    const response = await fetch(`${baseUrl}/api/diagnostics`, {
+      method: "GET",
+      headers,
+    });
+
+    assert.equal(response.status, 200);
+    const payload = await response.json() as {
+      summary?: {
+        feishu?: {
+          env?: {
+            appIdConfigured?: boolean;
+          };
+          state?: {
+            sessionBindingCount?: number;
+          };
+        };
+      };
+    };
+    assert.equal(payload.summary?.feishu?.env?.appIdConfigured, true);
+    assert.equal(payload.summary?.feishu?.state?.sessionBindingCount, 1);
+  } finally {
+    restoreEnv("FEISHU_APP_ID", previousEnv.appId);
+    restoreEnv("FEISHU_APP_SECRET", previousEnv.appSecret);
+    restoreEnv("FEISHU_USE_ENV_PROXY", previousEnv.useEnvProxy);
+    restoreEnv("FEISHU_PROGRESS_FLUSH_TIMEOUT_MS", previousEnv.progressFlushTimeoutMs);
     await closeServer(listeningServer);
     rmSync(root, { recursive: true, force: true });
   }
