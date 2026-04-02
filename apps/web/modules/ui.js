@@ -1365,6 +1365,7 @@ export function createRenderer(app) {
   return {
     renderAll,
     renderComposer,
+    renderConversation,
     renderThreadList,
     renderThreadControlPanel,
     renderWorkspaceTools,

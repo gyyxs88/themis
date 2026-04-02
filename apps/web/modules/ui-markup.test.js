@@ -316,6 +316,167 @@ test("renderComposerActionBarMarkup 在 chat 模式下会渲染中性说明", ()
   assert.ok(!html.includes("退出动作模式"));
 });
 
+test("renderDraftInputAssetsMarkup 会继续渲染草稿附件摘要与 PDF 信息", () => {
+  const html = markup.renderDraftInputAssetsMarkup(
+    [
+      {
+        assetId: "asset-doc-1",
+        kind: "document",
+        name: "report.pdf",
+        mimeType: "application/pdf",
+        localPath: "/workspace/temp/input-assets/report.pdf",
+        ingestionStatus: "ready",
+        textExtraction: {
+          status: "completed",
+          textPreview: "第一页摘要",
+        },
+        metadata: {
+          pageCount: 3,
+        },
+      },
+    ],
+    utils,
+  );
+
+  assert.ok(html.includes("已添加附件"));
+  assert.ok(html.includes("report.pdf"));
+  assert.ok(html.includes("PDF"));
+  assert.ok(html.includes("3 页"));
+  assert.ok(html.includes("第一页摘要"));
+  assert.ok(html.includes("已加工"));
+  assert.ok(html.includes('data-draft-input-asset-remove="0"'));
+});
+
+test("renderTurnMarkup 会为 inputEnvelope.assets 渲染同风格输入附件摘要", () => {
+  const thread = {
+    id: "thread-input-assets",
+    title: "输入资产会话",
+  };
+  const turn = {
+    id: "turn-input-assets",
+    goal: "请总结这些输入",
+    inputText: "",
+    state: "completed",
+    options: {},
+    inputEnvelope: {
+      envelopeId: "env-1",
+      sourceChannel: "web",
+      sourceSessionId: "thread-input-assets",
+      createdAt: "2026-04-02T10:00:00.000Z",
+      parts: [
+        {
+          partId: "part-1",
+          type: "text",
+          role: "user",
+          order: 1,
+          text: "请总结这些输入",
+        },
+        {
+          partId: "part-2",
+          type: "image",
+          role: "user",
+          order: 2,
+          assetId: "asset-image-1",
+        },
+        {
+          partId: "part-3",
+          type: "document",
+          role: "user",
+          order: 3,
+          assetId: "asset-doc-1",
+        },
+      ],
+      assets: [
+        {
+          assetId: "asset-image-1",
+          kind: "image",
+          name: "shot.png",
+          mimeType: "image/png",
+          localPath: "/workspace/temp/input-assets/shot.png",
+          sourceChannel: "web",
+          ingestionStatus: "processing",
+        },
+        {
+          assetId: "asset-doc-1",
+          kind: "document",
+          name: "report.pdf",
+          mimeType: "application/pdf",
+          localPath: "/workspace/temp/input-assets/report.pdf",
+          sourceChannel: "web",
+          ingestionStatus: "ready",
+          textExtraction: {
+            status: "completed",
+            textPreview: "第一页摘要",
+          },
+          metadata: {
+            pageCount: 3,
+          },
+        },
+      ],
+    },
+    assistantMessages: [],
+    steps: [],
+    result: null,
+  };
+  const store = createStoreStub({
+    assistantLabel: "Themis Assistant",
+    latestTurnMessage: "已收到输入",
+  });
+
+  const html = markup.renderTurnMarkup(turn, 1, { thread, store, utils });
+
+  assert.ok(html.includes("本次输入附件"));
+  assert.ok(html.includes("shot.png"));
+  assert.ok(html.includes("report.pdf"));
+  assert.ok(html.includes("图片"));
+  assert.ok(html.includes("PDF"));
+  assert.ok(html.includes("加工中"));
+  assert.ok(html.includes("已加工"));
+  assert.ok(html.includes("3 页"));
+  assert.ok(html.includes("第一页摘要"));
+});
+
+test("renderTurnMarkup 在没有 inputEnvelope.assets 时不渲染无意义附件块", () => {
+  const thread = {
+    id: "thread-no-assets",
+    title: "无附件会话",
+  };
+  const turn = {
+    id: "turn-no-assets",
+    goal: "纯文本输入",
+    inputText: "",
+    state: "completed",
+    options: {},
+    inputEnvelope: {
+      envelopeId: "env-text-only",
+      sourceChannel: "web",
+      createdAt: "2026-04-02T10:00:00.000Z",
+      parts: [
+        {
+          partId: "part-1",
+          type: "text",
+          role: "user",
+          order: 1,
+          text: "纯文本输入",
+        },
+      ],
+      assets: [],
+    },
+    assistantMessages: [],
+    steps: [],
+    result: null,
+  };
+  const store = createStoreStub({
+    assistantLabel: "Themis Assistant",
+    latestTurnMessage: "已收到纯文本",
+  });
+
+  const html = markup.renderTurnMarkup(turn, 1, { thread, store, utils });
+
+  assert.ok(!html.includes("本次输入附件"));
+  assert.ok(!html.includes("composer-input-assets-shell"));
+});
+
 test("renderThreadControlDetailsMarkup 会渲染 conversationId、serverThreadId 和来源", () => {
   assert.equal(typeof markup.renderThreadControlDetailsMarkup, "function");
 

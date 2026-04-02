@@ -128,31 +128,20 @@ export function renderComposerActionBarMarkup(actionBarState, utils) {
 }
 
 export function renderDraftInputAssetsMarkup(draftInputAssets, utils) {
-  const assets = Array.isArray(draftInputAssets) ? draftInputAssets : [];
-
-  if (!assets.length) {
-    return "";
-  }
-
-  return `
-    <div class="composer-input-assets-shell">
-      <p class="composer-input-assets-label">已添加附件</p>
-      <ul class="composer-input-assets-list">
-        ${assets.map((asset, index) => `
-          <li class="composer-input-assets-item">
-            <span class="composer-input-assets-name">${utils.escapeHtml(asset.name ?? asset.localPath ?? `asset-${index + 1}`)}</span>
-            <button
-              type="button"
-              class="toolbar-button composer-input-assets-remove"
-              data-draft-input-asset-remove="${index}"
-            >
-              移除
-            </button>
-          </li>
-        `).join("")}
-      </ul>
-    </div>
-  `;
+  return renderInputAssetsSummaryMarkup(draftInputAssets, utils, {
+    label: "已添加附件",
+    renderTrailingAction(asset, index) {
+      return `
+        <button
+          type="button"
+          class="toolbar-button composer-input-assets-remove"
+          data-draft-input-asset-remove="${index}"
+        >
+          移除
+        </button>
+      `;
+    },
+  });
 }
 
 export function renderTurnMarkup(turn, index, { thread = null, store, utils }) {
@@ -171,6 +160,10 @@ export function renderTurnMarkup(turn, index, { thread = null, store, utils }) {
   const assistantSummaryMarkup = !turn.result && !assistantMessages.length
     ? `<div class="assistant-summary">${utils.escapeHtml(store.latestTurnMessage(turn))}</div>`
     : "";
+  const inputAssetsMarkup = renderInputAssetsSummaryMarkup(turn?.inputEnvelope?.assets, utils, {
+    label: "本次输入附件",
+    shellClassName: "turn-input-assets-shell",
+  });
 
   return `
     <section class="message-row user-row" aria-label="用户请求">
@@ -180,6 +173,7 @@ export function renderTurnMarkup(turn, index, { thread = null, store, utils }) {
         </div>
         <p class="bubble-body">${utils.escapeHtml(turn.goal)}</p>
         ${turn.inputText ? `<div class="context-snippet">${utils.escapeHtml(turn.inputText)}</div>` : ""}
+        ${inputAssetsMarkup}
       </article>
     </section>
 
@@ -205,6 +199,116 @@ export function renderTurnMarkup(turn, index, { thread = null, store, utils }) {
       </article>
     </section>
   `;
+}
+
+function renderInputAssetsSummaryMarkup(assets, utils, options = {}) {
+  const normalizedAssets = Array.isArray(assets) ? assets.filter((asset) => asset && typeof asset === "object") : [];
+
+  if (!normalizedAssets.length) {
+    return "";
+  }
+
+  const label = typeof options.label === "string" && options.label ? options.label : "附件摘要";
+  const shellClassName = typeof options.shellClassName === "string" && options.shellClassName
+    ? ` ${options.shellClassName}`
+    : "";
+  const renderTrailingAction = typeof options.renderTrailingAction === "function"
+    ? options.renderTrailingAction
+    : null;
+
+  return `
+    <div class="composer-input-assets-shell${utils.escapeHtml(shellClassName)}">
+      <p class="composer-input-assets-label">${utils.escapeHtml(label)}</p>
+      <ul class="composer-input-assets-list">
+        ${normalizedAssets.map((asset, index) => renderInputAssetSummaryItem(asset, index, utils, renderTrailingAction)).join("")}
+      </ul>
+    </div>
+  `;
+}
+
+function renderInputAssetSummaryItem(asset, index, utils, renderTrailingAction) {
+  const name = asset.name ?? asset.localPath ?? asset.assetId ?? `asset-${index + 1}`;
+  const preview = typeof asset.textExtraction?.textPreview === "string" ? asset.textExtraction.textPreview.trim() : "";
+  const tags = buildInputAssetTags(asset);
+  const trailingActionMarkup = renderTrailingAction ? renderTrailingAction(asset, index) : "";
+
+  return `
+    <li class="composer-input-assets-item">
+      <div class="composer-input-assets-summary">
+        <span class="composer-input-assets-name">${utils.escapeHtml(name)}</span>
+        ${tags.length
+          ? `<div class="composer-input-assets-meta">${tags.map((tag) => renderInputAssetTag(tag, utils)).join("")}</div>`
+          : ""}
+        ${preview ? `<p class="composer-input-assets-preview">${utils.escapeHtml(preview)}</p>` : ""}
+      </div>
+      ${trailingActionMarkup}
+    </li>
+  `;
+}
+
+function buildInputAssetTags(asset) {
+  const tags = [];
+  const typeLabel = resolveInputAssetTypeLabel(asset);
+  const statusLabel = resolveInputAssetStatus(asset);
+
+  if (typeLabel) {
+    tags.push({ tone: "idle", text: typeLabel });
+  }
+
+  if (Number.isFinite(asset?.metadata?.pageCount) && Number(asset.metadata.pageCount) > 0) {
+    tags.push({ tone: "idle", text: `${Number(asset.metadata.pageCount)} 页` });
+  }
+
+  if (statusLabel) {
+    tags.push(statusLabel);
+  }
+
+  return tags;
+}
+
+function renderInputAssetTag(tag, utils) {
+  return `<span class="badge ${utils.escapeHtml(tag.tone)}">${utils.escapeHtml(tag.text)}</span>`;
+}
+
+function resolveInputAssetTypeLabel(asset) {
+  if (asset?.kind === "image") {
+    return "图片";
+  }
+
+  if (asset?.mimeType === "application/pdf") {
+    return "PDF";
+  }
+
+  if (asset?.kind === "document") {
+    return "文档";
+  }
+
+  return "";
+}
+
+function resolveInputAssetStatus(asset) {
+  if (asset?.ingestionStatus === "ready") {
+    return {
+      tone: "success",
+      text: "已加工",
+    };
+  }
+
+  if (asset?.ingestionStatus === "processing") {
+    return {
+      tone: "busy",
+      text: "加工中",
+    };
+  }
+
+  if (asset?.ingestionStatus === "failed") {
+    return {
+      tone: "error",
+      text: "加工失败",
+    };
+  }
+
+  return null;
 }
 
 function normalizeComposerActionBarState(actionBarState) {
