@@ -623,16 +623,47 @@ function printFeishuDiagnosticsSummary(summary: FeishuDiagnosticsSummary): void 
   console.log(`attachmentDraftCount：${summary.state.attachmentDraftCount}`);
   console.log(`smokeDoc：${summary.docs.smokeDocExists ? "yes" : "no"}`);
   console.log(`diagnosticsStore：${summary.diagnostics.store.status}`);
-  console.log("当前会话快照");
 
   const currentConversation = summary.diagnostics.currentConversation;
+  console.log("当前会话摘要");
   console.log(`sessionId：${currentConversation?.activeSessionId ?? "<none>"}`);
   console.log(`principalId：${currentConversation?.principalId ?? "<none>"}`);
   console.log(`threadId：${currentConversation?.threadId ?? "<none>"}`);
   console.log(`threadStatus：${currentConversation?.threadStatus ?? "<none>"}`);
+  console.log(`pendingActionCount：${currentConversation?.pendingActionCount ?? 0}`);
+
+  console.log("最近窗口统计");
+  console.log(`recentWindow.duplicateIgnoredCount：${summary.diagnostics.recentWindowStats.duplicateIgnoredCount}`);
+  console.log(`recentWindow.staleIgnoredCount：${summary.diagnostics.recentWindowStats.staleIgnoredCount}`);
+  console.log(`recentWindow.replySubmittedCount：${summary.diagnostics.recentWindowStats.replySubmittedCount}`);
+  console.log(`recentWindow.takeoverSubmittedCount：${summary.diagnostics.recentWindowStats.takeoverSubmittedCount}`);
+
+  console.log("最近一次 action 尝试");
+  if (summary.diagnostics.lastActionAttempt) {
+    console.log(`lastActionAttempt.type：${summary.diagnostics.lastActionAttempt.type}`);
+    console.log(`lastActionAttempt.requestId：${summary.diagnostics.lastActionAttempt.requestId ?? "<none>"}`);
+    console.log(`lastActionAttempt.actionId：${summary.diagnostics.lastActionAttempt.actionId ?? "<none>"}`);
+    console.log(`lastActionAttempt.sessionId：${summary.diagnostics.lastActionAttempt.sessionId ?? "<none>"}`);
+    console.log(`lastActionAttempt.principalId：${summary.diagnostics.lastActionAttempt.principalId ?? "<none>"}`);
+    console.log(`lastActionAttempt.createdAt：${summary.diagnostics.lastActionAttempt.createdAt}`);
+    console.log(`lastActionAttempt.summary：${summary.diagnostics.lastActionAttempt.summary}`);
+  } else {
+    console.log("- <none>");
+  }
+
+  console.log("最近一次被忽略消息");
+  if (summary.diagnostics.lastIgnoredMessage) {
+    console.log(`lastIgnoredMessage.type：${summary.diagnostics.lastIgnoredMessage.type}`);
+    console.log(`lastIgnoredMessage.messageId：${summary.diagnostics.lastIgnoredMessage.messageId ?? "<none>"}`);
+    console.log(`lastIgnoredMessage.createdAt：${summary.diagnostics.lastIgnoredMessage.createdAt}`);
+    console.log(`lastIgnoredMessage.summary：${summary.diagnostics.lastIgnoredMessage.summary}`);
+  } else {
+    console.log("- <none>");
+  }
+
+  console.log("当前会话快照");
   console.log(`lastMessageId：${currentConversation?.lastMessageId ?? "<none>"}`);
   console.log(`lastEventType：${currentConversation?.lastEventType ?? "<none>"}`);
-  console.log(`pendingActionCount：${currentConversation?.pendingActionCount ?? 0}`);
 
   for (const action of currentConversation?.pendingActions ?? []) {
     console.log(
@@ -641,7 +672,6 @@ function printFeishuDiagnosticsSummary(summary: FeishuDiagnosticsSummary): void 
   }
 
   console.log("最近 5 条事件轨迹");
-
   if (summary.diagnostics.recentEvents.length === 0) {
     console.log("- <none>");
     return;

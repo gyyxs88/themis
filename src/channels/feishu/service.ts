@@ -44,6 +44,7 @@ import {
 } from "./attachment-draft-store.js";
 import {
   FeishuDiagnosticsStateStore,
+  type FeishuDiagnosticsEventDetailValue,
   type FeishuDiagnosticsPendingAction,
 } from "./diagnostics-state-store.js";
 import { renderFeishuAssistantMessage, type FeishuRenderedMessageDraft } from "./message-renderer.js";
@@ -274,7 +275,11 @@ export class FeishuChannelService {
       this.recordFeishuDiagnosticsEvent({
         type: "message.duplicate_ignored",
         context,
+        lastMessageId: context.messageId,
         summary: "重复消息已忽略。",
+        details: {
+          dedupeWindowMs: FEISHU_MESSAGE_DEDUPE_TTL_MS,
+        },
       });
       this.logger.info(`[themis/feishu] 忽略重复消息：message=${context.messageId}`);
       return;
@@ -286,7 +291,12 @@ export class FeishuChannelService {
       this.recordFeishuDiagnosticsEvent({
         type: "message.stale_ignored",
         context,
+        lastMessageId: context.messageId,
         summary: "乱序旧消息已忽略。",
+        details: {
+          messageCreateTimeMs: staleInfo.messageCreateTimeMs,
+          latestCreateTimeMs: staleInfo.latestCreateTimeMs,
+        },
       });
       this.logger.info(
         `[themis/feishu] 忽略乱序旧消息：message=${context.messageId} createTime=${staleInfo.messageCreateTimeMs} latestCreateTime=${staleInfo.latestCreateTimeMs}`,
@@ -1997,6 +2007,9 @@ export class FeishuChannelService {
       sessionId: resolvedSessionId,
       summary: `已切换到会话：${resolvedSessionId}`,
       lastMessageId: context.messageId,
+      details: {
+        switchedSessionId: resolvedSessionId,
+      },
     });
     await this.safeSendText(context.chatId, `已切换到会话：${resolvedSessionId}`);
     await this.sendCurrentSession(context.chatId, context);
@@ -2011,6 +2024,7 @@ export class FeishuChannelService {
     requestId?: string | null;
     summary: string;
     lastMessageId?: string | null;
+    details?: Record<string, FeishuDiagnosticsEventDetailValue>;
   }): void {
     const now = new Date().toISOString();
     const chatId = input.context.chatId;
@@ -2018,8 +2032,8 @@ export class FeishuChannelService {
     const sessionId = input.sessionId ?? this.sessionStore.getActiveSessionId(toConversationKey(input.context)) ?? null;
     const principalId = input.principalId ?? this.ensurePrincipalIdentity(input.context).principalId;
 
-    try {
-      if (sessionId) {
+    if (sessionId) {
+      try {
         this.diagnosticsStateStore.upsertConversation({
           key: `${chatId}::${userId}`,
           chatId,
@@ -2036,8 +2050,12 @@ export class FeishuChannelService {
             principalId,
           }),
         });
+      } catch (error) {
+        this.logger.warn(`[themis/feishu] 写入飞书诊断会话状态失败：${toErrorMessage(error)}`);
       }
+    }
 
+    try {
       this.diagnosticsStateStore.appendEvent({
         id: createId("feishu-diagnostics-event"),
         type: input.type,
@@ -2050,9 +2068,10 @@ export class FeishuChannelService {
         ...(input.requestId ? { requestId: input.requestId } : {}),
         summary: input.summary,
         createdAt: now,
+        ...(input.details ? { details: input.details } : {}),
       });
     } catch (error) {
-      this.logger.warn(`[themis/feishu] 写入飞书诊断状态失败：${toErrorMessage(error)}`);
+      this.logger.warn(`[themis/feishu] 写入飞书诊断事件失败：${toErrorMessage(error)}`);
     }
   }
 
@@ -2601,6 +2620,11 @@ export class FeishuChannelService {
         actionId: action.actionId,
         requestId: action.requestId,
         summary: `审批提交失败：${actionId} 已失效。`,
+        lastMessageId: context.messageId,
+        details: {
+          matchedPendingActionCount: 1,
+          ...(action.scope?.sessionId ? { sourceSessionId: action.scope.sessionId } : {}),
+        },
       });
       await this.safeSendText(context.chatId, `提交审批失败：${actionId} 已失效。`);
       return;
@@ -2614,32 +2638,94 @@ export class FeishuChannelService {
       actionId: action.actionId,
       requestId: action.requestId,
       summary: decision === "approve" ? "审批已通过提交。" : "审批已拒绝提交。",
+      lastMessageId: context.messageId,
+      details: {
+        matchedPendingActionCount: 1,
+        ...(action.scope?.sessionId ? { sourceSessionId: action.scope.sessionId } : {}),
+      },
     });
     const message = decision === "approve" ? "已提交审批。" : "已提交拒绝。";
     await this.safeSendText(context.chatId, message);
   }
 
   private async replyActivePendingInput(context: FeishuIncomingContext): Promise<boolean> {
-    const actionScope = this.resolvePendingActionScope(context);
-
-    if (!actionScope) {
-      return false;
-    }
+    const sessionId = this.sessionStore.ensureActiveSessionId(toConversationKey(context));
+    const principal = this.ensurePrincipalIdentity(context);
+    const actionScope = {
+      sessionId,
+      principalId: principal.principalId,
+    };
 
     const scopedActions = this.actionBridge.list(actionScope);
     const approvals = scopedActions.filter((action) => action.actionType === "approval");
+    const inputActions = scopedActions.filter((action) => action.actionType === "user-input");
 
-    if (approvals.length > 0) {
+    if (approvals.length > 0 && inputActions.length > 0) {
+      this.recordFeishuDiagnosticsEvent({
+        type: "pending_input.blocked_by_approval",
+        context,
+        sessionId,
+        principalId: principal.principalId,
+        lastMessageId: context.messageId,
+        summary: "当前会话存在审批待处理，普通文本不会自动接管。",
+        details: {
+          blockingReason: "approval_pending",
+          approvalPendingActionCount: approvals.length,
+          matchedPendingActionCount: inputActions.length,
+        },
+      });
       return false;
     }
 
-    const inputActions = scopedActions.filter((action) => action.actionType === "user-input");
+    if (approvals.length > 0) {
+      if (inputActions.length === 0) {
+        this.recordFeishuDiagnosticsEvent({
+          type: "pending_input.not_found",
+          context,
+          sessionId,
+          principalId: principal.principalId,
+          lastMessageId: context.messageId,
+          summary: "当前会话没有可接管的等待输入。",
+          details: {
+            blockingReason: "approval_pending_without_takeover",
+            approvalPendingActionCount: approvals.length,
+            matchedPendingActionCount: 0,
+          },
+        });
+      }
+      return false;
+    }
 
     if (inputActions.length === 0) {
+      this.recordFeishuDiagnosticsEvent({
+        type: "pending_input.not_found",
+        context,
+        sessionId,
+        principalId: principal.principalId,
+        lastMessageId: context.messageId,
+        summary: "当前会话没有可接管的等待输入。",
+        details: {
+          blockingReason: "no_pending_input",
+          approvalPendingActionCount: 0,
+          matchedPendingActionCount: 0,
+        },
+      });
       return false;
     }
 
     if (inputActions.length > 1) {
+      this.recordFeishuDiagnosticsEvent({
+        type: "pending_input.ambiguous",
+        context,
+        sessionId,
+        lastMessageId: context.messageId,
+        principalId: principal.principalId,
+        summary: "当前会话存在多条可接管的等待输入。",
+        details: {
+          blockingReason: "multiple_user_input_pending",
+          matchedPendingActionCount: inputActions.length,
+        },
+      });
       await this.safeSendText(
         context.chatId,
         "当前会话存在多条待补充输入，请使用 /reply <actionId> <内容> 指定要回复的 action。",
@@ -2653,7 +2739,7 @@ export class FeishuChannelService {
       return false;
     }
 
-    return await this.submitPendingUserInput(inputAction, context.text, context);
+    return await this.submitPendingUserInput(inputAction, context.text, context, "takeover.submitted", 1);
   }
 
   private async submitPendingUserInput(
@@ -2661,6 +2747,7 @@ export class FeishuChannelService {
     rawInputText: string,
     context: FeishuIncomingContext,
     eventType: "reply.submitted" | "takeover.submitted" = "takeover.submitted",
+    matchedPendingActionCount = 1,
   ): Promise<boolean> {
     const inputText = normalizeText(rawInputText);
 
@@ -2684,6 +2771,11 @@ export class FeishuChannelService {
         summary: eventType === "takeover.submitted"
           ? `普通文本补充输入失败：${action.actionId} 已失效。`
           : `命令式回复失败：${action.actionId} 已失效。`,
+        lastMessageId: context.messageId,
+        details: {
+          matchedPendingActionCount,
+          ...(action.scope?.sessionId ? { sourceSessionId: action.scope.sessionId } : {}),
+        },
       });
       await this.safeSendText(context.chatId, `提交补充输入失败：${action.actionId} 已失效。`);
       return true;
@@ -2699,6 +2791,11 @@ export class FeishuChannelService {
       summary: eventType === "takeover.submitted"
         ? "普通文本已提交补充输入。"
         : "命令式 reply 已提交补充输入。",
+      lastMessageId: context.messageId,
+      details: {
+        matchedPendingActionCount,
+        ...(action.scope?.sessionId ? { sourceSessionId: action.scope.sessionId } : {}),
+      },
     });
     await this.safeSendText(context.chatId, "已提交补充输入。");
     return true;

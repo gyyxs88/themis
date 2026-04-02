@@ -4,6 +4,7 @@ import {
   FeishuDiagnosticsStateStore,
   type FeishuDiagnosticsConversation,
   type FeishuDiagnosticsEvent,
+  type FeishuDiagnosticsEventDetailValue,
   type FeishuDiagnosticsStateSnapshot,
 } from "../channels/feishu/diagnostics-state-store.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
@@ -15,6 +16,33 @@ export interface FeishuDiagnosticFileStatus {
 
 export interface FeishuDiagnosticStoreStatus extends FeishuDiagnosticFileStatus {
   count: number;
+}
+
+export interface FeishuDiagnosticsRecentWindowStats {
+  duplicateIgnoredCount: number;
+  staleIgnoredCount: number;
+  replySubmittedCount: number;
+  takeoverSubmittedCount: number;
+  approvalSubmittedCount: number;
+  pendingInputNotFoundCount: number;
+  pendingInputAmbiguousCount: number;
+}
+
+export interface FeishuDiagnosticsLastActionAttemptSummary {
+  type: string;
+  actionId: string | null;
+  requestId: string | null;
+  sessionId: string | null;
+  principalId: string | null;
+  createdAt: string;
+  summary: string;
+}
+
+export interface FeishuDiagnosticsLastIgnoredMessageSummary {
+  type: string;
+  messageId: string | null;
+  createdAt: string;
+  summary: string;
 }
 
 export interface FeishuDiagnosticsSummary {
@@ -38,6 +66,9 @@ export interface FeishuDiagnosticsSummary {
     store: FeishuDiagnosticFileStatus;
     currentConversation: FeishuDiagnosticsConversationSummary | null;
     recentEvents: FeishuDiagnosticsEventSummary[];
+    recentWindowStats: FeishuDiagnosticsRecentWindowStats;
+    lastActionAttempt: FeishuDiagnosticsLastActionAttemptSummary | null;
+    lastIgnoredMessage: FeishuDiagnosticsLastIgnoredMessageSummary | null;
   };
   docs: {
     smokeDocExists: boolean;
@@ -81,6 +112,7 @@ export interface FeishuDiagnosticsEventSummary {
   requestId: string | null;
   summary: string;
   createdAt: string;
+  details?: Record<string, FeishuDiagnosticsEventDetailValue>;
 }
 
 export interface ReadFeishuDiagnosticsOptions {
@@ -121,6 +153,7 @@ export async function readFeishuDiagnosticsSnapshot(
     readFeishuFileStatus(sessionStorePath, FEISHU_SESSION_STORE_PATH, "bindings"),
     readFeishuFileStatus(attachmentDraftStorePath, FEISHU_ATTACHMENT_DRAFT_STORE_PATH, "drafts"),
   ]);
+  const diagnosticsWindow = summarizeDiagnosticsWindow(diagnosticsSnapshot.recentEvents);
 
   return {
     env: {
@@ -146,6 +179,9 @@ export async function readFeishuDiagnosticsSnapshot(
         runtimeStore,
       ),
       recentEvents: diagnosticsSnapshot.recentEvents.slice(-5).map(cloneEventSummary),
+      recentWindowStats: diagnosticsWindow.recentWindowStats,
+      lastActionAttempt: diagnosticsWindow.lastActionAttempt,
+      lastIgnoredMessage: diagnosticsWindow.lastIgnoredMessage,
     },
     docs: {
       smokeDocExists: existsSync(join(workingDirectory, FEISHU_SMOKE_DOC_PATH)),
@@ -374,7 +410,106 @@ function cloneEventSummary(event: FeishuDiagnosticsEvent): FeishuDiagnosticsEven
     requestId: event.requestId ?? null,
     summary: event.summary,
     createdAt: event.createdAt,
+    ...(event.details ? { details: cloneEventDetails(event.details) } : {}),
   };
+}
+
+function summarizeDiagnosticsWindow(events: FeishuDiagnosticsEvent[]): {
+  recentWindowStats: FeishuDiagnosticsRecentWindowStats;
+  lastActionAttempt: FeishuDiagnosticsLastActionAttemptSummary | null;
+  lastIgnoredMessage: FeishuDiagnosticsLastIgnoredMessageSummary | null;
+} {
+  const recentWindowStats: FeishuDiagnosticsRecentWindowStats = {
+    duplicateIgnoredCount: 0,
+    staleIgnoredCount: 0,
+    replySubmittedCount: 0,
+    takeoverSubmittedCount: 0,
+    approvalSubmittedCount: 0,
+    pendingInputNotFoundCount: 0,
+    pendingInputAmbiguousCount: 0,
+  };
+
+  let lastActionAttempt: FeishuDiagnosticsLastActionAttemptSummary | null = null;
+  let lastIgnoredMessage: FeishuDiagnosticsLastIgnoredMessageSummary | null = null;
+
+  for (const event of events) {
+    switch (event.type) {
+      case "message.duplicate_ignored":
+        recentWindowStats.duplicateIgnoredCount += 1;
+        lastIgnoredMessage = summarizeIgnoredMessage(event);
+        break;
+      case "message.stale_ignored":
+        recentWindowStats.staleIgnoredCount += 1;
+        lastIgnoredMessage = summarizeIgnoredMessage(event);
+        break;
+      case "reply.submit_failed":
+        lastActionAttempt = summarizeActionAttempt(event);
+        break;
+      case "reply.submitted":
+        recentWindowStats.replySubmittedCount += 1;
+        lastActionAttempt = summarizeActionAttempt(event);
+        break;
+      case "takeover.submit_failed":
+        lastActionAttempt = summarizeActionAttempt(event);
+        break;
+      case "takeover.submitted":
+        recentWindowStats.takeoverSubmittedCount += 1;
+        lastActionAttempt = summarizeActionAttempt(event);
+        break;
+      case "approval.submit_failed":
+        lastActionAttempt = summarizeActionAttempt(event);
+        break;
+      case "approval.submitted":
+        recentWindowStats.approvalSubmittedCount += 1;
+        lastActionAttempt = summarizeActionAttempt(event);
+        break;
+      case "pending_input.not_found":
+        recentWindowStats.pendingInputNotFoundCount += 1;
+        break;
+      case "pending_input.ambiguous":
+        recentWindowStats.pendingInputAmbiguousCount += 1;
+        break;
+      default:
+        break;
+    }
+  }
+
+  return {
+    recentWindowStats,
+    lastActionAttempt,
+    lastIgnoredMessage,
+  };
+}
+
+function summarizeActionAttempt(
+  event: FeishuDiagnosticsEvent,
+): FeishuDiagnosticsLastActionAttemptSummary {
+  return {
+    type: event.type,
+    actionId: event.actionId ?? null,
+    requestId: event.requestId ?? null,
+    sessionId: event.sessionId ?? null,
+    principalId: event.principalId ?? null,
+    createdAt: event.createdAt,
+    summary: event.summary,
+  };
+}
+
+function summarizeIgnoredMessage(
+  event: FeishuDiagnosticsEvent,
+): FeishuDiagnosticsLastIgnoredMessageSummary {
+  return {
+    type: event.type,
+    messageId: event.messageId ?? null,
+    createdAt: event.createdAt,
+    summary: event.summary,
+  };
+}
+
+function cloneEventDetails(
+  details: Record<string, FeishuDiagnosticsEventDetailValue>,
+): Record<string, FeishuDiagnosticsEventDetailValue> {
+  return { ...details };
 }
 
 async function readFeishuFileStatus(

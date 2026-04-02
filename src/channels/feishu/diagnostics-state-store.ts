@@ -11,6 +11,8 @@ export interface FeishuDiagnosticsPendingAction {
   principalId: string;
 }
 
+export type FeishuDiagnosticsEventDetailValue = string | number | boolean | null;
+
 export interface FeishuDiagnosticsConversation {
   key: string;
   chatId: string;
@@ -35,6 +37,7 @@ export interface FeishuDiagnosticsEvent {
   requestId?: string;
   summary: string;
   createdAt: string;
+  details?: Record<string, FeishuDiagnosticsEventDetailValue>;
 }
 
 export interface FeishuDiagnosticsStateSnapshot {
@@ -255,6 +258,7 @@ function normalizeEvent(value: FeishuDiagnosticsEvent): FeishuDiagnosticsEvent {
   const requestId = normalizeOptionalText(value.requestId);
   const summary = normalizeRequiredText(value.summary);
   const createdAt = normalizeRequiredText(value.createdAt);
+  const details = normalizeEventDetails(value.details);
 
   if (!id || !type || !chatId || !userId || !summary || !createdAt) {
     throw new Error("Feishu 诊断事件缺少必要字段。");
@@ -272,6 +276,7 @@ function normalizeEvent(value: FeishuDiagnosticsEvent): FeishuDiagnosticsEvent {
     ...(requestId ? { requestId } : {}),
     summary,
     createdAt,
+    ...(details ? { details } : {}),
   };
 }
 
@@ -302,7 +307,39 @@ function cloneEvent(event: FeishuDiagnosticsEvent): FeishuDiagnosticsEvent {
     ...(event.requestId ? { requestId: event.requestId } : {}),
     summary: event.summary,
     createdAt: event.createdAt,
+    ...(event.details ? { details: cloneEventDetails(event.details) } : {}),
   };
+}
+
+function normalizeEventDetails(
+  value: FeishuDiagnosticsEvent["details"],
+): Record<string, FeishuDiagnosticsEventDetailValue> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const entries = Object.entries(value).filter(([, detailValue]) => isFeishuDiagnosticsEventDetailValue(detailValue));
+
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  return Object.fromEntries(entries);
+}
+
+function cloneEventDetails(
+  value: Record<string, FeishuDiagnosticsEventDetailValue>,
+): Record<string, FeishuDiagnosticsEventDetailValue> {
+  return { ...value };
+}
+
+function isFeishuDiagnosticsEventDetailValue(value: unknown): value is FeishuDiagnosticsEventDetailValue {
+  return (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    value === null
+  );
 }
 
 function normalizeRequiredText(value: unknown): string | null {
