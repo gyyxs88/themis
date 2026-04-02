@@ -197,6 +197,8 @@ function normalizeConversation(value: FeishuDiagnosticsConversation): FeishuDiag
   const userId = normalizeRequiredText(value.userId);
   const principalId = normalizeRequiredText(value.principalId);
   const activeSessionId = normalizeRequiredText(value.activeSessionId);
+  const lastMessageId = normalizeOptionalText(value.lastMessageId);
+  const lastEventType = normalizeOptionalText(value.lastEventType);
   const updatedAt = normalizeRequiredText(value.updatedAt);
   const pendingActions = Array.isArray(value.pendingActions) ? value.pendingActions.map(normalizePendingAction) : [];
 
@@ -210,8 +212,8 @@ function normalizeConversation(value: FeishuDiagnosticsConversation): FeishuDiag
     userId,
     principalId,
     activeSessionId,
-    lastMessageId: normalizeOptionalText(value.lastMessageId) ?? undefined,
-    lastEventType: normalizeOptionalText(value.lastEventType) ?? undefined,
+    ...(lastMessageId ? { lastMessageId } : {}),
+    ...(lastEventType ? { lastEventType } : {}),
     updatedAt,
     pendingActions,
   };
@@ -246,6 +248,11 @@ function normalizeEvent(value: FeishuDiagnosticsEvent): FeishuDiagnosticsEvent {
   const type = normalizeRequiredText(value.type);
   const chatId = normalizeRequiredText(value.chatId);
   const userId = normalizeRequiredText(value.userId);
+  const sessionId = normalizeOptionalText(value.sessionId);
+  const principalId = normalizeOptionalText(value.principalId);
+  const messageId = normalizeOptionalText(value.messageId);
+  const actionId = normalizeOptionalText(value.actionId);
+  const requestId = normalizeOptionalText(value.requestId);
   const summary = normalizeRequiredText(value.summary);
   const createdAt = normalizeRequiredText(value.createdAt);
 
@@ -258,11 +265,11 @@ function normalizeEvent(value: FeishuDiagnosticsEvent): FeishuDiagnosticsEvent {
     type,
     chatId,
     userId,
-    sessionId: normalizeOptionalText(value.sessionId) ?? undefined,
-    principalId: normalizeOptionalText(value.principalId) ?? undefined,
-    messageId: normalizeOptionalText(value.messageId) ?? undefined,
-    actionId: normalizeOptionalText(value.actionId) ?? undefined,
-    requestId: normalizeOptionalText(value.requestId) ?? undefined,
+    ...(sessionId ? { sessionId } : {}),
+    ...(principalId ? { principalId } : {}),
+    ...(messageId ? { messageId } : {}),
+    ...(actionId ? { actionId } : {}),
+    ...(requestId ? { requestId } : {}),
     summary,
     createdAt,
   };
@@ -275,8 +282,8 @@ function cloneConversation(conversation: FeishuDiagnosticsConversation): FeishuD
     userId: conversation.userId,
     principalId: conversation.principalId,
     activeSessionId: conversation.activeSessionId,
-    lastMessageId: conversation.lastMessageId,
-    lastEventType: conversation.lastEventType,
+    ...(conversation.lastMessageId ? { lastMessageId: conversation.lastMessageId } : {}),
+    ...(conversation.lastEventType ? { lastEventType: conversation.lastEventType } : {}),
     updatedAt: conversation.updatedAt,
     pendingActions: conversation.pendingActions.map((item) => ({ ...item })),
   };
@@ -288,11 +295,11 @@ function cloneEvent(event: FeishuDiagnosticsEvent): FeishuDiagnosticsEvent {
     type: event.type,
     chatId: event.chatId,
     userId: event.userId,
-    sessionId: event.sessionId,
-    principalId: event.principalId,
-    messageId: event.messageId,
-    actionId: event.actionId,
-    requestId: event.requestId,
+    ...(event.sessionId ? { sessionId: event.sessionId } : {}),
+    ...(event.principalId ? { principalId: event.principalId } : {}),
+    ...(event.messageId ? { messageId: event.messageId } : {}),
+    ...(event.actionId ? { actionId: event.actionId } : {}),
+    ...(event.requestId ? { requestId: event.requestId } : {}),
     summary: event.summary,
     createdAt: event.createdAt,
   };
