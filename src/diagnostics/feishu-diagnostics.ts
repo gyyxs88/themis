@@ -4,6 +4,7 @@ import {
   FeishuDiagnosticsStateStore,
   type FeishuDiagnosticsConversation,
   type FeishuDiagnosticsEvent,
+  type FeishuDiagnosticsEventDetailValue,
   type FeishuDiagnosticsStateSnapshot,
 } from "../channels/feishu/diagnostics-state-store.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
@@ -111,6 +112,7 @@ export interface FeishuDiagnosticsEventSummary {
   requestId: string | null;
   summary: string;
   createdAt: string;
+  details?: Record<string, FeishuDiagnosticsEventDetailValue>;
 }
 
 export interface ReadFeishuDiagnosticsOptions {
@@ -408,6 +410,7 @@ function cloneEventSummary(event: FeishuDiagnosticsEvent): FeishuDiagnosticsEven
     requestId: event.requestId ?? null,
     summary: event.summary,
     createdAt: event.createdAt,
+    ...(event.details ? { details: cloneEventDetails(event.details) } : {}),
   };
 }
 
@@ -492,6 +495,12 @@ function summarizeIgnoredMessage(
     createdAt: event.createdAt,
     summary: event.summary,
   };
+}
+
+function cloneEventDetails(
+  details: Record<string, FeishuDiagnosticsEventDetailValue>,
+): Record<string, FeishuDiagnosticsEventDetailValue> {
+  return { ...details };
 }
 
 async function readFeishuFileStatus(

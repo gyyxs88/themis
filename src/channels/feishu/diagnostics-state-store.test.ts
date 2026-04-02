@@ -197,6 +197,58 @@ test("FeishuDiagnosticsStateStore 会保留事件 details 并读回快照", () =
   }
 });
 
+test("FeishuDiagnosticsStateStore 可以读取不含 details 的旧版 diagnostics JSON", () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-feishu-diagnostics-legacy-"));
+  const filePath = join(root, "infra/local/feishu-diagnostics.json");
+
+  try {
+    mkdirSync(join(root, "infra", "local"), { recursive: true });
+    writeFileSync(
+      filePath,
+      JSON.stringify(
+        {
+          version: 1,
+          conversations: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              principalId: "principal-1",
+              activeSessionId: "session-1",
+              updatedAt: "2026-04-01T08:00:00.000Z",
+              pendingActions: [],
+            },
+          ],
+          recentEvents: [
+            {
+              id: "event-1",
+              type: "message.stale_ignored",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              messageId: "message-1",
+              summary: "旧消息被忽略",
+              createdAt: "2026-04-01T08:00:01.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const snapshot = new FeishuDiagnosticsStateStore({ filePath }).readSnapshot();
+
+    assert.equal(snapshot.status, "ok");
+    assert.equal(snapshot.recentEvents[0]?.type, "message.stale_ignored");
+    assert.equal(snapshot.recentEvents[0]?.details, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("FeishuDiagnosticsStateStore 会把 recentEvents 截断为 ring buffer", () => {
   const root = mkdtempSync(join(tmpdir(), "themis-feishu-diagnostics-ring-"));
   const store = new FeishuDiagnosticsStateStore({

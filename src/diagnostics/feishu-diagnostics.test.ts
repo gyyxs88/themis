@@ -289,9 +289,32 @@ test("readFeishuDiagnosticsSnapshot 会派生 recentWindowStats、lastActionAtte
 
     assert.equal(summary.diagnostics.recentWindowStats.staleIgnoredCount, 1);
     assert.equal(summary.diagnostics.recentWindowStats.takeoverSubmittedCount, 1);
+    assert.equal(summary.diagnostics.recentWindowStats.duplicateIgnoredCount, 0);
+    assert.equal(summary.diagnostics.recentWindowStats.replySubmittedCount, 0);
+    assert.equal(summary.diagnostics.recentWindowStats.approvalSubmittedCount, 0);
+    assert.equal(summary.diagnostics.recentWindowStats.pendingInputNotFoundCount, 0);
+    assert.equal(summary.diagnostics.recentWindowStats.pendingInputAmbiguousCount, 0);
     assert.equal(summary.diagnostics.lastActionAttempt?.type, "takeover.submitted");
     assert.equal(summary.diagnostics.lastActionAttempt?.requestId, "request-1");
+    assert.equal(summary.diagnostics.lastActionAttempt?.summary, "takeover 已提交");
+    assert.equal(summary.diagnostics.lastActionAttempt?.createdAt, "2026-04-02T08:00:02.000Z");
     assert.equal(summary.diagnostics.lastIgnoredMessage?.type, "message.stale_ignored");
+    assert.equal(summary.diagnostics.lastIgnoredMessage?.messageId, "message-1");
+    assert.equal(summary.diagnostics.lastIgnoredMessage?.summary, "旧消息被忽略");
+    assert.equal(summary.diagnostics.lastIgnoredMessage?.createdAt, "2026-04-02T08:00:01.000Z");
+    assert.deepEqual(summary.diagnostics.recentEvents[0]?.details, {
+      messageId: "message-1",
+      reason: "stale",
+      retryCount: 1,
+      approved: false,
+      note: null,
+    });
+    assert.deepEqual(summary.diagnostics.recentEvents[1]?.details, {
+      actionId: "action-1",
+      requestId: "request-1",
+      sessionId: "session-1",
+      principalId: "principal-1",
+    });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
