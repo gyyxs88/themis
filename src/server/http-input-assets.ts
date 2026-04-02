@@ -5,6 +5,7 @@ import { basename, join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
+import { enrichPdfInputAsset } from "../core/pdf-input-asset.js";
 import type { TaskInputAsset } from "../types/index.js";
 import { writeJson } from "./http-responses.js";
 
@@ -14,6 +15,7 @@ export async function handleInputAssetUpload(
   request: Request,
   options: {
     workingDirectory: string;
+    enrichPdfAsset?: (asset: TaskInputAsset) => Promise<TaskInputAsset>;
   },
 ): Promise<Response> {
   const formData = await request.formData();
@@ -29,14 +31,8 @@ export async function handleInputAssetUpload(
 
   const assetId = createId("asset");
   const safeName = basename(file.name || "upload.bin");
-
-  if (isPdfUpload(file.type, safeName)) {
-    return Response.json({
-      error: "当前 Web 端暂不支持 PDF 上传，请先转成图片或文本后再试。",
-    }, {
-      status: 415,
-    });
-  }
+  const isPdf = isPdfUpload(file.type, safeName);
+  const assetMimeType = isPdf ? "application/pdf" : (file.type || "application/octet-stream");
 
   if (!Number.isFinite(file.size) || file.size > MAX_INPUT_ASSET_BYTES) {
     return Response.json({
@@ -58,14 +54,18 @@ export async function handleInputAssetUpload(
     assetId,
     kind: resolveAssetKind(file.type),
     name: safeName,
-    mimeType: file.type || "application/octet-stream",
+    mimeType: assetMimeType,
     sizeBytes: file.size,
     localPath,
     sourceChannel: "web",
     ingestionStatus: "ready",
   };
 
-  return Response.json({ asset });
+  const enrichedAsset = isPdf
+    ? await (options.enrichPdfAsset ?? enrichPdfInputAsset)(asset)
+    : asset;
+
+  return Response.json({ asset: enrichedAsset });
 }
 
 export async function handleInputAssetUploadHttp(
@@ -73,6 +73,7 @@ export async function handleInputAssetUploadHttp(
   response: ServerResponse,
   options: {
     workingDirectory: string;
+    enrichPdfAsset?: (asset: TaskInputAsset) => Promise<TaskInputAsset>;
   },
 ): Promise<void> {
   if (isContentLengthTooLarge(request.headers)) {

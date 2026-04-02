@@ -118,6 +118,115 @@ test("GET /api/history/sessions 会使用默认 limit、拒绝非法 limit 并�
   });
 });
 
+test("GET /api/history/sessions 与 archive 接口会支持 query/originKind/includeArchived", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore, authHeaders }) => {
+    await seedRecentSessions(runtimeStore, 3);
+    runtimeStore.saveSessionHistoryMetadata({
+      sessionId: "session-history-002",
+      originKind: "fork",
+      originSessionId: "session-history-001",
+      originLabel: "fork 自 session-history-001",
+      createdAt: timestamp(120),
+      updatedAt: timestamp(120),
+    });
+    runtimeStore.archiveSessionHistory("session-history-003", timestamp(121));
+
+    const filteredResponse = await fetch(`${baseUrl}/api/history/sessions?query=fork%20%E8%87%AA%20session-history-001&originKind=fork`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    assert.equal(filteredResponse.status, 200);
+    const filteredPayload = await filteredResponse.json() as {
+      sessions?: Array<{
+        sessionId?: string;
+        originKind?: string;
+        originSessionId?: string;
+        originLabel?: string;
+      }>;
+    };
+    assert.deepEqual(filteredPayload.sessions?.map((item) => item.sessionId), ["session-history-002"]);
+    assert.equal(filteredPayload.sessions?.[0]?.originKind, "fork");
+    assert.equal(filteredPayload.sessions?.[0]?.originSessionId, "session-history-001");
+    assert.equal(filteredPayload.sessions?.[0]?.originLabel, "fork 自 session-history-001");
+
+    const defaultResponse = await fetch(`${baseUrl}/api/history/sessions?limit=10`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    assert.equal(defaultResponse.status, 200);
+    const defaultPayload = await defaultResponse.json() as {
+      sessions?: Array<{
+        sessionId?: string;
+      }>;
+    };
+    assert.deepEqual(defaultPayload.sessions?.map((item) => item.sessionId), [
+      "session-history-002",
+      "session-history-001",
+    ]);
+
+    const archivedResponse = await fetch(`${baseUrl}/api/history/sessions?includeArchived=1&query=session-history-003`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    assert.equal(archivedResponse.status, 200);
+    const archivedPayload = await archivedResponse.json() as {
+      sessions?: Array<{
+        sessionId?: string;
+        archivedAt?: string;
+      }>;
+    };
+    assert.equal(archivedPayload.sessions?.some((item) => item.sessionId === "session-history-003"), true);
+    assert.equal(
+      archivedPayload.sessions?.find((item) => item.sessionId === "session-history-003")?.archivedAt,
+      timestamp(121),
+    );
+
+    const detailResponse = await fetch(`${baseUrl}/api/history/sessions/session-history-002`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    assert.equal(detailResponse.status, 200);
+    const detailPayload = await detailResponse.json() as {
+      session?: {
+        originKind?: string;
+        originSessionId?: string;
+        originLabel?: string;
+      };
+    };
+    assert.equal(detailPayload.session?.originKind, "fork");
+    assert.equal(detailPayload.session?.originSessionId, "session-history-001");
+    assert.equal(detailPayload.session?.originLabel, "fork 自 session-history-001");
+
+    const archiveResponse = await fetch(`${baseUrl}/api/history/sessions/session-history-001/archive`, {
+      method: "POST",
+      headers: authHeaders,
+    });
+    assert.equal(archiveResponse.status, 200);
+    const archivePayload = await archiveResponse.json() as {
+      session?: {
+        sessionId?: string;
+        archivedAt?: string;
+      };
+    };
+    assert.equal(archivePayload.session?.sessionId, "session-history-001");
+    assert.ok(typeof archivePayload.session?.archivedAt === "string");
+
+    const unarchiveResponse = await fetch(`${baseUrl}/api/history/sessions/session-history-001/archive`, {
+      method: "DELETE",
+      headers: authHeaders,
+    });
+    assert.equal(unarchiveResponse.status, 200);
+    const unarchivePayload = await unarchiveResponse.json() as {
+      session?: {
+        sessionId?: string;
+        archivedAt?: string | null;
+      };
+    };
+    assert.equal(unarchivePayload.session?.sessionId, "session-history-001");
+    assert.equal(unarchivePayload.session?.archivedAt ?? null, null);
+  });
+});
+
 test("GET /api/history/sessions/:id 会返回 400 / 404 / 200，并带上 events 和 touchedFiles", async () => {
   await withHttpServer(async ({ baseUrl, runtimeStore, authHeaders }) => {
     const sessionId = "session-history-detail";
@@ -450,6 +559,51 @@ test("HEAD /api/history/sessions 与 HEAD /api/history/sessions/:id 不返回 bo
     });
     assert.equal(detailResponse.status, 200);
     assert.equal(await detailResponse.text(), "");
+  });
+});
+
+test("HEAD /api/history/sessions/:id/archive 不会修改归档状态", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore, authHeaders }) => {
+    const sessionId = "session-history-head-archive";
+    const requestId = "request-history-head-archive";
+    const taskId = "task-history-head-archive";
+    const request = buildTaskRequest({
+      sessionId,
+      requestId,
+      taskId,
+      createdAt: timestamp(42),
+    });
+
+    runtimeStore.upsertTurnFromRequest(request, taskId);
+    runtimeStore.completeTaskTurn({
+      request,
+      result: buildTaskResult({
+        requestId,
+        taskId,
+        completedAt: timestamp(43),
+      }),
+    });
+
+    const archiveResponse = await fetch(`${baseUrl}/api/history/sessions/${sessionId}/archive`, {
+      method: "HEAD",
+      headers: authHeaders,
+    });
+    assert.equal(archiveResponse.status, 200);
+    assert.equal(await archiveResponse.text(), "");
+
+    const detailResponse = await fetch(`${baseUrl}/api/history/sessions/${sessionId}`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    assert.equal(detailResponse.status, 200);
+    const detailPayload = await detailResponse.json() as {
+      session?: {
+        sessionId?: string;
+        archivedAt?: string | null;
+      };
+    };
+    assert.equal(detailPayload.session?.sessionId, sessionId);
+    assert.equal(detailPayload.session?.archivedAt ?? null, null);
   });
 });
 

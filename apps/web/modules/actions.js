@@ -111,6 +111,16 @@ export function createActions(app) {
       await sessionActions.handleForkSession();
     });
 
+    dom.threadArchiveButton?.addEventListener("click", async () => {
+      const activeThread = store.getActiveThread();
+
+      if (!activeThread) {
+        return;
+      }
+
+      await app.history.toggleThreadArchive(activeThread.id, !activeThread.historyArchivedAt);
+    });
+
     dom.threadControlJoinToggle.addEventListener("click", () => {
       const nextOpen = !app.runtime.threadControlJoinOpen;
       app.runtime.threadControlJoinOpen = nextOpen;

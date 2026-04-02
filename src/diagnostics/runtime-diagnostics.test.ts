@@ -805,6 +805,171 @@ test("RuntimeDiagnosticsService.readSummary 会把失败 action 纳入 feishu la
   }
 });
 
+test("RuntimeDiagnosticsService.readSummary 会汇总总览热点和 mcp 诊断建议", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-diagnostics-overview-"));
+  const previousEnv = {
+    feishuAppId: process.env.FEISHU_APP_ID,
+    feishuAppSecret: process.env.FEISHU_APP_SECRET,
+    themisBaseUrl: process.env.THEMIS_BASE_URL,
+  };
+  let server: ReturnType<typeof createServer> | null = null;
+
+  try {
+    writeFileSync(join(root, "README.md"), "# demo\n", "utf8");
+    mkdirSync(join(root, "memory", "architecture"), { recursive: true });
+    writeFileSync(join(root, "memory", "architecture", "overview.md"), "# arch\n", "utf8");
+    mkdirSync(join(root, "memory", "tasks"), { recursive: true });
+    writeFileSync(join(root, "memory", "tasks", "backlog.md"), "# backlog\n", "utf8");
+    writeFileSync(join(root, "memory", "tasks", "in-progress.md"), "# in-progress\n", "utf8");
+    writeFileSync(join(root, "memory", "tasks", "done.md"), "# done\n", "utf8");
+    mkdirSync(join(root, "docs", "feishu"), { recursive: true });
+    writeFileSync(join(root, "docs", "feishu", "themis-feishu-real-journey-smoke.md"), "# smoke\n", "utf8");
+    mkdirSync(join(root, "infra", "local"), { recursive: true });
+    writeFileSync(
+      join(root, "infra", "local", "feishu-diagnostics.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          conversations: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              principalId: "principal-1",
+              activeSessionId: "session-1",
+              lastMessageId: "message-3",
+              lastEventType: "pending_input.not_found",
+              updatedAt: "2026-04-02T10:00:00.000Z",
+              pendingActions: [
+                {
+                  actionId: "input-1",
+                  actionType: "user-input",
+                  taskId: "task-1",
+                  requestId: "request-1",
+                  sourceChannel: "web",
+                  sessionId: "session-1",
+                  principalId: "principal-1",
+                },
+              ],
+            },
+          ],
+          recentEvents: [
+            {
+              id: "event-1",
+              type: "pending_input.not_found",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              summary: "没有匹配到 pending action",
+              createdAt: "2026-04-02T09:00:01.000Z",
+            },
+            {
+              id: "event-2",
+              type: "message.stale_ignored",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              messageId: "message-2",
+              summary: "旧消息被忽略",
+              createdAt: "2026-04-02T09:00:02.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    server = createServer((req, res) => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+
+      if (req.method === "GET" && url.pathname === "/") {
+        res.writeHead(200, {
+          "content-type": "text/plain; charset=utf-8",
+        });
+        res.end("ok");
+        return;
+      }
+
+      res.writeHead(404);
+      res.end();
+    });
+
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+
+    if (!address || typeof address === "string") {
+      throw new Error("test server failed to bind");
+    }
+
+    process.env.FEISHU_APP_ID = "cli_xxx";
+    process.env.FEISHU_APP_SECRET = "secret_xxx";
+    process.env.THEMIS_BASE_URL = `http://127.0.0.1:${address.port}`;
+
+    const service = new RuntimeDiagnosticsService({
+      workingDirectory: root,
+      runtimeStore: null,
+      mcpInspector: {
+        list: async () => ({
+          servers: [
+            {
+              id: "context7",
+              name: "Context 7",
+              status: "healthy",
+              transport: "stdio",
+              command: "npx",
+              args: ["-y", "@upstash/context7-mcp"],
+              auth: "authenticated",
+            },
+            {
+              id: "figma",
+              name: "Figma",
+              status: "degraded",
+              transport: "sse",
+              auth: "login_required",
+              message: "OAuth login required",
+            },
+          ],
+        }),
+      } as never,
+    });
+    const summary = await service.readSummary();
+
+    assert.equal(summary.overview.primaryFocus?.scope, "feishu");
+    assert.equal(summary.overview.primaryFocus?.id, "feishu_pending_input_not_found");
+    assert.ok(summary.overview.hotspots.some((item) => item.scope === "mcp"));
+    assert.ok(summary.overview.suggestedCommands.includes("./themis doctor feishu"));
+    assert.ok(summary.overview.suggestedCommands.includes("./themis doctor mcp"));
+    assert.equal(summary.mcp.diagnostics.statusCounts.healthyCount, 1);
+    assert.equal(summary.mcp.diagnostics.statusCounts.abnormalCount, 1);
+    assert.equal(summary.mcp.diagnostics.primaryDiagnosis?.id, "server_degraded");
+    assert.equal(summary.mcp.diagnostics.serverDiagnoses[0]?.classification, "healthy");
+    assert.equal(summary.mcp.diagnostics.serverDiagnoses[0]?.server.transport, "stdio");
+    assert.equal(summary.mcp.diagnostics.serverDiagnoses[1]?.classification, "auth_required");
+    assert.match(summary.mcp.diagnostics.serverDiagnoses[1]?.summary ?? "", /OAuth|认证|登录/);
+    assert.ok(summary.mcp.diagnostics.serverDiagnoses[1]?.recommendedActions.includes("./themis doctor mcp"));
+    assert.ok(summary.mcp.diagnostics.serverDiagnoses[1]?.recommendedActions.includes("补齐对应 MCP server 的认证或重新执行 OAuth 登录。"));
+    assert.ok(summary.mcp.diagnostics.recommendedNextSteps.includes("./themis doctor service"));
+  } finally {
+    restoreEnv("FEISHU_APP_ID", previousEnv.feishuAppId);
+    restoreEnv("FEISHU_APP_SECRET", previousEnv.feishuAppSecret);
+    restoreEnv("THEMIS_BASE_URL", previousEnv.themisBaseUrl);
+
+    if (server) {
+      server.closeAllConnections?.();
+      server.closeIdleConnections?.();
+      server.unref();
+      server.close();
+    }
+
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("RuntimeDiagnosticsService 会接入 mcp inspector 输出", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-runtime-diagnostics-mcp-"));
 
@@ -819,6 +984,7 @@ test("RuntimeDiagnosticsService 会接入 mcp inspector 输出", async () => {
               id: "context7",
               name: "Context 7",
               status: "healthy",
+              args: [],
             },
           ],
         }),
@@ -831,6 +997,7 @@ test("RuntimeDiagnosticsService 会接入 mcp inspector 输出", async () => {
         id: "context7",
         name: "Context 7",
         status: "healthy",
+        args: [],
       },
     ]);
   } finally {

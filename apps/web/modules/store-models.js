@@ -43,6 +43,10 @@ export function createStoreModelHelpers() {
       storedTurnCount: 0,
       storedSummary: "",
       storedStatus: null,
+      historyArchivedAt: null,
+      historyOriginKind: "standard",
+      historyOriginSessionId: null,
+      historyOriginLabel: null,
       historyHydrated: true,
       historyNeedsRehydrate: false,
       turns: [],
@@ -122,6 +126,10 @@ export function createStoreModelHelpers() {
       storedTurnCount: Number.isFinite(thread.storedTurnCount) ? Math.max(0, Number(thread.storedTurnCount)) : 0,
       storedSummary: typeof thread.storedSummary === "string" ? thread.storedSummary : "",
       storedStatus: typeof thread.storedStatus === "string" ? thread.storedStatus : null,
+      historyArchivedAt: typeof thread.historyArchivedAt === "string" ? thread.historyArchivedAt : null,
+      historyOriginKind: normalizeHistoryOriginKind(thread.historyOriginKind),
+      historyOriginSessionId: typeof thread.historyOriginSessionId === "string" ? thread.historyOriginSessionId : null,
+      historyOriginLabel: typeof thread.historyOriginLabel === "string" ? thread.historyOriginLabel : null,
       historyHydrated: typeof thread.historyHydrated === "boolean" ? thread.historyHydrated : true,
       historyNeedsRehydrate: typeof thread.historyNeedsRehydrate === "boolean" ? thread.historyNeedsRehydrate : false,
       turns: Array.isArray(thread.turns) ? thread.turns.map(normalizeTurn).filter(Boolean) : [],
@@ -321,6 +329,10 @@ export function createStoreModelHelpers() {
     }
 
     return "standard";
+  }
+
+  function normalizeHistoryOriginKind(value) {
+    return value === "fork" ? "fork" : "standard";
   }
 
   function normalizeBootstrapMode(value) {

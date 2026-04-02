@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import type { Readable } from "node:stream";
 import { resolve } from "node:path";
 import type { TaskInputAsset } from "../../types/index.js";
+import { enrichPdfInputAsset } from "../../core/pdf-input-asset.js";
 import { extractFeishuPostImageKeys } from "./message-content.js";
 
 export interface FeishuMessageResourceEvent {
@@ -57,6 +58,7 @@ export interface DownloadFeishuMessageResourcesOptions {
   client: FeishuMessageResourceClient;
   resources: FeishuMessageResourceReference[];
   targetDirectory: string;
+  enrichPdfAsset?: (asset: FeishuMessageResourceAsset) => Promise<TaskInputAsset>;
 }
 
 export function extractFeishuMessageResources(event: FeishuMessageResourceEvent): FeishuMessageResourceReference[] | null {
@@ -129,13 +131,15 @@ export async function downloadFeishuMessageResources(
     const fileName = resolveResourceName(resource, response.headers);
     const filePath = resolve(options.targetDirectory, `${sanitizeSegment(resource.id)}-${sanitizeFileName(fileName)}`);
     const mimeType = resolveMimeType(response.headers, resource.type);
+    const isPdf = isPdfResource(mimeType, fileName);
+    const assetMimeType = isPdf ? "application/pdf" : mimeType;
 
     await response.writeFile(filePath);
-    attachments.push({
+    const asset: FeishuMessageResourceAsset = {
       assetId: resource.id,
       kind: resource.type === "image" ? "image" : "document",
       ...(fileName ? { name: fileName } : {}),
-      mimeType,
+      mimeType: assetMimeType,
       localPath: filePath,
       sourceChannel: "feishu",
       sourceMessageId: resource.sourceMessageId,
@@ -144,7 +148,34 @@ export async function downloadFeishuMessageResources(
       type: resource.type,
       value: filePath,
       createdAt: resource.createdAt,
-    });
+    };
+
+    if (isPdf) {
+      const enrichPdfAsset = options.enrichPdfAsset ?? (async (pdfAsset: FeishuMessageResourceAsset) => {
+        return await enrichPdfInputAsset(pdfAsset);
+      });
+
+      try {
+        const enrichedAsset = await enrichPdfAsset(asset);
+        attachments.push({
+          ...asset,
+          ingestionStatus: enrichedAsset.ingestionStatus,
+          ...(enrichedAsset.textExtraction ? { textExtraction: enrichedAsset.textExtraction } : {}),
+          ...(enrichedAsset.metadata ? { metadata: enrichedAsset.metadata } : {}),
+        });
+      } catch {
+        attachments.push({
+          ...asset,
+          ingestionStatus: "ready",
+          textExtraction: {
+            status: "failed",
+          },
+        });
+      }
+      continue;
+    }
+
+    attachments.push(asset);
   }
 
   return attachments;
@@ -170,7 +201,7 @@ function buildFallbackName(resource: FeishuMessageResourceReference, headers: un
 }
 
 function inferExtension(headers: unknown, resourceType: FeishuMessageResourceReference["type"]): string {
-  const contentType = readHeader(headers, "content-type")?.toLowerCase();
+  const contentType = normalizeContentType(readHeader(headers, "content-type"));
 
   switch (contentType) {
     case "image/png":
@@ -183,18 +214,32 @@ function inferExtension(headers: unknown, resourceType: FeishuMessageResourceRef
     case "application/pdf":
       return ".pdf";
     default:
-      return resourceType === "image" ? ".bin" : "";
+      return resourceType === "image" ? ".png" : "";
   }
 }
 
 function resolveMimeType(headers: unknown, resourceType: FeishuMessageResourceReference["type"]): string {
-  const contentType = readHeader(headers, "content-type")?.toLowerCase();
+  const contentType = normalizeContentType(readHeader(headers, "content-type"));
 
   if (contentType) {
     return contentType;
   }
 
   return resourceType === "image" ? "image/png" : "application/octet-stream";
+}
+
+function isPdfResource(mimeType: string, fileName: string): boolean {
+  return normalizeContentType(mimeType) === "application/pdf" || fileName.toLowerCase().endsWith(".pdf");
+}
+
+function normalizeContentType(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const [contentType] = value.split(";", 1);
+  const normalized = contentType?.trim().toLowerCase();
+  return normalized ? normalized : null;
 }
 
 function extractFilenameFromHeaders(headers: unknown): string | null {

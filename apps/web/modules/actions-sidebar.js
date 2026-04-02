@@ -219,6 +219,17 @@ export function createSidebarActions(app) {
     dom.threadSearchInput.addEventListener("input", () => {
       app.runtime.threadSearchQuery = dom.threadSearchInput.value;
       app.renderer.renderThreadList();
+      void app.history.refreshHistoryFromServer({
+        skipActiveHistoryLoad: true,
+      });
+    });
+
+    dom.threadShowArchivedInput?.addEventListener("change", () => {
+      app.runtime.historyIncludeArchived = Boolean(dom.threadShowArchivedInput.checked);
+      app.renderer.renderThreadList();
+      void app.history.refreshHistoryFromServer({
+        skipActiveHistoryLoad: true,
+      });
     });
 
     dom.newThreadButton.addEventListener("click", async () => {

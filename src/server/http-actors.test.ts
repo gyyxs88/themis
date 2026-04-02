@@ -310,6 +310,125 @@ test("POST /api/actors/timeline 和 /api/actors/takeover 会返回 runtime timel
   });
 });
 
+test("POST /api/actors/memory-candidates/suggest、/list、/review 会管理长期记忆候选", async () => {
+  await withHttpServer(async ({ baseUrl, runtime, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+    const identity = runtime.getIdentityLinkService().ensureIdentity(buildIdentityPayload("owner-memory-http"));
+
+    const suggestResponse = await postJson(baseUrl, "/api/actors/memory-candidates/suggest", {
+      ...buildIdentityPayload("owner-memory-http"),
+      candidate: {
+        kind: "preference",
+        title: "回答节奏",
+        summary: "先结论后展开。",
+        rationale: "最近多轮协作都要求先给结论。",
+        suggestedContent: "默认先给结论，再补过程和依据。",
+        sourceType: "themis",
+        sourceLabel: "session session-http-memory-1 / task task-http-memory-1",
+        sourceTaskId: "task-http-memory-1",
+        sourceConversationId: "session-http-memory-1",
+      },
+    }, authHeaders);
+
+    assert.equal(suggestResponse.status, 200);
+    const suggestPayload = await suggestResponse.json() as {
+      identity?: { principalId?: string };
+      candidate?: { candidateId?: string; status?: string; sourceTaskId?: string };
+    };
+    assert.equal(suggestPayload.identity?.principalId, identity.principalId);
+    assert.ok(suggestPayload.candidate?.candidateId);
+    assert.equal(suggestPayload.candidate?.status, "suggested");
+    assert.equal(suggestPayload.candidate?.sourceTaskId, "task-http-memory-1");
+
+    const listResponse = await postJson(baseUrl, "/api/actors/memory-candidates/list", {
+      ...buildIdentityPayload("owner-memory-http"),
+      limit: 10,
+    }, authHeaders);
+
+    assert.equal(listResponse.status, 200);
+    const listPayload = await listResponse.json() as {
+      candidates?: Array<{ candidateId?: string; status?: string }>;
+    };
+    assert.deepEqual(
+      listPayload.candidates?.map((candidate) => candidate.candidateId),
+      [suggestPayload.candidate?.candidateId],
+    );
+
+    const approveResponse = await postJson(baseUrl, "/api/actors/memory-candidates/review", {
+      ...buildIdentityPayload("owner-memory-http"),
+      candidateId: suggestPayload.candidate?.candidateId,
+      decision: "approve",
+    }, authHeaders);
+
+    assert.equal(approveResponse.status, 200);
+    const approvePayload = await approveResponse.json() as {
+      candidate?: { status?: string; approvedMemoryId?: string };
+      memory?: { title?: string };
+    };
+    assert.equal(approvePayload.candidate?.status, "approved");
+    assert.ok(approvePayload.candidate?.approvedMemoryId);
+    assert.equal(approvePayload.memory?.title, "回答节奏");
+
+    const rejectSuggestResponse = await postJson(baseUrl, "/api/actors/memory-candidates/suggest", {
+      ...buildIdentityPayload("owner-memory-http"),
+      candidate: {
+        kind: "behavior",
+        title: "复盘方式",
+        summary: "先列风险，再给建议。",
+        rationale: "近期对话更关注风险面。",
+        suggestedContent: "复盘时先列风险和回滚面。",
+        sourceType: "manual",
+        sourceLabel: "owner manual review",
+      },
+    }, authHeaders);
+    const rejectSuggestPayload = await rejectSuggestResponse.json() as {
+      candidate?: { candidateId?: string };
+    };
+
+    const rejectResponse = await postJson(baseUrl, "/api/actors/memory-candidates/review", {
+      ...buildIdentityPayload("owner-memory-http"),
+      candidateId: rejectSuggestPayload.candidate?.candidateId,
+      decision: "reject",
+    }, authHeaders);
+
+    assert.equal(rejectResponse.status, 200);
+    const rejectPayload = await rejectResponse.json() as {
+      candidate?: { status?: string; candidateId?: string };
+      memory?: unknown;
+    };
+    assert.equal(rejectPayload.candidate?.status, "rejected");
+    assert.equal(rejectPayload.memory ?? null, null);
+
+    const archiveResponse = await postJson(baseUrl, "/api/actors/memory-candidates/review", {
+      ...buildIdentityPayload("owner-memory-http"),
+      candidateId: rejectSuggestPayload.candidate?.candidateId,
+      decision: "archive",
+    }, authHeaders);
+
+    assert.equal(archiveResponse.status, 200);
+    const archivePayload = await archiveResponse.json() as {
+      candidate?: { archivedAt?: string };
+    };
+    assert.ok(typeof archivePayload.candidate?.archivedAt === "string");
+
+    const archivedListResponse = await postJson(baseUrl, "/api/actors/memory-candidates/list", {
+      ...buildIdentityPayload("owner-memory-http"),
+      includeArchived: true,
+      status: "rejected",
+      limit: 10,
+    }, authHeaders);
+    const archivedListPayload = await archivedListResponse.json() as {
+      candidates?: Array<{ candidateId?: string; archivedAt?: string }>;
+    };
+
+    assert.deepEqual(
+      archivedListPayload.candidates?.map((candidate) => candidate.candidateId),
+      [rejectSuggestPayload.candidate?.candidateId],
+    );
+    assert.ok(typeof archivedListPayload.candidates?.[0]?.archivedAt === "string");
+  });
+});
+
 function listenServer(server: Server): Promise<Server> {
   return new Promise((resolve, reject) => {
     server.once("error", reject);

@@ -10,6 +10,9 @@ import { serveWebAsset } from "./http-assets.js";
 import {
   handleActorCreate,
   handleActorList,
+  handleMainMemoryCandidateList,
+  handleMainMemoryCandidateReview,
+  handleMainMemoryCandidateSuggest,
   handleActorTakeover,
   handleActorTimeline,
 } from "./http-actors.js";
@@ -22,7 +25,7 @@ import {
   handleAuthStatus,
 } from "./http-auth.js";
 import { toErrorMessage } from "./http-errors.js";
-import { handleHistorySessionDetail, handleHistorySessions } from "./http-history.js";
+import { handleHistorySessionArchive, handleHistorySessionDetail, handleHistorySessions } from "./http-history.js";
 import {
   handleIdentityLinkCodeCreate,
   handleIdentityPersonaUpdate,
@@ -221,6 +224,18 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
         return handleActorTakeover(request, response, runtime);
       }
 
+      if (request.method === "POST" && url.pathname === "/api/actors/memory-candidates/suggest") {
+        return handleMainMemoryCandidateSuggest(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/actors/memory-candidates/list") {
+        return handleMainMemoryCandidateList(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/actors/memory-candidates/review") {
+        return handleMainMemoryCandidateReview(request, response, runtime);
+      }
+
       if (request.method === "POST" && url.pathname === "/api/skills/list") {
         return handleSkillsList(request, response, runtime);
       }
@@ -291,6 +306,16 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if ((request.method === "GET" || isHeadRequest) && url.pathname === "/api/history/sessions") {
         return handleHistorySessions(url, response, runtimeStore, isHeadRequest);
+      }
+
+      if ((request.method === "POST" || request.method === "DELETE" || isHeadRequest) && url.pathname.endsWith("/archive") && url.pathname.startsWith("/api/history/sessions/")) {
+        return handleHistorySessionArchive(
+          url,
+          response,
+          runtimeStore,
+          request.method !== "DELETE",
+          isHeadRequest,
+        );
       }
 
       if ((request.method === "GET" || isHeadRequest) && url.pathname.startsWith("/api/history/sessions/")) {

@@ -19,6 +19,11 @@ test("McpInspector 会归一化 mcpServerStatus/list，并用 reload + list 作�
                 name: "Context 7",
                 status: "healthy",
                 transport: "stdio",
+                command: "npx",
+                args: ["-y", "@upstash/context7-mcp"],
+                cwd: "/tmp/demo",
+                enabled: true,
+                auth: "authenticated",
               },
             ],
           };
@@ -38,10 +43,22 @@ test("McpInspector 会归一化 mcpServerStatus/list，并用 reload + list 作�
   const reloaded = await inspector.reload();
   const probed = await inspector.probe();
 
-  assert.equal(listed.servers[0]?.id, "context7");
-  assert.equal(listed.servers[0]?.name, "Context 7");
+  assert.deepEqual(listed.servers[0], {
+    id: "context7",
+    name: "Context 7",
+    status: "healthy",
+    transport: "stdio",
+    command: "npx",
+    args: ["-y", "@upstash/context7-mcp"],
+    cwd: "/tmp/demo",
+    enabled: true,
+    auth: "authenticated",
+  });
   assert.equal(reloaded.servers[0]?.status, "healthy");
+  assert.equal(reloaded.servers[0]?.transport, "stdio");
+  assert.deepEqual(reloaded.servers[0]?.args, ["-y", "@upstash/context7-mcp"]);
   assert.equal(probed.servers[0]?.status, "healthy");
+  assert.equal(probed.servers[0]?.command, "npx");
   assert.deepEqual(calls, [
     "mcpServerStatus/list",
     "config/mcpServer/reload",
@@ -76,6 +93,7 @@ test("McpInspector 在字段缺失时会降级到 unknown", async () => {
       id: "unknown",
       name: "unknown",
       status: "unknown",
+      args: [],
     },
   ]);
 });

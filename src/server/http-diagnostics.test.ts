@@ -29,17 +29,38 @@ test("GET /api/diagnostics 会返回结构化 summary", async () => {
     createMcpInspector: () => ({
       list: async () => ({
         servers: [
-          { id: "context7", name: "Context 7", status: "healthy" },
+          {
+            id: "context7",
+            name: "Context 7",
+            status: "healthy",
+            transport: "stdio",
+            args: ["-y", "@upstash/context7-mcp"],
+            auth: "authenticated",
+          },
         ],
       }),
       probe: async () => ({
         servers: [
-          { id: "context7", name: "Context 7", status: "healthy" },
+          {
+            id: "context7",
+            name: "Context 7",
+            status: "healthy",
+            transport: "stdio",
+            args: ["-y", "@upstash/context7-mcp"],
+            auth: "authenticated",
+          },
         ],
       }),
       reload: async () => ({
         servers: [
-          { id: "context7", name: "Context 7", status: "healthy" },
+          {
+            id: "context7",
+            name: "Context 7",
+            status: "healthy",
+            transport: "stdio",
+            args: ["-y", "@upstash/context7-mcp"],
+            auth: "authenticated",
+          },
         ],
       }),
     }),
@@ -77,11 +98,25 @@ test("GET /api/diagnostics 会返回结构化 summary", async () => {
         };
         context?: unknown;
         memory?: unknown;
+        overview?: {
+          hotspots?: Array<{
+            scope?: string;
+          }>;
+        };
         service?: unknown;
         mcp?: {
           servers?: Array<{
             id?: string;
+            transport?: string;
           }>;
+          diagnostics?: {
+            statusCounts?: {
+              healthyCount?: number;
+            };
+            serverDiagnoses?: Array<{
+              classification?: string;
+            }>;
+          };
         };
       };
     };
@@ -90,12 +125,16 @@ test("GET /api/diagnostics 会返回结构化 summary", async () => {
     assert.ok(payload.summary?.provider);
     assert.ok(payload.summary?.context);
     assert.ok(payload.summary?.memory);
+    assert.ok(payload.summary?.overview);
     assert.ok(payload.summary?.service);
     assert.ok(payload.summary?.mcp);
     assert.equal(payload.summary?.workingDirectory, root);
     assert.equal(payload.summary?.provider?.activeMode, "third-party");
     assert.equal(payload.summary?.provider?.providerCount, 1);
     assert.equal(payload.summary?.mcp?.servers?.[0]?.id, "context7");
+    assert.equal(payload.summary?.mcp?.servers?.[0]?.transport, "stdio");
+    assert.equal(payload.summary?.mcp?.diagnostics?.statusCounts?.healthyCount, 1);
+    assert.equal(payload.summary?.mcp?.diagnostics?.serverDiagnoses?.[0]?.classification, "healthy");
   } finally {
     restoreEnv("THEMIS_OPENAI_COMPAT_BASE_URL", previousEnv.baseUrl);
     restoreEnv("THEMIS_OPENAI_COMPAT_API_KEY", previousEnv.apiKey);
@@ -288,6 +327,11 @@ test("GET /api/diagnostics 会返回 feishu summary", async () => {
     assert.equal(response.status, 200);
     const payload = await response.json() as {
       summary?: {
+        overview?: {
+          hotspots?: Array<{
+            scope?: string;
+          }>;
+        };
         feishu?: {
           env?: {
             appIdConfigured?: boolean;
@@ -319,6 +363,7 @@ test("GET /api/diagnostics 会返回 feishu summary", async () => {
         };
       };
     };
+    assert.ok(payload.summary?.overview);
     assert.equal(payload.summary?.feishu?.env?.appIdConfigured, true);
     assert.equal(payload.summary?.feishu?.env?.useEnvProxy, true);
     assert.equal(payload.summary?.feishu?.service?.serviceReachable, true);
@@ -834,17 +879,38 @@ test("GET /api/diagnostics/mcp 与 POST /api/diagnostics/mcp/probe/reload 可用
     createMcpInspector: () => ({
       list: async () => ({
         servers: [
-          { id: "context7", name: "Context 7", status: "healthy" },
+          {
+            id: "context7",
+            name: "Context 7",
+            status: "healthy",
+            transport: "stdio",
+            args: ["-y", "@upstash/context7-mcp"],
+            auth: "authenticated",
+          },
         ],
       }),
       probe: async () => ({
         servers: [
-          { id: "context7", name: "Context 7", status: "healthy" },
+          {
+            id: "context7",
+            name: "Context 7",
+            status: "healthy",
+            transport: "stdio",
+            args: ["-y", "@upstash/context7-mcp"],
+            auth: "authenticated",
+          },
         ],
       }),
       reload: async () => ({
         servers: [
-          { id: "context7", name: "Context 7", status: "healthy" },
+          {
+            id: "context7",
+            name: "Context 7",
+            status: "healthy",
+            transport: "stdio",
+            args: ["-y", "@upstash/context7-mcp"],
+            auth: "authenticated",
+          },
         ],
       }),
     }),
@@ -874,11 +940,19 @@ test("GET /api/diagnostics/mcp 与 POST /api/diagnostics/mcp/probe/reload 可用
           id?: string;
           name?: string;
           status?: string;
+          transport?: string;
         }>;
+        diagnostics?: {
+          serverDiagnoses?: Array<{
+            classification?: string;
+          }>;
+        };
       };
     };
     assert.ok(Array.isArray(mcpPayload.summary?.servers));
     assert.equal(mcpPayload.summary?.servers?.[0]?.id, "context7");
+    assert.equal(mcpPayload.summary?.servers?.[0]?.transport, "stdio");
+    assert.equal(mcpPayload.summary?.diagnostics?.serverDiagnoses?.[0]?.classification, "healthy");
 
     const probeResponse = await fetch(`${baseUrl}/api/diagnostics/mcp/probe`, {
       method: "POST",

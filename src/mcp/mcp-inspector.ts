@@ -4,6 +4,15 @@ export interface McpServerSummary {
   id: string;
   name: string;
   status: string;
+  transport?: string;
+  command?: string;
+  args: string[];
+  cwd?: string;
+  enabled?: boolean;
+  auth?: string;
+  error?: string;
+  message?: string;
+  raw?: Record<string, unknown>;
 }
 
 export interface McpInspectorListResult {
@@ -83,14 +92,94 @@ function normalizeServer(value: unknown): McpServerSummary {
   const record = typeof value === "object" && value !== null
     ? value as Record<string, unknown>
     : {};
-
-  return {
+  const normalized: McpServerSummary = {
     id: toStringOrUnknown(record.id),
     name: toStringOrUnknown(record.name),
     status: toStringOrUnknown(record.status),
+    args: toStringArray(record.args),
   };
+  const transport = toOptionalString(record.transport);
+  const command = toOptionalString(record.command);
+  const cwd = toOptionalString(record.cwd);
+  const auth = toOptionalString(record.auth);
+  const error = toOptionalString(record.error);
+  const message = toOptionalString(record.message);
+  const enabled = typeof record.enabled === "boolean" ? record.enabled : undefined;
+  const raw = buildRawRecord(record);
+
+  if (transport) {
+    normalized.transport = transport;
+  }
+
+  if (command) {
+    normalized.command = command;
+  }
+
+  if (cwd) {
+    normalized.cwd = cwd;
+  }
+
+  if (typeof enabled === "boolean") {
+    normalized.enabled = enabled;
+  }
+
+  if (auth) {
+    normalized.auth = auth;
+  }
+
+  if (error) {
+    normalized.error = error;
+  }
+
+  if (message) {
+    normalized.message = message;
+  }
+
+  if (raw) {
+    normalized.raw = raw;
+  }
+
+  return normalized;
 }
 
 function toStringOrUnknown(value: unknown): string {
   return typeof value === "string" && value.trim() ? value : "unknown";
+}
+
+function toOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
+function buildRawRecord(record: Record<string, unknown>): Record<string, unknown> | undefined {
+  const knownKeys = new Set([
+    "id",
+    "name",
+    "status",
+    "transport",
+    "command",
+    "args",
+    "cwd",
+    "enabled",
+    "auth",
+    "error",
+    "message",
+  ]);
+  const rawEntries = Object.entries(record).filter(([key]) => !knownKeys.has(key));
+
+  if (rawEntries.length === 0) {
+    return undefined;
+  }
+
+  return Object.fromEntries(rawEntries);
 }

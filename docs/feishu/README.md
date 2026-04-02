@@ -49,9 +49,27 @@
 - `doctor smoke feishu`：只做飞书前置检查和手工 smoke 接力提示，不假装自己是全自动飞书 E2E。
 - 手工 A/B：最后才在飞书里继续真实接管和收口。
 
+当前固定飞书复验矩阵已经统一成四个主场景，加三类支撑护栏：
+
+- 自动化 `Web -> 飞书 direct-text takeover`
+- 自动化 `approval -> user-input -> 飞书 direct-text takeover`
+- `./themis doctor smoke web` 对真实业务 prompt 的低成本探针
+- `./themis doctor smoke feishu` + 手工 A/B 的最后一跳接力验收
+- `/use` 切会话后的 waiting action 绑定护栏
+- `duplicate / stale message` 忽略护栏
+- `doctor feishu` 的常见失败诊断分支
+
+如果想用一个命令串起来，可以跑 `./themis doctor smoke all`：
+
+- 它会先执行 Web smoke。
+- 只有 Web smoke 通过后，才继续输出 Feishu smoke 前置检查。
+- 如果 Web smoke 没过，CLI 会明确提示“Feishu smoke 已跳过”，避免误以为飞书侧也已经验证过。
+
 ## 诊断边界
 
 - `doctor feishu` 现在已经能输出主诊断、诊断摘要、建议动作、当前会话、recent window、最后一次 action 尝试、最近被忽略消息和最近 5 条事件轨迹。
+- `doctor feishu` 现在还会额外输出“当前接管判断”，直接告诉你当前是 `direct_text_ready`、`reply_required`、`blocked_by_approval` 还是 `approval_required`，以及下一步该用普通文本、`/reply` 还是先处理审批。
+- `doctor feishu` 现在还会给出“排障剧本”，把常见诊断翻成更具体的操作步骤，例如先 `/approve` 哪个 action、再 `/reply` 哪个 action，或者提示不要重发哪条旧消息；当前会话里如果已经有可继续的 `user-input`，剧本也会尽量直接带出 `sessionId / actionId / messageId`。
 - `doctor smoke feishu` 现在带统一 `next steps` 和 `diagnosis` 字段，但它仍然只是前置检查 + 手工接力入口。
 - `doctor smoke web` 负责真实 Web / HTTP 金路径，不负责飞书最后一跳。
 - `doctor smoke feishu` 负责飞书最后一跳的前置检查，不负责自动发消息。

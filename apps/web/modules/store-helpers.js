@@ -525,10 +525,11 @@ export function createStoreHelpers({ app, getState, saveState }) {
       || (thread?.historyNeedsRehydrate && app.runtime.restoredActionHydrationThreadId === thread?.id),
     );
     const running = Boolean(latestTurn?.state === "running" || latestTurn?.state === "queued");
-    const sourceKind = thread?.threadOrigin === "fork"
-      ? "fork"
-      : thread?.threadOrigin === "attached"
-        ? "attached"
+    const historyOriginKind = thread?.historyOriginKind === "fork" ? "fork" : "standard";
+    const sourceKind = thread?.threadOrigin === "attached"
+      ? "attached"
+      : thread?.threadOrigin === "fork" || historyOriginKind === "fork"
+        ? "fork"
         : "standard";
     const sourceLabel = sourceKind === "fork"
       ? "fork"
@@ -557,6 +558,9 @@ export function createStoreHelpers({ app, getState, saveState }) {
         { label: "conversationId", value: thread?.id ?? "" },
         ...(thread?.serverThreadId ? [{ label: "serverThreadId", value: thread.serverThreadId }] : []),
         { label: "来源", value: sourceLabel },
+        ...(thread?.historyOriginLabel ? [{ label: "分支来源", value: thread.historyOriginLabel }] : []),
+        ...(thread?.historyOriginSessionId ? [{ label: "源会话", value: thread.historyOriginSessionId }] : []),
+        ...(thread?.historyArchivedAt ? [{ label: "归档状态", value: "已归档" }] : []),
       ],
     };
   }
@@ -673,6 +677,22 @@ export function createStoreHelpers({ app, getState, saveState }) {
       return false;
     }
 
+    if (
+      thread.serverHistoryAvailable
+      && shouldApplyServerFilteredVisibility(query)
+      && thread.id !== state.activeThreadId
+    ) {
+      const filteredSessionIds = app.runtime.historyServerFilterSessionIds;
+
+      if (!(filteredSessionIds instanceof Set) || !filteredSessionIds.has(thread.id)) {
+        return false;
+      }
+    }
+
+    if (thread.historyArchivedAt && !app.runtime.historyIncludeArchived && thread.id !== state.activeThreadId) {
+      return false;
+    }
+
     const hasContent = Boolean(
       thread.turns.length ||
       thread.storedTurnCount ||
@@ -694,7 +714,10 @@ export function createStoreHelpers({ app, getState, saveState }) {
     const latestTurn = thread.turns.at(-1);
     const searchable = [
       thread.title,
+      thread.id,
       thread.storedSummary,
+      thread.historyOriginLabel,
+      thread.historyOriginSessionId,
       latestTurn?.goal,
       latestTurn?.inputText,
       latestTurn?.result?.summary,
@@ -706,6 +729,21 @@ export function createStoreHelpers({ app, getState, saveState }) {
       .toLowerCase();
 
     return searchable.includes(normalizedQuery);
+  }
+
+  function shouldApplyServerFilteredVisibility(query = "") {
+    if (!app.runtime.historyServerFilterActive || !(app.runtime.historyServerFilterSessionIds instanceof Set)) {
+      return false;
+    }
+
+    const currentQuery = typeof query === "string" ? query.trim() : "";
+    const snapshotQuery = typeof app.runtime.historyServerFilterQuery === "string"
+      ? app.runtime.historyServerFilterQuery
+      : "";
+    const currentIncludeArchived = Boolean(app.runtime.historyIncludeArchived);
+    const snapshotIncludeArchived = Boolean(app.runtime.historyServerFilterIncludeArchived);
+
+    return currentQuery === snapshotQuery && currentIncludeArchived === snapshotIncludeArchived;
   }
 
   function syncThreadStoredState(thread, turn) {

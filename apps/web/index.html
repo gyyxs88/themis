@@ -46,6 +46,10 @@
           <span class="sr-only">搜索聊天</span>
           <input id="thread-search-input" type="search" placeholder="搜索聊天" autocomplete="off" />
         </label>
+        <label class="sidebar-inline-toggle" for="thread-show-archived-input">
+          <input id="thread-show-archived-input" type="checkbox" />
+          <span>显示已归档</span>
+        </label>
 
         <div class="sidebar-divider" aria-hidden="true"></div>
 
@@ -129,6 +133,7 @@
               </div>
               <div class="thread-control-actions">
                 <button id="fork-thread-button" type="button" class="toolbar-button subtle">分叉</button>
+                <button id="thread-archive-button" type="button" class="toolbar-button subtle">归档当前会话</button>
                 <button
                   id="thread-control-join-toggle"
                   type="button"

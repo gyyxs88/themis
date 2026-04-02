@@ -97,6 +97,17 @@ export async function handleSessionForkContext(
       return;
     }
 
+    if (targetSessionId && sessionId) {
+      store.saveSessionHistoryMetadata({
+        sessionId: targetSessionId,
+        originKind: "fork",
+        originSessionId: sessionId,
+        originLabel: `fork 自 ${sessionId}`,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
     if (forkContext.strategy === "native-thread-fork" && targetSessionId) {
       if (!bindForkedSession(store, targetSessionId, forkContext.threadId)) {
         writeJson(response, 409, {

@@ -23,6 +23,7 @@ import {
   ACTOR_RUNTIME_MEMORY_STATUSES,
   ACTOR_TASK_SCOPE_STATUSES,
   PRINCIPAL_ACTOR_STATUSES,
+  PRINCIPAL_MAIN_MEMORY_CANDIDATE_STATUSES,
   PRINCIPAL_MAIN_MEMORY_KINDS,
   PRINCIPAL_MAIN_MEMORY_SOURCE_TYPES,
   PRINCIPAL_MAIN_MEMORY_STATUSES,
@@ -35,6 +36,7 @@ import type {
   PrincipalPersonaOnboardingState,
   PrincipalPersonaProfileData,
   PrincipalActorStatus,
+  PrincipalMainMemoryCandidateStatus,
   PrincipalMainMemoryKind,
   PrincipalMainMemorySourceType,
   PrincipalMainMemoryStatus,
@@ -47,10 +49,11 @@ import type {
   StoredActorRuntimeMemoryRecord,
   StoredActorTaskScopeRecord,
   StoredPrincipalActorRecord,
+  StoredPrincipalMainMemoryCandidateRecord,
   StoredPrincipalMainMemoryRecord,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 14;
+const DATABASE_SCHEMA_VERSION = 16;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -158,6 +161,10 @@ export interface StoredSessionHistorySummary {
   createdAt: string;
   updatedAt: string;
   turnCount: number;
+  archivedAt?: string;
+  originKind: "standard" | "fork";
+  originSessionId?: string;
+  originLabel?: string;
   threadId?: string;
   latestTurn: {
     requestId: string;
@@ -174,6 +181,19 @@ export interface StoredSessionHistorySummary {
 export interface StoredSessionHistoryFilter {
   sourceChannel?: string;
   userId?: string;
+  query?: string;
+  includeArchived?: boolean;
+  originKind?: "standard" | "fork";
+}
+
+export interface StoredSessionHistoryMetadataRecord {
+  sessionId: string;
+  archivedAt?: string;
+  originKind?: "standard" | "fork";
+  originSessionId?: string;
+  originLabel?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface StoredSessionTaskSettingsRecord {
@@ -226,6 +246,26 @@ interface PrincipalMainMemoryRow {
   body_markdown: string;
   source_type: string;
   status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PrincipalMainMemoryCandidateRow {
+  candidate_id: string;
+  principal_id: string;
+  kind: string;
+  title: string;
+  summary: string;
+  rationale: string;
+  suggested_content: string;
+  source_type: string;
+  source_label: string;
+  source_task_id: string | null;
+  source_conversation_id: string | null;
+  status: string;
+  approved_memory_id: string | null;
+  reviewed_at: string | null;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -583,6 +623,10 @@ interface SessionSummaryRow {
   created_at: string;
   updated_at: string;
   turn_count: number;
+  archived_at: string | null;
+  origin_kind: string | null;
+  origin_session_id: string | null;
+  origin_label: string | null;
   thread_id: string | null;
   latest_request_id: string;
   latest_task_id: string;
@@ -1717,6 +1761,274 @@ export class SqliteCodexSessionRegistry {
     if (mainMemoryWriteResult.changes === 0) {
       throw new Error("Principal main memory write did not apply.");
     }
+  }
+
+  savePrincipalMainMemoryCandidate(record: StoredPrincipalMainMemoryCandidateRecord): void {
+    const candidateId = record.candidateId.trim();
+    const principalId = record.principalId.trim();
+    const kind = normalizeText(record.kind);
+    const title = normalizeText(record.title);
+    const summary = normalizeText(record.summary);
+    const rationale = normalizeText(record.rationale);
+    const suggestedContent = normalizeText(record.suggestedContent);
+    const sourceType = normalizeText(record.sourceType);
+    const sourceLabel = normalizeText(record.sourceLabel);
+    const sourceTaskId = normalizeText(record.sourceTaskId);
+    const sourceConversationId = normalizeText(record.sourceConversationId);
+    const status = normalizeText(record.status);
+    const approvedMemoryId = normalizeText(record.approvedMemoryId);
+    const reviewedAt = normalizeText(record.reviewedAt);
+    const archivedAt = normalizeText(record.archivedAt);
+
+    if (
+      !candidateId ||
+      !principalId ||
+      !kind ||
+      !PRINCIPAL_MAIN_MEMORY_KINDS.includes(kind as PrincipalMainMemoryKind) ||
+      !title ||
+      !summary ||
+      !rationale ||
+      !suggestedContent ||
+      !sourceType ||
+      !PRINCIPAL_MAIN_MEMORY_SOURCE_TYPES.includes(sourceType as PrincipalMainMemorySourceType) ||
+      !sourceLabel ||
+      !status ||
+      !PRINCIPAL_MAIN_MEMORY_CANDIDATE_STATUSES.includes(status as PrincipalMainMemoryCandidateStatus)
+    ) {
+      throw new Error("Principal main memory candidate record is incomplete.");
+    }
+
+    if (approvedMemoryId && status !== "approved") {
+      throw new Error("Principal main memory candidate approved memory requires approved status.");
+    }
+
+    const existing = this.db
+      .prepare(
+        `
+          SELECT principal_id
+          FROM themis_principal_main_memory_candidates
+          WHERE candidate_id = ?
+        `,
+      )
+      .get(candidateId) as { principal_id: string } | undefined;
+
+    if (existing && existing.principal_id !== principalId) {
+      throw new Error("Principal main memory candidate belongs to another principal.");
+    }
+
+    const candidateWriteResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_principal_main_memory_candidates (
+            candidate_id,
+            principal_id,
+            kind,
+            title,
+            summary,
+            rationale,
+            suggested_content,
+            source_type,
+            source_label,
+            source_task_id,
+            source_conversation_id,
+            status,
+            approved_memory_id,
+            reviewed_at,
+            archived_at,
+            created_at,
+            updated_at
+          ) VALUES (
+            @candidate_id,
+            @principal_id,
+            @kind,
+            @title,
+            @summary,
+            @rationale,
+            @suggested_content,
+            @source_type,
+            @source_label,
+            @source_task_id,
+            @source_conversation_id,
+            @status,
+            @approved_memory_id,
+            @reviewed_at,
+            @archived_at,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(candidate_id) DO UPDATE SET
+            kind = excluded.kind,
+            title = excluded.title,
+            summary = excluded.summary,
+            rationale = excluded.rationale,
+            suggested_content = excluded.suggested_content,
+            source_type = excluded.source_type,
+            source_label = excluded.source_label,
+            source_task_id = excluded.source_task_id,
+            source_conversation_id = excluded.source_conversation_id,
+            status = excluded.status,
+            approved_memory_id = excluded.approved_memory_id,
+            reviewed_at = excluded.reviewed_at,
+            archived_at = excluded.archived_at,
+            updated_at = excluded.updated_at
+          WHERE themis_principal_main_memory_candidates.principal_id = excluded.principal_id
+        `,
+      )
+      .run({
+        candidate_id: candidateId,
+        principal_id: principalId,
+        kind,
+        title,
+        summary,
+        rationale,
+        suggested_content: suggestedContent,
+        source_type: sourceType,
+        source_label: sourceLabel,
+        source_task_id: sourceTaskId ?? null,
+        source_conversation_id: sourceConversationId ?? null,
+        status,
+        approved_memory_id: approvedMemoryId ?? null,
+        reviewed_at: reviewedAt ?? null,
+        archived_at: archivedAt ?? null,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+
+    if (candidateWriteResult.changes === 0) {
+      throw new Error("Principal main memory candidate write did not apply.");
+    }
+  }
+
+  getPrincipalMainMemoryCandidate(
+    principalId: string,
+    candidateId: string,
+  ): StoredPrincipalMainMemoryCandidateRecord | null {
+    const normalizedPrincipalId = principalId.trim();
+    const normalizedCandidateId = candidateId.trim();
+
+    if (!normalizedPrincipalId || !normalizedCandidateId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            candidate_id,
+            principal_id,
+            kind,
+            title,
+            summary,
+            rationale,
+            suggested_content,
+            source_type,
+            source_label,
+            source_task_id,
+            source_conversation_id,
+            status,
+            approved_memory_id,
+            reviewed_at,
+            archived_at,
+            created_at,
+            updated_at
+          FROM themis_principal_main_memory_candidates
+          WHERE principal_id = ?
+            AND candidate_id = ?
+        `,
+      )
+      .get(normalizedPrincipalId, normalizedCandidateId) as PrincipalMainMemoryCandidateRow | undefined;
+
+    return row ? mapPrincipalMainMemoryCandidateRow(row) : null;
+  }
+
+  listPrincipalMainMemoryCandidates(filters: {
+    principalId: string;
+    status?: PrincipalMainMemoryCandidateStatus;
+    includeArchived?: boolean;
+    query?: string;
+    limit?: number;
+  }): StoredPrincipalMainMemoryCandidateRecord[] {
+    const normalizedPrincipalId = filters.principalId.trim();
+    const normalizedStatus = normalizeText(filters.status);
+    const normalizedQuery = normalizeText(filters.query);
+    const includeArchived = filters.includeArchived === true;
+    const normalizedLimit = normalizeLimit(filters.limit);
+
+    if (!normalizedPrincipalId) {
+      return [];
+    }
+
+    const parameters: Array<string | number> = [normalizedPrincipalId];
+    let sql = `
+      SELECT
+        candidate_id,
+        principal_id,
+        kind,
+        title,
+        summary,
+        rationale,
+        suggested_content,
+        source_type,
+        source_label,
+        source_task_id,
+        source_conversation_id,
+        status,
+        approved_memory_id,
+        reviewed_at,
+        archived_at,
+        created_at,
+        updated_at
+      FROM themis_principal_main_memory_candidates
+      WHERE principal_id = ?
+    `;
+
+    if (!includeArchived) {
+      sql += ` AND archived_at IS NULL`;
+    }
+
+    if (
+      normalizedStatus &&
+      PRINCIPAL_MAIN_MEMORY_CANDIDATE_STATUSES.includes(normalizedStatus as PrincipalMainMemoryCandidateStatus)
+    ) {
+      sql += ` AND status = ?`;
+      parameters.push(normalizedStatus);
+    }
+
+    if (normalizedQuery) {
+      const likePattern = `%${normalizedQuery}%`;
+      sql += `
+        AND (
+          candidate_id LIKE ?
+          OR title LIKE ?
+          OR summary LIKE ?
+          OR rationale LIKE ?
+          OR suggested_content LIKE ?
+          OR source_label LIKE ?
+          OR COALESCE(source_task_id, '') LIKE ?
+          OR COALESCE(source_conversation_id, '') LIKE ?
+        )
+      `;
+      parameters.push(
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+      );
+    }
+
+    sql += `
+      ORDER BY updated_at DESC, candidate_id DESC
+      LIMIT ?
+    `;
+    parameters.push(normalizedLimit);
+
+    const rows = this.db.prepare(sql).all(...parameters) as PrincipalMainMemoryCandidateRow[];
+
+    return rows.map(mapPrincipalMainMemoryCandidateRow);
   }
 
   searchPrincipalMainMemory(
@@ -3151,6 +3463,15 @@ export class SqliteCodexSessionRegistry {
       this.db
         .prepare(
           `
+            DELETE FROM themis_principal_main_memory_candidates
+            WHERE principal_id = ?
+          `,
+        )
+        .run(normalizedPrincipalId);
+
+      this.db
+        .prepare(
+          `
             DELETE FROM themis_principal_skill_materializations
             WHERE principal_id = ?
           `,
@@ -3313,6 +3634,22 @@ export class SqliteCodexSessionRegistry {
         .prepare(
           `
             UPDATE themis_principal_main_memory
+            SET
+              principal_id = @target_principal_id,
+              updated_at = @updated_at
+            WHERE principal_id = @source_principal_id
+          `,
+        )
+        .run({
+          source_principal_id: sourceId,
+          target_principal_id: targetId,
+          updated_at: updatedAt,
+        });
+
+      this.db
+        .prepare(
+          `
+            UPDATE themis_principal_main_memory_candidates
             SET
               principal_id = @target_principal_id,
               updated_at = @updated_at
@@ -4054,118 +4391,95 @@ export class SqliteCodexSessionRegistry {
   }
 
   listRecentSessions(limit = 24): StoredSessionHistorySummary[] {
+    return this.listRecentSessionsByFilter({}, limit);
+  }
+
+  listRecentSessionsByFilter(filter: StoredSessionHistoryFilter, limit = 24): StoredSessionHistorySummary[] {
     const resolvedLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 24;
-    const rows = this.db
-      .prepare(
-        `
-          SELECT
-            grouped.session_id,
-            grouped.created_at,
-            grouped.updated_at,
-            grouped.turn_count,
-            COALESCE(NULLIF(cs.thread_id, ''), latest.codex_thread_id) AS thread_id,
-            latest.request_id AS latest_request_id,
-            latest.task_id AS latest_task_id,
-            latest.goal AS latest_goal,
-            latest.status AS latest_status,
-            latest.summary AS latest_summary,
-            latest.session_mode AS latest_session_mode,
-            latest.codex_thread_id AS latest_codex_thread_id,
-            latest.updated_at AS latest_updated_at
-          FROM (
-            SELECT
-              session_id,
-              MIN(created_at) AS created_at,
-              MAX(updated_at) AS updated_at,
-              COUNT(*) AS turn_count
-            FROM themis_turns
-            WHERE session_id IS NOT NULL AND session_id <> ''
-            GROUP BY session_id
-          ) grouped
-          INNER JOIN themis_turns latest
-            ON latest.request_id = (
-              SELECT request_id
-              FROM themis_turns latest_turn
-              WHERE latest_turn.session_id = grouped.session_id
-              ORDER BY latest_turn.updated_at DESC, latest_turn.created_at DESC, latest_turn.request_id DESC
-              LIMIT 1
-            )
-          LEFT JOIN codex_sessions cs
-            ON cs.session_id = grouped.session_id
-          ORDER BY grouped.updated_at DESC
-          LIMIT ?
-        `,
-      )
-      .all(resolvedLimit) as SessionSummaryRow[];
+    const { sql, params } = this.buildSessionSummaryQuery({
+      filter,
+      limit: resolvedLimit,
+    });
+    const rows = this.db.prepare(sql).all(...params) as SessionSummaryRow[];
 
     return rows.map(mapSessionSummaryRow);
   }
 
-  listRecentSessionsByFilter(filter: StoredSessionHistoryFilter, limit = 24): StoredSessionHistorySummary[] {
-    const clauses: string[] = [
-      "session_id IS NOT NULL",
-      "session_id <> ''",
-    ];
-    const params: Array<string | number> = [];
+  getSessionHistorySummary(sessionId: string): StoredSessionHistorySummary | null {
+    const normalized = sessionId.trim();
 
-    if (typeof filter.sourceChannel === "string" && filter.sourceChannel.trim()) {
-      clauses.push("source_channel = ?");
-      params.push(filter.sourceChannel.trim());
+    if (!normalized) {
+      return null;
     }
 
-    if (typeof filter.userId === "string" && filter.userId.trim()) {
-      clauses.push("user_id = ?");
-      params.push(filter.userId.trim());
+    const { sql, params } = this.buildSessionSummaryQuery({
+      sessionId: normalized,
+      limit: 1,
+      includeArchived: true,
+    });
+    const row = this.db.prepare(sql).get(...params) as SessionSummaryRow | undefined;
+
+    return row ? mapSessionSummaryRow(row) : null;
+  }
+
+  saveSessionHistoryMetadata(record: StoredSessionHistoryMetadataRecord): void {
+    const sessionId = record.sessionId.trim();
+
+    if (!sessionId || !record.createdAt || !record.updatedAt) {
+      throw new Error("Session history metadata record is incomplete.");
     }
 
-    const resolvedLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 24;
-    params.push(resolvedLimit);
+    const existing = this.readSessionHistoryMetadataRow(sessionId);
+    const originKind = normalizeSessionHistoryOriginKind(record.originKind ?? existing?.origin_kind ?? null);
+    const originSessionId = normalizeText(record.originSessionId ?? existing?.origin_session_id ?? undefined);
+    const originLabel = normalizeText(record.originLabel ?? existing?.origin_label ?? undefined);
+    const archivedAt = normalizeText(existing?.archived_at ?? undefined);
 
-    const whereClause = clauses.join("\n              AND ");
-    const rows = this.db
+    this.db
       .prepare(
         `
-          SELECT
-            grouped.session_id,
-            grouped.created_at,
-            grouped.updated_at,
-            grouped.turn_count,
-            COALESCE(NULLIF(cs.thread_id, ''), latest.codex_thread_id) AS thread_id,
-            latest.request_id AS latest_request_id,
-            latest.task_id AS latest_task_id,
-            latest.goal AS latest_goal,
-            latest.status AS latest_status,
-            latest.summary AS latest_summary,
-            latest.session_mode AS latest_session_mode,
-            latest.codex_thread_id AS latest_codex_thread_id,
-            latest.updated_at AS latest_updated_at
-          FROM (
-            SELECT
-              session_id,
-              MIN(created_at) AS created_at,
-              MAX(updated_at) AS updated_at,
-              COUNT(*) AS turn_count
-            FROM themis_turns
-            WHERE ${whereClause}
-            GROUP BY session_id
-          ) grouped
-          INNER JOIN themis_turns latest
-            ON latest.request_id = (
-              SELECT request_id
-              FROM themis_turns latest_turn
-              WHERE latest_turn.session_id = grouped.session_id
-              ORDER BY latest_turn.updated_at DESC, latest_turn.created_at DESC, latest_turn.request_id DESC
-              LIMIT 1
-            )
-          LEFT JOIN codex_sessions cs
-            ON cs.session_id = grouped.session_id
-          ORDER BY grouped.updated_at DESC
-          LIMIT ?
+          INSERT INTO themis_session_history_metadata (
+            session_id,
+            archived_at,
+            origin_kind,
+            origin_session_id,
+            origin_label,
+            created_at,
+            updated_at
+          ) VALUES (
+            @session_id,
+            @archived_at,
+            @origin_kind,
+            @origin_session_id,
+            @origin_label,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(session_id) DO UPDATE SET
+            archived_at = excluded.archived_at,
+            origin_kind = excluded.origin_kind,
+            origin_session_id = excluded.origin_session_id,
+            origin_label = excluded.origin_label,
+            updated_at = excluded.updated_at
         `,
       )
-      .all(...params) as SessionSummaryRow[];
+      .run({
+        session_id: sessionId,
+        archived_at: archivedAt ?? null,
+        origin_kind: originKind,
+        origin_session_id: originSessionId ?? null,
+        origin_label: originLabel ?? null,
+        created_at: existing?.created_at ?? record.createdAt,
+        updated_at: record.updatedAt,
+      });
+  }
 
-    return rows.map(mapSessionSummaryRow);
+  archiveSessionHistory(sessionId: string, archivedAt: string): boolean {
+    return this.writeSessionArchiveState(sessionId, archivedAt);
+  }
+
+  unarchiveSessionHistory(sessionId: string, updatedAt: string): boolean {
+    return this.writeSessionArchiveState(sessionId, null, updatedAt);
   }
 
   hasSessionTurn(filter: StoredSessionHistoryFilter & { sessionId: string }): boolean {
@@ -4805,6 +5119,28 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_principal_main_memory_principal_idx
       ON themis_principal_main_memory(principal_id, updated_at DESC, memory_id DESC);
 
+      CREATE TABLE IF NOT EXISTS themis_principal_main_memory_candidates (
+        candidate_id TEXT PRIMARY KEY,
+        principal_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        rationale TEXT NOT NULL,
+        suggested_content TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_label TEXT NOT NULL,
+        source_task_id TEXT,
+        source_conversation_id TEXT,
+        status TEXT NOT NULL,
+        approved_memory_id TEXT,
+        reviewed_at TEXT,
+        archived_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE,
+        FOREIGN KEY (approved_memory_id) REFERENCES themis_principal_main_memory(memory_id) ON DELETE SET NULL
+      );
+
       CREATE TABLE IF NOT EXISTS themis_actor_task_scopes (
         scope_id TEXT PRIMARY KEY,
         principal_id TEXT NOT NULL,
@@ -4850,6 +5186,12 @@ export class SqliteCodexSessionRegistry {
     database.exec(`
       CREATE INDEX IF NOT EXISTS themis_principal_actors_owner_idx
       ON themis_principal_actors(owner_principal_id, updated_at DESC, actor_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_principal_main_memory_candidates_principal_idx
+      ON themis_principal_main_memory_candidates(principal_id, archived_at, updated_at DESC, candidate_id DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_principal_main_memory_candidates_status_idx
+      ON themis_principal_main_memory_candidates(principal_id, status, archived_at, updated_at DESC, candidate_id DESC);
 
       CREATE INDEX IF NOT EXISTS themis_actor_task_scopes_principal_idx
       ON themis_actor_task_scopes(principal_id, actor_id, status, updated_at DESC, scope_id ASC);
@@ -5109,6 +5451,7 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_web_audit_events_created_idx
       ON themis_web_audit_events(created_at DESC);
     `);
+    this.createSessionHistoryMetadataTables(database);
     this.createTurnInputTables(database);
 
     const authAccountColumns = database
@@ -5154,6 +5497,232 @@ export class SqliteCodexSessionRegistry {
       `);
     }
 
+  }
+
+  private createSessionHistoryMetadataTables(database: Database.Database): void {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS themis_session_history_metadata (
+        session_id TEXT PRIMARY KEY,
+        archived_at TEXT,
+        origin_kind TEXT NOT NULL DEFAULT 'standard',
+        origin_session_id TEXT,
+        origin_label TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_session_history_metadata_archived_idx
+      ON themis_session_history_metadata(archived_at, updated_at DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_session_history_metadata_origin_idx
+      ON themis_session_history_metadata(origin_kind, updated_at DESC);
+    `);
+  }
+
+  private readSessionHistoryMetadataRow(sessionId: string): {
+    session_id: string;
+    archived_at: string | null;
+    origin_kind: string;
+    origin_session_id: string | null;
+    origin_label: string | null;
+    created_at: string;
+    updated_at: string;
+  } | null {
+    const normalized = sessionId.trim();
+
+    if (!normalized) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            session_id,
+            archived_at,
+            origin_kind,
+            origin_session_id,
+            origin_label,
+            created_at,
+            updated_at
+          FROM themis_session_history_metadata
+          WHERE session_id = ?
+        `,
+      )
+      .get(normalized) as {
+        session_id: string;
+        archived_at: string | null;
+        origin_kind: string;
+        origin_session_id: string | null;
+        origin_label: string | null;
+        created_at: string;
+        updated_at: string;
+      } | undefined;
+
+    return row ?? null;
+  }
+
+  private writeSessionArchiveState(sessionId: string, archivedAt: string | null, updatedAt?: string): boolean {
+    const normalized = sessionId.trim();
+    const summary = this.getSessionHistorySummary(normalized);
+
+    if (!normalized || !summary) {
+      return false;
+    }
+
+    const existing = this.readSessionHistoryMetadataRow(normalized);
+    const timestamp = archivedAt ?? updatedAt ?? new Date().toISOString();
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_session_history_metadata (
+            session_id,
+            archived_at,
+            origin_kind,
+            origin_session_id,
+            origin_label,
+            created_at,
+            updated_at
+          ) VALUES (
+            @session_id,
+            @archived_at,
+            @origin_kind,
+            @origin_session_id,
+            @origin_label,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(session_id) DO UPDATE SET
+            archived_at = excluded.archived_at,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        session_id: normalized,
+        archived_at: archivedAt,
+        origin_kind: normalizeSessionHistoryOriginKind(existing?.origin_kind ?? summary.originKind),
+        origin_session_id: existing?.origin_session_id ?? summary.originSessionId ?? null,
+        origin_label: existing?.origin_label ?? summary.originLabel ?? null,
+        created_at: existing?.created_at ?? summary.createdAt,
+        updated_at: updatedAt ?? timestamp,
+      });
+
+    return true;
+  }
+
+  private buildSessionSummaryQuery(options: {
+    filter?: StoredSessionHistoryFilter;
+    sessionId?: string;
+    limit: number;
+    includeArchived?: boolean;
+  }): {
+    sql: string;
+    params: Array<string | number>;
+  } {
+    const groupedClauses = [
+      "session_id IS NOT NULL",
+      "session_id <> ''",
+    ];
+    const groupedParams: Array<string | number> = [];
+    const filter = options.filter ?? {};
+
+    if (typeof options.sessionId === "string" && options.sessionId.trim()) {
+      groupedClauses.push("session_id = ?");
+      groupedParams.push(options.sessionId.trim());
+    }
+
+    if (typeof filter.sourceChannel === "string" && filter.sourceChannel.trim()) {
+      groupedClauses.push("source_channel = ?");
+      groupedParams.push(filter.sourceChannel.trim());
+    }
+
+    if (typeof filter.userId === "string" && filter.userId.trim()) {
+      groupedClauses.push("user_id = ?");
+      groupedParams.push(filter.userId.trim());
+    }
+
+    const outerClauses: string[] = [];
+    const outerParams: Array<string | number> = [];
+    const includeArchived = options.includeArchived ?? filter.includeArchived ?? false;
+
+    if (!includeArchived) {
+      outerClauses.push("metadata.archived_at IS NULL");
+    }
+
+    if (filter.originKind === "fork" || filter.originKind === "standard") {
+      outerClauses.push("COALESCE(NULLIF(metadata.origin_kind, ''), 'standard') = ?");
+      outerParams.push(filter.originKind);
+    }
+
+    const normalizedQuery = typeof filter.query === "string" ? filter.query.trim().toLowerCase() : "";
+    if (normalizedQuery) {
+      const likeQuery = `%${normalizedQuery}%`;
+      outerClauses.push(`
+        (
+          LOWER(grouped.session_id) LIKE ?
+          OR LOWER(COALESCE(latest.goal, '')) LIKE ?
+          OR LOWER(COALESCE(latest.summary, '')) LIKE ?
+          OR LOWER(COALESCE(metadata.origin_label, '')) LIKE ?
+          OR LOWER(COALESCE(metadata.origin_session_id, '')) LIKE ?
+          OR LOWER(COALESCE(NULLIF(cs.thread_id, ''), latest.codex_thread_id, '')) LIKE ?
+        )
+      `);
+      outerParams.push(likeQuery, likeQuery, likeQuery, likeQuery, likeQuery, likeQuery);
+    }
+
+    const outerWhereClause = outerClauses.length > 0
+      ? `WHERE ${outerClauses.join("\n          AND ")}`
+      : "";
+
+    return {
+      sql: `
+        SELECT
+          grouped.session_id,
+          grouped.created_at,
+          grouped.updated_at,
+          grouped.turn_count,
+          metadata.archived_at,
+          COALESCE(NULLIF(metadata.origin_kind, ''), 'standard') AS origin_kind,
+          metadata.origin_session_id,
+          metadata.origin_label,
+          COALESCE(NULLIF(cs.thread_id, ''), latest.codex_thread_id) AS thread_id,
+          latest.request_id AS latest_request_id,
+          latest.task_id AS latest_task_id,
+          latest.goal AS latest_goal,
+          latest.status AS latest_status,
+          latest.summary AS latest_summary,
+          latest.session_mode AS latest_session_mode,
+          latest.codex_thread_id AS latest_codex_thread_id,
+          latest.updated_at AS latest_updated_at
+        FROM (
+          SELECT
+            session_id,
+            MIN(created_at) AS created_at,
+            MAX(updated_at) AS updated_at,
+            COUNT(*) AS turn_count
+          FROM themis_turns
+          WHERE ${groupedClauses.join("\n            AND ")}
+          GROUP BY session_id
+        ) grouped
+        INNER JOIN themis_turns latest
+          ON latest.request_id = (
+            SELECT request_id
+            FROM themis_turns latest_turn
+            WHERE latest_turn.session_id = grouped.session_id
+            ORDER BY latest_turn.updated_at DESC, latest_turn.created_at DESC, latest_turn.request_id DESC
+            LIMIT 1
+          )
+        LEFT JOIN codex_sessions cs
+          ON cs.session_id = grouped.session_id
+        LEFT JOIN themis_session_history_metadata metadata
+          ON metadata.session_id = grouped.session_id
+        ${outerWhereClause}
+        ORDER BY grouped.updated_at DESC
+        LIMIT ?
+      `,
+      params: [...groupedParams, ...outerParams, options.limit],
+    };
   }
 
   private createTurnInputTables(database: Database.Database): void {
@@ -5348,6 +5917,30 @@ function mapPrincipalMainMemoryRow(row: PrincipalMainMemoryRow): StoredPrincipal
   };
 }
 
+function mapPrincipalMainMemoryCandidateRow(
+  row: PrincipalMainMemoryCandidateRow,
+): StoredPrincipalMainMemoryCandidateRecord {
+  return {
+    candidateId: row.candidate_id,
+    principalId: row.principal_id,
+    kind: row.kind as PrincipalMainMemoryKind,
+    title: row.title,
+    summary: row.summary,
+    rationale: row.rationale,
+    suggestedContent: row.suggested_content,
+    sourceType: row.source_type as PrincipalMainMemorySourceType,
+    sourceLabel: row.source_label,
+    ...(row.source_task_id ? { sourceTaskId: row.source_task_id } : {}),
+    ...(row.source_conversation_id ? { sourceConversationId: row.source_conversation_id } : {}),
+    status: row.status as PrincipalMainMemoryCandidateStatus,
+    ...(row.approved_memory_id ? { approvedMemoryId: row.approved_memory_id } : {}),
+    ...(row.reviewed_at ? { reviewedAt: row.reviewed_at } : {}),
+    ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function mapActorTaskScopeRow(row: ActorTaskScopeRow): StoredActorTaskScopeRecord {
   return {
     scopeId: row.scope_id,
@@ -5501,12 +6094,19 @@ function mapEventRow(row: EventRow): StoredTaskEventRecord {
 
 function mapSessionSummaryRow(row: SessionSummaryRow): StoredSessionHistorySummary {
   const threadId = normalizeText(row.thread_id ?? undefined);
+  const archivedAt = normalizeText(row.archived_at ?? undefined);
+  const originSessionId = normalizeText(row.origin_session_id ?? undefined);
+  const originLabel = normalizeText(row.origin_label ?? undefined);
 
   return {
     sessionId: row.session_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     turnCount: row.turn_count,
+    originKind: normalizeSessionHistoryOriginKind(row.origin_kind),
+    ...(archivedAt ? { archivedAt } : {}),
+    ...(originSessionId ? { originSessionId } : {}),
+    ...(originLabel ? { originLabel } : {}),
     ...(threadId ? { threadId } : {}),
     latestTurn: {
       requestId: row.latest_request_id,
@@ -5519,6 +6119,10 @@ function mapSessionSummaryRow(row: SessionSummaryRow): StoredSessionHistorySumma
       updatedAt: row.latest_updated_at,
     },
   };
+}
+
+function normalizeSessionHistoryOriginKind(value: string | undefined | null): "standard" | "fork" {
+  return value === "fork" ? "fork" : "standard";
 }
 
 function mapInputAssetRow(row: InputAssetRow): TaskInputAsset {

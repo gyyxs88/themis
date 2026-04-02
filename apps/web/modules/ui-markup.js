@@ -9,6 +9,7 @@ export function renderThreadButton(thread, { active, busy, status, escapeHtml })
   const resolvedStatus = status ?? "idle";
   const statusTone = badgeToneForStatus(resolvedStatus);
   const statusLabel = formatStatusLabel(resolvedStatus);
+  const title = thread?.historyArchivedAt ? `${thread.title} · 已归档` : thread.title;
 
   return `
     <button
@@ -18,7 +19,7 @@ export function renderThreadButton(thread, { active, busy, status, escapeHtml })
       aria-current="${active ? "true" : "false"}"
       ${busy ? "disabled" : ""}
     >
-      <span class="thread-title">${escapeHtml(thread.title)}</span>
+      <span class="thread-title">${escapeHtml(title)}</span>
       <span class="thread-status-inline ${escapeHtml(statusTone)}">
         <span class="thread-status-dot" aria-hidden="true"></span>
         <span>${escapeHtml(statusLabel)}</span>

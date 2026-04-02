@@ -251,6 +251,408 @@ test("attachConversationById 在服务端失败时会留在原线程并且不创
   }
 });
 
+test("refreshHistoryFromServer 会把 query/includeArchived 传给服务端，并同步来源与归档元数据", async () => {
+  const storageKey = "themis-history-search-test";
+  const storage = createLocalStorageMock();
+  const originalLocalStorage = globalThis.localStorage;
+  const originalFetch = globalThis.fetch;
+  globalThis.localStorage = storage;
+
+  const app = {
+    constants: {
+      MAX_THREAD_COUNT: 20,
+      STORAGE_KEY: storageKey,
+    },
+    utils: {
+      ...utils,
+      safeReadJson: async (response) => response.json(),
+    },
+    runtime: {
+      historySyncBusy: false,
+      historyHydratingThreadId: null,
+      threadSearchQuery: "fork 自 session-root-1",
+      historyIncludeArchived: true,
+    },
+    renderer: {
+      renderAll() {},
+    },
+    sessionSettings: {
+      async loadThreadSettings() {},
+    },
+  };
+
+  app.store = createStore(app);
+
+  try {
+    globalThis.fetch = async (url) => {
+      assert.equal(url, "/api/history/sessions?limit=20&query=fork+%E8%87%AA+session-root-1&includeArchived=1");
+
+      return new Response(JSON.stringify({
+        sessions: [
+          {
+            sessionId: "session-search-1",
+            createdAt: "2026-04-02T10:00:00.000Z",
+            updatedAt: "2026-04-02T10:01:00.000Z",
+            turnCount: 1,
+            archivedAt: "2026-04-02T10:02:00.000Z",
+            originKind: "fork",
+            originSessionId: "session-root-1",
+            originLabel: "fork 自 session-root-1",
+            latestTurn: {
+              requestId: "request-search-1",
+              taskId: "task-search-1",
+              goal: "fork 历史搜索",
+              status: "completed",
+              updatedAt: "2026-04-02T10:01:00.000Z",
+            },
+          },
+        ],
+      }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    };
+
+    const history = createHistoryController(app);
+    await history.refreshHistoryFromServer({
+      skipActiveHistoryLoad: true,
+    });
+
+    const thread = app.store.getThreadById("session-search-1");
+    assert.equal(thread?.historyOriginKind, "fork");
+    assert.equal(thread?.historyOriginSessionId, "session-root-1");
+    assert.equal(thread?.historyOriginLabel, "fork 自 session-root-1");
+    assert.equal(thread?.historyArchivedAt, "2026-04-02T10:02:00.000Z");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalLocalStorage === undefined) {
+      delete globalThis.localStorage;
+    } else {
+      globalThis.localStorage = originalLocalStorage;
+    }
+  }
+});
+
+test("refreshHistoryFromServer 在服务端筛选开启时会隐藏不在结果集中的旧历史线程", async () => {
+  const storageKey = "themis-history-filtered-visibility-test";
+  const storage = createLocalStorageMock();
+  const originalLocalStorage = globalThis.localStorage;
+  const originalFetch = globalThis.fetch;
+  globalThis.localStorage = storage;
+
+  const app = {
+    constants: {
+      MAX_THREAD_COUNT: 20,
+      STORAGE_KEY: storageKey,
+    },
+    utils: {
+      ...utils,
+      safeReadJson: async (response) => response.json(),
+    },
+    runtime: {
+      historySyncBusy: false,
+      historyHydratingThreadId: null,
+      threadSearchQuery: "fork 自 session-root-1",
+      historyIncludeArchived: false,
+    },
+    renderer: {
+      renderAll() {},
+    },
+    sessionSettings: {
+      async loadThreadSettings() {},
+    },
+  };
+
+  app.store = createStore(app);
+  const staleThread = app.store.createThread();
+  staleThread.id = "session-stale";
+  staleThread.serverHistoryAvailable = true;
+  staleThread.storedTurnCount = 1;
+  staleThread.historyHydrated = false;
+  staleThread.historyOriginKind = "fork";
+  staleThread.historyOriginSessionId = "session-root-1";
+  staleThread.historyOriginLabel = "fork 自 session-root-1";
+  staleThread.storedSummary = "fork 自 session-root-1 的旧摘要";
+  staleThread.updatedAt = "2026-04-02T09:59:00.000Z";
+  app.store.state.threads.push(staleThread);
+  app.store.saveState();
+
+  try {
+    globalThis.fetch = async (url) => {
+      assert.equal(url, "/api/history/sessions?limit=20&query=fork+%E8%87%AA+session-root-1");
+
+      return new Response(JSON.stringify({
+        sessions: [
+          {
+            sessionId: "session-search-1",
+            createdAt: "2026-04-02T10:00:00.000Z",
+            updatedAt: "2026-04-02T10:01:00.000Z",
+            turnCount: 1,
+            originKind: "fork",
+            originSessionId: "session-root-1",
+            originLabel: "fork 自 session-root-1",
+            latestTurn: {
+              requestId: "request-search-1",
+              taskId: "task-search-1",
+              goal: "fork 历史搜索",
+              status: "completed",
+              updatedAt: "2026-04-02T10:01:00.000Z",
+            },
+          },
+        ],
+      }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    };
+
+    const history = createHistoryController(app);
+    await history.refreshHistoryFromServer({
+      skipActiveHistoryLoad: true,
+    });
+
+    assert.deepEqual(
+      app.store.getVisibleThreads(app.runtime.threadSearchQuery).map((thread) => thread.id),
+      ["session-search-1"],
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalLocalStorage === undefined) {
+      delete globalThis.localStorage;
+    } else {
+      globalThis.localStorage = originalLocalStorage;
+    }
+  }
+});
+
+test("refreshHistoryFromServer 在筛选条件变化且新请求失败时不会继续沿用旧结果集隐藏线程", async () => {
+  const storageKey = "themis-history-filter-reset-test";
+  const storage = createLocalStorageMock();
+  const originalLocalStorage = globalThis.localStorage;
+  const originalFetch = globalThis.fetch;
+  const originalConsoleError = console.error;
+  globalThis.localStorage = storage;
+
+  const app = {
+    constants: {
+      MAX_THREAD_COUNT: 20,
+      STORAGE_KEY: storageKey,
+    },
+    utils: {
+      ...utils,
+      safeReadJson: async (response) => response.json(),
+    },
+    runtime: {
+      historySyncBusy: false,
+      historyHydratingThreadId: null,
+      threadSearchQuery: "fork 自 session-root-1",
+      historyIncludeArchived: false,
+    },
+    renderer: {
+      renderAll() {},
+    },
+    sessionSettings: {
+      async loadThreadSettings() {},
+    },
+  };
+
+  app.store = createStore(app);
+  const firstThread = app.store.createThread();
+  firstThread.id = "session-first";
+  firstThread.serverHistoryAvailable = true;
+  firstThread.storedTurnCount = 1;
+  firstThread.historyHydrated = false;
+  firstThread.historyOriginKind = "fork";
+  firstThread.historyOriginSessionId = "session-root-1";
+  firstThread.historyOriginLabel = "fork 自 session-root-1";
+  firstThread.storedSummary = "fork 自 session-root-1 的第一条";
+  firstThread.updatedAt = "2026-04-02T10:00:00.000Z";
+
+  const staleThread = app.store.createThread();
+  staleThread.id = "session-stale";
+  staleThread.serverHistoryAvailable = true;
+  staleThread.storedTurnCount = 1;
+  staleThread.historyHydrated = false;
+  staleThread.historyOriginKind = "fork";
+  staleThread.historyOriginSessionId = "session-root-1";
+  staleThread.historyOriginLabel = "fork 自 session-root-1";
+  staleThread.storedSummary = "fork 自 session-root-1 的旧摘要";
+  staleThread.updatedAt = "2026-04-02T09:59:00.000Z";
+
+  app.store.state.threads.push(firstThread, staleThread);
+  app.store.saveState();
+
+  let fetchCount = 0;
+
+  try {
+    console.error = () => {};
+    globalThis.fetch = async (url) => {
+      fetchCount += 1;
+
+      if (fetchCount === 1) {
+        assert.equal(url, "/api/history/sessions?limit=20&query=fork+%E8%87%AA+session-root-1");
+
+        return new Response(JSON.stringify({
+          sessions: [
+            {
+              sessionId: "session-first",
+              createdAt: "2026-04-02T10:00:00.000Z",
+              updatedAt: "2026-04-02T10:01:00.000Z",
+              turnCount: 1,
+              originKind: "fork",
+              originSessionId: "session-root-1",
+              originLabel: "fork 自 session-root-1",
+              latestTurn: {
+                requestId: "request-first",
+                taskId: "task-first",
+                goal: "fork 历史搜索",
+                status: "completed",
+                updatedAt: "2026-04-02T10:01:00.000Z",
+              },
+            },
+          ],
+        }), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        });
+      }
+
+      assert.equal(url, "/api/history/sessions?limit=20");
+      throw new Error("network down");
+    };
+
+    const history = createHistoryController(app);
+    await history.refreshHistoryFromServer({
+      skipActiveHistoryLoad: true,
+    });
+
+    assert.deepEqual(
+      app.store.getVisibleThreads(app.runtime.threadSearchQuery).map((thread) => thread.id),
+      ["session-first"],
+    );
+
+    app.runtime.threadSearchQuery = "";
+    await history.refreshHistoryFromServer({
+      skipActiveHistoryLoad: true,
+    });
+
+    const visibleThreadIds = app.store.getVisibleThreads(app.runtime.threadSearchQuery).map((thread) => thread.id);
+    assert.equal(visibleThreadIds.includes("session-first"), true);
+    assert.equal(visibleThreadIds.includes("session-stale"), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalConsoleError;
+    if (originalLocalStorage === undefined) {
+      delete globalThis.localStorage;
+    } else {
+      globalThis.localStorage = originalLocalStorage;
+    }
+  }
+});
+
+test("toggleThreadArchive 会调用 archive 接口并同步当前线程的 archivedAt", async () => {
+  const storageKey = "themis-history-archive-test";
+  const storage = createLocalStorageMock();
+  const originalLocalStorage = globalThis.localStorage;
+  const originalFetch = globalThis.fetch;
+  globalThis.localStorage = storage;
+
+  const app = {
+    constants: {
+      MAX_THREAD_COUNT: 20,
+      STORAGE_KEY: storageKey,
+    },
+    utils: {
+      ...utils,
+      safeReadJson: async (response) => response.json(),
+    },
+    runtime: {
+      historySyncBusy: false,
+      historyHydratingThreadId: null,
+      threadSearchQuery: "",
+      historyIncludeArchived: false,
+    },
+    renderer: {
+      renderAll() {},
+    },
+    sessionSettings: {
+      async loadThreadSettings() {},
+    },
+  };
+
+  app.store = createStore(app);
+  const thread = app.store.getActiveThread();
+  thread.id = "session-archive-1";
+  thread.serverHistoryAvailable = true;
+  thread.storedTurnCount = 1;
+
+  const requests = [];
+
+  try {
+    globalThis.fetch = async (url, options = {}) => {
+      requests.push({
+        url,
+        method: options.method ?? "GET",
+      });
+
+      const archivedAt = options.method === "DELETE" ? null : "2026-04-02T11:00:00.000Z";
+
+      return new Response(JSON.stringify({
+        session: {
+          sessionId: "session-archive-1",
+          createdAt: "2026-04-02T10:00:00.000Z",
+          updatedAt: "2026-04-02T11:00:00.000Z",
+          turnCount: 1,
+          originKind: "standard",
+          archivedAt,
+          latestTurn: {
+            requestId: "request-archive-1",
+            taskId: "task-archive-1",
+            goal: "archive test",
+            status: "completed",
+            updatedAt: "2026-04-02T10:00:30.000Z",
+          },
+        },
+      }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    };
+
+    const history = createHistoryController(app);
+    await history.toggleThreadArchive("session-archive-1", true);
+    assert.equal(thread.historyArchivedAt, "2026-04-02T11:00:00.000Z");
+
+    await history.toggleThreadArchive("session-archive-1", false);
+    assert.equal(thread.historyArchivedAt ?? null, null);
+    assert.deepEqual(requests, [
+      {
+        url: "/api/history/sessions/session-archive-1/archive",
+        method: "POST",
+      },
+      {
+        url: "/api/history/sessions/session-archive-1/archive",
+        method: "DELETE",
+      },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalLocalStorage === undefined) {
+      delete globalThis.localStorage;
+    } else {
+      globalThis.localStorage = originalLocalStorage;
+    }
+  }
+});
+
 function createHistoryHarness(options = {}) {
   const storageKey = "themis-history-test";
   const storage = createLocalStorageMock();

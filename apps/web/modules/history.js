@@ -37,16 +37,33 @@ export function createHistoryController(app) {
     app.renderer.renderAll();
 
     try {
-      const response = await fetch(`/api/history/sessions?limit=${MAX_THREAD_COUNT}`);
+      const query = typeof (options.query ?? app.runtime.threadSearchQuery) === "string"
+        ? (options.query ?? app.runtime.threadSearchQuery).trim()
+        : "";
+      const includeArchived = Boolean(options.includeArchived ?? app.runtime.historyIncludeArchived);
+      const response = await fetch(buildHistorySessionsUrl({
+        limit: MAX_THREAD_COUNT,
+        query,
+        includeArchived,
+      }));
       const data = await app.utils.safeReadJson(response);
 
       if (!response.ok) {
         throw new Error(data?.error?.message ?? "拉取历史会话失败。");
       }
 
-      mergeHistorySessions(data?.sessions ?? []);
+      const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
+      mergeHistorySessions(sessions);
+      syncServerFilteredVisibility(sessions, {
+        query,
+        includeArchived,
+      });
       app.store.saveState();
       app.renderer.renderAll();
+
+      if (options.skipActiveHistoryLoad) {
+        return;
+      }
 
       if (options.force && app.store.state.activeThreadId) {
         await ensureThreadHistoryLoaded(app.store.state.activeThreadId, { force: true });
@@ -69,6 +86,25 @@ export function createHistoryController(app) {
     }
 
     app.store.trimThreads();
+  }
+
+  function syncServerFilteredVisibility(sessions, options = {}) {
+    const serverFilterActive = Boolean(
+      (typeof options.query === "string" && options.query.trim())
+      || options.includeArchived,
+    );
+    const normalizedQuery = typeof options.query === "string" ? options.query.trim() : "";
+
+    app.runtime.historyServerFilterActive = serverFilterActive;
+    app.runtime.historyServerFilterQuery = normalizedQuery;
+    app.runtime.historyServerFilterIncludeArchived = Boolean(options.includeArchived);
+    app.runtime.historyServerFilterSessionIds = serverFilterActive
+      ? new Set(
+        sessions
+          .map((session) => (typeof session?.sessionId === "string" ? session.sessionId : ""))
+          .filter(Boolean),
+      )
+      : null;
   }
 
   function upsertThreadFromHistorySummary(summary) {
@@ -94,6 +130,7 @@ export function createHistoryController(app) {
     thread.storedTurnCount = Math.max(summary.turnCount ?? 0, thread.turns.length);
     thread.storedSummary = summary.latestTurn?.summary ?? summary.latestTurn?.goal ?? thread.storedSummary;
     thread.storedStatus = summary.latestTurn?.status ?? thread.storedStatus;
+    applySessionHistoryMetadataToThread(thread, summary);
 
     if (!thread.turns.length) {
       thread.historyHydrated = false;
@@ -217,6 +254,7 @@ export function createHistoryController(app) {
       thread.storedTurnCount = 0;
       thread.storedSummary = "";
       thread.storedStatus = null;
+      applySessionHistoryMetadataToThread(thread, { originKind: "standard" });
       thread.historyHydrated = true;
       await app.sessionSettings.loadThreadSettings(thread.id, { quiet: true });
       app.store.state.activeThreadId = thread.id;
@@ -264,6 +302,7 @@ export function createHistoryController(app) {
     thread.storedTurnCount = Math.max(session.turnCount ?? 0, thread.storedTurnCount ?? 0);
     thread.storedSummary = session.latestTurn?.summary ?? session.latestTurn?.goal ?? thread.storedSummary;
     thread.storedStatus = session.latestTurn?.status ?? thread.storedStatus;
+    applySessionHistoryMetadataToThread(thread, session);
     thread.historyHydrated = true;
     thread.turns = Array.isArray(data?.turns)
       ? data.turns
@@ -276,6 +315,60 @@ export function createHistoryController(app) {
     if (thread.turns.length) {
       thread.updatedAt = thread.turns.at(-1)?.createdAt ?? thread.updatedAt;
     }
+  }
+
+  async function toggleThreadArchive(threadId, archived) {
+    const normalizedThreadId = typeof threadId === "string" ? threadId.trim() : "";
+
+    if (!normalizedThreadId) {
+      return;
+    }
+
+    const response = await fetch(`/api/history/sessions/${encodeURIComponent(normalizedThreadId)}/archive`, {
+      method: archived ? "POST" : "DELETE",
+    });
+    const data = await app.utils.safeReadJson(response);
+
+    if (!response.ok) {
+      throw new Error(data?.error?.message ?? "更新归档状态失败。");
+    }
+
+    const thread = app.store.getThreadById(normalizedThreadId);
+    if (!thread || !data?.session) {
+      return;
+    }
+
+    applySessionHistoryMetadataToThread(thread, data.session);
+    thread.updatedAt = typeof data.session.updatedAt === "string" ? data.session.updatedAt : thread.updatedAt;
+    app.store.saveState();
+    app.renderer.renderAll();
+  }
+
+  function applySessionHistoryMetadataToThread(thread, session) {
+    if (!thread || !session || typeof session !== "object") {
+      return;
+    }
+
+    thread.historyArchivedAt = typeof session.archivedAt === "string" ? session.archivedAt : null;
+    thread.historyOriginKind = session.originKind === "fork" ? "fork" : "standard";
+    thread.historyOriginSessionId = typeof session.originSessionId === "string" ? session.originSessionId : null;
+    thread.historyOriginLabel = typeof session.originLabel === "string" ? session.originLabel : null;
+  }
+
+  function buildHistorySessionsUrl(options = {}) {
+    const params = new URLSearchParams();
+    params.set("limit", String(options.limit ?? MAX_THREAD_COUNT));
+    const normalizedQuery = typeof options.query === "string" ? options.query.trim() : "";
+
+    if (normalizedQuery) {
+      params.set("query", normalizedQuery);
+    }
+
+    if (options.includeArchived) {
+      params.set("includeArchived", "1");
+    }
+
+    return `/api/history/sessions?${params.toString()}`;
   }
 
   function mapStoredTurnToLocalTurn(turn, existingTurn = null) {
@@ -536,5 +629,6 @@ export function createHistoryController(app) {
     threadNeedsHistoryHydration,
     refreshHistoryFromServer,
     ensureThreadHistoryLoaded,
+    toggleThreadArchive,
   };
 }

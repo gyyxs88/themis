@@ -524,6 +524,169 @@ test("savePrincipalActor / savePrincipalMainMemory / saveActorTaskScope 在 chan
   }
 });
 
+test("SqliteCodexSessionRegistry 会保存长期记忆候选，并支持状态/归档/搜索过滤", () => {
+  const { root, registry } = createRegistryContext();
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-candidate-1",
+      displayName: "Owner",
+      createdAt: "2026-04-02T12:00:00.000Z",
+      updatedAt: "2026-04-02T12:00:00.000Z",
+    });
+
+    registry.savePrincipalMainMemoryCandidate({
+      candidateId: "candidate-suggested-1",
+      principalId: "principal-candidate-1",
+      kind: "preference",
+      title: "回答节奏",
+      summary: "偏好先给结论再展开。",
+      rationale: "最近多轮对话都要求先结论后展开。",
+      suggestedContent: "默认先给结论，再补过程和依据。",
+      sourceType: "themis",
+      sourceLabel: "session session-candidate-1 / task task-candidate-1",
+      sourceTaskId: "task-candidate-1",
+      sourceConversationId: "session-candidate-1",
+      status: "suggested",
+      createdAt: "2026-04-02T12:01:00.000Z",
+      updatedAt: "2026-04-02T12:01:00.000Z",
+    });
+    registry.savePrincipalMainMemoryCandidate({
+      candidateId: "candidate-rejected-1",
+      principalId: "principal-candidate-1",
+      kind: "behavior",
+      title: "复盘方式",
+      summary: "倾向先列风险再给建议。",
+      rationale: "用户更关注风险排查。",
+      suggestedContent: "复盘时优先列风险和回滚面。",
+      sourceType: "manual",
+      sourceLabel: "owner manual review",
+      status: "rejected",
+      reviewedAt: "2026-04-02T12:02:30.000Z",
+      createdAt: "2026-04-02T12:02:00.000Z",
+      updatedAt: "2026-04-02T12:02:30.000Z",
+    });
+    registry.savePrincipalMainMemory({
+      memoryId: "main-memory-approved-1",
+      principalId: "principal-candidate-1",
+      kind: "task-note",
+      title: "上线排障偏好",
+      summary: "故障排查时先看 doctor。",
+      bodyMarkdown: "遇到线上问题先跑 doctor，再决定是否深入。",
+      sourceType: "themis",
+      status: "active",
+      createdAt: "2026-04-02T12:03:30.000Z",
+      updatedAt: "2026-04-02T12:04:00.000Z",
+    });
+    registry.savePrincipalMainMemoryCandidate({
+      candidateId: "candidate-approved-1",
+      principalId: "principal-candidate-1",
+      kind: "task-note",
+      title: "上线排障偏好",
+      summary: "故障排查时先看 doctor。",
+      rationale: "近期多次诊断都从 doctor 起步。",
+      suggestedContent: "遇到线上问题先跑 doctor，再决定是否深入。",
+      sourceType: "themis",
+      sourceLabel: "session session-candidate-2 / task task-candidate-2",
+      status: "approved",
+      approvedMemoryId: "main-memory-approved-1",
+      reviewedAt: "2026-04-02T12:04:00.000Z",
+      archivedAt: "2026-04-02T12:05:00.000Z",
+      createdAt: "2026-04-02T12:03:00.000Z",
+      updatedAt: "2026-04-02T12:05:00.000Z",
+    });
+
+    const defaultList = registry.listPrincipalMainMemoryCandidates({
+      principalId: "principal-candidate-1",
+      limit: 10,
+    });
+    assert.deepEqual(defaultList.map((item) => item.candidateId), [
+      "candidate-rejected-1",
+      "candidate-suggested-1",
+    ]);
+
+    const suggestedOnly = registry.listPrincipalMainMemoryCandidates({
+      principalId: "principal-candidate-1",
+      status: "suggested",
+      query: "先给结论",
+      limit: 10,
+    });
+    assert.deepEqual(suggestedOnly.map((item) => item.candidateId), ["candidate-suggested-1"]);
+
+    const archivedApproved = registry.listPrincipalMainMemoryCandidates({
+      principalId: "principal-candidate-1",
+      status: "approved",
+      includeArchived: true,
+      query: "doctor",
+      limit: 10,
+    });
+    assert.deepEqual(archivedApproved.map((item) => item.candidateId), ["candidate-approved-1"]);
+    assert.equal(archivedApproved[0]?.approvedMemoryId, "main-memory-approved-1");
+    assert.equal(archivedApproved[0]?.archivedAt, "2026-04-02T12:05:00.000Z");
+
+    const loaded = registry.getPrincipalMainMemoryCandidate("principal-candidate-1", "candidate-suggested-1");
+    assert.equal(loaded?.sourceTaskId, "task-candidate-1");
+    assert.equal(loaded?.sourceConversationId, "session-candidate-1");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("savePrincipalMainMemoryCandidate 会拒绝跨 principal 重挂 candidateId", () => {
+  const { root, registry } = createRegistryContext();
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-candidate-owner-1",
+      displayName: "Owner 1",
+      createdAt: "2026-04-02T12:00:00.000Z",
+      updatedAt: "2026-04-02T12:00:00.000Z",
+    });
+    registry.savePrincipal({
+      principalId: "principal-candidate-owner-2",
+      displayName: "Owner 2",
+      createdAt: "2026-04-02T12:00:30.000Z",
+      updatedAt: "2026-04-02T12:00:30.000Z",
+    });
+
+    registry.savePrincipalMainMemoryCandidate({
+      candidateId: "candidate-shared-1",
+      principalId: "principal-candidate-owner-1",
+      kind: "preference",
+      title: "回答节奏",
+      summary: "先结论后展开",
+      rationale: "Owner 1 偏好如此。",
+      suggestedContent: "默认先给结论，再展开分析。",
+      sourceType: "themis",
+      sourceLabel: "session candidate-shared-owner-1",
+      status: "suggested",
+      createdAt: "2026-04-02T12:01:00.000Z",
+      updatedAt: "2026-04-02T12:01:00.000Z",
+    });
+
+    assert.throws(
+      () =>
+        registry.savePrincipalMainMemoryCandidate({
+          candidateId: "candidate-shared-1",
+          principalId: "principal-candidate-owner-2",
+          kind: "preference",
+          title: "回答节奏",
+          summary: "先结论后展开",
+          rationale: "这条不该抢走别人的候选。",
+          suggestedContent: "默认先给结论，再展开分析。",
+          sourceType: "manual",
+          sourceLabel: "owner manual review",
+          status: "suggested",
+          createdAt: "2026-04-02T12:02:00.000Z",
+          updatedAt: "2026-04-02T12:02:00.000Z",
+        }),
+      /principal main memory candidate belongs to another principal/i,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("searchActorRuntimeMemory 会按 actorId / scopeId / query / limit 组合过滤", () => {
   const { root, registry } = createRegistryContext();
 
@@ -1084,7 +1247,7 @@ test("脏 legacy actor memory 数据会在升级时被 foreign_key_check 拦下"
   }
 });
 
-test("mergePrincipals 会迁移 actor/main-memory/scope/runtime-memory 到 target principal", () => {
+test("mergePrincipals 会迁移 actor/main-memory/candidate/scope/runtime-memory 到 target principal", () => {
   const { root, registry } = createRegistryContext();
 
   try {
@@ -1109,6 +1272,24 @@ test("mergePrincipals 会迁移 actor/main-memory/scope/runtime-memory 到 targe
       runtimeMemoryId: "runtime-memory-source-1",
       taskId: "task-source-1",
       conversationId: "conversation-source-1",
+    });
+    registry.savePrincipalMainMemoryCandidate({
+      candidateId: "candidate-source-1",
+      principalId: "principal-source",
+      kind: "preference",
+      title: "回答节奏",
+      summary: "先结论后展开",
+      rationale: "source principal 偏好如此。",
+      suggestedContent: "默认先给结论，再展开分析。",
+      sourceType: "themis",
+      sourceLabel: "session conversation-source-1 / task task-source-1",
+      sourceTaskId: "task-source-1",
+      sourceConversationId: "conversation-source-1",
+      status: "approved",
+      approvedMemoryId: "main-memory-source-1",
+      reviewedAt: "2026-03-31T11:04:30.000Z",
+      createdAt: "2026-03-31T11:04:00.000Z",
+      updatedAt: "2026-03-31T11:04:30.000Z",
     });
 
     registry.mergePrincipals(
@@ -1136,9 +1317,14 @@ test("mergePrincipals 会迁移 actor/main-memory/scope/runtime-memory 到 targe
       })[0]?.principalId,
       "principal-target",
     );
+    assert.equal(
+      registry.getPrincipalMainMemoryCandidate("principal-target", "candidate-source-1")?.principalId,
+      "principal-target",
+    );
 
     assert.equal(registry.listPrincipalActors("principal-source").length, 0);
     assert.equal(registry.searchPrincipalMainMemory("principal-source", "主记忆", 5).length, 0);
+    assert.equal(registry.getPrincipalMainMemoryCandidate("principal-source", "candidate-source-1"), null);
     assert.equal(registry.getActorTaskScope("principal-source", "scope-source-1"), null);
     assert.equal(registry.listActorTaskTimeline({ principalId: "principal-source" }).length, 0);
   } finally {
@@ -1146,7 +1332,7 @@ test("mergePrincipals 会迁移 actor/main-memory/scope/runtime-memory 到 targe
   }
 });
 
-test("resetPrincipalState 会清空 actor/main-memory/scope/runtime-memory", () => {
+test("resetPrincipalState 会清空 actor/main-memory/candidate/scope/runtime-memory", () => {
   const { root, registry } = createRegistryContext();
 
   try {
@@ -1166,11 +1352,28 @@ test("resetPrincipalState 会清空 actor/main-memory/scope/runtime-memory", () 
       taskId: "task-reset-1",
       conversationId: "conversation-reset-1",
     });
+    registry.savePrincipalMainMemoryCandidate({
+      candidateId: "candidate-reset-1",
+      principalId: "principal-reset",
+      kind: "task-note",
+      title: "排障习惯",
+      summary: "先跑 doctor。",
+      rationale: "近期多轮排障都从 doctor 起步。",
+      suggestedContent: "遇到线上问题先跑 doctor。",
+      sourceType: "themis",
+      sourceLabel: "session conversation-reset-1 / task task-reset-1",
+      sourceTaskId: "task-reset-1",
+      sourceConversationId: "conversation-reset-1",
+      status: "suggested",
+      createdAt: "2026-03-31T11:10:30.000Z",
+      updatedAt: "2026-03-31T11:10:30.000Z",
+    });
 
     registry.resetPrincipalState("principal-reset", "2026-03-31T11:11:00.000Z");
 
     assert.equal(registry.listPrincipalActors("principal-reset").length, 0);
     assert.equal(registry.searchPrincipalMainMemory("principal-reset", "主记忆", 5).length, 0);
+    assert.equal(registry.getPrincipalMainMemoryCandidate("principal-reset", "candidate-reset-1"), null);
     assert.equal(registry.getActorTaskScope("principal-reset", "scope-reset-1"), null);
     assert.equal(registry.listActorTaskTimeline({ principalId: "principal-reset" }).length, 0);
   } finally {

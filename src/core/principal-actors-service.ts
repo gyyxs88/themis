@@ -1,9 +1,11 @@
 import type {
   ActorRuntimeMemoryKind,
+  PrincipalMainMemoryCandidateReviewDecision,
   PrincipalMainMemoryStatus,
   StoredActorRuntimeMemoryRecord,
   StoredActorTaskScopeRecord,
   StoredPrincipalActorRecord,
+  StoredPrincipalMainMemoryCandidateRecord,
   StoredPrincipalMainMemoryRecord,
 } from "../types/index.js";
 import type { SqliteCodexSessionRegistry } from "../storage/index.js";
@@ -30,6 +32,42 @@ export interface UpsertMainMemoryInput {
   memoryId?: string;
   status?: PrincipalMainMemoryStatus;
   now?: string;
+}
+
+export interface SuggestMainMemoryCandidateInput {
+  principalId: string;
+  kind: StoredPrincipalMainMemoryRecord["kind"];
+  title: string;
+  summary: string;
+  rationale: string;
+  suggestedContent: string;
+  sourceType: StoredPrincipalMainMemoryRecord["sourceType"];
+  sourceLabel: string;
+  sourceTaskId?: string;
+  sourceConversationId?: string;
+  candidateId?: string;
+  now?: string;
+}
+
+export interface ListMainMemoryCandidatesInput {
+  principalId: string;
+  status?: StoredPrincipalMainMemoryCandidateRecord["status"];
+  includeArchived?: boolean;
+  query?: string;
+  limit?: number;
+}
+
+export interface ReviewMainMemoryCandidateInput {
+  principalId: string;
+  candidateId: string;
+  decision: PrincipalMainMemoryCandidateReviewDecision;
+  memoryId?: string;
+  now?: string;
+}
+
+export interface ReviewMainMemoryCandidateResult {
+  candidate: StoredPrincipalMainMemoryCandidateRecord;
+  memory: StoredPrincipalMainMemoryRecord | null;
 }
 
 export interface DispatchTaskToActorInput {
@@ -165,6 +203,121 @@ export class PrincipalActorsService {
 
     this.registry.savePrincipalMainMemory(record);
     return record;
+  }
+
+  suggestMainMemoryCandidate(input: SuggestMainMemoryCandidateInput): StoredPrincipalMainMemoryCandidateRecord {
+    const now = normalizeNow(input.now);
+    const sourceTaskId = normalizeOptionalText(input.sourceTaskId);
+    const sourceConversationId = normalizeOptionalText(input.sourceConversationId);
+    const record: StoredPrincipalMainMemoryCandidateRecord = {
+      candidateId: normalizeOptionalText(input.candidateId) ?? createId("memory-candidate"),
+      principalId: normalizeRequiredText(input.principalId, "Principal id is required."),
+      kind: input.kind,
+      title: normalizeRequiredText(input.title, "Main memory candidate title is required."),
+      summary: normalizeRequiredText(input.summary, "Main memory candidate summary is required."),
+      rationale: normalizeRequiredText(input.rationale, "Main memory candidate rationale is required."),
+      suggestedContent: normalizeRequiredText(
+        input.suggestedContent,
+        "Main memory candidate suggested content is required.",
+      ),
+      sourceType: input.sourceType,
+      sourceLabel: normalizeRequiredText(input.sourceLabel, "Main memory candidate source label is required."),
+      status: "suggested",
+      createdAt: now,
+      updatedAt: now,
+      ...(sourceTaskId ? { sourceTaskId } : {}),
+      ...(sourceConversationId ? { sourceConversationId } : {}),
+    };
+
+    this.registry.savePrincipalMainMemoryCandidate(record);
+    return record;
+  }
+
+  listMainMemoryCandidates(input: ListMainMemoryCandidatesInput): StoredPrincipalMainMemoryCandidateRecord[] {
+    const status = normalizeOptionalText(input.status);
+    const query = normalizeOptionalText(input.query);
+    return this.registry.listPrincipalMainMemoryCandidates({
+      principalId: normalizeRequiredText(input.principalId, "Principal id is required."),
+      ...(status ? { status: status as StoredPrincipalMainMemoryCandidateRecord["status"] } : {}),
+      ...(query ? { query } : {}),
+      ...(input.includeArchived === true ? { includeArchived: true } : {}),
+      ...(typeof input.limit === "number" ? { limit: input.limit } : {}),
+    });
+  }
+
+  reviewMainMemoryCandidate(input: ReviewMainMemoryCandidateInput): ReviewMainMemoryCandidateResult {
+    const principalId = normalizeRequiredText(input.principalId, "Principal id is required.");
+    const candidateId = normalizeRequiredText(input.candidateId, "Candidate id is required.");
+    const candidate = this.registry.getPrincipalMainMemoryCandidate(principalId, candidateId);
+
+    if (!candidate) {
+      throw new Error("Principal main memory candidate does not exist.");
+    }
+
+    const now = normalizeNow(input.now);
+
+    if (input.decision === "archive") {
+      const archivedCandidate: StoredPrincipalMainMemoryCandidateRecord = {
+        ...candidate,
+        archivedAt: now,
+        updatedAt: now,
+      };
+      this.registry.savePrincipalMainMemoryCandidate(archivedCandidate);
+      return {
+        candidate: archivedCandidate,
+        memory: null,
+      };
+    }
+
+    if (candidate.archivedAt) {
+      throw new Error("Principal main memory candidate is archived.");
+    }
+
+    if (candidate.status !== "suggested") {
+      throw new Error("Principal main memory candidate is no longer pending review.");
+    }
+
+    if (input.decision === "reject") {
+      const rejectedCandidate: StoredPrincipalMainMemoryCandidateRecord = {
+        ...candidate,
+        status: "rejected",
+        reviewedAt: now,
+        updatedAt: now,
+      };
+      this.registry.savePrincipalMainMemoryCandidate(rejectedCandidate);
+      return {
+        candidate: rejectedCandidate,
+        memory: null,
+      };
+    }
+
+    const memory: StoredPrincipalMainMemoryRecord = {
+      memoryId: normalizeOptionalText(input.memoryId) ?? createId("main-memory"),
+      principalId,
+      kind: candidate.kind,
+      title: candidate.title,
+      summary: candidate.summary,
+      bodyMarkdown: candidate.suggestedContent,
+      sourceType: candidate.sourceType,
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.registry.savePrincipalMainMemory(memory);
+
+    const approvedCandidate: StoredPrincipalMainMemoryCandidateRecord = {
+      ...candidate,
+      status: "approved",
+      approvedMemoryId: memory.memoryId,
+      reviewedAt: now,
+      updatedAt: now,
+    };
+    this.registry.savePrincipalMainMemoryCandidate(approvedCandidate);
+
+    return {
+      candidate: approvedCandidate,
+      memory,
+    };
   }
 
   dispatchTaskToActor(input: DispatchTaskToActorInput): ActorDispatchPacket {

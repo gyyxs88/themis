@@ -288,6 +288,165 @@ test("RuntimeSmokeService.runWebSmoke 在未进入 action_required 时返回失�
   }
 });
 
+test("RuntimeSmokeService.runWebSmoke 在 action_required 缺少 actionId 时返回失败结果", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-smoke-web-missing-action-id-"));
+
+  try {
+    const service = createService(root, {
+      fetchImpl: async (input) => {
+        const url = normalizeUrl(input);
+
+        if (url.endsWith("/api/web-auth/login")) {
+          return new Response(null, {
+            status: 200,
+            headers: {
+              "set-cookie": "themis_web_session=session-smoke-missing-action-id; Path=/; HttpOnly",
+            },
+          });
+        }
+
+        if (url.endsWith("/api/tasks/stream")) {
+          return new Response(
+            [
+              JSON.stringify({
+                kind: "ack",
+                requestId: "req-smoke-missing-action-id",
+                taskId: "task-smoke-missing-action-id",
+                title: "task.accepted",
+                text: "accepted",
+              }),
+              JSON.stringify({
+                kind: "event",
+                requestId: "req-smoke-missing-action-id",
+                taskId: "task-smoke-missing-action-id",
+                title: "task.action_required",
+                text: "请补充输入",
+                metadata: {
+                  actionType: "user-input",
+                },
+              }),
+            ].join("\n"),
+            {
+              status: 200,
+              headers: {
+                "content-type": "application/x-ndjson; charset=utf-8",
+              },
+            },
+          );
+        }
+
+        throw new Error(`unexpected fetch: ${url}`);
+      },
+    });
+
+    const result = await service.runWebSmoke();
+
+    assert.equal(result.ok, false);
+    assert.equal(result.observedActionRequired, true);
+    assert.equal(result.observedCompleted, false);
+    assert.equal(result.historyCompleted, false);
+    assert.equal(result.actionId, null);
+    assert.match(result.message, /缺少 actionId/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("RuntimeSmokeService.runWebSmoke 在 stream completed 但 history/detail 无法确认收口时返回失败结果", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-smoke-web-history-fail-"));
+
+  try {
+    const service = createService(root, {
+      fetchImpl: async (input) => {
+        const url = normalizeUrl(input);
+
+        if (url.endsWith("/api/web-auth/login")) {
+          return new Response(null, {
+            status: 200,
+            headers: {
+              "set-cookie": "themis_web_session=session-smoke-history-fail; Path=/; HttpOnly",
+            },
+          });
+        }
+
+        if (url.endsWith("/api/tasks/stream")) {
+          return new Response(
+            [
+              JSON.stringify({
+                kind: "ack",
+                requestId: "req-smoke-history-fail",
+                taskId: "task-smoke-history-fail",
+                title: "task.accepted",
+                text: "accepted",
+              }),
+              JSON.stringify({
+                kind: "event",
+                requestId: "req-smoke-history-fail",
+                taskId: "task-smoke-history-fail",
+                title: "task.action_required",
+                text: "请补充输入",
+                metadata: {
+                  actionId: "action-smoke-history-fail",
+                },
+              }),
+              JSON.stringify({
+                kind: "result",
+                requestId: "req-smoke-history-fail",
+                taskId: "task-smoke-history-fail",
+                metadata: {
+                  structuredOutput: {
+                    status: "completed",
+                  },
+                },
+              }),
+              JSON.stringify({
+                kind: "done",
+                requestId: "req-smoke-history-fail",
+                taskId: "task-smoke-history-fail",
+                result: {
+                  status: "completed",
+                },
+              }),
+            ].join("\n"),
+            {
+              status: 200,
+              headers: {
+                "content-type": "application/x-ndjson; charset=utf-8",
+              },
+            },
+          );
+        }
+
+        if (url.endsWith("/api/tasks/actions")) {
+          return new Response(JSON.stringify({ ok: true }), {
+            status: 200,
+            headers: {
+              "content-type": "application/json; charset=utf-8",
+            },
+          });
+        }
+
+        if (url.includes("/api/history/sessions/")) {
+          return new Response("history broken", { status: 500 });
+        }
+
+        throw new Error(`unexpected fetch: ${url}`);
+      },
+    });
+
+    const result = await service.runWebSmoke();
+
+    assert.equal(result.ok, false);
+    assert.equal(result.observedActionRequired, true);
+    assert.equal(result.observedCompleted, true);
+    assert.equal(result.historyCompleted, false);
+    assert.equal(result.actionId, "action-smoke-history-fail");
+    assert.match(result.message, /history detail status=500/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("RuntimeSmokeService.runFeishuSmoke 在缺少 FEISHU_APP_ID / FEISHU_APP_SECRET 时返回失败结果", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-runtime-smoke-feishu-fail-"));
 
@@ -608,6 +767,125 @@ test("RuntimeSmokeService.runAllSmoke 在 web 失败时不会误报 feishu 已�
     assert.equal(result.web.ok, false);
     assert.equal(result.feishu, null);
     assert.equal(result.ok, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("RuntimeSmokeService.runAllSmoke 在 web 通过但 feishu 前置检查失败时会保留 feishu 结果", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-smoke-all-feishu-fail-"));
+
+  try {
+    const service = createService(root, {
+      env: {},
+      fetchImpl: async (input) => {
+        const url = normalizeUrl(input);
+
+        if (url.endsWith("/api/web-auth/login")) {
+          return new Response(null, {
+            status: 200,
+            headers: {
+              "set-cookie": "themis_web_session=session-smoke-4; Path=/; HttpOnly",
+            },
+          });
+        }
+
+        if (url.endsWith("/api/tasks/stream")) {
+          return new Response(
+            [
+              JSON.stringify({
+                kind: "ack",
+                requestId: "req-smoke-4",
+                taskId: "task-smoke-4",
+                title: "task.accepted",
+                text: "accepted",
+              }),
+              JSON.stringify({
+                kind: "event",
+                requestId: "req-smoke-4",
+                taskId: "task-smoke-4",
+                title: "task.action_required",
+                text: "请补充输入",
+                metadata: {
+                  actionId: "action-smoke-4",
+                },
+              }),
+              JSON.stringify({
+                kind: "result",
+                requestId: "req-smoke-4",
+                taskId: "task-smoke-4",
+                metadata: {
+                  structuredOutput: {
+                    status: "completed",
+                  },
+                },
+              }),
+              JSON.stringify({
+                kind: "done",
+                requestId: "req-smoke-4",
+                taskId: "task-smoke-4",
+                result: {
+                  status: "completed",
+                },
+              }),
+            ].join("\n"),
+            {
+              status: 200,
+              headers: {
+                "content-type": "application/x-ndjson; charset=utf-8",
+              },
+            },
+          );
+        }
+
+        if (url.endsWith("/api/tasks/actions")) {
+          return new Response(JSON.stringify({ ok: true }), {
+            status: 200,
+            headers: {
+              "content-type": "application/json; charset=utf-8",
+            },
+          });
+        }
+
+        if (url.includes("/api/history/sessions/")) {
+          return new Response(
+            JSON.stringify({
+              turns: [
+                {
+                  status: "completed",
+                },
+              ],
+            }),
+            {
+              status: 200,
+              headers: {
+                "content-type": "application/json; charset=utf-8",
+              },
+            },
+          );
+        }
+
+        if (url === "http://127.0.0.1:3100/") {
+          return new Response(null, {
+            status: 302,
+            headers: {
+              location: "/login",
+            },
+          });
+        }
+
+        throw new Error(`unexpected fetch: ${url}`);
+      },
+    });
+
+    const result = await service.runAllSmoke();
+
+    assert.equal(result.ok, false);
+    assert.equal(result.web.ok, true);
+    assert.ok(result.feishu);
+    assert.equal(result.feishu?.ok, false);
+    assert.equal(result.feishu?.diagnosisId, "config_missing");
+    assert.match(result.message, /FEISHU_APP_ID/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

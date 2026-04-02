@@ -139,6 +139,18 @@
   color: var(--muted);
 }
 
+.sidebar-inline-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.sidebar-inline-toggle input {
+  margin: 0;
+}
+
 .sidebar-divider {
   height: 1px;
   background: var(--line);

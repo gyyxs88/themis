@@ -23,6 +23,20 @@ test("飞书复验指引会固定关键路径与复跑顺序", () => {
       why: "锁住 approval 与 user-input 混合恢复的真实主链路。",
     },
     {
+      id: "real_prompt_probe",
+      layer: "cli",
+      label: "真实业务 prompt 低成本探针",
+      command: "./themis doctor smoke web",
+      why: "固定真实 Web / HTTP prompt -> task.action_required -> completed 的低成本复跑入口。",
+    },
+    {
+      id: "manual_ab_acceptance",
+      layer: "journey",
+      label: "doctor smoke feishu + 手工 A/B 接力验收",
+      command: "./themis doctor smoke feishu",
+      why: "把飞书最后一跳固定在正式 smoke 入口和手工 A/B 剧本里复验，不伪装成全自动 E2E。",
+    },
+    {
       id: "session_rebind",
       layer: "service",
       label: "/use 切会话后的 waiting action 绑定",

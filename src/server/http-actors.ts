@@ -22,6 +22,32 @@ interface ActorScopePayload extends IdentityPayload {
   scopeId: string;
 }
 
+interface MainMemoryCandidateSuggestPayload extends IdentityPayload {
+  candidate: {
+    kind: string;
+    title: string;
+    summary: string;
+    rationale: string;
+    suggestedContent: string;
+    sourceType: string;
+    sourceLabel: string;
+    sourceTaskId?: string;
+    sourceConversationId?: string;
+  };
+}
+
+interface MainMemoryCandidateListPayload extends IdentityPayload {
+  status?: string;
+  query?: string;
+  includeArchived?: boolean;
+  limit?: number;
+}
+
+interface MainMemoryCandidateReviewPayload extends IdentityPayload {
+  candidateId: string;
+  decision: "approve" | "reject" | "archive";
+}
+
 async function readAndNormalizePayload<T>(
   request: IncomingMessage,
   response: ServerResponse,
@@ -160,6 +186,104 @@ export async function handleActorTakeover(
   }
 }
 
+export async function handleMainMemoryCandidateSuggest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeMainMemoryCandidateSuggestPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const candidate = runtime.getPrincipalActorsService().suggestMainMemoryCandidate({
+      principalId: identity.principalId,
+      kind: payload.candidate.kind as never,
+      title: payload.candidate.title,
+      summary: payload.candidate.summary,
+      rationale: payload.candidate.rationale,
+      suggestedContent: payload.candidate.suggestedContent,
+      sourceType: payload.candidate.sourceType as never,
+      sourceLabel: payload.candidate.sourceLabel,
+      ...(payload.candidate.sourceTaskId ? { sourceTaskId: payload.candidate.sourceTaskId } : {}),
+      ...(payload.candidate.sourceConversationId
+        ? { sourceConversationId: payload.candidate.sourceConversationId }
+        : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      candidate,
+    });
+  } catch (error) {
+    writeActorBoundaryError(response, error);
+  }
+}
+
+export async function handleMainMemoryCandidateList(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeMainMemoryCandidateListPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const candidates = runtime.getPrincipalActorsService().listMainMemoryCandidates({
+      principalId: identity.principalId,
+      ...(payload.status ? { status: payload.status as never } : {}),
+      ...(payload.query ? { query: payload.query } : {}),
+      ...(payload.includeArchived ? { includeArchived: true } : {}),
+      ...(typeof payload.limit === "number" ? { limit: payload.limit } : {}),
+    });
+
+    writeJson(response, 200, {
+      identity,
+      candidates,
+    });
+  } catch (error) {
+    writeActorBoundaryError(response, error);
+  }
+}
+
+export async function handleMainMemoryCandidateReview(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeMainMemoryCandidateReviewPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = runtime.getPrincipalActorsService().reviewMainMemoryCandidate({
+      principalId: identity.principalId,
+      candidateId: payload.candidateId,
+      decision: payload.decision,
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      candidate: result.candidate,
+      ...(result.memory ? { memory: result.memory } : { memory: null }),
+    });
+  } catch (error) {
+    writeActorBoundaryError(response, error);
+  }
+}
+
 function normalizeIdentityPayload(value: unknown): IdentityPayload {
   if (!isRecord(value)) {
     throw new Error("身份请求缺少必要字段。");
@@ -222,6 +346,84 @@ function normalizeActorScopePayload(value: unknown): ActorScopePayload {
   };
 }
 
+function normalizeMainMemoryCandidateSuggestPayload(value: unknown): MainMemoryCandidateSuggestPayload {
+  if (!isRecord(value) || !isRecord(value.candidate)) {
+    throw new Error("长期记忆候选请求缺少必要字段。");
+  }
+
+  const identity = normalizeIdentityPayload(value);
+  const kind = normalizeText(value.candidate.kind);
+  const title = normalizeText(value.candidate.title);
+  const summary = normalizeText(value.candidate.summary);
+  const rationale = normalizeText(value.candidate.rationale);
+  const suggestedContent = normalizeText(value.candidate.suggestedContent);
+  const sourceType = normalizeText(value.candidate.sourceType);
+  const sourceLabel = normalizeText(value.candidate.sourceLabel);
+  const sourceTaskId = normalizeText(value.candidate.sourceTaskId);
+  const sourceConversationId = normalizeText(value.candidate.sourceConversationId);
+
+  if (!kind || !title || !summary || !rationale || !suggestedContent || !sourceType || !sourceLabel) {
+    throw new Error("长期记忆候选请求缺少必要字段。");
+  }
+
+  return {
+    ...identity,
+    candidate: {
+      kind,
+      title,
+      summary,
+      rationale,
+      suggestedContent,
+      sourceType,
+      sourceLabel,
+      ...(sourceTaskId ? { sourceTaskId } : {}),
+      ...(sourceConversationId ? { sourceConversationId } : {}),
+    },
+  };
+}
+
+function normalizeMainMemoryCandidateListPayload(value: unknown): MainMemoryCandidateListPayload {
+  if (!isRecord(value)) {
+    throw new Error("长期记忆候选列表请求缺少必要字段。");
+  }
+
+  const identity = normalizeIdentityPayload(value);
+  const status = normalizeText(value.status);
+  const query = normalizeText(value.query);
+  const includeArchived = value.includeArchived === true || value.includeArchived === 1 || value.includeArchived === "1";
+  const limit = typeof value.limit === "number" && Number.isFinite(value.limit) && value.limit > 0
+    ? Math.floor(value.limit)
+    : undefined;
+
+  return {
+    ...identity,
+    ...(status ? { status } : {}),
+    ...(query ? { query } : {}),
+    ...(includeArchived ? { includeArchived: true } : {}),
+    ...(typeof limit === "number" ? { limit } : {}),
+  };
+}
+
+function normalizeMainMemoryCandidateReviewPayload(value: unknown): MainMemoryCandidateReviewPayload {
+  if (!isRecord(value)) {
+    throw new Error("长期记忆候选审批请求缺少必要字段。");
+  }
+
+  const identity = normalizeIdentityPayload(value);
+  const candidateId = normalizeText(value.candidateId);
+  const decision = normalizeText(value.decision);
+
+  if (!candidateId || (decision !== "approve" && decision !== "reject" && decision !== "archive")) {
+    throw new Error("长期记忆候选审批请求缺少必要字段。");
+  }
+
+  return {
+    ...identity,
+    candidateId,
+    decision,
+  };
+}
+
 function normalizeText(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -239,5 +441,8 @@ function isActorBoundaryError(error: unknown): boolean {
   const message = toErrorMessage(error);
 
   return message === "Principal actor does not exist."
-    || message === "Actor task scope does not exist.";
+    || message === "Actor task scope does not exist."
+    || message === "Principal main memory candidate does not exist."
+    || message === "Principal main memory candidate is archived."
+    || message === "Principal main memory candidate is no longer pending review.";
 }

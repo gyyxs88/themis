@@ -12,7 +12,15 @@ export function handleHistorySessions(
 ): void {
   const rawLimit = Number.parseInt(url.searchParams.get("limit") ?? "24", 10);
   const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 24;
-  const sessions = store.listRecentSessions(limit);
+  const sessions = store.listRecentSessionsByFilter({
+    ...(normalizeText(url.searchParams.get("query")) ? { query: normalizeText(url.searchParams.get("query"))! } : {}),
+    ...((url.searchParams.get("includeArchived") === "1" || url.searchParams.get("includeArchived") === "true")
+      ? { includeArchived: true }
+      : {}),
+    ...((url.searchParams.get("originKind") === "fork" || url.searchParams.get("originKind") === "standard")
+      ? { originKind: url.searchParams.get("originKind") as "fork" | "standard" }
+      : {}),
+  }, limit);
 
   writeJson(response, 200, { sessions }, headOnly);
 }
@@ -50,7 +58,7 @@ export async function handleHistorySessionDetail(
 
   const firstTurn = turns[0]!;
   const latestTurn = turns.at(-1) ?? firstTurn;
-  const session = store.listRecentSessions(200).find((item) => item.sessionId === sessionId);
+  const session = store.getSessionHistorySummary(sessionId);
   const detailedTurns = turns.map((turn) => {
     const turnInput = store.getTurnInput(turn.requestId);
 
@@ -82,6 +90,64 @@ export async function handleHistorySessionDetail(
     },
     turns: detailedTurns,
     ...(nativeThread ? { nativeThread } : {}),
+  }, headOnly);
+}
+
+export function handleHistorySessionArchive(
+  url: URL,
+  response: ServerResponse,
+  store: SqliteCodexSessionRegistry,
+  archived: boolean,
+  headOnly = false,
+): void {
+  const sessionId = decodeURIComponent(url.pathname.slice("/api/history/sessions/".length, -"/archive".length)).trim();
+
+  if (!sessionId) {
+    writeJson(response, 400, {
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Missing session id.",
+      },
+    }, headOnly);
+    return;
+  }
+
+  if (headOnly) {
+    const session = store.getSessionHistorySummary(sessionId);
+
+    if (!session) {
+      writeJson(response, 404, {
+        error: {
+          code: "NOT_FOUND",
+          message: "No stored history was found for this session.",
+        },
+      }, true);
+      return;
+    }
+
+    writeJson(response, 200, { session }, true);
+    return;
+  }
+
+  const timestamp = new Date().toISOString();
+  const ok = archived
+    ? store.archiveSessionHistory(sessionId, timestamp)
+    : store.unarchiveSessionHistory(sessionId, timestamp);
+
+  if (!ok) {
+    writeJson(response, 404, {
+      error: {
+        code: "NOT_FOUND",
+        message: "No stored history was found for this session.",
+      },
+    }, headOnly);
+    return;
+  }
+
+  const session = store.getSessionHistorySummary(sessionId);
+
+  writeJson(response, 200, {
+    session,
   }, headOnly);
 }
 

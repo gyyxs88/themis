@@ -32,6 +32,9 @@ export function createRenderer(app) {
   function renderAll(scrollToBottom = false) {
     store.ensureActiveThread();
     dom.threadSearchInput.value = app.runtime.threadSearchQuery;
+    if (dom.threadShowArchivedInput) {
+      dom.threadShowArchivedInput.checked = Boolean(app.runtime.historyIncludeArchived);
+    }
     renderThreadList();
     renderWorkspaceHeader();
     renderThreadControlPanel();
@@ -188,6 +191,9 @@ export function createRenderer(app) {
     dom.threadControlDetailsBody.innerHTML = renderThreadControlDetailsMarkup(threadControlState, utils);
     dom.threadControlJoinHint.textContent = threadControlState.joinHint || "";
     dom.conversationLinkNote.textContent = threadControlState.joinHint || "";
+    if (dom.threadArchiveButton) {
+      dom.threadArchiveButton.textContent = thread.historyArchivedAt ? "取消归档" : "归档当前会话";
+    }
     dom.threadControlJoinPanel.hidden = !joinOpen;
     dom.threadControlJoinPanel.classList.toggle("hidden", !joinOpen);
     dom.threadControlJoinPanel.setAttribute("aria-hidden", String(!joinOpen));

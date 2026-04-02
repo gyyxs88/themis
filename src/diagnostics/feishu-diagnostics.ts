@@ -118,6 +118,16 @@ export interface FeishuDiagnosticsConversationSummary {
   updatedAt: string;
 }
 
+export interface FeishuTakeoverGuidance {
+  state:
+    | "no_pending_action"
+    | "approval_required"
+    | "blocked_by_approval"
+    | "reply_required"
+    | "direct_text_ready";
+  hint: string;
+}
+
 export interface FeishuDiagnosticsEventSummary {
   id: string;
   type: string;
@@ -218,6 +228,166 @@ export async function readFeishuDiagnosticsSnapshot(
       smokeDocExists: existsSync(join(workingDirectory, FEISHU_SMOKE_DOC_PATH)),
     },
   };
+}
+
+export function describeFeishuTakeoverGuidance(
+  currentConversation: FeishuDiagnosticsConversationSummary | null,
+): FeishuTakeoverGuidance {
+  const pendingActions = currentConversation?.pendingActions ?? [];
+
+  if (pendingActions.length === 0) {
+    return {
+      state: "no_pending_action",
+      hint: "当前会话没有 pending action，可继续按固定复跑顺序验证。",
+    };
+  }
+
+  const approvalPendingActions = pendingActions.filter((action) => action.actionType === "approval");
+  const userInputPendingActions = pendingActions.filter((action) => action.actionType === "user-input");
+  const approvalActionIds = approvalPendingActions.map((action) => action.actionId).join(", ");
+  const userInputActionIds = userInputPendingActions.map((action) => action.actionId).join(", ");
+
+  if (approvalPendingActions.length > 0 && userInputPendingActions.length > 0) {
+    return {
+      state: "blocked_by_approval",
+      hint: `当前会话同时存在 approval(${approvalActionIds}) 和 user-input(${userInputActionIds})；请先执行 /approve <actionId> 或 /deny <actionId> 处理 approval，再继续 direct-text takeover 或 /reply。`,
+    };
+  }
+
+  if (approvalPendingActions.length > 0) {
+    return {
+      state: "approval_required",
+      hint: `当前会话还有 approval pending action；请先执行 /approve <actionId> 或 /deny <actionId>。候选 actionId：${approvalActionIds}`,
+    };
+  }
+
+  if (userInputPendingActions.length > 1) {
+    return {
+      state: "reply_required",
+      hint: `当前会话存在多条 user-input；普通文本不会自动接管，请执行 /reply <actionId> <内容>。候选 actionId：${userInputActionIds}`,
+    };
+  }
+
+  return {
+    state: "direct_text_ready",
+    hint: `当前会话存在唯一 user-input(${userInputActionIds})；可以直接回复普通文本，或执行 /reply ${userInputActionIds} <内容>。`,
+  };
+}
+
+export function buildFeishuTroubleshootingPlaybook(input: {
+  primaryDiagnosisId: FeishuDiagnosticsDiagnosisSummary["id"] | null;
+  currentConversation: FeishuDiagnosticsConversationSummary | null;
+  lastIgnoredMessage: FeishuDiagnosticsLastIgnoredMessageSummary | null;
+}): string[] {
+  const pendingActions = input.currentConversation?.pendingActions ?? [];
+  const approvalPendingActions = pendingActions.filter((action) => action.actionType === "approval");
+  const userInputPendingActions = pendingActions.filter((action) => action.actionType === "user-input");
+  const firstApprovalActionId = approvalPendingActions[0]?.actionId ?? "<actionId>";
+  const firstUserInputActionId = userInputPendingActions[0]?.actionId ?? "<actionId>";
+  const currentSessionId = input.currentConversation?.activeSessionId ?? "<sessionId>";
+  const takeoverGuidance = describeFeishuTakeoverGuidance(input.currentConversation);
+
+  switch (input.primaryDiagnosisId) {
+    case "approval_blocking_takeover":
+      return [
+        `先处理 approval action：/approve ${firstApprovalActionId} 或 /deny ${firstApprovalActionId}`,
+        `approval 处理完后，再对 user-input action 继续：直接回复普通文本，或 /reply ${firstUserInputActionId} <内容>`,
+        "处理后重新运行 ./themis doctor feishu，确认当前接管判断已变化。",
+      ];
+    case "pending_input_ambiguous":
+      return userInputPendingActions.length > 0
+        ? userInputPendingActions.map((action, index) =>
+          `${index + 1 === 1 ? "候选 user-input action：" : "备用 user-input action："} /reply ${action.actionId} <内容>`)
+          .concat("不要直接发送普通文本，先显式命中正确的 actionId。")
+        : [
+          "先查看 doctor feishu 输出里的 pendingActions 列表。",
+          "然后执行 /reply <actionId> <内容>，不要直接发送普通文本。",
+        ];
+    case "pending_input_not_found":
+      return [
+        `先执行 /use ${currentSessionId} 确认自己在目标会话，再看这条 waiting action 还在不在。`,
+        ...buildTakeoverContinuationSteps(takeoverGuidance, {
+          firstApprovalActionId,
+          firstUserInputActionId,
+        }),
+        input.lastIgnoredMessage
+          ? `最近还出现过被忽略消息 ${input.lastIgnoredMessage.messageId ?? "<messageId>"}，如果你刚才重发过旧消息，不要再重发，先按当前会话状态继续。`
+          : "如果当前会话里已经没有 pending action，说明这条 waiting action 可能已经被处理过，先确认历史收口状态。",
+      ];
+    case "ignored_message_window": {
+      const ignoredMessageId = input.lastIgnoredMessage?.messageId ?? "<messageId>";
+      const ignoredHint = input.lastIgnoredMessage?.type === "message.stale_ignored"
+        ? `最近被忽略的是旧消息 ${ignoredMessageId}，不要重发这条旧消息；请在当前会话重新发送一条新的消息。`
+        : `最近被忽略的是重复消息 ${ignoredMessageId}，不要重复转发同一条消息；请确认当前会话状态后再继续。`;
+      return [
+        ignoredHint,
+        ...buildTakeoverContinuationSteps(takeoverGuidance, {
+          firstApprovalActionId,
+          firstUserInputActionId,
+        }),
+        "再运行 ./themis doctor smoke feishu，确认是否只是 message window 干扰。",
+      ];
+    }
+    case "action_submit_failed":
+      return [
+        "先看最近一次 action 尝试里的 actionId / requestId / summary。",
+        "确认当前会话和 pending action 仍然存在后，再重试提交。",
+        "必要时运行 ./themis doctor smoke feishu 复核飞书前置检查。",
+      ];
+    case "service_unreachable":
+      return [
+        "先恢复 Themis 服务，例如运行 npm run dev:web。",
+        "服务恢复后重新运行 ./themis doctor feishu。",
+      ];
+    case "config_missing":
+      return [
+        "先运行 ./themis config list 检查当前飞书配置。",
+        "补齐 FEISHU_APP_ID / FEISHU_APP_SECRET 后再重跑诊断。",
+      ];
+    case "healthy":
+      return [
+        "按固定顺序继续复跑：./themis doctor feishu -> ./themis doctor smoke web -> ./themis doctor smoke feishu。",
+        "最后再做飞书手工 A/B 验收。",
+      ];
+    default:
+      return [
+        "先看主诊断、当前接管判断和 pendingActions。",
+        "再按固定复跑顺序继续定位：./themis doctor feishu -> ./themis doctor smoke web -> ./themis doctor smoke feishu。",
+      ];
+  }
+}
+
+function buildTakeoverContinuationSteps(
+  guidance: FeishuTakeoverGuidance,
+  input: {
+    firstApprovalActionId: string;
+    firstUserInputActionId: string;
+  },
+): string[] {
+  switch (guidance.state) {
+    case "blocked_by_approval":
+      return [
+        `如果当前会话仍被 approval 阻塞，先处理：/approve ${input.firstApprovalActionId} 或 /deny ${input.firstApprovalActionId}`,
+        `approval 处理完后，再继续 user-input：直接回复普通文本，或 /reply ${input.firstUserInputActionId} <内容>`,
+      ];
+    case "approval_required":
+      return [
+        `当前会话还有 approval pending action，先执行 /approve ${input.firstApprovalActionId} 或 /deny ${input.firstApprovalActionId}`,
+      ];
+    case "reply_required":
+      return [
+        `当前会话里有多条 user-input，先显式执行 /reply ${input.firstUserInputActionId} <内容>，不要直接发送普通文本。`,
+      ];
+    case "direct_text_ready":
+      return [
+        `当前会话里仍有唯一 user-input，可直接回复普通文本，或执行 /reply ${input.firstUserInputActionId} <内容>。`,
+      ];
+    case "no_pending_action":
+    default:
+      return [
+        "先看当前会话摘要和 pendingActions，确认是不是切错会话或这条 waiting action 已经被处理过。",
+      ];
+  }
 }
 
 async function probeServiceReachability(

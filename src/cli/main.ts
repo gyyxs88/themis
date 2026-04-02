@@ -7,7 +7,11 @@ import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { resolveCodexAuthFilePath, resolveDefaultCodexHome } from "../core/auth-accounts.js";
 import { RuntimeDiagnosticsService, type RuntimeDiagnosticFileStatus } from "../diagnostics/runtime-diagnostics.js";
-import type { FeishuDiagnosticsSummary } from "../diagnostics/feishu-diagnostics.js";
+import {
+  buildFeishuTroubleshootingPlaybook,
+  describeFeishuTakeoverGuidance,
+  type FeishuDiagnosticsSummary,
+} from "../diagnostics/feishu-diagnostics.js";
 import { RuntimeSmokeService } from "../diagnostics/runtime-smoke.js";
 import { McpInspector } from "../mcp/mcp-inspector.js";
 import { PrincipalSkillsService } from "../core/principal-skills-service.js";
@@ -274,9 +278,7 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
     workingDirectory: cwd,
     runtimeStore,
     sqliteFilePath: dbPath,
-    mcpInspector: new McpInspector({
-      workingDirectory: cwd,
-    }),
+    mcpInspector: createCliMcpInspector(),
   });
   const summary = await diagnostics.readSummary();
 
@@ -288,8 +290,28 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
     console.log(`- provider：${summary.provider.activeMode} (${summary.provider.providerCount} 个)`);
     console.log(`- context：${countOk(summary.context.files)}/${summary.context.files.length} ok`);
     console.log(`- memory：${countOk(summary.memory.files)}/${summary.memory.files.length} ok`);
+    console.log(`- feishu：${summary.feishu.diagnostics.primaryDiagnosis?.title ?? "<none>"}`);
     console.log(`- service/sqlite：${summary.service.sqlite.exists ? "ok" : "missing"} (${summary.service.sqlite.path})`);
-    console.log(`- mcp：${summary.mcp.servers.length} 个 server${summary.mcp.readError ? `（读取失败：${summary.mcp.readError}）` : ""}`);
+    const abnormalMcpCount = summary.mcp.diagnostics.statusCounts.abnormalCount;
+    console.log(`- mcp：${summary.mcp.servers.length} 个 server${summary.mcp.readError ? `（读取失败：${summary.mcp.readError}）` : abnormalMcpCount > 0 ? `（${abnormalMcpCount} 个异常）` : ""}`);
+
+    console.log("异常热点");
+    if (summary.overview.hotspots.length === 0) {
+      console.log("- <none>");
+    } else {
+      for (const [index, hotspot] of summary.overview.hotspots.entries()) {
+        console.log(`${index + 1}. [${hotspot.scope}] ${hotspot.title}：${hotspot.summary}`);
+      }
+    }
+
+    console.log("建议先看");
+    if (summary.overview.suggestedCommands.length === 0) {
+      console.log("- <none>");
+    } else {
+      for (const [index, command] of summary.overview.suggestedCommands.entries()) {
+        console.log(`${index + 1}. ${command}`);
+      }
+    }
     return;
   }
 
@@ -331,11 +353,33 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
     case "mcp":
       console.log("Themis 诊断 - mcp");
       console.log(`serverCount：${summary.mcp.servers.length}`);
-      for (const server of summary.mcp.servers) {
-        console.log(`${server.name}(${server.id})：${server.status}`);
+      console.log(`healthyCount：${summary.mcp.diagnostics.statusCounts.healthyCount}`);
+      console.log(`abnormalCount：${summary.mcp.diagnostics.statusCounts.abnormalCount}`);
+      console.log(`unknownCount：${summary.mcp.diagnostics.statusCounts.unknownCount}`);
+      for (const diagnosis of summary.mcp.diagnostics.serverDiagnoses) {
+        console.log(`${diagnosis.server.name}(${diagnosis.server.id})：${diagnosis.server.status}`);
+        console.log(`  分类：${diagnosis.classification}`);
+        const details = formatMcpServerDetails(diagnosis.server);
+        if (details) {
+          console.log(`  细节：${details}`);
+        }
+        console.log(`  摘要：${diagnosis.summary}`);
+        if (diagnosis.recommendedActions.length > 0) {
+          console.log("  建议动作：");
+          for (const [index, step] of diagnosis.recommendedActions.entries()) {
+            console.log(`  ${index + 1}. ${step}`);
+          }
+        }
       }
       if (summary.mcp.readError) {
         console.log(`readError：${summary.mcp.readError}`);
+      }
+      console.log("问题判断");
+      console.log(`主诊断：${summary.mcp.diagnostics.primaryDiagnosis?.title ?? "<none>"}`);
+      console.log(`诊断摘要：${summary.mcp.diagnostics.primaryDiagnosis?.summary ?? "<none>"}`);
+      console.log("建议动作：");
+      for (const [index, step] of summary.mcp.diagnostics.recommendedNextSteps.entries()) {
+        console.log(`${index + 1}. ${step}`);
       }
       return;
     case "feishu":
@@ -380,6 +424,9 @@ async function handleDoctorSmoke(args: string[]): Promise<number> {
       if (all.feishu) {
         console.log("");
         printFeishuSmokeResult(all.feishu);
+      } else if (!all.web.ok) {
+        console.log("");
+        console.log("Feishu smoke 已跳过：Web smoke 未通过，先修复 Web 链路后再继续。");
       }
 
       return all.ok ? 0 : 1;
@@ -651,12 +698,29 @@ function printFeishuDiagnosticsSummary(summary: FeishuDiagnosticsSummary): void 
   console.log(`threadId：${currentConversation?.threadId ?? "<none>"}`);
   console.log(`threadStatus：${currentConversation?.threadStatus ?? "<none>"}`);
   console.log(`pendingActionCount：${currentConversation?.pendingActionCount ?? 0}`);
+  const takeoverGuidance = describeFeishuTakeoverGuidance(currentConversation);
+  console.log("当前接管判断");
+  console.log(`takeoverState：${takeoverGuidance.state}`);
+  console.log(`takeoverHint：${takeoverGuidance.hint}`);
+  const playbook = buildFeishuTroubleshootingPlaybook({
+    primaryDiagnosisId: primaryDiagnosis?.id ?? null,
+    currentConversation,
+    lastIgnoredMessage: summary.diagnostics.lastIgnoredMessage,
+  });
+  console.log("排障剧本");
+
+  for (const [index, step] of playbook.entries()) {
+    console.log(`${index + 1}. ${step}`);
+  }
 
   console.log("最近窗口统计");
   console.log(`recentWindow.duplicateIgnoredCount：${summary.diagnostics.recentWindowStats.duplicateIgnoredCount}`);
   console.log(`recentWindow.staleIgnoredCount：${summary.diagnostics.recentWindowStats.staleIgnoredCount}`);
+  console.log(`recentWindow.approvalSubmittedCount：${summary.diagnostics.recentWindowStats.approvalSubmittedCount}`);
   console.log(`recentWindow.replySubmittedCount：${summary.diagnostics.recentWindowStats.replySubmittedCount}`);
   console.log(`recentWindow.takeoverSubmittedCount：${summary.diagnostics.recentWindowStats.takeoverSubmittedCount}`);
+  console.log(`recentWindow.pendingInputNotFoundCount：${summary.diagnostics.recentWindowStats.pendingInputNotFoundCount}`);
+  console.log(`recentWindow.pendingInputAmbiguousCount：${summary.diagnostics.recentWindowStats.pendingInputAmbiguousCount}`);
 
   console.log("最近一次 action 尝试");
   if (summary.diagnostics.lastActionAttempt) {
@@ -706,6 +770,75 @@ function printFeishuDiagnosticsSummary(summary: FeishuDiagnosticsSummary): void 
 
 function countOk(files: RuntimeDiagnosticFileStatus[]): number {
   return files.filter((file) => file.status === "ok").length;
+}
+
+function createCliMcpInspector(): Pick<McpInspector, "list" | "probe" | "reload"> {
+  const fixture = process.env.THEMIS_MCP_INSPECTOR_FIXTURE?.trim();
+
+  if (!fixture) {
+    return new McpInspector({
+      workingDirectory: cwd,
+    });
+  }
+
+  const parsed = JSON.parse(fixture) as {
+    servers?: Array<{
+      id?: string;
+      name?: string;
+      status?: string;
+      transport?: string;
+      command?: string;
+      args?: string[];
+      cwd?: string;
+      enabled?: boolean;
+      auth?: string;
+      error?: string;
+      message?: string;
+    }>;
+  };
+  const summary = {
+    servers: Array.isArray(parsed.servers)
+      ? parsed.servers.map((server, index) => ({
+        id: typeof server.id === "string" && server.id.trim() ? server.id : `fixture-${index + 1}`,
+        name: typeof server.name === "string" && server.name.trim() ? server.name : `fixture-${index + 1}`,
+        status: typeof server.status === "string" && server.status.trim() ? server.status : "unknown",
+        args: Array.isArray(server.args)
+          ? server.args.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+          : [],
+        ...(typeof server.transport === "string" && server.transport.trim() ? { transport: server.transport } : {}),
+        ...(typeof server.command === "string" && server.command.trim() ? { command: server.command } : {}),
+        ...(typeof server.cwd === "string" && server.cwd.trim() ? { cwd: server.cwd } : {}),
+        ...(typeof server.enabled === "boolean" ? { enabled: server.enabled } : {}),
+        ...(typeof server.auth === "string" && server.auth.trim() ? { auth: server.auth } : {}),
+        ...(typeof server.error === "string" && server.error.trim() ? { error: server.error } : {}),
+        ...(typeof server.message === "string" && server.message.trim() ? { message: server.message } : {}),
+      }))
+      : [],
+  };
+
+  return {
+    list: async () => summary,
+    probe: async () => summary,
+    reload: async () => summary,
+  };
+}
+
+function formatMcpServerDetails(server: {
+  transport?: string;
+  command?: string;
+  auth?: string;
+  error?: string;
+  message?: string;
+}): string | null {
+  const parts = [
+    server.transport ? `transport=${server.transport}` : null,
+    server.command ? `command=${server.command}` : null,
+    server.auth ? `auth=${server.auth}` : null,
+    server.error ? `error=${server.error}` : null,
+    server.message ? `message=${server.message}` : null,
+  ].filter((item): item is string => Boolean(item));
+
+  return parts.length > 0 ? parts.join(", ") : null;
 }
 
 function resolveConfigValue(

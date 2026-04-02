@@ -15,9 +15,26 @@ export const PRINCIPAL_MAIN_MEMORY_STATUSES = ["active", "deprecated", "archived
 
 export type PrincipalMainMemoryStatus = (typeof PRINCIPAL_MAIN_MEMORY_STATUSES)[number];
 
+export const PRINCIPAL_MAIN_MEMORY_CANDIDATE_STATUSES = [
+  "suggested",
+  "approved",
+  "rejected",
+] as const;
+
+export type PrincipalMainMemoryCandidateStatus = (typeof PRINCIPAL_MAIN_MEMORY_CANDIDATE_STATUSES)[number];
+
 export const PRINCIPAL_MAIN_MEMORY_SOURCE_TYPES = ["themis", "manual", "imported"] as const;
 
 export type PrincipalMainMemorySourceType = (typeof PRINCIPAL_MAIN_MEMORY_SOURCE_TYPES)[number];
+
+export const PRINCIPAL_MAIN_MEMORY_CANDIDATE_REVIEW_DECISIONS = [
+  "approve",
+  "reject",
+  "archive",
+] as const;
+
+export type PrincipalMainMemoryCandidateReviewDecision =
+  (typeof PRINCIPAL_MAIN_MEMORY_CANDIDATE_REVIEW_DECISIONS)[number];
 
 export const ACTOR_TASK_SCOPE_STATUSES = [
   "open",
@@ -62,6 +79,26 @@ export interface StoredPrincipalMainMemoryRecord {
   bodyMarkdown: string;
   sourceType: PrincipalMainMemorySourceType;
   status: PrincipalMainMemoryStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoredPrincipalMainMemoryCandidateRecord {
+  candidateId: string;
+  principalId: string;
+  kind: PrincipalMainMemoryKind;
+  title: string;
+  summary: string;
+  rationale: string;
+  suggestedContent: string;
+  sourceType: PrincipalMainMemorySourceType;
+  sourceLabel: string;
+  sourceTaskId?: string;
+  sourceConversationId?: string;
+  status: PrincipalMainMemoryCandidateStatus;
+  approvedMemoryId?: string;
+  reviewedAt?: string;
+  archivedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

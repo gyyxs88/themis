@@ -8,7 +8,214 @@ import test from "node:test";
 import { FeishuDiagnosticsStateStore } from "../channels/feishu/diagnostics-state-store.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import type { TaskRequest } from "../types/task.js";
-import { readFeishuDiagnosticsSnapshot } from "./feishu-diagnostics.js";
+import {
+  buildFeishuTroubleshootingPlaybook,
+  describeFeishuTakeoverGuidance,
+  readFeishuDiagnosticsSnapshot,
+  type FeishuDiagnosticsLastIgnoredMessageSummary,
+  type FeishuDiagnosticsConversationSummary,
+} from "./feishu-diagnostics.js";
+
+test("describeFeishuTakeoverGuidance 会给出可执行的接管提示", () => {
+  const noPending = describeFeishuTakeoverGuidance(null);
+  assert.equal(noPending.state, "no_pending_action");
+  assert.match(noPending.hint, /没有 pending action/);
+
+  const blockedByApprovalConversation: FeishuDiagnosticsConversationSummary = {
+    key: "chat-1::user-1",
+    chatId: "chat-1",
+    userId: "user-1",
+    principalId: "principal-1",
+    activeSessionId: "session-1",
+    threadId: "thread-1",
+    threadStatus: "running",
+    lastMessageId: "message-1",
+    lastEventType: "waiting_action.snapshot",
+    pendingActionCount: 2,
+    pendingActions: [
+      {
+        actionId: "input-1",
+        actionType: "user-input",
+        taskId: "task-1",
+        requestId: "request-1",
+        sourceChannel: "web",
+        sessionId: "session-1",
+        principalId: "principal-1",
+      },
+      {
+        actionId: "approval-1",
+        actionType: "approval",
+        taskId: "task-2",
+        requestId: "request-2",
+        sourceChannel: "feishu",
+        sessionId: "session-1",
+        principalId: "principal-1",
+      },
+    ],
+    updatedAt: "2026-04-02T10:00:00.000Z",
+  };
+  const blockedByApproval = describeFeishuTakeoverGuidance(blockedByApprovalConversation);
+  assert.equal(blockedByApproval.state, "blocked_by_approval");
+  assert.match(blockedByApproval.hint, /approval-1/);
+  assert.match(blockedByApproval.hint, /input-1/);
+  assert.match(blockedByApproval.hint, /先.*approve.*deny/);
+
+  const replyRequiredConversation: FeishuDiagnosticsConversationSummary = {
+    ...blockedByApprovalConversation,
+    pendingActionCount: 2,
+    pendingActions: [
+      {
+        actionId: "input-1",
+        actionType: "user-input",
+        taskId: "task-1",
+        requestId: "request-1",
+        sourceChannel: "web",
+        sessionId: "session-1",
+        principalId: "principal-1",
+      },
+      {
+        actionId: "input-2",
+        actionType: "user-input",
+        taskId: "task-2",
+        requestId: "request-2",
+        sourceChannel: "feishu",
+        sessionId: "session-1",
+        principalId: "principal-1",
+      },
+    ],
+  };
+  const replyRequired = describeFeishuTakeoverGuidance(replyRequiredConversation);
+  assert.equal(replyRequired.state, "reply_required");
+  assert.match(replyRequired.hint, /\/reply <actionId> <内容>/);
+  assert.match(replyRequired.hint, /input-1/);
+  assert.match(replyRequired.hint, /input-2/);
+
+  const directTextReadyConversation: FeishuDiagnosticsConversationSummary = {
+    ...blockedByApprovalConversation,
+    pendingActionCount: 1,
+    pendingActions: [
+      {
+        actionId: "input-1",
+        actionType: "user-input",
+        taskId: "task-1",
+        requestId: "request-1",
+        sourceChannel: "web",
+        sessionId: "session-1",
+        principalId: "principal-1",
+      },
+    ],
+  };
+  const directTextReady = describeFeishuTakeoverGuidance(directTextReadyConversation);
+  assert.equal(directTextReady.state, "direct_text_ready");
+  assert.match(directTextReady.hint, /直接回复普通文本/);
+  assert.match(directTextReady.hint, /input-1/);
+});
+
+test("buildFeishuTroubleshootingPlaybook 会把常见诊断翻成排障剧本", () => {
+  const conversation: FeishuDiagnosticsConversationSummary = {
+    key: "chat-1::user-1",
+    chatId: "chat-1",
+    userId: "user-1",
+    principalId: "principal-1",
+    activeSessionId: "session-1",
+    threadId: "thread-1",
+    threadStatus: "running",
+    lastMessageId: "message-1",
+    lastEventType: "waiting_action.snapshot",
+    pendingActionCount: 2,
+    pendingActions: [
+      {
+        actionId: "input-1",
+        actionType: "user-input",
+        taskId: "task-1",
+        requestId: "request-1",
+        sourceChannel: "web",
+        sessionId: "session-1",
+        principalId: "principal-1",
+      },
+      {
+        actionId: "approval-1",
+        actionType: "approval",
+        taskId: "task-2",
+        requestId: "request-2",
+        sourceChannel: "feishu",
+        sessionId: "session-1",
+        principalId: "principal-1",
+      },
+    ],
+    updatedAt: "2026-04-02T10:00:00.000Z",
+  };
+  const staleIgnoredMessage: FeishuDiagnosticsLastIgnoredMessageSummary = {
+    type: "message.stale_ignored",
+    messageId: "message-42",
+    createdAt: "2026-04-02T10:10:00.000Z",
+    summary: "旧消息被忽略",
+  };
+
+  const blockedByApproval = buildFeishuTroubleshootingPlaybook({
+    primaryDiagnosisId: "approval_blocking_takeover",
+    currentConversation: conversation,
+    lastIgnoredMessage: null,
+  });
+  assert.ok(blockedByApproval.some((step) => step.includes("/approve approval-1")));
+  assert.ok(blockedByApproval.some((step) => step.includes("/reply input-1 <内容>")));
+
+  const replyRequired = buildFeishuTroubleshootingPlaybook({
+    primaryDiagnosisId: "pending_input_ambiguous",
+    currentConversation: {
+      ...conversation,
+      pendingActions: [
+        conversation.pendingActions[0]!,
+        {
+          actionId: "input-2",
+          actionType: "user-input",
+          taskId: "task-3",
+          requestId: "request-3",
+          sourceChannel: "feishu",
+          sessionId: "session-1",
+          principalId: "principal-1",
+        },
+      ],
+    },
+    lastIgnoredMessage: null,
+  });
+  assert.ok(replyRequired.some((step) => step.includes("/reply input-1 <内容>")));
+  assert.ok(replyRequired.some((step) => step.includes("/reply input-2 <内容>")));
+
+  const ignoredMessage = buildFeishuTroubleshootingPlaybook({
+    primaryDiagnosisId: "ignored_message_window",
+    currentConversation: null,
+    lastIgnoredMessage: staleIgnoredMessage,
+  });
+  assert.ok(ignoredMessage.some((step) => step.includes("message-42")));
+  assert.ok(ignoredMessage.some((step) => step.includes("不要重发这条旧消息")));
+
+  const pendingNotFound = buildFeishuTroubleshootingPlaybook({
+    primaryDiagnosisId: "pending_input_not_found",
+    currentConversation: {
+      ...conversation,
+      pendingActionCount: 1,
+      pendingActions: [conversation.pendingActions[0]!],
+    },
+    lastIgnoredMessage: staleIgnoredMessage,
+  });
+  assert.ok(pendingNotFound.some((step) => step.includes("/use session-1")));
+  assert.ok(pendingNotFound.some((step) => step.includes("/reply input-1 <内容>")));
+  assert.ok(pendingNotFound.some((step) => step.includes("message-42")));
+
+  const ignoredWithReadyInput = buildFeishuTroubleshootingPlaybook({
+    primaryDiagnosisId: "ignored_message_window",
+    currentConversation: {
+      ...conversation,
+      pendingActionCount: 1,
+      pendingActions: [conversation.pendingActions[0]!],
+    },
+    lastIgnoredMessage: staleIgnoredMessage,
+  });
+  assert.ok(ignoredWithReadyInput.some((step) => step.includes("message-42")));
+  assert.ok(ignoredWithReadyInput.some((step) => step.includes("/reply input-1 <内容>")));
+  assert.ok(ignoredWithReadyInput.some((step) => step.includes("直接回复普通文本")));
+});
 
 test("readFeishuDiagnosticsSnapshot 会在服务黑洞地址上超时返回不可达", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-feishu-diagnostics-timeout-"));
