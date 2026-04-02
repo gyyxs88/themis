@@ -410,6 +410,10 @@ test("飞书 duplicate / stale 消息会写入诊断事件", async () => {
     let snapshot = harness.readFeishuDiagnosticsStore();
     assert.equal(snapshot.status, "ok");
     assert.equal(snapshot.recentEvents.at(-1)?.type, "message.duplicate_ignored");
+    assert.equal(snapshot.recentEvents.at(-1)?.messageId, "message-dup-1");
+    assert.equal(snapshot.recentEvents.at(-1)?.sessionId, snapshot.conversations[0]?.activeSessionId);
+    assert.equal(snapshot.recentEvents.at(-1)?.principalId, harness.getCurrentPrincipalId());
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.dedupeWindowMs, 600_000);
 
     await harness.handleRawMessageEvent(staleMessage);
     snapshot = harness.readFeishuDiagnosticsStore();
@@ -448,7 +452,9 @@ test("飞书 direct-text takeover 会写入 takeover.submitted 并刷新 pending
     assert.equal(snapshot.conversations[0]?.pendingActions.length, 0);
     assert.equal(snapshot.recentEvents.at(-1)?.type, "takeover.submitted");
     assert.equal(snapshot.recentEvents.at(-1)?.requestId, "request-1");
+    assert.equal(snapshot.recentEvents.at(-1)?.summary, "普通文本已提交补充输入。");
     assert.equal(snapshot.recentEvents.at(-1)?.details?.matchedPendingActionCount, 1);
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.sourceSessionId, harness.getCurrentSessionId());
   } finally {
     harness.cleanup();
   }
@@ -479,6 +485,91 @@ test("飞书 /reply 会写入 reply.submitted 并刷新 pendingActions", async (
     assert.equal(snapshot.conversations[0]?.pendingActions.length, 0);
     assert.equal(snapshot.recentEvents.at(-1)?.type, "reply.submitted");
     assert.equal(snapshot.recentEvents.at(-1)?.requestId, "req-pending-action");
+    assert.equal(snapshot.recentEvents.at(-1)?.summary, "命令式 reply 已提交补充输入。");
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.matchedPendingActionCount, 1);
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.sourceSessionId, harness.getCurrentSessionId());
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书 /approve 提交失败时会写入结构化 approval.submit_failed 事件", async () => {
+  const harness = createHarness({
+    resolveFailureActionIds: ["approval-fail-1"],
+  });
+
+  try {
+    harness.injectPendingAction({
+      actionId: "approval-fail-1",
+      requestId: "request-approval-fail-1",
+      actionType: "approval",
+      prompt: "Allow command?",
+    });
+
+    await harness.handleCommand("approve", ["approval-fail-1"]);
+
+    const snapshot = harness.readFeishuDiagnosticsStore();
+    assert.equal(snapshot.status, "ok");
+    assert.equal(snapshot.recentEvents.at(-1)?.type, "approval.submit_failed");
+    assert.equal(snapshot.recentEvents.at(-1)?.actionId, "approval-fail-1");
+    assert.equal(snapshot.recentEvents.at(-1)?.requestId, "request-approval-fail-1");
+    assert.equal(snapshot.recentEvents.at(-1)?.summary, "审批提交失败：approval-fail-1 已失效。");
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.matchedPendingActionCount, 1);
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.sourceSessionId, harness.getCurrentSessionId());
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书 direct-text takeover 提交失败时会写入结构化 takeover.submit_failed 事件", async () => {
+  const harness = createHarness({
+    resolveFailureActionIds: ["takeover-fail-1"],
+  });
+
+  try {
+    harness.injectPendingAction({
+      actionId: "takeover-fail-1",
+      requestId: "request-takeover-fail-1",
+      actionType: "user-input",
+      prompt: "Please add details",
+    });
+
+    await harness.handleMessageEventText("继续执行");
+
+    const snapshot = harness.readFeishuDiagnosticsStore();
+    assert.equal(snapshot.status, "ok");
+    assert.equal(snapshot.recentEvents.at(-1)?.type, "takeover.submit_failed");
+    assert.equal(snapshot.recentEvents.at(-1)?.actionId, "takeover-fail-1");
+    assert.equal(snapshot.recentEvents.at(-1)?.requestId, "request-takeover-fail-1");
+    assert.equal(snapshot.recentEvents.at(-1)?.summary, "普通文本补充输入失败：takeover-fail-1 已失效。");
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.matchedPendingActionCount, 1);
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.sourceSessionId, harness.getCurrentSessionId());
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书 /reply 提交失败时会写入结构化 reply.submit_failed 事件", async () => {
+  const harness = createHarness({
+    resolveFailureActionIds: ["reply-fail-1"],
+  });
+
+  try {
+    harness.injectPendingAction({
+      actionId: "reply-fail-1",
+      requestId: "request-reply-fail-1",
+      actionType: "user-input",
+      prompt: "Please add details",
+    });
+
+    await harness.handleCommand("reply", ["reply-fail-1", "继续", "补充"]);
+
+    const snapshot = harness.readFeishuDiagnosticsStore();
+    assert.equal(snapshot.status, "ok");
+    assert.equal(snapshot.recentEvents.at(-1)?.type, "reply.submit_failed");
+    assert.equal(snapshot.recentEvents.at(-1)?.actionId, "reply-fail-1");
+    assert.equal(snapshot.recentEvents.at(-1)?.requestId, "request-reply-fail-1");
+    assert.equal(snapshot.recentEvents.at(-1)?.summary, "命令式回复失败：reply-fail-1 已失效。");
     assert.equal(snapshot.recentEvents.at(-1)?.details?.matchedPendingActionCount, 1);
     assert.equal(snapshot.recentEvents.at(-1)?.details?.sourceSessionId, harness.getCurrentSessionId());
   } finally {
@@ -1513,6 +1604,10 @@ test("飞书普通文本在同一会话存在多条 user-input waiting action �
     const snapshot = harness.readFeishuDiagnosticsStore();
     assert.equal(snapshot.status, "ok");
     assert.equal(snapshot.recentEvents.at(-1)?.type, "pending_input.ambiguous");
+    assert.equal(snapshot.recentEvents.at(-1)?.messageId, "message-1");
+    assert.equal(snapshot.recentEvents.at(-1)?.sessionId, harness.getCurrentSessionId());
+    assert.equal(snapshot.recentEvents.at(-1)?.principalId, harness.getCurrentPrincipalId());
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.blockingReason, "multiple_user_input_pending");
     assert.equal(snapshot.recentEvents.at(-1)?.details?.matchedPendingActionCount, 2);
   } finally {
     harness.cleanup();
@@ -3830,6 +3925,7 @@ type FeishuHarnessConfig = {
   runtimeEngine?: "sdk" | "app-server";
   omitRuntimeRegistry?: boolean;
   appServerEventsBuilder?: (request: TaskRequest) => TaskEvent[];
+  resolveFailureActionIds?: string[];
   appServerRuntimeFactory?: (input: {
     runtimeStore: SqliteCodexSessionRegistry;
     identityService: IdentityLinkService;
@@ -4040,6 +4136,7 @@ function createHarness(
       || "omitRuntimeRegistry" in runtimeCatalogOrSkillsOverrides
       || "appServerEventsBuilder" in runtimeCatalogOrSkillsOverrides
       || "appServerRuntimeFactory" in runtimeCatalogOrSkillsOverrides
+      || "resolveFailureActionIds" in runtimeCatalogOrSkillsOverrides
     )
       ? runtimeCatalogOrSkillsOverrides as FeishuHarnessConfig
       : null;
@@ -4297,8 +4394,13 @@ function createHarness(
     });
   const loggerState = createLogger();
   const resolvedActionSubmissions: TaskPendingActionSubmitRequest[] = [];
+  const forcedResolveFailureActionIds = new Set(harnessConfig?.resolveFailureActionIds ?? []);
   const originalResolveAction = actionBridge.resolve.bind(actionBridge);
   actionBridge.resolve = (payload) => {
+    if (forcedResolveFailureActionIds.has(payload.actionId)) {
+      return false;
+    }
+
     const resolved = originalResolveAction(payload);
 
     if (resolved) {

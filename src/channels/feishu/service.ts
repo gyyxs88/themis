@@ -277,6 +277,9 @@ export class FeishuChannelService {
         context,
         lastMessageId: context.messageId,
         summary: "重复消息已忽略。",
+        details: {
+          dedupeWindowMs: FEISHU_MESSAGE_DEDUPE_TTL_MS,
+        },
       });
       this.logger.info(`[themis/feishu] 忽略重复消息：message=${context.messageId}`);
       return;
@@ -2712,6 +2715,7 @@ export class FeishuChannelService {
         type: "pending_input.ambiguous",
         context,
         sessionId,
+        lastMessageId: context.messageId,
         principalId: principal.principalId,
         summary: "当前会话存在多条可接管的等待输入。",
         details: {
