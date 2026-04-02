@@ -312,12 +312,16 @@ test("RuntimeSmokeService.runFeishuSmoke 在缺少 FEISHU_APP_ID / FEISHU_APP_SE
     const result = await service.runFeishuSmoke();
 
     assert.equal(result.ok, false);
+    assert.equal(result.diagnosisId, "config_missing");
+    assert.match(result.diagnosisSummary, /FEISHU_APP_ID \/ FEISHU_APP_SECRET 未完整配置/);
     assert.equal(result.serviceReachable, true);
     assert.equal(result.feishuConfigReady, false);
     assert.equal(result.docPath, "docs/feishu/themis-feishu-real-journey-smoke.md");
-    assert.ok(result.nextSteps.some((step) => step.includes("./themis doctor feishu")));
-    assert.ok(result.nextSteps.some((step) => step.includes("./themis doctor smoke feishu")));
-    assert.ok(result.nextSteps.some((step) => step.includes("A/B 手工路径")));
+    assert.deepEqual(result.nextSteps, [
+      "./themis doctor feishu",
+      "./themis doctor smoke web",
+      "./themis doctor smoke feishu",
+    ]);
     assert.match(result.message, /FEISHU_APP_ID/);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -392,11 +396,18 @@ test("RuntimeSmokeService.runFeishuSmoke 在根路径返回 302/login 时仍判�
     const result = await service.runFeishuSmoke();
 
     assert.equal(result.ok, true);
+    assert.equal(result.diagnosisId, "healthy");
+    assert.equal(result.diagnosisSummary, "飞书配置、服务可达性和最近窗口摘要看起来正常，继续按固定复跑顺序验证即可。");
     assert.equal(result.serviceReachable, true);
     assert.equal(result.feishuConfigReady, true);
     assert.equal(result.statusCode, 302);
     assert.equal(result.sessionBindingCount, 1);
     assert.equal(result.attachmentDraftCount, 1);
+    assert.deepEqual(result.nextSteps, [
+      "./themis doctor feishu",
+      "./themis doctor smoke web",
+      "./themis doctor smoke feishu",
+    ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -472,6 +483,7 @@ test("RuntimeSmokeService.runFeishuSmoke 会复用快照里的配置就绪状态
     assert.equal(result.statusCode, 302);
     assert.equal(result.sessionBindingCount, 1);
     assert.equal(result.attachmentDraftCount, 1);
+    assert.equal(result.diagnosisId, "healthy");
     assert.equal(env.getAccessCount(), 2);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -504,6 +516,46 @@ test("RuntimeSmokeService.runFeishuSmoke 在健康检查返回 500 时判定为�
     assert.equal(result.serviceReachable, false);
     assert.equal(result.feishuConfigReady, true);
     assert.match(result.message, /不可达/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("RuntimeSmokeService.runFeishuSmoke 会输出固定复跑顺序和诊断摘要", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-smoke-feishu-diagnosis-"));
+
+  try {
+    const service = createService(root, {
+      env: {
+        FEISHU_APP_ID: "cli_xxx",
+        FEISHU_APP_SECRET: "secret_xxx",
+      },
+      fetchImpl: async (input) => {
+        const url = normalizeUrl(input);
+
+        if (url === "http://127.0.0.1:3100/") {
+          return new Response(null, {
+            status: 200,
+            headers: {
+              "content-type": "text/plain; charset=utf-8",
+            },
+          });
+        }
+
+        throw new Error(`unexpected fetch: ${url}`);
+      },
+    });
+
+    const result = await service.runFeishuSmoke();
+
+    assert.equal(result.ok, true);
+    assert.equal(result.diagnosisId, "healthy");
+    assert.equal(result.diagnosisSummary, "飞书配置、服务可达性和最近窗口摘要看起来正常，继续按固定复跑顺序验证即可。");
+    assert.deepEqual(result.nextSteps, [
+      "./themis doctor feishu",
+      "./themis doctor smoke web",
+      "./themis doctor smoke feishu",
+    ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

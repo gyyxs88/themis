@@ -493,9 +493,13 @@ test("themis doctor smoke feishu 会输出前置检查和 nextSteps", async () =
     assert.match(result.stdout, /docs\/feishu\/themis-feishu-real-journey-smoke\.md/);
     assert.match(result.stdout, /nextSteps/);
     assert.match(result.stdout, /statusCode：302/);
+    assert.match(result.stdout, /diagnosisId：approval_blocking_takeover/);
+    assert.match(result.stdout, /diagnosisSummary：当前 scope 里还有 approval pending action/);
     assert.match(result.stdout, /sessionBindingCount：1/);
     assert.match(result.stdout, /attachmentDraftCount：1/);
-    assert.match(result.stdout, /建议先运行：\.\/themis doctor feishu/);
+    assert.match(result.stdout, /1\. \.\/themis doctor feishu/);
+    assert.match(result.stdout, /2\. \.\/themis doctor smoke web/);
+    assert.match(result.stdout, /3\. \.\/themis doctor smoke feishu/);
   } finally {
     if (server) {
       server.closeAllConnections?.();
@@ -606,6 +610,13 @@ test("themis doctor feishu 会输出配置、服务和本地状态摘要", async
     assert.match(result.stdout, /sessionBindingCount：1/);
     assert.match(result.stdout, /attachmentDraftCount：1/);
     assert.match(result.stdout, /smokeDoc：yes/);
+    assert.match(result.stdout, /问题判断/);
+    assert.match(result.stdout, /主诊断：当前未发现明显阻塞/);
+    assert.match(result.stdout, /诊断摘要：飞书配置、服务可达性和最近窗口摘要看起来正常/);
+    assert.match(result.stdout, /建议动作：/);
+    assert.match(result.stdout, /1\. \.\/themis doctor feishu/);
+    assert.match(result.stdout, /2\. \.\/themis doctor smoke web/);
+    assert.match(result.stdout, /3\. \.\/themis doctor smoke feishu/);
   } finally {
     if (server) {
       server.closeAllConnections?.();

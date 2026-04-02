@@ -597,6 +597,8 @@ function printFeishuSmokeResult(result: Awaited<ReturnType<RuntimeSmokeService["
   console.log(`ok：${result.ok ? "yes" : "no"}`);
   console.log(`serviceReachable：${result.serviceReachable ? "yes" : "no"}`);
   console.log(`statusCode：${result.statusCode ?? "null"}`);
+  console.log(`diagnosisId：${result.diagnosisId}`);
+  console.log(`diagnosisSummary：${result.diagnosisSummary}`);
   console.log(`feishuConfigReady：${result.feishuConfigReady ? "yes" : "no"}`);
   console.log(`sessionBindingCount：${result.sessionBindingCount}`);
   console.log(`attachmentDraftCount：${result.attachmentDraftCount}`);
@@ -623,6 +625,24 @@ function printFeishuDiagnosticsSummary(summary: FeishuDiagnosticsSummary): void 
   console.log(`attachmentDraftCount：${summary.state.attachmentDraftCount}`);
   console.log(`smokeDoc：${summary.docs.smokeDocExists ? "yes" : "no"}`);
   console.log(`diagnosticsStore：${summary.diagnostics.store.status}`);
+
+  const primaryDiagnosis = summary.diagnostics.primaryDiagnosis;
+  console.log("问题判断");
+  console.log(`主诊断：${primaryDiagnosis?.title ?? "<none>"}`);
+  console.log(`诊断摘要：${primaryDiagnosis?.summary ?? "<none>"}`);
+  console.log("建议动作：");
+
+  for (const [index, step] of summary.diagnostics.recommendedNextSteps.entries()) {
+    console.log(`${index + 1}. ${step}`);
+  }
+
+  if (summary.diagnostics.secondaryDiagnoses.length > 0) {
+    console.log("次诊断：");
+
+    for (const [index, diagnosis] of summary.diagnostics.secondaryDiagnoses.entries()) {
+      console.log(`${index + 1}. ${diagnosis.title}：${diagnosis.summary}`);
+    }
+  }
 
   const currentConversation = summary.diagnostics.currentConversation;
   console.log("当前会话摘要");

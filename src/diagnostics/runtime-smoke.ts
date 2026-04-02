@@ -21,6 +21,8 @@ export interface FeishuSmokeResult {
   ok: boolean;
   serviceReachable: boolean;
   statusCode: number | null;
+  diagnosisId: string;
+  diagnosisSummary: string;
   feishuConfigReady: boolean;
   sessionBindingCount: number;
   attachmentDraftCount: number;
@@ -73,6 +75,11 @@ const WEB_SMOKE_PROMPT = `你接下来要继续做当前仓库里的一个具体
 5. 当我回复文件路径后，你只需确认“已收到路径”，然后结束本轮，不要继续分析代码，不要继续提出新的问题。`;
 
 const FEISHU_DOC_PATH = "docs/feishu/themis-feishu-real-journey-smoke.md";
+const FEISHU_SMOKE_RERUN_SEQUENCE = [
+  "./themis doctor feishu",
+  "./themis doctor smoke web",
+  "./themis doctor smoke feishu",
+];
 
 export class RuntimeSmokeService {
   private readonly workingDirectory: string;
@@ -309,24 +316,32 @@ export class RuntimeSmokeService {
   }
 
   async runFeishuSmoke(): Promise<FeishuSmokeResult> {
+    const snapshotEnv: NodeJS.ProcessEnv = {
+      FEISHU_APP_ID: this.env.FEISHU_APP_ID,
+      FEISHU_APP_SECRET: this.env.FEISHU_APP_SECRET,
+    };
     const snapshot = await readFeishuDiagnosticsSnapshot({
       workingDirectory: this.workingDirectory,
-      env: this.env,
+      env: snapshotEnv,
       baseUrl: this.baseUrl,
       fetchImpl: this.fetchImpl,
     });
+    const primaryDiagnosis = snapshot.diagnostics.primaryDiagnosis ?? {
+      id: "healthy",
+      severity: "info",
+      title: "当前未发现明显阻塞",
+      summary: "飞书配置、服务可达性和最近窗口摘要看起来正常，继续按固定复跑顺序验证即可。",
+    };
     const feishuConfigReady = snapshot.env.appIdConfigured && snapshot.env.appSecretConfigured;
-    const nextSteps = [
-      "建议先运行：./themis doctor feishu",
-      "然后运行 ./themis doctor smoke feishu，确认 smoke 输出里的诊断上下文。",
-      "最后按文档里的 A/B 手工路径继续接力。",
-    ];
+    const nextSteps = [...FEISHU_SMOKE_RERUN_SEQUENCE];
 
     if (!feishuConfigReady) {
       return {
         ok: false,
         serviceReachable: snapshot.service.serviceReachable,
         statusCode: snapshot.service.statusCode,
+        diagnosisId: primaryDiagnosis.id,
+        diagnosisSummary: primaryDiagnosis.summary,
         feishuConfigReady,
         sessionBindingCount: snapshot.state.sessionBindingCount,
         attachmentDraftCount: snapshot.state.attachmentDraftCount,
@@ -341,6 +356,8 @@ export class RuntimeSmokeService {
         ok: false,
         serviceReachable: snapshot.service.serviceReachable,
         statusCode: snapshot.service.statusCode,
+        diagnosisId: primaryDiagnosis.id,
+        diagnosisSummary: primaryDiagnosis.summary,
         feishuConfigReady,
         sessionBindingCount: snapshot.state.sessionBindingCount,
         attachmentDraftCount: snapshot.state.attachmentDraftCount,
@@ -354,12 +371,14 @@ export class RuntimeSmokeService {
       ok: true,
       serviceReachable: snapshot.service.serviceReachable,
       statusCode: snapshot.service.statusCode,
+      diagnosisId: primaryDiagnosis.id,
+      diagnosisSummary: primaryDiagnosis.summary,
       feishuConfigReady,
       sessionBindingCount: snapshot.state.sessionBindingCount,
       attachmentDraftCount: snapshot.state.attachmentDraftCount,
       nextSteps,
       docPath: FEISHU_DOC_PATH,
-      message: "Feishu smoke 前置检查通过，后续请先看 doctor feishu，再按手工接力步骤继续。",
+      message: `Feishu smoke 前置检查通过，主诊断：${primaryDiagnosis.title}。`,
     };
   }
 
