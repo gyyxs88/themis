@@ -75,7 +75,7 @@ export class FeishuDiagnosticsStateStore {
 
   upsertConversation(conversation: FeishuDiagnosticsConversation): void {
     const normalizedConversation = normalizeConversation(conversation);
-    const store = this.readStore();
+    const store = this.readWritableStore();
     const index = store.conversations.findIndex((entry) => entry.key === normalizedConversation.key);
 
     if (index === -1) {
@@ -89,7 +89,7 @@ export class FeishuDiagnosticsStateStore {
 
   appendEvent(event: FeishuDiagnosticsEvent): void {
     const normalizedEvent = normalizeEvent(event);
-    const store = this.readStore();
+    const store = this.readWritableStore();
 
     store.recentEvents.push(normalizedEvent);
 
@@ -101,62 +101,72 @@ export class FeishuDiagnosticsStateStore {
   }
 
   readSnapshot(): FeishuDiagnosticsStateSnapshot {
-    try {
-      const raw = readFileSync(this.filePath, "utf8");
-      const parsed = JSON.parse(raw) as Partial<FeishuDiagnosticsStateStoreData> | null;
-      const store = normalizeStore(parsed);
+    const result = this.readStoreState();
 
-      if (!store) {
-        return {
-          path: "infra/local/feishu-diagnostics.json",
-          status: "unreadable",
-          conversations: [],
-          recentEvents: [],
-        };
-      }
-
+    if (result.status !== "ok") {
       return {
         path: "infra/local/feishu-diagnostics.json",
-        status: "ok",
-        conversations: store.conversations.map(cloneConversation),
-        recentEvents: store.recentEvents.map(cloneEvent),
-      };
-    } catch (error) {
-      if (isNotFoundError(error)) {
-        return {
-          path: "infra/local/feishu-diagnostics.json",
-          status: "missing",
-          conversations: [],
-          recentEvents: [],
-        };
-      }
-
-      return {
-        path: "infra/local/feishu-diagnostics.json",
-        status: "unreadable",
+        status: result.status,
         conversations: [],
         recentEvents: [],
       };
     }
+
+    return {
+      path: "infra/local/feishu-diagnostics.json",
+      status: "ok",
+      conversations: result.store.conversations.map(cloneConversation),
+      recentEvents: result.store.recentEvents.map(cloneEvent),
+    };
   }
 
-  private readStore(): FeishuDiagnosticsStateStoreData {
+  private readWritableStore(): FeishuDiagnosticsStateStoreData {
+    const result = this.readStoreState();
+
+    if (result.status === "unreadable") {
+      throw new Error("Feishu 诊断状态文件已损坏，拒绝覆盖原文件。");
+    }
+
+    return result.store;
+  }
+
+  private readStoreState():
+    | {
+        status: "ok";
+        store: FeishuDiagnosticsStateStoreData;
+      }
+    | {
+        status: "missing" | "unreadable";
+        store: FeishuDiagnosticsStateStoreData;
+      } {
     try {
       const raw = readFileSync(this.filePath, "utf8");
       const parsed = JSON.parse(raw) as Partial<FeishuDiagnosticsStateStoreData> | null;
       const store = normalizeStore(parsed);
 
       if (!store) {
-        return { ...EMPTY_STORE, conversations: [], recentEvents: [] };
+        return {
+          status: "unreadable",
+          store: { ...EMPTY_STORE, conversations: [], recentEvents: [] },
+        };
       }
 
-      return store;
+      return {
+        status: "ok",
+        store,
+      };
     } catch (error) {
       if (isNotFoundError(error)) {
-        return { ...EMPTY_STORE, conversations: [], recentEvents: [] };
+        return {
+          status: "missing",
+          store: { ...EMPTY_STORE, conversations: [], recentEvents: [] },
+        };
       }
 
-      return { ...EMPTY_STORE, conversations: [], recentEvents: [] };
+      return {
+        status: "unreadable",
+        store: { ...EMPTY_STORE, conversations: [], recentEvents: [] },
+      };
     }
   }
 
