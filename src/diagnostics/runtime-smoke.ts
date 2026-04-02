@@ -309,15 +309,13 @@ export class RuntimeSmokeService {
   }
 
   async runFeishuSmoke(): Promise<FeishuSmokeResult> {
-    const feishuAppId = normalizeText(this.env.FEISHU_APP_ID);
-    const feishuAppSecret = normalizeText(this.env.FEISHU_APP_SECRET);
-    const feishuConfigReady = Boolean(feishuAppId && feishuAppSecret);
     const snapshot = await readFeishuDiagnosticsSnapshot({
       workingDirectory: this.workingDirectory,
       env: this.env,
       baseUrl: this.baseUrl,
       fetchImpl: this.fetchImpl,
     });
+    const feishuConfigReady = snapshot.env.appIdConfigured && snapshot.env.appSecretConfigured;
     const nextSteps = [
       "建议先运行：./themis doctor feishu",
       "然后运行 ./themis doctor smoke feishu，确认 smoke 输出里的诊断上下文。",
