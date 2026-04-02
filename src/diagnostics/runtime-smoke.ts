@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { WebAccessService } from "../core/web-access.js";
+import { readFeishuDiagnosticsSnapshot } from "./feishu-diagnostics.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 
 export interface WebSmokeResult {
@@ -19,7 +20,10 @@ export interface WebSmokeResult {
 export interface FeishuSmokeResult {
   ok: boolean;
   serviceReachable: boolean;
+  statusCode: number | null;
   feishuConfigReady: boolean;
+  sessionBindingCount: number;
+  attachmentDraftCount: number;
   nextSteps: string[];
   docPath: string;
   message: string;
@@ -308,29 +312,40 @@ export class RuntimeSmokeService {
     const feishuAppId = normalizeText(this.env.FEISHU_APP_ID);
     const feishuAppSecret = normalizeText(this.env.FEISHU_APP_SECRET);
     const feishuConfigReady = Boolean(feishuAppId && feishuAppSecret);
-    const serviceReachable = await isServiceReachable(this.baseUrl, this.fetchImpl);
+    const snapshot = await readFeishuDiagnosticsSnapshot({
+      workingDirectory: this.workingDirectory,
+      env: this.env,
+      baseUrl: this.baseUrl,
+      fetchImpl: this.fetchImpl,
+    });
     const nextSteps = [
-      "先在真实飞书里执行 `/msgupdate`，确认机器人基础消息更新能力。",
-      "再在 Web 新会话里执行 `/smoke user-input`，确认 A 路径可接力。",
-      "最后在 Web 新会话里执行 `/smoke mixed`，确认 B 路径可接力。",
+      "建议先运行：./themis doctor feishu",
+      "然后运行 ./themis doctor smoke feishu，确认 smoke 输出里的诊断上下文。",
+      "最后按文档里的 A/B 手工路径继续接力。",
     ];
 
     if (!feishuConfigReady) {
       return {
         ok: false,
-        serviceReachable,
+        serviceReachable: snapshot.service.serviceReachable,
+        statusCode: snapshot.service.statusCode,
         feishuConfigReady,
+        sessionBindingCount: snapshot.state.sessionBindingCount,
+        attachmentDraftCount: snapshot.state.attachmentDraftCount,
         nextSteps,
         docPath: FEISHU_DOC_PATH,
         message: "FEISHU_APP_ID / FEISHU_APP_SECRET 未配置，先补齐再做飞书 smoke 手工接力。",
       };
     }
 
-    if (!serviceReachable) {
+    if (!snapshot.service.serviceReachable) {
       return {
         ok: false,
-        serviceReachable,
+        serviceReachable: snapshot.service.serviceReachable,
+        statusCode: snapshot.service.statusCode,
         feishuConfigReady,
+        sessionBindingCount: snapshot.state.sessionBindingCount,
+        attachmentDraftCount: snapshot.state.attachmentDraftCount,
         nextSteps,
         docPath: FEISHU_DOC_PATH,
         message: `Themis 服务当前不可达，先确认 ${this.baseUrl} 可访问后再做飞书 smoke。`,
@@ -339,11 +354,14 @@ export class RuntimeSmokeService {
 
     return {
       ok: true,
-      serviceReachable,
+      serviceReachable: snapshot.service.serviceReachable,
+      statusCode: snapshot.service.statusCode,
       feishuConfigReady,
+      sessionBindingCount: snapshot.state.sessionBindingCount,
+      attachmentDraftCount: snapshot.state.attachmentDraftCount,
       nextSteps,
       docPath: FEISHU_DOC_PATH,
-      message: "Feishu smoke 前置检查通过，后续请按手工接力步骤继续。",
+      message: "Feishu smoke 前置检查通过，后续请先看 doctor feishu，再按手工接力步骤继续。",
     };
   }
 
@@ -434,18 +452,6 @@ function extractCookie(setCookieHeader: string, name: string): string {
   }
 
   throw new Error(`Missing cookie ${name}.`);
-}
-
-async function isServiceReachable(baseUrl: string, fetchImpl: typeof fetch): Promise<boolean> {
-  try {
-    const response = await fetchImpl(`${baseUrl}/`, {
-      method: "GET",
-    });
-
-    return response.status < 500;
-  } catch {
-    return false;
-  }
 }
 
 async function waitForHistoryTurnStatus(

@@ -596,7 +596,10 @@ function printFeishuSmokeResult(result: Awaited<ReturnType<RuntimeSmokeService["
   console.log("Themis smoke - feishu");
   console.log(`ok：${result.ok ? "yes" : "no"}`);
   console.log(`serviceReachable：${result.serviceReachable ? "yes" : "no"}`);
+  console.log(`statusCode：${result.statusCode ?? "null"}`);
   console.log(`feishuConfigReady：${result.feishuConfigReady ? "yes" : "no"}`);
+  console.log(`sessionBindingCount：${result.sessionBindingCount}`);
+  console.log(`attachmentDraftCount：${result.attachmentDraftCount}`);
   console.log(`docPath：${result.docPath}`);
   console.log(`message：${result.message}`);
   console.log("nextSteps：");

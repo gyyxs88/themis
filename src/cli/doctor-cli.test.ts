@@ -338,6 +338,46 @@ test("themis doctor smoke feishu 会输出前置检查和 nextSteps", async () =
   let server: ReturnType<typeof createServer> | null = null;
 
   try {
+    mkdirSync(resolve(workspace, "infra", "local"), { recursive: true });
+    writeFileSync(
+      resolve(workspace, "infra/local/feishu-sessions.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          bindings: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              activeSessionId: "session-1",
+              updatedAt: "2026-04-02T00:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    writeFileSync(
+      resolve(workspace, "infra/local/feishu-attachment-drafts.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          drafts: [
+            {
+              draftId: "draft-1",
+              sessionId: "session-1",
+              updatedAt: "2026-04-02T00:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
     server = createServer((req, res) => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
@@ -371,6 +411,9 @@ test("themis doctor smoke feishu 会输出前置检查和 nextSteps", async () =
     assert.match(result.stdout, /Feishu smoke 前置检查通过/);
     assert.match(result.stdout, /docs\/feishu\/themis-feishu-real-journey-smoke\.md/);
     assert.match(result.stdout, /nextSteps/);
+    assert.match(result.stdout, /sessionBindingCount：1/);
+    assert.match(result.stdout, /attachmentDraftCount：1/);
+    assert.match(result.stdout, /建议先运行：\.\/themis doctor feishu/);
   } finally {
     if (server) {
       server.closeAllConnections?.();
