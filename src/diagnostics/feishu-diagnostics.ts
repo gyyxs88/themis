@@ -45,6 +45,20 @@ export interface FeishuDiagnosticsLastIgnoredMessageSummary {
   summary: string;
 }
 
+export interface FeishuDiagnosticsDiagnosisSummary {
+  id:
+    | "healthy"
+    | "config_missing"
+    | "service_unreachable"
+    | "approval_blocking_takeover"
+    | "pending_input_ambiguous"
+    | "action_submit_failed"
+    | "ignored_message_window";
+  severity: "info" | "warning" | "error";
+  title: string;
+  summary: string;
+}
+
 export interface FeishuDiagnosticsSummary {
   env: {
     appIdConfigured: boolean;
@@ -69,6 +83,9 @@ export interface FeishuDiagnosticsSummary {
     recentWindowStats: FeishuDiagnosticsRecentWindowStats;
     lastActionAttempt: FeishuDiagnosticsLastActionAttemptSummary | null;
     lastIgnoredMessage: FeishuDiagnosticsLastIgnoredMessageSummary | null;
+    primaryDiagnosis: FeishuDiagnosticsDiagnosisSummary | null;
+    secondaryDiagnoses: FeishuDiagnosticsDiagnosisSummary[];
+    recommendedNextSteps: string[];
   };
   docs: {
     smokeDocExists: boolean;
@@ -154,6 +171,15 @@ export async function readFeishuDiagnosticsSnapshot(
     readFeishuFileStatus(attachmentDraftStorePath, FEISHU_ATTACHMENT_DRAFT_STORE_PATH, "drafts"),
   ]);
   const diagnosticsWindow = summarizeDiagnosticsWindow(diagnosticsSnapshot.recentEvents);
+  const diagnosis = classifyFeishuDiagnostics({
+    appIdConfigured: Boolean(normalizeText(env.FEISHU_APP_ID)),
+    appSecretConfigured: Boolean(normalizeText(env.FEISHU_APP_SECRET)),
+    serviceReachable: service.serviceReachable,
+    recentWindowStats: diagnosticsWindow.recentWindowStats,
+    recentEvents: diagnosticsSnapshot.recentEvents,
+    lastActionAttempt: diagnosticsWindow.lastActionAttempt,
+    lastIgnoredMessage: diagnosticsWindow.lastIgnoredMessage,
+  });
 
   return {
     env: {
@@ -182,6 +208,9 @@ export async function readFeishuDiagnosticsSnapshot(
       recentWindowStats: diagnosticsWindow.recentWindowStats,
       lastActionAttempt: diagnosticsWindow.lastActionAttempt,
       lastIgnoredMessage: diagnosticsWindow.lastIgnoredMessage,
+      primaryDiagnosis: diagnosis.primaryDiagnosis,
+      secondaryDiagnoses: diagnosis.secondaryDiagnoses,
+      recommendedNextSteps: diagnosis.recommendedNextSteps,
     },
     docs: {
       smokeDocExists: existsSync(join(workingDirectory, FEISHU_SMOKE_DOC_PATH)),
@@ -478,6 +507,132 @@ function summarizeDiagnosticsWindow(events: FeishuDiagnosticsEvent[]): {
     recentWindowStats,
     lastActionAttempt,
     lastIgnoredMessage,
+  };
+}
+
+function classifyFeishuDiagnostics(summary: {
+  appIdConfigured: boolean;
+  appSecretConfigured: boolean;
+  serviceReachable: boolean;
+  recentWindowStats: FeishuDiagnosticsRecentWindowStats;
+  recentEvents: FeishuDiagnosticsEvent[];
+  lastActionAttempt: FeishuDiagnosticsLastActionAttemptSummary | null;
+  lastIgnoredMessage: FeishuDiagnosticsLastIgnoredMessageSummary | null;
+}): {
+  primaryDiagnosis: FeishuDiagnosticsDiagnosisSummary | null;
+  secondaryDiagnoses: FeishuDiagnosticsDiagnosisSummary[];
+  recommendedNextSteps: string[];
+} {
+  if (!summary.appIdConfigured || !summary.appSecretConfigured) {
+    return {
+      primaryDiagnosis: {
+        id: "config_missing",
+        severity: "error",
+        title: "飞书配置缺失",
+        summary: "FEISHU_APP_ID / FEISHU_APP_SECRET 未完整配置，当前不适合继续做飞书复验。",
+      },
+      secondaryDiagnoses: [],
+      recommendedNextSteps: [
+        "./themis config list",
+        "./themis config set FEISHU_APP_ID <value>",
+        "./themis config set FEISHU_APP_SECRET <value>",
+      ],
+    };
+  }
+
+  if (!summary.serviceReachable) {
+    return {
+      primaryDiagnosis: {
+        id: "service_unreachable",
+        severity: "error",
+        title: "Themis 服务不可达",
+        summary: "当前 `doctor feishu` 无法探测到 Themis 服务，先恢复服务再做飞书复验。",
+      },
+      secondaryDiagnoses: [],
+      recommendedNextSteps: [
+        "npm run dev:web",
+        "./themis doctor feishu",
+      ],
+    };
+  }
+
+  if (summary.lastActionAttempt?.type.endsWith("submit_failed")) {
+    return {
+      primaryDiagnosis: {
+        id: "action_submit_failed",
+        severity: "error",
+        title: "最近一次 waiting action 提交失败",
+        summary: summary.lastActionAttempt.summary,
+      },
+      secondaryDiagnoses: [],
+      recommendedNextSteps: [
+        "./themis doctor feishu",
+        "./themis doctor smoke feishu",
+      ],
+    };
+  }
+
+  if (summary.recentEvents.some((event) => event.type === "pending_input.blocked_by_approval")) {
+    return {
+      primaryDiagnosis: {
+        id: "approval_blocking_takeover",
+        severity: "warning",
+        title: "approval 仍在阻挡 direct-text takeover",
+        summary: "当前 scope 里还有 approval pending action，普通文本不会直接接管 user-input。",
+      },
+      secondaryDiagnoses: [],
+      recommendedNextSteps: [
+        "先在飞书里执行 /approve <actionId> 或 /deny <actionId>",
+        "然后重新运行 ./themis doctor feishu",
+      ],
+    };
+  }
+
+  if (summary.recentWindowStats.pendingInputAmbiguousCount > 0) {
+    return {
+      primaryDiagnosis: {
+        id: "pending_input_ambiguous",
+        severity: "warning",
+        title: "当前 scope 存在多条 user-input",
+        summary: "普通文本不会自动接管，请改用显式 /reply <actionId> <内容>。",
+      },
+      secondaryDiagnoses: [],
+      recommendedNextSteps: [
+        "先看 doctor feishu 输出里的 pendingActions 列表",
+        "然后在飞书里执行 /reply <actionId> <内容>",
+      ],
+    };
+  }
+
+  if (summary.lastIgnoredMessage) {
+    return {
+      primaryDiagnosis: {
+        id: "ignored_message_window",
+        severity: "warning",
+        title: "最近有飞书消息被忽略",
+        summary: summary.lastIgnoredMessage.summary,
+      },
+      secondaryDiagnoses: [],
+      recommendedNextSteps: [
+        "./themis doctor feishu",
+        "./themis doctor smoke feishu",
+      ],
+    };
+  }
+
+  return {
+    primaryDiagnosis: {
+      id: "healthy",
+      severity: "info",
+      title: "当前未发现明显阻塞",
+      summary: "飞书配置、服务可达性和最近窗口摘要看起来正常，继续按固定复跑顺序验证即可。",
+    },
+    secondaryDiagnoses: [],
+    recommendedNextSteps: [
+      "./themis doctor feishu",
+      "./themis doctor smoke web",
+      "./themis doctor smoke feishu",
+    ],
   };
 }
 
