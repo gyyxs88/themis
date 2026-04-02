@@ -20,6 +20,7 @@ import type {
   TaskRuntimeRunHooks,
 } from "../../types/index.js";
 import { SqliteCodexSessionRegistry } from "../../storage/index.js";
+import { FeishuDiagnosticsStateStore } from "./diagnostics-state-store.js";
 import { FeishuChannelService } from "./service.js";
 import { FeishuSessionStore } from "./session-store.js";
 
@@ -327,6 +328,150 @@ test("/current 会显示当前会话的 native thread 摘要", async () => {
     assert.match(message, /thread-current-1/);
     assert.match(message, /ship mobile session summary/);
     assert.match(message, /任务状态：completed/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书 /use 会把当前会话快照和 session.switched 写入诊断状态", async () => {
+  const harness = createHarness();
+
+  try {
+    const sessionA = "session-feishu-diagnostics-a";
+    const sessionB = "session-feishu-diagnostics-b";
+    harness.seedAppServerSession(sessionA, {
+      threadId: "thread-feishu-diagnostics-a",
+      goal: "seed session A",
+    });
+    harness.seedAppServerSession(sessionB, {
+      threadId: "thread-feishu-diagnostics-b",
+      goal: "seed session B",
+    });
+    harness.setCurrentSession(sessionB);
+
+    await harness.handleCommand("use", [sessionA]);
+
+    const snapshot = harness.readFeishuDiagnosticsStore();
+    assert.equal(snapshot.status, "ok");
+    assert.equal(snapshot.conversations[0]?.activeSessionId, sessionA);
+    assert.equal(snapshot.conversations[0]?.lastEventType, "session.switched");
+    assert.equal(snapshot.recentEvents.at(-1)?.type, "session.switched");
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书 duplicate / stale 消息会写入诊断事件", async () => {
+  const harness = createHarness();
+
+  try {
+    const firstMessage = {
+      message: {
+        chat_id: "chat-dup-1",
+        message_id: "message-dup-1",
+        create_time: "1711958400000",
+        message_type: "text",
+        chat_type: "p2p",
+        content: JSON.stringify({ text: "第一条消息" }),
+      },
+      sender: {
+        sender_id: {
+          user_id: "user-dup-1",
+        },
+      },
+    };
+    const duplicateMessage = {
+      ...firstMessage,
+      message: {
+        ...firstMessage.message,
+      },
+    };
+    const staleMessage = {
+      message: {
+        chat_id: "chat-dup-1",
+        message_id: "message-dup-2",
+        create_time: "1711958399000",
+        message_type: "text",
+        chat_type: "p2p",
+        content: JSON.stringify({ text: "更旧的消息" }),
+      },
+      sender: {
+        sender_id: {
+          user_id: "user-dup-1",
+        },
+      },
+    };
+
+    await harness.handleRawMessageEvent(firstMessage);
+    harness.takeMessages();
+
+    await harness.handleRawMessageEvent(duplicateMessage);
+    let snapshot = harness.readFeishuDiagnosticsStore();
+    assert.equal(snapshot.status, "ok");
+    assert.equal(snapshot.recentEvents.at(-1)?.type, "message.duplicate_ignored");
+
+    await harness.handleRawMessageEvent(staleMessage);
+    snapshot = harness.readFeishuDiagnosticsStore();
+    assert.equal(snapshot.status, "ok");
+    assert.equal(snapshot.recentEvents.at(-1)?.type, "message.stale_ignored");
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书 direct-text takeover 会写入 takeover.submitted 并刷新 pendingActions", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.injectPendingAction({
+      actionId: "takeover-1",
+      actionType: "user-input",
+      prompt: "Please add details",
+    });
+
+    await harness.handleMessageEventText("继续执行");
+
+    assert.deepEqual(harness.getResolvedActionSubmissions(), [{
+      taskId: "task-pending-action",
+      requestId: "req-pending-action",
+      actionId: "takeover-1",
+      inputText: "继续执行",
+    }]);
+
+    const snapshot = harness.readFeishuDiagnosticsStore();
+    assert.equal(snapshot.status, "ok");
+    assert.equal(snapshot.conversations[0]?.lastEventType, "takeover.submitted");
+    assert.equal(snapshot.conversations[0]?.pendingActions.length, 0);
+    assert.equal(snapshot.recentEvents.at(-1)?.type, "takeover.submitted");
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书 /reply 会写入 reply.submitted 并刷新 pendingActions", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.injectPendingAction({
+      actionId: "reply-diagnostics-1",
+      actionType: "user-input",
+      prompt: "Please add details",
+    });
+
+    await harness.handleCommand("reply", ["reply-diagnostics-1", "继续", "补充"]);
+
+    assert.deepEqual(harness.getResolvedActionSubmissions(), [{
+      taskId: "task-pending-action",
+      requestId: "req-pending-action",
+      actionId: "reply-diagnostics-1",
+      inputText: "继续 补充",
+    }]);
+
+    const snapshot = harness.readFeishuDiagnosticsStore();
+    assert.equal(snapshot.status, "ok");
+    assert.equal(snapshot.conversations[0]?.lastEventType, "reply.submitted");
+    assert.equal(snapshot.conversations[0]?.pendingActions.length, 0);
+    assert.equal(snapshot.recentEvents.at(-1)?.type, "reply.submitted");
   } finally {
     harness.cleanup();
   }
@@ -3847,6 +3992,9 @@ function createHarness(
   const sessionStore = new FeishuSessionStore({
     filePath: join(workingDirectory, "infra/local/feishu-sessions.json"),
   });
+  const diagnosticsStateStore = new FeishuDiagnosticsStateStore({
+    filePath: join(workingDirectory, "infra/local/feishu-diagnostics.json"),
+  });
   const accounts = [
     {
       accountId: "acc-1",
@@ -4137,6 +4285,7 @@ function createHarness(
     } as never,
     taskTimeoutMs: 5_000,
     sessionStore,
+    diagnosticsStateStore,
     logger: loggerState.logger,
   });
   const messages: string[] = [];
@@ -4295,6 +4444,9 @@ function createHarness(
           attachments: Array<{ type: string; value: string }>;
         }>;
       };
+    },
+    readFeishuDiagnosticsStore() {
+      return diagnosticsStateStore.readSnapshot();
     },
     injectPendingAction(input: {
       taskId?: string;
