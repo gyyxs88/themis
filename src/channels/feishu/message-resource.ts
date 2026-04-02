@@ -162,8 +162,10 @@ export async function downloadFeishuMessageResources(
       try {
         const enrichedAsset = await enrichDocumentAsset(asset);
         attachments.push({
-          ...enrichedAsset,
           ...asset,
+          ingestionStatus: enrichedAsset.ingestionStatus ?? asset.ingestionStatus,
+          textExtraction: enrichedAsset.textExtraction ?? asset.textExtraction,
+          metadata: enrichedAsset.metadata ?? asset.metadata,
         });
       } catch {
         attachments.push({
