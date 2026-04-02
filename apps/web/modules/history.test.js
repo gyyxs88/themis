@@ -28,6 +28,130 @@ test("ensureThreadHistoryLoaded 会从历史 detail 恢复 waiting turn 的 pend
   }
 });
 
+test("ensureThreadHistoryLoaded 会从历史 detail 恢复 turn.inputEnvelope", async () => {
+  const harness = createHistoryHarness({
+    responseTurnStatus: "completed",
+    responseEvents: [
+      {
+        eventId: "event-input-1",
+        requestId: "req-1",
+        taskId: "task-1",
+        type: "task.completed",
+        status: "completed",
+        message: "已完成。",
+        payloadJson: null,
+        createdAt: "2026-03-29T00:01:00.000Z",
+      },
+    ],
+    responseTurnInput: {
+      requestId: "req-1",
+      createdAt: "2026-03-29T00:00:00.000Z",
+      envelope: {
+        envelopeId: "env-history-1",
+        sourceChannel: "web",
+        sourceSessionId: "session-history-1",
+        createdAt: "2026-03-29T00:00:00.000Z",
+        parts: [
+          {
+            partId: "part-1",
+            type: "text",
+            role: "user",
+            order: 1,
+            text: "请总结附件内容",
+          },
+          {
+            partId: "part-2",
+            type: "image",
+            role: "user",
+            order: 2,
+            assetId: "asset-image-1",
+          },
+          {
+            partId: "part-3",
+            type: "document",
+            role: "user",
+            order: 3,
+            assetId: "asset-doc-1",
+          },
+        ],
+        assets: [
+          {
+            assetId: "asset-image-1",
+            kind: "image",
+            mimeType: "image/png",
+            localPath: "/workspace/temp/input-assets/shot.png",
+            sourceChannel: "web",
+            ingestionStatus: "ready",
+          },
+          {
+            assetId: "asset-doc-1",
+            kind: "document",
+            mimeType: "application/pdf",
+            localPath: "/workspace/temp/input-assets/report.pdf",
+            sourceChannel: "web",
+            ingestionStatus: "ready",
+            textExtraction: {
+              status: "completed",
+              textPreview: "第一页摘要",
+            },
+            metadata: {
+              pageCount: 3,
+            },
+          },
+        ],
+      },
+      compileSummary: {
+        runtimeTarget: "sdk",
+        degradationLevel: "controlled_fallback",
+        warnings: [],
+      },
+    },
+  });
+
+  try {
+    const { thread, history } = harness;
+
+    await history.ensureThreadHistoryLoaded(thread.id);
+
+    const restoredTurn = thread.turns[0];
+    assert.equal(restoredTurn.inputEnvelope?.envelopeId, "env-history-1");
+    assert.equal(restoredTurn.inputEnvelope?.sourceSessionId, "session-history-1");
+    assert.deepEqual(
+      restoredTurn.inputEnvelope?.parts?.map((part) => part.type),
+      ["text", "image", "document"],
+    );
+    assert.equal(restoredTurn.inputEnvelope?.parts?.[2]?.assetId, "asset-doc-1");
+    assert.equal(restoredTurn.inputEnvelope?.assets?.[1]?.textExtraction?.textPreview, "第一页摘要");
+    assert.equal(restoredTurn.inputEnvelope?.assets?.[1]?.metadata?.pageCount, 3);
+  } finally {
+    harness.restore();
+  }
+});
+
+test("ensureThreadHistoryLoaded 遇到旧历史缺少 input 时不会破坏 turn", async () => {
+  const harness = createHistoryHarness({
+    responseTurnInput: null,
+  });
+
+  try {
+    const { thread, history } = harness;
+
+    await history.ensureThreadHistoryLoaded(thread.id);
+
+    const restoredTurn = thread.turns[0];
+    assert.equal(restoredTurn.inputEnvelope, undefined);
+    assert.equal(restoredTurn.state, "waiting");
+    assert.deepEqual(restoredTurn.pendingAction, {
+      actionId: "approval-1",
+      actionType: "approval",
+      prompt: "Allow command?",
+      choices: ["approve", "deny"],
+    });
+  } finally {
+    harness.restore();
+  }
+});
+
 test("ensureThreadHistoryLoaded 不会把已提交过的同一 waiting action 恢复成重复入口", async () => {
   const harness = createHistoryHarness({
     existingTurn: {
@@ -744,6 +868,7 @@ function createHistoryHarness(options = {}) {
               createdAt: "2026-03-29T00:00:30.000Z",
             },
           ],
+          ...(options.responseTurnInput ? { input: options.responseTurnInput } : {}),
           touchedFiles: [],
         },
       ],

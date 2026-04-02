@@ -376,6 +376,7 @@ export function createHistoryController(app) {
       return null;
     }
 
+    const inputEnvelope = app.store.normalizeTaskInputEnvelope?.(turn.input?.envelope ?? turn.inputEnvelope) ?? null;
     const restoredPendingAction = resolvePendingActionFromStoredTurn(turn);
     const suppressDuplicatePendingAction = shouldSuppressDuplicatePendingAction(existingTurn, restoredPendingAction, turn);
     const result = buildResultFromStoredTurn(turn);
@@ -390,6 +391,7 @@ export function createHistoryController(app) {
       createdAt: typeof turn.createdAt === "string" ? turn.createdAt : nowIso(),
       goal: typeof turn.goal === "string" ? turn.goal : "",
       inputText: typeof turn.inputText === "string" ? turn.inputText : "",
+      ...(inputEnvelope ? { inputEnvelope } : {}),
       options: parseJsonText(turn.optionsJson),
       requestId: typeof turn.requestId === "string" ? turn.requestId : null,
       taskId: typeof turn.taskId === "string" ? turn.taskId : null,
