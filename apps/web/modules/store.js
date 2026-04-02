@@ -299,6 +299,7 @@ export function createStore(app) {
     createDefaultThreadSettings: models.createDefaultThreadSettings,
     createThread: models.createThread,
     createTurn: models.createTurn,
+    normalizeTaskInputEnvelope: models.normalizeTaskInputEnvelope,
     appendStep,
     upsertAssistantMessage,
     normalizeBootstrapMode: models.normalizeBootstrapMode,

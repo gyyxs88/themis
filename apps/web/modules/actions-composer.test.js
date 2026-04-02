@@ -272,6 +272,76 @@ test("normalizeState 会保留 draftInputAssets 的 canonical 字段", () => {
   assert.equal(normalized.threads[0]?.draftInputAssets[0]?.textExtraction?.textPreview, "report preview");
 });
 
+test("normalizeState 会保留 turn.inputEnvelope 的 canonical 字段", () => {
+  const models = createStoreModelHelpers();
+  const normalized = models.normalizeState({
+    activeThreadId: "thread-a",
+    threads: [
+      {
+        id: "thread-a",
+        title: "线程 A",
+        turns: [
+          {
+            id: "turn-a",
+            inputEnvelope: {
+              envelopeId: "env-1",
+              sourceChannel: "web",
+              sourceSessionId: "thread-a",
+              createdAt: "2026-04-01T22:00:00.000Z",
+              parts: [
+                {
+                  partId: "part-1",
+                  type: "text",
+                  role: "user",
+                  order: 1,
+                  text: "请看这份 PDF",
+                },
+                {
+                  partId: "part-2",
+                  type: "document",
+                  role: "user",
+                  order: 2,
+                  assetId: "asset-doc-1",
+                },
+              ],
+              assets: [
+                {
+                  assetId: "asset-doc-1",
+                  kind: "document",
+                  name: "report.pdf",
+                  mimeType: "application/pdf",
+                  sizeBytes: 1024,
+                  localPath: "/workspace/temp/input-assets/report.pdf",
+                  sourceChannel: "web",
+                  sourceMessageId: "msg-123",
+                  createdAt: "2026-04-01T20:00:00.000Z",
+                  textExtraction: {
+                    status: "completed",
+                    textPath: "/workspace/temp/input-assets/report.txt",
+                    textPreview: "第一页摘要",
+                  },
+                  metadata: {
+                    pageCount: 3,
+                  },
+                  ingestionStatus: "ready",
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(normalized.threads[0]?.turns[0]?.inputEnvelope?.envelopeId, "env-1");
+  assert.equal(normalized.threads[0]?.turns[0]?.inputEnvelope?.parts?.[1]?.assetId, "asset-doc-1");
+  assert.equal(
+    normalized.threads[0]?.turns[0]?.inputEnvelope?.assets?.[0]?.textExtraction?.textPreview,
+    "第一页摘要",
+  );
+  assert.equal(normalized.threads[0]?.turns[0]?.inputEnvelope?.assets?.[0]?.metadata?.pageCount, 3);
+});
+
 test("persisted review mode 在当前 latest turn running 时会回退到普通发送", async () => {
   const harness = createComposerHarness({
     activeRunRef: null,

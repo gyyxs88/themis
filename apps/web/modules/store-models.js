@@ -62,12 +62,15 @@ export function createStoreModelHelpers() {
     };
   }
 
-  function createTurn({ goal, inputText, options }) {
+  function createTurn({ goal, inputText, options, inputEnvelope }) {
+    const normalizedInputEnvelope = normalizeTaskInputEnvelope(inputEnvelope);
+
     return {
       id: createId("turn"),
       createdAt: nowIso(),
       goal,
       inputText,
+      ...(normalizedInputEnvelope ? { inputEnvelope: normalizedInputEnvelope } : {}),
       ...(options ? { options } : {}),
       requestId: null,
       taskId: null,
@@ -141,11 +144,14 @@ export function createStoreModelHelpers() {
       return null;
     }
 
+    const inputEnvelope = normalizeTaskInputEnvelope(turn.inputEnvelope);
+
     return {
       id: typeof turn.id === "string" ? turn.id : createId("turn"),
       createdAt: typeof turn.createdAt === "string" ? turn.createdAt : nowIso(),
       goal: typeof turn.goal === "string" ? turn.goal : "",
       inputText: typeof turn.inputText === "string" ? turn.inputText : "",
+      ...(inputEnvelope ? { inputEnvelope } : {}),
       options: normalizeTurnOptions(turn.options),
       requestId: typeof turn.requestId === "string" ? turn.requestId : null,
       taskId: typeof turn.taskId === "string" ? turn.taskId : null,
@@ -215,6 +221,76 @@ export function createStoreModelHelpers() {
         };
       })
       .filter(Boolean);
+  }
+
+  function normalizeTaskInputEnvelope(value) {
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+
+    const envelopeId = typeof value.envelopeId === "string" ? value.envelopeId : "";
+    const sourceChannel = typeof value.sourceChannel === "string" ? value.sourceChannel : "";
+    const createdAt = typeof value.createdAt === "string" ? value.createdAt : "";
+
+    if (!envelopeId || !sourceChannel || !createdAt) {
+      return null;
+    }
+
+    const parts = Array.isArray(value.parts)
+      ? value.parts.map(normalizeTaskInputPart).filter(Boolean)
+      : [];
+
+    return {
+      envelopeId,
+      sourceChannel,
+      ...(typeof value.sourceSessionId === "string" ? { sourceSessionId: value.sourceSessionId } : {}),
+      ...(typeof value.sourceMessageId === "string" ? { sourceMessageId: value.sourceMessageId } : {}),
+      parts,
+      assets: normalizeDraftInputAssets(value.assets),
+      createdAt,
+    };
+  }
+
+  function normalizeTaskInputPart(value) {
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+
+    const partId = typeof value.partId === "string" ? value.partId : "";
+    const type = value.type === "text" || value.type === "image" || value.type === "document" ? value.type : "";
+    const role = value.role === "user" ? value.role : "";
+    const order = Number.isFinite(value.order) ? Number(value.order) : null;
+
+    if (!partId || !type || !role || order === null) {
+      return null;
+    }
+
+    if (type === "text") {
+      if (typeof value.text !== "string") {
+        return null;
+      }
+
+      return {
+        partId,
+        type,
+        role,
+        order,
+        text: value.text,
+      };
+    }
+
+    if (typeof value.assetId !== "string" || !value.assetId) {
+      return null;
+    }
+
+    return {
+      partId,
+      type,
+      role,
+      order,
+      assetId: value.assetId,
+      ...(typeof value.caption === "string" ? { caption: value.caption } : {}),
+    };
   }
 
   function normalizeStep(step) {
@@ -361,6 +437,8 @@ export function createStoreModelHelpers() {
     createInitialState,
     createTurn,
     normalizeState,
+    normalizeTaskInputEnvelope,
+    normalizeTaskInputPart,
     normalizeThreadOrigin,
     normalizeBootstrapMode,
     normalizeComposerMode,
