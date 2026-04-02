@@ -84,7 +84,8 @@ export async function enrichDocumentInputAsset(
 }
 
 function isPdfAsset(asset: TaskInputAsset): boolean {
-  return asset.mimeType.split(";", 1)[0].trim().toLowerCase() === "application/pdf";
+  const mimeType = asset.mimeType.split(";", 1)[0].trim().toLowerCase();
+  return mimeType === "application/pdf" || asset.localPath.toLowerCase().endsWith(".pdf");
 }
 
 async function shouldTreatAsTextDocument(asset: TaskInputAsset): Promise<boolean> {

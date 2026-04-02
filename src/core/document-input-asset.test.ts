@@ -51,6 +51,19 @@ test("未知后缀但内容像 UTF-8 文本时也会进入文本富化", async (
   assert.match(result.textExtraction?.textPreview ?? "", /alpha/);
 });
 
+test("仅靠白名单扩展名也会进入文本富化并生成 sidecar", async () => {
+  const localPath = createTempFile("config.yaml", "name: themis\n");
+  const result = await enrichDocumentInputAsset(createDocumentAsset({
+    mimeType: "application/octet-stream",
+    localPath,
+  }));
+
+  assert.equal(result.ingestionStatus, "ready");
+  assert.equal(result.textExtraction?.status, "completed");
+  assert.match(result.textExtraction?.textPath ?? "", /config\.yaml\.themis\.txt$/);
+  assert.equal(readFileSync(result.textExtraction?.textPath ?? "", "utf8"), "name: themis\n");
+});
+
 test("文本型文档在读取全文失败时会回退为 ready/failed", async () => {
   const localPath = createTempFile("guide.txt", "alpha\nbeta\n");
   const result = await enrichDocumentInputAsset(createDocumentAsset({
@@ -99,6 +112,34 @@ test("PDF 会继续委托给现有 PDF 富化逻辑", async () => {
 
   const result = await enrichDocumentInputAsset(createDocumentAsset({
     mimeType: "application/pdf",
+    localPath,
+  }), {
+    enrichPdfAsset: async (asset) => {
+      delegated += 1;
+      return {
+        ...asset,
+        ingestionStatus: "ready",
+        metadata: { pageCount: 8 },
+        textExtraction: {
+          status: "completed",
+          textPath: "/tmp/report.txt",
+          textPreview: "fake pdf text",
+        },
+      };
+    },
+  });
+
+  assert.equal(delegated, 1);
+  assert.equal(result.metadata?.pageCount, 8);
+  assert.equal(result.textExtraction?.status, "completed");
+});
+
+test("PDF 即使 MIME 退化为 octet-stream，路径以 .pdf 结尾也会委托给现有 PDF 富化逻辑", async () => {
+  const localPath = createTempFile("report.pdf", "fake-pdf");
+  let delegated = 0;
+
+  const result = await enrichDocumentInputAsset(createDocumentAsset({
+    mimeType: "application/octet-stream",
     localPath,
   }), {
     enrichPdfAsset: async (asset) => {
