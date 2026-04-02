@@ -174,6 +174,76 @@ test("RuntimeDiagnosticsService.readSummary 会汇总 feishu diagnostics 快照"
       ),
       "utf8",
     );
+    writeFileSync(
+      join(root, "infra", "local", "feishu-diagnostics.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          conversations: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              principalId: "principal-1",
+              activeSessionId: "session-1",
+              lastMessageId: "message-1",
+              lastEventType: "message.created",
+              updatedAt: "2026-04-01T00:00:00.000Z",
+              pendingActions: [
+                {
+                  actionId: "action-1",
+                  actionType: "approval",
+                  taskId: "task-1",
+                  requestId: "request-1",
+                  sourceChannel: "feishu",
+                  sessionId: "session-1",
+                  principalId: "principal-1",
+                },
+              ],
+            },
+            {
+              key: "chat-2::user-2",
+              chatId: "chat-2",
+              userId: "user-2",
+              principalId: "principal-2",
+              activeSessionId: "session-2",
+              lastMessageId: "message-2",
+              lastEventType: "message.received",
+              updatedAt: "2026-04-01T01:00:00.000Z",
+              pendingActions: [],
+            },
+          ],
+          recentEvents: [
+            {
+              id: "event-1",
+              type: "message.created",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              messageId: "message-1",
+              actionId: "action-1",
+              requestId: "request-1",
+              summary: "收到第一条消息",
+              createdAt: "2026-04-01T00:00:01.000Z",
+            },
+            {
+              id: "event-2",
+              type: "task.progress",
+              chatId: "chat-2",
+              userId: "user-2",
+              sessionId: "session-2",
+              principalId: "principal-2",
+              summary: "任务推进中",
+              createdAt: "2026-04-01T01:00:01.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
 
     server = createServer((req, res) => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -223,6 +293,10 @@ test("RuntimeDiagnosticsService.readSummary 会汇总 feishu diagnostics 快照"
     assert.equal(summary.feishu.state.attachmentDraftStore.status, "ok");
     assert.equal(summary.feishu.state.sessionBindingCount, 1);
     assert.equal(summary.feishu.state.attachmentDraftCount, 2);
+    assert.equal(summary.feishu.diagnostics.store.status, "ok");
+    assert.equal(summary.feishu.diagnostics.store.conversations.length, 2);
+    assert.equal(summary.feishu.diagnostics.currentConversation?.key, "chat-2::user-2");
+    assert.deepEqual(summary.feishu.diagnostics.recentEvents.map((event) => event.id), ["event-1", "event-2"]);
     assert.equal(summary.feishu.docs.smokeDocExists, true);
   } finally {
     restoreEnv("FEISHU_APP_ID", previousEnv.feishuAppId);

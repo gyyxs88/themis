@@ -173,6 +173,53 @@ test("GET /api/diagnostics 会返回 feishu summary", async () => {
       "utf8",
     );
     writeFileSync(
+      join(root, "infra", "local", "feishu-diagnostics.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          conversations: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              principalId: "principal-1",
+              activeSessionId: "session-1",
+              lastMessageId: "message-1",
+              lastEventType: "message.created",
+              updatedAt: "2026-04-02T00:00:00.000Z",
+              pendingActions: [],
+            },
+          ],
+          recentEvents: [
+            {
+              id: "event-1",
+              type: "message.created",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              messageId: "message-1",
+              summary: "收到第一条消息",
+              createdAt: "2026-04-02T00:00:01.000Z",
+            },
+            {
+              id: "event-2",
+              type: "task.progress",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              summary: "任务推进中",
+              createdAt: "2026-04-02T00:00:02.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    writeFileSync(
       join(root, "infra", "local", "feishu-attachment-drafts.json"),
       JSON.stringify(
         {
@@ -220,6 +267,20 @@ test("GET /api/diagnostics 会返回 feishu summary", async () => {
           state?: {
             sessionBindingCount?: number;
           };
+          diagnostics?: {
+            store?: {
+              status?: string;
+              conversations?: Array<{
+                key?: string;
+              }>;
+            };
+            currentConversation?: {
+              key?: string;
+            } | null;
+            recentEvents?: Array<{
+              id?: string;
+            }>;
+          };
           docs?: {
             smokeDocExists?: boolean;
           };
@@ -230,6 +291,9 @@ test("GET /api/diagnostics 会返回 feishu summary", async () => {
     assert.equal(payload.summary?.feishu?.env?.useEnvProxy, true);
     assert.equal(payload.summary?.feishu?.service?.serviceReachable, true);
     assert.equal(payload.summary?.feishu?.state?.sessionBindingCount, 1);
+    assert.equal(payload.summary?.feishu?.diagnostics?.store?.status, "ok");
+    assert.equal(payload.summary?.feishu?.diagnostics?.currentConversation?.key, "chat-1::user-1");
+    assert.deepEqual(payload.summary?.feishu?.diagnostics?.recentEvents?.map((event) => event.id), ["event-1", "event-2"]);
     assert.equal(payload.summary?.feishu?.docs?.smokeDocExists, true);
   } finally {
     restoreEnv("THEMIS_BASE_URL", previousEnv.baseUrl);

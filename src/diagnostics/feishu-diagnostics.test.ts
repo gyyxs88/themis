@@ -202,6 +202,147 @@ test("readFeishuDiagnosticsSnapshot 会正常统计 sessions 和 drafts 数量",
   }
 });
 
+test("readFeishuDiagnosticsSnapshot 会返回 diagnostics store、currentConversation 和 recentEvents", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-feishu-diagnostics-store-"));
+
+  try {
+    mkdirSync(join(root, "docs", "feishu"), { recursive: true });
+    writeFileSync(join(root, "docs", "feishu", "themis-feishu-real-journey-smoke.md"), "# smoke\n", "utf8");
+    mkdirSync(join(root, "infra", "local"), { recursive: true });
+    writeFileSync(
+      join(root, "infra", "local", "feishu-sessions.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          bindings: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              activeSessionId: "session-1",
+              updatedAt: "2026-04-02T08:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    writeFileSync(
+      join(root, "infra", "local", "feishu-attachment-drafts.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          drafts: [
+            {
+              key: "chat-1::user-1::session-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              parts: [],
+              assets: [],
+              attachments: [],
+              createdAt: "2026-04-02T08:00:00.000Z",
+              updatedAt: "2026-04-02T08:00:00.000Z",
+              expiresAt: "2026-04-02T09:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    writeFileSync(
+      join(root, "infra", "local", "feishu-diagnostics.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          conversations: [
+            {
+              key: "chat-1::user-1",
+              chatId: "chat-1",
+              userId: "user-1",
+              principalId: "principal-1",
+              activeSessionId: "session-1",
+              lastMessageId: "message-1",
+              lastEventType: "message.created",
+              updatedAt: "2026-04-02T08:00:00.000Z",
+              pendingActions: [
+                {
+                  actionId: "action-1",
+                  actionType: "approval",
+                  taskId: "task-1",
+                  requestId: "request-1",
+                  sourceChannel: "feishu",
+                  sessionId: "session-1",
+                  principalId: "principal-1",
+                },
+              ],
+            },
+            {
+              key: "chat-2::user-2",
+              chatId: "chat-2",
+              userId: "user-2",
+              principalId: "principal-2",
+              activeSessionId: "session-2",
+              lastMessageId: "message-2",
+              lastEventType: "message.received",
+              updatedAt: "2026-04-02T09:00:00.000Z",
+              pendingActions: [],
+            },
+          ],
+          recentEvents: [
+            {
+              id: "event-1",
+              type: "message.created",
+              chatId: "chat-1",
+              userId: "user-1",
+              sessionId: "session-1",
+              principalId: "principal-1",
+              messageId: "message-1",
+              actionId: "action-1",
+              requestId: "request-1",
+              summary: "收到第一条消息",
+              createdAt: "2026-04-02T08:00:01.000Z",
+            },
+            {
+              id: "event-2",
+              type: "task.progress",
+              chatId: "chat-2",
+              userId: "user-2",
+              sessionId: "session-2",
+              principalId: "principal-2",
+              summary: "任务仍在推进",
+              createdAt: "2026-04-02T09:00:01.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await readFeishuDiagnosticsSnapshot({
+      workingDirectory: root,
+      baseUrl: "https://example.com",
+      fetchImpl: async () =>
+        new Response(null, {
+          status: 200,
+        }),
+    });
+
+    assert.equal(result.diagnostics.store.status, "ok");
+    assert.equal(result.diagnostics.store.conversations.length, 2);
+    assert.equal(result.diagnostics.currentConversation?.key, "chat-2::user-2");
+    assert.deepEqual(result.diagnostics.recentEvents.map((event) => event.id), ["event-1", "event-2"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 async function waitForReject(timeoutMs: number, message: string): Promise<never> {
   await new Promise((_, reject) => {
     const timer = setTimeout(() => reject(new Error(message)), timeoutMs);

@@ -1,5 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  FeishuDiagnosticsStateStore,
+  type FeishuDiagnosticsConversation,
+  type FeishuDiagnosticsEvent,
+  type FeishuDiagnosticsStateSnapshot,
+} from "../channels/feishu/diagnostics-state-store.js";
 
 export interface FeishuDiagnosticFileStatus {
   path: string;
@@ -27,6 +33,11 @@ export interface FeishuDiagnosticsSummary {
     sessionBindingCount: number;
     attachmentDraftCount: number;
   };
+  diagnostics: {
+    store: FeishuDiagnosticsStateSnapshot;
+    currentConversation: FeishuDiagnosticsConversation | null;
+    recentEvents: FeishuDiagnosticsEvent[];
+  };
   docs: {
     smokeDocExists: boolean;
   };
@@ -43,6 +54,7 @@ export interface ReadFeishuDiagnosticsOptions {
 const FEISHU_SMOKE_DOC_PATH = "docs/feishu/themis-feishu-real-journey-smoke.md";
 const FEISHU_SESSION_STORE_PATH = "infra/local/feishu-sessions.json";
 const FEISHU_ATTACHMENT_DRAFT_STORE_PATH = "infra/local/feishu-attachment-drafts.json";
+const FEISHU_DIAGNOSTICS_STORE_PATH = "infra/local/feishu-diagnostics.json";
 
 export async function readFeishuDiagnosticsSnapshot(
   options: ReadFeishuDiagnosticsOptions,
@@ -54,6 +66,9 @@ export async function readFeishuDiagnosticsSnapshot(
   const serviceProbeTimeoutMs = normalizePositiveInteger(options.serviceProbeTimeoutMs, 1_000);
   const sessionStorePath = join(workingDirectory, FEISHU_SESSION_STORE_PATH);
   const attachmentDraftStorePath = join(workingDirectory, FEISHU_ATTACHMENT_DRAFT_STORE_PATH);
+  const diagnosticsStore = new FeishuDiagnosticsStateStore({
+    filePath: join(workingDirectory, FEISHU_DIAGNOSTICS_STORE_PATH),
+  }).readSnapshot();
 
   const [service, sessionStore, attachmentDraftStore] = await Promise.all([
     probeServiceReachability(baseUrl, fetchImpl, serviceProbeTimeoutMs),
@@ -74,6 +89,11 @@ export async function readFeishuDiagnosticsSnapshot(
       attachmentDraftStore,
       sessionBindingCount: sessionStore.count,
       attachmentDraftCount: attachmentDraftStore.count,
+    },
+    diagnostics: {
+      store: diagnosticsStore,
+      currentConversation: selectCurrentConversation(diagnosticsStore.conversations),
+      recentEvents: diagnosticsStore.recentEvents.map(cloneEvent),
     },
     docs: {
       smokeDocExists: existsSync(join(workingDirectory, FEISHU_SMOKE_DOC_PATH)),
@@ -149,6 +169,50 @@ function normalizePositiveInteger(value: number | undefined, fallback: number): 
 function normalizeText(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
+}
+
+function selectCurrentConversation(
+  conversations: FeishuDiagnosticsConversation[],
+): FeishuDiagnosticsConversation | null {
+  if (conversations.length === 0) {
+    return null;
+  }
+
+  return conversations.reduce((current, candidate) => (
+    compareConversation(candidate, current) > 0 ? candidate : current
+  ));
+}
+
+function compareConversation(left: FeishuDiagnosticsConversation, right: FeishuDiagnosticsConversation): number {
+  const leftUpdatedAt = parseTimestamp(left.updatedAt);
+  const rightUpdatedAt = parseTimestamp(right.updatedAt);
+
+  if (leftUpdatedAt !== rightUpdatedAt) {
+    return leftUpdatedAt - rightUpdatedAt;
+  }
+
+  return left.key.localeCompare(right.key);
+}
+
+function parseTimestamp(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function cloneEvent(event: FeishuDiagnosticsEvent): FeishuDiagnosticsEvent {
+  return {
+    id: event.id,
+    type: event.type,
+    chatId: event.chatId,
+    userId: event.userId,
+    sessionId: event.sessionId,
+    principalId: event.principalId,
+    messageId: event.messageId,
+    actionId: event.actionId,
+    requestId: event.requestId,
+    summary: event.summary,
+    createdAt: event.createdAt,
+  };
 }
 
 async function readFeishuFileStatus(
