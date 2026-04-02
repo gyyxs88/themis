@@ -469,7 +469,7 @@ test("persisted review mode 在当前 latest turn running 时会回退到普通�
   }
 });
 
-test("submitThread 会在存在 draftInputAssets 时向 /api/tasks/stream 提交 inputEnvelope", async () => {
+test("submitThread 会把已发送的 inputEnvelope 挂回本地新 turn", async () => {
   const harness = createComposerHarness({
     activeRunRef: null,
     activeRequestController: null,
@@ -490,7 +490,7 @@ test("submitThread 会在存在 draftInputAssets 时向 /api/tasks/stream 提交
   });
 
   try {
-    const { app, dom } = harness;
+    const { app, dom, activeThread } = harness;
     const actions = createComposerActions(app, {
       consumeNdjsonStream: async () => {},
       finalizeTurnCancelled() {},
@@ -506,6 +506,50 @@ test("submitThread 会在存在 draftInputAssets 时向 /api/tasks/stream 提交
     assert.equal(app.runtime.streamRequests[0]?.url, "/api/tasks/stream");
     assert.equal(app.runtime.streamRequests[0]?.body.inputEnvelope.parts[1].type, "image");
     assert.equal(app.runtime.streamRequests[0]?.body.inputEnvelope.sourceSessionId, "thread-a");
+    const localTurn = activeThread.turns.at(-1);
+    assert.equal(localTurn?.inputEnvelope?.parts[1]?.type, "image");
+    assert.equal(localTurn?.inputEnvelope?.assets[0]?.assetId, "asset-image-1");
+    assert.equal(localTurn?.inputEnvelope?.sourceSessionId, "thread-a");
+    assert.equal(
+      localTurn?.inputEnvelope?.parts[1]?.assetId,
+      app.runtime.streamRequests[0]?.body.inputEnvelope.parts[1]?.assetId,
+    );
+    assert.equal(
+      localTurn?.inputEnvelope?.assets[0]?.assetId,
+      app.runtime.streamRequests[0]?.body.inputEnvelope.assets[0]?.assetId,
+    );
+  } finally {
+    harness.restore();
+  }
+});
+
+test("submitThread 在无附件时不会给本地新 turn 平白新增空 inputEnvelope", async () => {
+  const harness = createComposerHarness({
+    activeRunRef: null,
+    activeRequestController: null,
+    allowCreateTurn: true,
+    activeTurnState: "completed",
+    activeTurnAction: null,
+    activeThreadDraftGoal: "普通文本消息",
+    activeThreadDraftAssets: [],
+  });
+
+  try {
+    const { app, dom, activeThread } = harness;
+    const actions = createComposerActions(app, {
+      consumeNdjsonStream: async () => {},
+      finalizeTurnCancelled() {},
+      finalizeTurnError() {},
+    });
+    actions.bindComposerControls();
+
+    await dom.form.listeners.submit[0]({
+      preventDefault() {},
+    });
+
+    assert.equal(app.runtime.streamRequestCount, 1);
+    assert.equal(app.runtime.streamRequests[0]?.body.inputEnvelope, undefined);
+    assert.equal(activeThread.turns.at(-1)?.inputEnvelope, undefined);
   } finally {
     harness.restore();
   }
@@ -1731,7 +1775,7 @@ function createComposerHarness(options = {}) {
     syncThreadStoredState() {},
     trimThreads() {},
     clearActiveRun() {},
-    createTurn({ goal, inputText, options: turnOptions }) {
+    createTurn({ goal, inputText, options: turnOptions, inputEnvelope }) {
       if (!options.allowCreateTurn) {
         throw new Error("createTurn should not be called in this test");
       }
@@ -1743,6 +1787,7 @@ function createComposerHarness(options = {}) {
         goal,
         inputText,
         options: turnOptions,
+        inputEnvelope,
       });
     },
     resolveAccessMode() {
@@ -1972,6 +2017,7 @@ function createTurnRecord({
   goal = "测试任务",
   inputText = "",
   options = undefined,
+  inputEnvelope = undefined,
 }) {
   return {
     id,
@@ -1985,6 +2031,7 @@ function createTurnRecord({
     goal,
     inputText,
     options,
+    inputEnvelope,
     steps: [
       {
         title: "准备执行",

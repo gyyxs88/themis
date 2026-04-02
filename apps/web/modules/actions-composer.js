@@ -396,7 +396,7 @@ export function createComposerActions(app, streamActions) {
     try {
       const historyContext = store.shouldBootstrapThread(thread) ? thread.bootstrapTranscript : "";
       const identity = app.identity.getRequestIdentity();
-    const inputEnvelope = draftInputAssets.length
+      const inputEnvelope = draftInputAssets.length
         ? await app.inputAssets.buildDraftEnvelope({
           sourceChannel: "web",
           sourceSessionId: thread.id,
@@ -405,6 +405,17 @@ export function createComposerActions(app, streamActions) {
           draftAssets: draftInputAssets,
         })
         : null;
+      const canonicalInputEnvelope = inputEnvelope
+        ? (store.normalizeTaskInputEnvelope?.(inputEnvelope) ?? inputEnvelope)
+        : null;
+
+      if (canonicalInputEnvelope) {
+        turn.inputEnvelope = canonicalInputEnvelope;
+        store.syncThreadStoredState(thread, turn);
+        store.saveState();
+        app.renderer.renderAll(shouldScrollThread(thread.id));
+      }
+
       await submitStreamingRequest(thread, "/api/tasks/stream", {
         source: "web",
         goal,
@@ -413,7 +424,7 @@ export function createComposerActions(app, streamActions) {
         sessionId: thread.id,
         ...(turn.options ? { options: turn.options } : {}),
         ...(historyContext ? { historyContext } : {}),
-        ...(inputEnvelope ? { inputEnvelope } : {}),
+        ...(canonicalInputEnvelope ? { inputEnvelope: canonicalInputEnvelope } : {}),
       });
     } catch (error) {
       finalizeSubmitError(thread, error);
