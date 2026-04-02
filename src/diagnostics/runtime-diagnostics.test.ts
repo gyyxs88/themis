@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
+import type { TaskRequest } from "../types/task.js";
 import { RuntimeDiagnosticsService } from "./runtime-diagnostics.js";
 
 test("RuntimeDiagnosticsService.readSummary 返回 auth/provider/context/memory/service 基本字段", async () => {
@@ -59,6 +60,9 @@ test("RuntimeDiagnosticsService.readSummary 会汇总 feishu diagnostics 快照"
     themisBaseUrl: process.env.THEMIS_BASE_URL,
   };
   let server: ReturnType<typeof createServer> | null = null;
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
 
   try {
     writeFileSync(join(root, "README.md"), "# demo\n", "utf8");
@@ -174,6 +178,27 @@ test("RuntimeDiagnosticsService.readSummary 会汇总 feishu diagnostics 快照"
       ),
       "utf8",
     );
+    runtimeStore.saveSession({
+      sessionId: "session-2",
+      threadId: "thread-2",
+      createdAt: "2026-04-01T00:59:00.000Z",
+      updatedAt: "2026-04-01T01:00:00.000Z",
+    });
+    runtimeStore.upsertTurnFromRequest(createFeishuTaskRequest("session-2", "request-2"), "task-2");
+    runtimeStore.appendTaskEvent({
+      eventId: "event-runtime-1",
+      taskId: "task-2",
+      requestId: "request-2",
+      type: "task.started",
+      status: "running",
+      message: "Task started",
+      payload: {
+        session: {
+          threadId: "thread-2",
+        },
+      },
+      timestamp: "2026-04-01T01:00:01.000Z",
+    });
     writeFileSync(
       join(root, "infra", "local", "feishu-diagnostics.json"),
       JSON.stringify(
@@ -293,9 +318,23 @@ test("RuntimeDiagnosticsService.readSummary 会汇总 feishu diagnostics 快照"
     assert.equal(summary.feishu.state.attachmentDraftStore.status, "ok");
     assert.equal(summary.feishu.state.sessionBindingCount, 1);
     assert.equal(summary.feishu.state.attachmentDraftCount, 2);
-    assert.equal(summary.feishu.diagnostics.store.status, "ok");
-    assert.equal(summary.feishu.diagnostics.store.conversations.length, 2);
-    assert.equal(summary.feishu.diagnostics.currentConversation?.key, "chat-2::user-2");
+    assert.deepEqual(summary.feishu.diagnostics.store, {
+      path: "infra/local/feishu-diagnostics.json",
+      status: "ok",
+    });
+    assert.deepEqual(summary.feishu.diagnostics.currentConversation, {
+      key: "chat-2::user-2",
+      chatId: "chat-2",
+      userId: "user-2",
+      principalId: "principal-2",
+      activeSessionId: "session-2",
+      threadId: "thread-2",
+      threadStatus: "running",
+      lastMessageId: "message-2",
+      lastEventType: "message.received",
+      pendingActionCount: 0,
+      updatedAt: "2026-04-01T01:00:00.000Z",
+    });
     assert.deepEqual(summary.feishu.diagnostics.recentEvents.map((event) => event.id), ["event-1", "event-2"]);
     assert.equal(summary.feishu.docs.smokeDocExists, true);
   } finally {
@@ -428,4 +467,20 @@ function restoreEnv(key: string, value: string | undefined): void {
   }
 
   delete process.env[key];
+}
+
+function createFeishuTaskRequest(sessionId: string, requestId: string): TaskRequest {
+  return {
+    requestId,
+    taskId: requestId.replace("request", "task"),
+    sourceChannel: "feishu",
+    user: {
+      userId: "user-1",
+    },
+    goal: "diagnostics",
+    channelContext: {
+      sessionId,
+    },
+    createdAt: "2026-04-01T01:00:00.000Z",
+  };
 }

@@ -6,6 +6,7 @@ import {
   type FeishuDiagnosticsEvent,
   type FeishuDiagnosticsStateSnapshot,
 } from "../channels/feishu/diagnostics-state-store.js";
+import { SqliteCodexSessionRegistry } from "../storage/index.js";
 
 export interface FeishuDiagnosticFileStatus {
   path: string;
@@ -34,13 +35,27 @@ export interface FeishuDiagnosticsSummary {
     attachmentDraftCount: number;
   };
   diagnostics: {
-    store: FeishuDiagnosticsStateSnapshot;
-    currentConversation: FeishuDiagnosticsConversation | null;
+    store: FeishuDiagnosticFileStatus;
+    currentConversation: FeishuDiagnosticsConversationSummary | null;
     recentEvents: FeishuDiagnosticsEvent[];
   };
   docs: {
     smokeDocExists: boolean;
   };
+}
+
+export interface FeishuDiagnosticsConversationSummary {
+  key: string;
+  chatId: string;
+  userId: string;
+  principalId: string;
+  activeSessionId: string;
+  threadId: string | null;
+  threadStatus: string | null;
+  lastMessageId: string | null;
+  lastEventType: string | null;
+  pendingActionCount: number;
+  updatedAt: string;
 }
 
 export interface ReadFeishuDiagnosticsOptions {
@@ -49,12 +64,15 @@ export interface ReadFeishuDiagnosticsOptions {
   baseUrl?: string;
   fetchImpl?: typeof fetch;
   serviceProbeTimeoutMs?: number;
+  runtimeStore?: SqliteCodexSessionRegistry | null;
+  sqliteFilePath?: string;
 }
 
 const FEISHU_SMOKE_DOC_PATH = "docs/feishu/themis-feishu-real-journey-smoke.md";
 const FEISHU_SESSION_STORE_PATH = "infra/local/feishu-sessions.json";
 const FEISHU_ATTACHMENT_DRAFT_STORE_PATH = "infra/local/feishu-attachment-drafts.json";
 const FEISHU_DIAGNOSTICS_STORE_PATH = "infra/local/feishu-diagnostics.json";
+const FEISHU_SQLITE_FILE_PATH = "infra/local/themis.db";
 
 export async function readFeishuDiagnosticsSnapshot(
   options: ReadFeishuDiagnosticsOptions,
@@ -66,9 +84,12 @@ export async function readFeishuDiagnosticsSnapshot(
   const serviceProbeTimeoutMs = normalizePositiveInteger(options.serviceProbeTimeoutMs, 1_000);
   const sessionStorePath = join(workingDirectory, FEISHU_SESSION_STORE_PATH);
   const attachmentDraftStorePath = join(workingDirectory, FEISHU_ATTACHMENT_DRAFT_STORE_PATH);
-  const diagnosticsStore = new FeishuDiagnosticsStateStore({
-    filePath: join(workingDirectory, FEISHU_DIAGNOSTICS_STORE_PATH),
-  }).readSnapshot();
+  const diagnosticsFilePath = join(workingDirectory, FEISHU_DIAGNOSTICS_STORE_PATH);
+  const diagnosticsSnapshot = readFeishuDiagnosticsStateSnapshot(diagnosticsFilePath);
+  const runtimeStore = resolveFeishuRuntimeStore({
+    runtimeStore: options.runtimeStore ?? null,
+    sqliteFilePath: options.sqliteFilePath ?? join(workingDirectory, FEISHU_SQLITE_FILE_PATH),
+  });
 
   const [service, sessionStore, attachmentDraftStore] = await Promise.all([
     probeServiceReachability(baseUrl, fetchImpl, serviceProbeTimeoutMs),
@@ -91,9 +112,15 @@ export async function readFeishuDiagnosticsSnapshot(
       attachmentDraftCount: attachmentDraftStore.count,
     },
     diagnostics: {
-      store: diagnosticsStore,
-      currentConversation: selectCurrentConversation(diagnosticsStore.conversations),
-      recentEvents: diagnosticsStore.recentEvents.map(cloneEvent),
+      store: {
+        path: diagnosticsSnapshot.path,
+        status: diagnosticsSnapshot.status,
+      },
+      currentConversation: summarizeConversation(
+        selectCurrentConversation(diagnosticsSnapshot.conversations),
+        runtimeStore,
+      ),
+      recentEvents: diagnosticsSnapshot.recentEvents.slice(-5).map(cloneEvent),
     },
     docs: {
       smokeDocExists: existsSync(join(workingDirectory, FEISHU_SMOKE_DOC_PATH)),
@@ -181,6 +208,95 @@ function selectCurrentConversation(
   return conversations.reduce((current, candidate) => (
     compareConversation(candidate, current) > 0 ? candidate : current
   ));
+}
+
+function summarizeConversation(
+  conversation: FeishuDiagnosticsConversation | null,
+  runtimeStore: SqliteCodexSessionRegistry | null,
+): FeishuDiagnosticsConversationSummary | null {
+  if (!conversation) {
+    return null;
+  }
+
+  const threadContext = resolveConversationThreadContext(conversation, runtimeStore);
+
+  return {
+    key: conversation.key,
+    chatId: conversation.chatId,
+    userId: conversation.userId,
+    principalId: conversation.principalId,
+    activeSessionId: conversation.activeSessionId,
+    threadId: threadContext.threadId,
+    threadStatus: threadContext.threadStatus,
+    lastMessageId: conversation.lastMessageId ?? null,
+    lastEventType: conversation.lastEventType ?? null,
+    pendingActionCount: conversation.pendingActions.length,
+    updatedAt: conversation.updatedAt,
+  };
+}
+
+function resolveConversationThreadContext(
+  conversation: FeishuDiagnosticsConversation,
+  runtimeStore: SqliteCodexSessionRegistry | null,
+): {
+  threadId: string | null;
+  threadStatus: string | null;
+} {
+  if (!runtimeStore) {
+    return {
+      threadId: null,
+      threadStatus: null,
+    };
+  }
+
+  const sessionId = normalizeText(conversation.activeSessionId);
+  if (!sessionId) {
+    return {
+      threadId: null,
+      threadStatus: null,
+    };
+  }
+
+  const session = runtimeStore.getSession(sessionId);
+  const turns = runtimeStore.listSessionTurns(sessionId);
+  const latestTurn = turns.at(-1) ?? null;
+
+  return {
+    threadId: normalizeText(session?.threadId) ?? normalizeText(latestTurn?.codexThreadId) ?? null,
+    threadStatus: normalizeText(latestTurn?.status) ?? null,
+  };
+}
+
+function readFeishuDiagnosticsStateSnapshot(filePath: string): FeishuDiagnosticsStateSnapshot {
+  if (!existsSync(filePath)) {
+    return {
+      path: FEISHU_DIAGNOSTICS_STORE_PATH,
+      status: "missing",
+      conversations: [],
+      recentEvents: [],
+    };
+  }
+
+  return new FeishuDiagnosticsStateStore({
+    filePath,
+  }).readSnapshot();
+}
+
+function resolveFeishuRuntimeStore(options: {
+  runtimeStore: SqliteCodexSessionRegistry | null;
+  sqliteFilePath: string;
+}): SqliteCodexSessionRegistry | null {
+  if (options.runtimeStore) {
+    return options.runtimeStore;
+  }
+
+  if (!existsSync(options.sqliteFilePath)) {
+    return null;
+  }
+
+  return new SqliteCodexSessionRegistry({
+    databaseFile: options.sqliteFilePath,
+  });
 }
 
 function compareConversation(left: FeishuDiagnosticsConversation, right: FeishuDiagnosticsConversation): number {

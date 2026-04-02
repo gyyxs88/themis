@@ -116,6 +116,8 @@ export class RuntimeDiagnosticsService {
     const mcpSummary = await this.readMcpSummary();
     const feishuSummary = await readFeishuDiagnosticsSnapshot({
       workingDirectory: this.workingDirectory,
+      runtimeStore: this.runtimeStore,
+      sqliteFilePath: this.sqliteFilePath,
     });
 
     return {
