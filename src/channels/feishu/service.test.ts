@@ -414,6 +414,8 @@ test("飞书 duplicate / stale 消息会写入诊断事件", async () => {
     snapshot = harness.readFeishuDiagnosticsStore();
     assert.equal(snapshot.status, "ok");
     assert.equal(snapshot.recentEvents.at(-1)?.type, "message.stale_ignored");
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.messageCreateTimeMs, 1711958399000);
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.latestCreateTimeMs, 1711958400000);
   } finally {
     harness.cleanup();
   }
@@ -425,6 +427,7 @@ test("飞书 direct-text takeover 会写入 takeover.submitted 并刷新 pending
   try {
     harness.injectPendingAction({
       actionId: "takeover-1",
+      requestId: "request-1",
       actionType: "user-input",
       prompt: "Please add details",
     });
@@ -433,7 +436,7 @@ test("飞书 direct-text takeover 会写入 takeover.submitted 并刷新 pending
 
     assert.deepEqual(harness.getResolvedActionSubmissions(), [{
       taskId: "task-pending-action",
-      requestId: "req-pending-action",
+      requestId: "request-1",
       actionId: "takeover-1",
       inputText: "继续执行",
     }]);
@@ -443,6 +446,8 @@ test("飞书 direct-text takeover 会写入 takeover.submitted 并刷新 pending
     assert.equal(snapshot.conversations[0]?.lastEventType, "takeover.submitted");
     assert.equal(snapshot.conversations[0]?.pendingActions.length, 0);
     assert.equal(snapshot.recentEvents.at(-1)?.type, "takeover.submitted");
+    assert.equal(snapshot.recentEvents.at(-1)?.requestId, "request-1");
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.matchedPendingActionCount, 1);
   } finally {
     harness.cleanup();
   }
@@ -1384,6 +1389,10 @@ test("飞书普通文本在没有 pending action 时仍按现有语义进入任�
       sdk: 0,
       appServer: 1,
     });
+
+    const snapshot = harness.readFeishuDiagnosticsStore();
+    assert.equal(snapshot.status, "ok");
+    assert.equal(snapshot.recentEvents.at(-1)?.type, "pending_input.not_found");
   } finally {
     harness.cleanup();
   }
@@ -1439,6 +1448,11 @@ test("飞书普通文本在同一会话存在多条 user-input waiting action �
       sdk: 0,
       appServer: 0,
     });
+
+    const snapshot = harness.readFeishuDiagnosticsStore();
+    assert.equal(snapshot.status, "ok");
+    assert.equal(snapshot.recentEvents.at(-1)?.type, "pending_input.ambiguous");
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.matchedPendingActionCount, 2);
   } finally {
     harness.cleanup();
   }
