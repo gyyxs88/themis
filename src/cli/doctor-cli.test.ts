@@ -411,6 +411,7 @@ test("themis doctor smoke feishu 会输出前置检查和 nextSteps", async () =
     assert.match(result.stdout, /Feishu smoke 前置检查通过/);
     assert.match(result.stdout, /docs\/feishu\/themis-feishu-real-journey-smoke\.md/);
     assert.match(result.stdout, /nextSteps/);
+    assert.match(result.stdout, /statusCode：302/);
     assert.match(result.stdout, /sessionBindingCount：1/);
     assert.match(result.stdout, /attachmentDraftCount：1/);
     assert.match(result.stdout, /建议先运行：\.\/themis doctor feishu/);

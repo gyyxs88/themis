@@ -453,8 +453,6 @@ test("RuntimeSmokeService.runFeishuSmoke 会复用快照里的配置就绪状态
         const url = normalizeUrl(input);
 
         if (url === "http://127.0.0.1:3100/") {
-          void env.FEISHU_APP_ID;
-          void env.FEISHU_APP_SECRET;
           return new Response(null, {
             status: 302,
             headers: {
@@ -474,6 +472,7 @@ test("RuntimeSmokeService.runFeishuSmoke 会复用快照里的配置就绪状态
     assert.equal(result.statusCode, 302);
     assert.equal(result.sessionBindingCount, 1);
     assert.equal(result.attachmentDraftCount, 1);
+    assert.equal(env.getAccessCount(), 2);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -618,28 +617,35 @@ function createSingleChunkNdjsonResponse(lines: Array<Record<string, unknown>>):
   });
 }
 
-function createSnapshotAwareEnv(): NodeJS.ProcessEnv {
+function createSnapshotAwareEnv(): NodeJS.ProcessEnv & { getAccessCount(): number } {
   let accessCount = 0;
   const backing = new Map<string, string>([
     ["FEISHU_APP_ID", "cli_xxx"],
     ["FEISHU_APP_SECRET", "secret_xxx"],
   ]);
 
-  return new Proxy({} as NodeJS.ProcessEnv, {
+  return new Proxy({} as NodeJS.ProcessEnv & { getAccessCount(): number }, {
     get(_target, property) {
       if (typeof property !== "string") {
         return undefined;
       }
 
+      if (property === "getAccessCount") {
+        return () => accessCount;
+      }
+
       if (property === "FEISHU_APP_ID" || property === "FEISHU_APP_SECRET") {
         accessCount += 1;
-        return accessCount <= 2 ? undefined : backing.get(property);
+        if (accessCount > 2) {
+          throw new Error(`unexpected extra env access: ${property}`);
+        }
+        return backing.get(property);
       }
 
       return backing.get(property);
     },
     has(_target, property) {
-      return typeof property === "string" && backing.has(property);
+      return typeof property === "string" && (backing.has(property) || property === "getAccessCount");
     },
   });
 }
