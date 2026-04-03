@@ -6,7 +6,9 @@ import test from "node:test";
 import type { ThreadOptions } from "@openai/codex-sdk";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import type { TaskEvent, TaskRequest } from "../types/index.js";
+import type { CompiledTaskInput } from "./runtime-input-compiler.js";
 import { CodexTaskRuntime } from "./codex-runtime.js";
+import * as codexRuntimeModule from "./codex-runtime.js";
 import type { CodexThreadSessionStore } from "./codex-session-store.js";
 import {
   addOpenAICompatibleProvider,
@@ -208,6 +210,49 @@ test("第三方模型未声明图片输入时会阻止 inputEnvelope 里的图�
   } finally {
     rmSync(workingDirectory, { recursive: true, force: true });
   }
+});
+
+test("buildCodexFallbackPromptSections 只消费路径提示块和额外纯文本 parts", () => {
+  const promptSections = (codexRuntimeModule as unknown as {
+    buildCodexFallbackPromptSections(request: TaskRequest, compiledInput: CompiledTaskInput | null): string[];
+  }).buildCodexFallbackPromptSections(
+    createRequest({
+      goal: "帮我看文档",
+    }),
+    {
+      nativeInputParts: [
+        {
+          type: "text",
+          text: "这段正文不应被拼进文档 fallback。",
+          assetId: "asset-doc-1",
+          sourcePartId: "part-doc-text-1",
+        },
+        {
+          type: "text",
+          text: "第一段上下文：系统已经切到新会话。",
+          sourcePartId: "part-text-1",
+        },
+        {
+          type: "text",
+          text: "第二段上下文：请保持同一线程继续处理。",
+          sourcePartId: "part-text-2",
+        },
+      ],
+      fallbackPromptSections: [
+        "Attached document paths:\n\n- assetId: asset-doc-1\n  name: guide.md\n  mimeType: text/markdown\n  localPath: /workspace/temp/input-assets/guide.md",
+      ],
+      compileWarnings: [],
+      degradationLevel: "controlled_fallback",
+    },
+  );
+
+  assert.equal(promptSections.length, 2);
+  assert.equal(promptSections[0], "Attached document paths:\n\n- assetId: asset-doc-1\n  name: guide.md\n  mimeType: text/markdown\n  localPath: /workspace/temp/input-assets/guide.md");
+  assert.match(promptSections[1] ?? "", /Additional envelope text parts:/);
+  assert.match(promptSections[1] ?? "", /第一段上下文：系统已经切到新会话。/);
+  assert.match(promptSections[1] ?? "", /第二段上下文：请保持同一线程继续处理。/);
+  assert.doesNotMatch(promptSections.join("\n\n"), /Document text fallback:/);
+  assert.doesNotMatch(promptSections.join("\n\n"), /这段正文不应被拼进文档 fallback。/);
 });
 
 test("runTask 在 codex-sdk 路径遇到图片 envelope 时会在 acquire 前阻止", async () => {
@@ -536,7 +581,7 @@ test("runTask 会优先使用会话绑定的工作区", async () => {
   }
 });
 
-test("runTask 会把 inputEnvelope 文本文档编译进 sdk prompt fallback sections", async () => {
+test("runTask 会把 inputEnvelope 文档只保留为路径提示，不再拼正文", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-runtime-envelope-document-fallback-"));
   const controlDirectory = join(root, "control");
   mkdirSync(controlDirectory);
@@ -595,9 +640,11 @@ test("runTask 会把 inputEnvelope 文本文档编译进 sdk prompt fallback sec
     }));
 
     assert.equal(capturedPrompts.length, 1);
-    assert.match(capturedPrompts[0] ?? "", /Document text fallback:/);
+    assert.match(capturedPrompts[0] ?? "", /Attached document paths:/);
     assert.match(capturedPrompts[0] ?? "", /assetId: asset-doc-1/);
-    assert.match(capturedPrompts[0] ?? "", /This is the document body\./);
+    assert.match(capturedPrompts[0] ?? "", /guide\.md/);
+    assert.doesNotMatch(capturedPrompts[0] ?? "", /Document text fallback:/);
+    assert.doesNotMatch(capturedPrompts[0] ?? "", /This is the document body\./);
     assert.doesNotMatch(capturedPrompts[0] ?? "", /Attachments:/);
   } finally {
     rmSync(root, { recursive: true, force: true });

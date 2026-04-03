@@ -1351,23 +1351,13 @@ function resolveCodexRuntimeInputCapabilities(): RuntimeInputCapabilities {
   };
 }
 
-function buildCodexFallbackPromptSections(
+export function buildCodexFallbackPromptSections(
   request: TaskRequest,
   compiledInput: CompiledTaskInput | null,
 ): string[] {
   if (!compiledInput) {
     return [];
   }
-
-  const documentTextSections = compiledInput.nativeInputParts
-    .filter((part): part is Extract<CompiledTaskInput["nativeInputParts"][number], { type: "text"; assetId?: string }> => (
-      part.type === "text" && typeof part.assetId === "string"
-    ))
-    .map((part) => [
-      "Document text fallback:",
-      `assetId: ${part.assetId}`,
-      part.text,
-    ].join("\n"));
 
   const mirroredTextParts = new Set(
     [request.goal, request.inputText]
@@ -1387,7 +1377,7 @@ function buildCodexFallbackPromptSections(
     ].join("\n")]
     : [];
 
-  return [...compiledInput.fallbackPromptSections, ...documentTextSections, ...envelopeTextSections];
+  return [...compiledInput.fallbackPromptSections, ...envelopeTextSections];
 }
 
 function withoutTaskAttachments(request: TaskRequest): TaskRequest {
