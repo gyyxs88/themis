@@ -1,16 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { basename } from "node:path";
 
-import type {
-  RuntimeInputCapabilities,
-  TaskInputAsset,
-  TaskInputEnvelope,
-} from "../types/index.js";
+import type { RuntimeInputCapabilities, TaskInputAsset, TaskInputEnvelope } from "../types/index.js";
 
-export type RuntimeInputDegradationLevel =
-  | "native"
-  | "lossless_textualization"
-  | "controlled_fallback"
-  | "blocked";
+export type RuntimeInputDegradationLevel = "native" | "lossless_textualization" | "controlled_fallback" | "blocked";
 
 export interface RuntimeCompileTarget {
   runtimeId: string;
@@ -59,6 +52,12 @@ export function compileTaskInputForRuntime(input: {
   const nativeInputParts: CompiledTaskInputPart[] = [];
   const fallbackPromptSections: string[] = [];
   const compileWarnings: RuntimeCompileWarning[] = [];
+  const documentPathEntries: Array<{
+    assetId: string;
+    name: string;
+    mimeType: string;
+    localPath: string;
+  }> = [];
   let degradationLevel: RuntimeInputDegradationLevel = "native";
 
   for (const part of [...input.envelope.parts].sort((left, right) => left.order - right.order)) {
@@ -99,90 +98,22 @@ export function compileTaskInputForRuntime(input: {
       continue;
     }
 
-    if (isLosslessTextDocument(asset.mimeType)) {
-      if (!input.target.capabilities.nativeTextInput) {
+    if (part.type === "document") {
+      if (!isTrustedDocumentPath(asset.localPath)) {
         return blocked({
-          code: "TEXT_NATIVE_INPUT_REQUIRED",
-          message: "当前 runtime 未声明支持文本原生输入，无法承载可文本化文档。",
+          code: "DOCUMENT_PATH_UNAVAILABLE",
+          message: "当前文档缺少可信本地路径，无法生成路径提示块。",
           assetId: asset.assetId,
         });
       }
 
-      const textualDocument = resolveTextualDocumentContent(asset);
-
-      if (textualDocument.kind === "source_unavailable") {
-        return blocked({
-          code: "TEXTUAL_DOCUMENT_SOURCE_UNAVAILABLE",
-          message: "当前可文本化文档缺少可读文本源，无法诚实地编译为文本输入。",
-          assetId: asset.assetId,
-        });
-      }
-
-      nativeInputParts.push({
-        type: "text",
-        text: textualDocument.text,
-        sourcePartId: part.partId,
+      documentPathEntries.push({
         assetId: asset.assetId,
-      });
-
-      if (textualDocument.kind === "preview_fallback") {
-        compileWarnings.push({
-          code: "TEXTUAL_DOCUMENT_PREVIEW_FALLBACK",
-          message: "可文本化文档缺少真实文本源，当前退回 textPreview 作为受控降级输入。",
-          assetId: asset.assetId,
-        });
-        degradationLevel = mergeDegradationLevel(degradationLevel, "controlled_fallback");
-        continue;
-      }
-
-      degradationLevel = mergeDegradationLevel(degradationLevel, "lossless_textualization");
-      continue;
-    }
-
-    if (supportsNativeDocumentInput(asset.mimeType, input.target.capabilities)) {
-      nativeInputParts.push({
-        type: "document",
-        assetPath: asset.localPath,
+        name: asset.name ?? basename(asset.localPath),
         mimeType: asset.mimeType,
-        sourcePartId: part.partId,
-        assetId: asset.assetId,
+        localPath: asset.localPath,
       });
-      continue;
-    }
-
-    if (asset.mimeType === "application/pdf" && input.target.capabilities.supportsPdfTextExtraction) {
-      if (!input.target.capabilities.nativeTextInput) {
-        return blocked({
-          code: "TEXT_NATIVE_INPUT_REQUIRED",
-          message: "PDF 受控降级依赖文本原生输入，当前 runtime 未声明支持。",
-          assetId: asset.assetId,
-        });
-      }
-
-      const pdfFallbackText = resolvePdfFallbackText(asset);
-
-      if (pdfFallbackText === null) {
-        return blocked({
-          code: "PDF_TEXT_SOURCE_UNAVAILABLE",
-          message: "PDF 缺少可用文本提取结果，无法进行受控降级。",
-          assetId: asset.assetId,
-        });
-      }
-
-      fallbackPromptSections.push(
-        [
-          "PDF fallback context:",
-          `assetId: ${asset.assetId}`,
-          `path: ${asset.localPath}`,
-          pdfFallbackText,
-        ].join("\n"),
-      );
-      compileWarnings.push({
-        code: "PDF_CONTROLLED_FALLBACK",
-        message: "PDF 当前通过受控降级进入 runtime。",
-        assetId: asset.assetId,
-      });
-      degradationLevel = mergeDegradationLevel(degradationLevel, "controlled_fallback");
+      degradationLevel = "controlled_fallback";
       continue;
     }
 
@@ -191,6 +122,10 @@ export function compileTaskInputForRuntime(input: {
       message: `当前 runtime 不支持文档输入：${asset.mimeType}`,
       assetId: asset.assetId,
     });
+  }
+
+  if (documentPathEntries.length) {
+    fallbackPromptSections.push(formatDocumentPathSection(documentPathEntries));
   }
 
   return {
@@ -210,72 +145,6 @@ export function compileTaskInputForRuntime(input: {
   }
 }
 
-function supportsNativeDocumentInput(mimeType: string, capabilities: RuntimeInputCapabilities): boolean {
-  if (!capabilities.nativeDocumentInput) {
-    return false;
-  }
-
-  if (!capabilities.supportedDocumentMimeTypes.length) {
-    return true;
-  }
-
-  return capabilities.supportedDocumentMimeTypes.includes(mimeType);
-}
-
-function isLosslessTextDocument(mimeType: string): boolean {
-  return [
-    "text/plain",
-    "text/markdown",
-    "text/x-markdown",
-    "application/json",
-    "application/x-typescript",
-    "text/typescript",
-    "application/typescript",
-    "text/javascript",
-    "application/javascript",
-  ].includes(mimeType);
-}
-
-function resolveTextualDocumentContent(asset: TaskInputAsset):
-  | { kind: "lossless_source"; text: string }
-  | { kind: "preview_fallback"; text: string }
-  | { kind: "source_unavailable" } {
-  const textPath = asset.textExtraction?.status === "completed" ? asset.textExtraction.textPath : undefined;
-
-  if (textPath && existsSync(textPath)) {
-    return {
-      kind: "lossless_source",
-      text: readFileSync(textPath, "utf8"),
-    };
-  }
-
-  if (existsSync(asset.localPath)) {
-    return {
-      kind: "lossless_source",
-      text: readFileSync(asset.localPath, "utf8"),
-    };
-  }
-
-  if (asset.textExtraction?.textPreview) {
-    return {
-      kind: "preview_fallback",
-      text: asset.textExtraction.textPreview,
-    };
-  }
-
-  return { kind: "source_unavailable" };
-}
-
-function resolvePdfFallbackText(asset: TaskInputAsset): string | null {
-  const textPath = asset.textExtraction?.status === "completed" ? asset.textExtraction.textPath : undefined;
-
-  if (textPath && existsSync(textPath)) {
-    return readFileSync(textPath, "utf8");
-  }
-
-  return asset.textExtraction?.textPreview ?? null;
-}
-
 function requireAsset(assets: TaskInputAsset[], assetId: string): TaskInputAsset {
   const asset = assets.find((item) => item.assetId === assetId);
 
@@ -286,16 +155,27 @@ function requireAsset(assets: TaskInputAsset[], assetId: string): TaskInputAsset
   return asset;
 }
 
-function mergeDegradationLevel(
-  current: RuntimeInputDegradationLevel,
-  next: RuntimeInputDegradationLevel,
-): RuntimeInputDegradationLevel {
-  return DEGRADATION_LEVEL_PRIORITY[next] > DEGRADATION_LEVEL_PRIORITY[current] ? next : current;
+function isTrustedDocumentPath(localPath: string): boolean {
+  return localPath.trim().length > 0 && existsSync(localPath);
 }
 
-const DEGRADATION_LEVEL_PRIORITY: Record<RuntimeInputDegradationLevel, number> = {
-  native: 0,
-  lossless_textualization: 1,
-  controlled_fallback: 2,
-  blocked: 3,
-};
+function formatDocumentPathSection(
+  entries: Array<{
+    assetId: string;
+    name: string;
+    mimeType: string;
+    localPath: string;
+  }>,
+): string {
+  const lines = ["Attached document paths:"];
+
+  for (const entry of entries) {
+    lines.push("");
+    lines.push(`- assetId: ${entry.assetId}`);
+    lines.push(`  name: ${entry.name}`);
+    lines.push(`  mimeType: ${entry.mimeType}`);
+    lines.push(`  localPath: ${entry.localPath}`);
+  }
+
+  return lines.join("\n");
+}
