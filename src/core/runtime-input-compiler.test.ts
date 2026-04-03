@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { tmpdir } from "node:os";
@@ -284,6 +284,47 @@ test("文档缺少可信路径时会被 blocked", () => {
   assert.deepEqual(compiled.fallbackPromptSections, []);
   assert.equal(compiled.compileWarnings[0]?.code, "DOCUMENT_PATH_UNAVAILABLE");
   assert.match(compiled.compileWarnings[0]?.message ?? "", /可信本地路径/);
+});
+
+test("文档路径指向目录时会被 blocked", () => {
+  const parentDirectory = mkdtempSync(join(tmpdir(), "themis-runtime-input-compiler-dir-"));
+  const directoryPath = join(parentDirectory, "folder-as-document");
+  mkdirSync(directoryPath);
+  const compiled = compileTaskInputForRuntime({
+    envelope: {
+      envelopeId: "env-document-directory-path-1",
+      sourceChannel: "web",
+      parts: [
+        { partId: "part-1", type: "document", role: "user", order: 1, assetId: "asset-doc-1" },
+      ],
+      assets: [
+        {
+          assetId: "asset-doc-1",
+          kind: "document",
+          name: "folder-as-document",
+          mimeType: "text/markdown",
+          localPath: directoryPath,
+          sourceChannel: "web",
+          ingestionStatus: "ready",
+        },
+      ],
+      createdAt: "2026-04-03T10:20:00.000Z",
+    },
+    target: {
+      runtimeId: "app-server",
+      capabilities: {
+        nativeTextInput: true,
+        nativeImageInput: true,
+        nativeDocumentInput: false,
+        supportedDocumentMimeTypes: [],
+        supportsPdfTextExtraction: true,
+        supportsDocumentPageRasterization: false,
+      },
+    },
+  });
+
+  assert.equal(compiled.degradationLevel, "blocked");
+  assert.equal(compiled.compileWarnings[0]?.code, "DOCUMENT_PATH_UNAVAILABLE");
 });
 
 test("PDF 在没有 nativeDocumentInput 时也只会生成路径提示块", () => {

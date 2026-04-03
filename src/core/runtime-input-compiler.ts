@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { statSync } from "node:fs";
 import { basename } from "node:path";
 
 import type { RuntimeInputCapabilities, TaskInputAsset, TaskInputEnvelope } from "../types/index.js";
@@ -156,7 +156,15 @@ function requireAsset(assets: TaskInputAsset[], assetId: string): TaskInputAsset
 }
 
 function isTrustedDocumentPath(localPath: string): boolean {
-  return localPath.trim().length > 0 && existsSync(localPath);
+  if (localPath.trim().length === 0) {
+    return false;
+  }
+
+  try {
+    return statSync(localPath).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function formatDocumentPathSection(
