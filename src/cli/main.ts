@@ -6,7 +6,11 @@ import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { resolveCodexAuthFilePath, resolveDefaultCodexHome } from "../core/auth-accounts.js";
-import { RuntimeDiagnosticsService, type RuntimeDiagnosticFileStatus } from "../diagnostics/runtime-diagnostics.js";
+import {
+  RuntimeDiagnosticsService,
+  type RuntimeDiagnosticFileStatus,
+  type RuntimeMultimodalDiagnosticsSummary,
+} from "../diagnostics/runtime-diagnostics.js";
 import {
   buildFeishuTroubleshootingPlaybook,
   describeFeishuTakeoverGuidance,
@@ -292,6 +296,7 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
     console.log(`- memory：${countOk(summary.memory.files)}/${summary.memory.files.length} ok`);
     console.log(`- feishu：${summary.feishu.diagnostics.primaryDiagnosis?.title ?? "<none>"}`);
     console.log(`- service/sqlite：${summary.service.sqlite.exists ? "ok" : "missing"} (${summary.service.sqlite.path})`);
+    console.log(`- multimodal：${formatMultimodalOverview(summary.service.multimodal)}`);
     const abnormalMcpCount = summary.mcp.diagnostics.statusCounts.abnormalCount;
     console.log(`- mcp：${summary.mcp.servers.length} 个 server${summary.mcp.readError ? `（读取失败：${summary.mcp.readError}）` : abnormalMcpCount > 0 ? `（${abnormalMcpCount} 个异常）` : ""}`);
 
@@ -349,6 +354,36 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
       console.log("Themis 诊断 - service");
       console.log(`sqlite.path：${summary.service.sqlite.path}`);
       console.log(`sqlite.status：${summary.service.sqlite.exists ? "ok" : "missing"}`);
+      console.log(`multimodal.status：${summary.service.multimodal.available ? "ok" : "unavailable"}`);
+      console.log(`multimodal.recentTurnInputCount：${summary.service.multimodal.recentTurnInputCount}/${summary.service.multimodal.sampleWindowSize}`);
+      console.log(
+        `multimodal.assetCounts：image=${summary.service.multimodal.assetCounts.image}, document=${summary.service.multimodal.assetCounts.document}`,
+      );
+      console.log(
+        `multimodal.degradationCounts：native=${summary.service.multimodal.degradationCounts.native}, lossless_textualization=${summary.service.multimodal.degradationCounts.losslessTextualization}, controlled_fallback=${summary.service.multimodal.degradationCounts.controlledFallback}, blocked=${summary.service.multimodal.degradationCounts.blocked}, unknown=${summary.service.multimodal.degradationCounts.unknown}`,
+      );
+      console.log(`multimodal.sourceChannels：${formatNamedCountList(summary.service.multimodal.sourceChannelCounts, "sourceChannel")}`);
+      console.log(`multimodal.runtimeTargets：${formatNamedCountList(summary.service.multimodal.runtimeTargetCounts, "runtimeTarget")}`);
+      if (summary.service.multimodal.lastTurn) {
+        console.log(`multimodal.lastTurn.requestId：${summary.service.multimodal.lastTurn.requestId}`);
+        console.log(`multimodal.lastTurn.sourceChannel：${summary.service.multimodal.lastTurn.sourceChannel}`);
+        console.log(`multimodal.lastTurn.sessionId：${summary.service.multimodal.lastTurn.sessionId ?? "<none>"}`);
+        console.log(`multimodal.lastTurn.createdAt：${summary.service.multimodal.lastTurn.createdAt}`);
+        console.log(
+          `multimodal.lastTurn.compile：${summary.service.multimodal.lastTurn.runtimeTarget ?? "unknown"} / ${summary.service.multimodal.lastTurn.degradationLevel}`,
+        );
+        console.log(
+          `multimodal.lastTurn.parts：${summary.service.multimodal.lastTurn.partTypes.join(", ") || "<none>"}`,
+        );
+        console.log(
+          `multimodal.lastTurn.assets：${summary.service.multimodal.lastTurn.assetKinds.join(", ") || "<none>"}`,
+        );
+        console.log(
+          `multimodal.lastTurn.warningCodes：${summary.service.multimodal.lastTurn.warningCodes.join(", ") || "<none>"}`,
+        );
+      } else {
+        console.log("multimodal.lastTurn：<none>");
+      }
       return;
     case "mcp":
       console.log("Themis 诊断 - mcp");
@@ -625,6 +660,36 @@ function printFileStatuses(files: RuntimeDiagnosticFileStatus[]): void {
   }
 }
 
+function formatMultimodalOverview(summary: RuntimeMultimodalDiagnosticsSummary): string {
+  if (!summary.available) {
+    return "unavailable";
+  }
+
+  if (summary.recentTurnInputCount === 0) {
+    return "最近没有已持久化的 turn input";
+  }
+
+  return [
+    `${summary.recentTurnInputCount} 条最近输入`,
+    `native ${summary.degradationCounts.native}`,
+    `fallback ${summary.degradationCounts.controlledFallback}`,
+    `blocked ${summary.degradationCounts.blocked}`,
+  ].join(" / ");
+}
+
+function formatNamedCountList<T extends { count: number }>(
+  items: T[],
+  key: Exclude<keyof T, "count">,
+): string {
+  if (items.length === 0) {
+    return "<none>";
+  }
+
+  return items
+    .map((item) => `${String(item[key])}=${item.count}`)
+    .join(", ");
+}
+
 function printWebSmokeResult(result: Awaited<ReturnType<RuntimeSmokeService["runWebSmoke"]>>): void {
   console.log("Themis smoke - web");
   console.log(`ok：${result.ok ? "yes" : "no"}`);
@@ -636,6 +701,10 @@ function printWebSmokeResult(result: Awaited<ReturnType<RuntimeSmokeService["run
   console.log(`observedActionRequired：${result.observedActionRequired ? "yes" : "no"}`);
   console.log(`observedCompleted：${result.observedCompleted ? "yes" : "no"}`);
   console.log(`historyCompleted：${result.historyCompleted ? "yes" : "no"}`);
+  console.log(`imageCompileVerified：${result.imageCompileVerified ? "yes" : "no"}`);
+  console.log(`imageCompileDegradationLevel：${result.imageCompileDegradationLevel ?? "<none>"}`);
+  console.log(`documentCompileVerified：${result.documentCompileVerified ? "yes" : "no"}`);
+  console.log(`documentCompileDegradationLevel：${result.documentCompileDegradationLevel ?? "<none>"}`);
   console.log(`message：${result.message}`);
 }
 

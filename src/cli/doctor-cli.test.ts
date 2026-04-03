@@ -151,79 +151,11 @@ test("themis doctor smoke web 会输出真实 Web smoke 结果", async () => {
 
   try {
     mkdirSync(resolve(workspace, "infra", "local"), { recursive: true });
-    server = createServer((req, res) => {
+    const webSmokeDouble = createWebSmokeHttpDouble();
+    server = createServer(async (req, res) => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
-      if (req.method === "POST" && url.pathname === "/api/web-auth/login") {
-        res.writeHead(200, {
-          "set-cookie": "themis_web_session=session-smoke-cli; Path=/; HttpOnly",
-        });
-        res.end();
-        return;
-      }
-
-      if (req.method === "POST" && url.pathname === "/api/tasks/stream") {
-        res.writeHead(200, {
-          "content-type": "application/x-ndjson; charset=utf-8",
-        });
-        res.write(JSON.stringify({
-          kind: "ack",
-          requestId: "req-smoke-cli",
-          taskId: "task-smoke-cli",
-          title: "task.accepted",
-          text: "accepted",
-        }) + "\n");
-        res.write(JSON.stringify({
-          kind: "event",
-          requestId: "req-smoke-cli",
-          taskId: "task-smoke-cli",
-          title: "task.action_required",
-          text: "请补充输入",
-          metadata: {
-            actionId: "action-smoke-cli",
-          },
-        }) + "\n");
-        res.write(JSON.stringify({
-          kind: "result",
-          requestId: "req-smoke-cli",
-          taskId: "task-smoke-cli",
-          metadata: {
-            structuredOutput: {
-              status: "completed",
-            },
-          },
-        }) + "\n");
-        res.write(JSON.stringify({
-          kind: "done",
-          requestId: "req-smoke-cli",
-          taskId: "task-smoke-cli",
-          result: {
-            status: "completed",
-          },
-        }) + "\n");
-        res.end();
-        return;
-      }
-
-      if (req.method === "POST" && url.pathname === "/api/tasks/actions") {
-        res.writeHead(200, {
-          "content-type": "application/json; charset=utf-8",
-        });
-        res.end(JSON.stringify({ ok: true }));
-        return;
-      }
-
-      if (req.method === "GET" && url.pathname.startsWith("/api/history/sessions/")) {
-        res.writeHead(200, {
-          "content-type": "application/json; charset=utf-8",
-        });
-        res.end(JSON.stringify({
-          turns: [
-            {
-              status: "completed",
-            },
-          ],
-        }));
+      if (await webSmokeDouble.handle(req, res)) {
         return;
       }
 
@@ -255,7 +187,11 @@ test("themis doctor smoke web 会输出真实 Web smoke 结果", async () => {
     assert.match(result.stdout, /sessionId：/);
     assert.match(result.stdout, /requestId：/);
     assert.match(result.stdout, /taskId：/);
-    assert.match(result.stdout, /actionId：action-smoke-cli/);
+    assert.match(result.stdout, /actionId：action-/);
+    assert.match(result.stdout, /imageCompileVerified：yes/);
+    assert.match(result.stdout, /imageCompileDegradationLevel：native/);
+    assert.match(result.stdout, /documentCompileVerified：yes/);
+    assert.match(result.stdout, /documentCompileDegradationLevel：controlled_fallback/);
   } finally {
     if (server) {
       server.closeAllConnections?.();
@@ -543,79 +479,11 @@ test("themis doctor smoke all 会先输出 web，再输出 feishu 前置检查",
       "utf8",
     );
 
-    server = createServer((req, res) => {
+    const webSmokeDouble = createWebSmokeHttpDouble();
+    server = createServer(async (req, res) => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
-      if (req.method === "POST" && url.pathname === "/api/web-auth/login") {
-        res.writeHead(200, {
-          "set-cookie": "themis_web_session=session-smoke-all-cli; Path=/; HttpOnly",
-        });
-        res.end();
-        return;
-      }
-
-      if (req.method === "POST" && url.pathname === "/api/tasks/stream") {
-        res.writeHead(200, {
-          "content-type": "application/x-ndjson; charset=utf-8",
-        });
-        res.write(JSON.stringify({
-          kind: "ack",
-          requestId: "req-smoke-all-cli",
-          taskId: "task-smoke-all-cli",
-          title: "task.accepted",
-          text: "accepted",
-        }) + "\n");
-        res.write(JSON.stringify({
-          kind: "event",
-          requestId: "req-smoke-all-cli",
-          taskId: "task-smoke-all-cli",
-          title: "task.action_required",
-          text: "请补充输入",
-          metadata: {
-            actionId: "action-smoke-all-cli",
-          },
-        }) + "\n");
-        res.write(JSON.stringify({
-          kind: "result",
-          requestId: "req-smoke-all-cli",
-          taskId: "task-smoke-all-cli",
-          metadata: {
-            structuredOutput: {
-              status: "completed",
-            },
-          },
-        }) + "\n");
-        res.write(JSON.stringify({
-          kind: "done",
-          requestId: "req-smoke-all-cli",
-          taskId: "task-smoke-all-cli",
-          result: {
-            status: "completed",
-          },
-        }) + "\n");
-        res.end();
-        return;
-      }
-
-      if (req.method === "POST" && url.pathname === "/api/tasks/actions") {
-        res.writeHead(200, {
-          "content-type": "application/json; charset=utf-8",
-        });
-        res.end(JSON.stringify({ ok: true }));
-        return;
-      }
-
-      if (req.method === "GET" && url.pathname.startsWith("/api/history/sessions/")) {
-        res.writeHead(200, {
-          "content-type": "application/json; charset=utf-8",
-        });
-        res.end(JSON.stringify({
-          turns: [
-            {
-              status: "completed",
-            },
-          ],
-        }));
+      if (await webSmokeDouble.handle(req, res)) {
         return;
       }
 
@@ -651,6 +519,8 @@ test("themis doctor smoke all 会先输出 web，再输出 feishu 前置检查",
     assert.ok(webIndex >= 0);
     assert.ok(feishuIndex > webIndex);
     assert.match(result.stdout, /Web smoke 成功/);
+    assert.match(result.stdout, /imageCompileVerified：yes/);
+    assert.match(result.stdout, /documentCompileVerified：yes/);
     assert.match(result.stdout, /Feishu smoke 前置检查通过/);
   } finally {
     if (server) {
@@ -1706,10 +1576,19 @@ test("themis doctor feishu 会输出失败 action 摘要", async () => {
 });
 
 function createFeishuTaskRequest(sessionId: string, requestId: string): TaskRequest {
+  return createDiagnosticsTaskRequest("feishu", sessionId, requestId, "2026-04-02T09:00:00.000Z");
+}
+
+function createDiagnosticsTaskRequest(
+  sourceChannel: TaskRequest["sourceChannel"],
+  sessionId: string,
+  requestId: string,
+  createdAt: string,
+): TaskRequest {
   return {
     requestId,
     taskId: "task-1",
-    sourceChannel: "feishu",
+    sourceChannel,
     user: {
       userId: "user-1",
     },
@@ -1717,7 +1596,7 @@ function createFeishuTaskRequest(sessionId: string, requestId: string): TaskRequ
     channelContext: {
       sessionId,
     },
-    createdAt: "2026-04-02T09:00:00.000Z",
+    createdAt,
   };
 }
 
@@ -1735,6 +1614,148 @@ test("themis doctor context 会输出 README/AGENTS 状态", () => {
     assert.equal(result.code, 0);
     assert.match(result.stdout, /README\.md：ok/);
     assert.match(result.stdout, /AGENTS\.md：missing/);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("themis doctor service 会输出最近 turn input 的多模态摘要", () => {
+  const workspace = mkdtempSync(join(tmpdir(), "themis-doctor-cli-service-multimodal-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: resolve(workspace, "infra/local/themis.db"),
+  });
+
+  try {
+    runtimeStore.saveSession({
+      sessionId: "session-1",
+      threadId: "thread-1",
+      createdAt: "2026-04-02T09:00:00.000Z",
+      updatedAt: "2026-04-02T09:10:00.000Z",
+    });
+    runtimeStore.upsertTurnFromRequest(createDiagnosticsTaskRequest("feishu", "session-1", "request-1", "2026-04-02T09:00:00.000Z"), "task-1");
+    runtimeStore.saveTurnInput({
+      requestId: "request-1",
+      createdAt: "2026-04-02T09:00:01.000Z",
+      envelope: {
+        envelopeId: "envelope-service-1",
+        sourceChannel: "feishu",
+        sourceSessionId: "session-1",
+        createdAt: "2026-04-02T09:00:01.000Z",
+        parts: [
+          {
+            partId: "part-image-1",
+            type: "image",
+            role: "user",
+            order: 1,
+            assetId: "asset-image-1",
+          },
+        ],
+        assets: [
+          {
+            assetId: "asset-image-1",
+            kind: "image",
+            mimeType: "image/png",
+            localPath: "/tmp/service-image.png",
+            sourceChannel: "feishu",
+            ingestionStatus: "ready",
+          },
+        ],
+      },
+      compileSummary: {
+        runtimeTarget: "app-server",
+        degradationLevel: "native",
+        warnings: [],
+      },
+    });
+    runtimeStore.upsertTurnFromRequest(createDiagnosticsTaskRequest("web", "session-1", "request-2", "2026-04-02T09:05:00.000Z"), "task-2");
+    runtimeStore.saveTurnInput({
+      requestId: "request-2",
+      createdAt: "2026-04-02T09:05:01.000Z",
+      envelope: {
+        envelopeId: "envelope-service-2",
+        sourceChannel: "web",
+        sourceSessionId: "session-1",
+        createdAt: "2026-04-02T09:05:01.000Z",
+        parts: [
+          {
+            partId: "part-document-1",
+            type: "document",
+            role: "user",
+            order: 1,
+            assetId: "asset-document-1",
+          },
+        ],
+        assets: [
+          {
+            assetId: "asset-document-1",
+            kind: "document",
+            mimeType: "application/pdf",
+            localPath: "/tmp/service-document.pdf",
+            sourceChannel: "web",
+            ingestionStatus: "ready",
+          },
+        ],
+      },
+      compileSummary: {
+        runtimeTarget: "app-server",
+        degradationLevel: "controlled_fallback",
+        warnings: [],
+      },
+    });
+    runtimeStore.upsertTurnFromRequest(createDiagnosticsTaskRequest("feishu", "session-1", "request-3", "2026-04-02T09:10:00.000Z"), "task-3");
+    runtimeStore.saveTurnInput({
+      requestId: "request-3",
+      createdAt: "2026-04-02T09:10:01.000Z",
+      envelope: {
+        envelopeId: "envelope-service-3",
+        sourceChannel: "feishu",
+        sourceSessionId: "session-1",
+        createdAt: "2026-04-02T09:10:01.000Z",
+        parts: [
+          {
+            partId: "part-image-2",
+            type: "image",
+            role: "user",
+            order: 1,
+            assetId: "asset-image-2",
+          },
+        ],
+        assets: [
+          {
+            assetId: "asset-image-2",
+            kind: "image",
+            mimeType: "image/jpeg",
+            localPath: "/tmp/service-blocked-image.jpg",
+            sourceChannel: "feishu",
+            ingestionStatus: "ready",
+          },
+        ],
+      },
+      compileSummary: {
+        runtimeTarget: "codex-sdk",
+        degradationLevel: "blocked",
+        warnings: [
+          {
+            code: "IMAGE_NATIVE_INPUT_REQUIRED",
+            message: "当前 runtime 不支持 native image input。",
+            assetId: "asset-image-2",
+          },
+        ],
+      },
+    });
+
+    const result = runCli(["doctor", "service"], workspace);
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /Themis 诊断 - service/);
+    assert.match(result.stdout, /multimodal\.status：ok/);
+    assert.match(result.stdout, /multimodal\.recentTurnInputCount：3\/24/);
+    assert.match(result.stdout, /multimodal\.assetCounts：image=2, document=1/);
+    assert.match(result.stdout, /multimodal\.degradationCounts：native=1, lossless_textualization=0, controlled_fallback=1, blocked=1, unknown=0/);
+    assert.match(result.stdout, /multimodal\.sourceChannels：feishu=2, web=1/);
+    assert.match(result.stdout, /multimodal\.runtimeTargets：app-server=2, codex-sdk=1/);
+    assert.match(result.stdout, /multimodal\.lastTurn\.requestId：request-3/);
+    assert.match(result.stdout, /multimodal\.lastTurn\.compile：codex-sdk \/ blocked/);
+    assert.match(result.stdout, /multimodal\.lastTurn\.warningCodes：IMAGE_NATIVE_INPUT_REQUIRED/);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
@@ -1800,6 +1821,134 @@ test("themis doctor mcp 会输出状态分布和排障建议", () => {
     rmSync(workspace, { recursive: true, force: true });
   }
 });
+
+function createWebSmokeHttpDouble(): {
+  handle: (req: any, res: any) => Promise<boolean>;
+} {
+  const sessionRequestMap = new Map<string, { requestId: string; kind: "image" | "document" }>();
+
+  return {
+    handle: async (req, res) => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+
+      if (req.method === "POST" && url.pathname === "/api/web-auth/login") {
+        res.writeHead(200, {
+          "set-cookie": "themis_web_session=session-smoke-cli; Path=/; HttpOnly",
+        });
+        res.end();
+        return true;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/tasks/stream") {
+        const payload = await readJsonRequest(req) as {
+          requestId?: string;
+          taskId?: string;
+          sessionId?: string;
+          inputEnvelope?: {
+            parts?: Array<{ type?: string }>;
+          };
+        };
+        const requestId = payload.requestId ?? "req-smoke-cli";
+        const taskId = payload.taskId ?? "task-smoke-cli";
+        const sessionId = payload.sessionId ?? "session-smoke-cli";
+        const partType = payload.inputEnvelope?.parts?.[0]?.type;
+        sessionRequestMap.set(sessionId, {
+          requestId,
+          kind: partType === "document" ? "document" : "image",
+        });
+        res.writeHead(200, {
+          "content-type": "application/x-ndjson; charset=utf-8",
+        });
+        res.write(JSON.stringify({
+          kind: "ack",
+          requestId,
+          taskId,
+          title: "task.accepted",
+          text: "accepted",
+        }) + "\n");
+        res.write(JSON.stringify({
+          kind: "event",
+          requestId,
+          taskId,
+          title: "task.action_required",
+          text: "请补充输入",
+          metadata: {
+            actionId: `action-${requestId}`,
+          },
+        }) + "\n");
+        res.write(JSON.stringify({
+          kind: "result",
+          requestId,
+          taskId,
+          metadata: {
+            structuredOutput: {
+              status: "completed",
+            },
+          },
+        }) + "\n");
+        res.write(JSON.stringify({
+          kind: "done",
+          requestId,
+          taskId,
+          result: {
+            status: "completed",
+          },
+        }) + "\n");
+        res.end();
+        return true;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/tasks/actions") {
+        res.writeHead(200, {
+          "content-type": "application/json; charset=utf-8",
+        });
+        res.end(JSON.stringify({ ok: true }));
+        return true;
+      }
+
+      if (req.method === "GET" && url.pathname.startsWith("/api/history/sessions/")) {
+        const sessionId = decodeURIComponent(url.pathname.slice("/api/history/sessions/".length));
+        const taskRequest = sessionRequestMap.get(sessionId);
+        res.writeHead(200, {
+          "content-type": "application/json; charset=utf-8",
+        });
+        res.end(JSON.stringify({
+          turns: [
+            {
+              requestId: taskRequest?.requestId,
+              status: "completed",
+              input: {
+                compileSummary: {
+                  runtimeTarget: "app-server",
+                  degradationLevel: taskRequest?.kind === "document" ? "controlled_fallback" : "native",
+                  warnings: [],
+                },
+              },
+            },
+          ],
+        }));
+        return true;
+      }
+
+      return false;
+    },
+  };
+}
+
+async function readJsonRequest(req: any): Promise<unknown> {
+  const chunks: Buffer[] = [];
+
+  await new Promise<void>((resolve, reject) => {
+    req.on("data", (chunk: Buffer | string) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    req.on("end", () => resolve());
+    req.on("error", reject);
+  });
+
+  const payload = Buffer.concat(chunks).toString("utf8");
+  return payload ? JSON.parse(payload) : null;
+}
 
 function join(...parts: string[]): string {
   return resolve(...parts);

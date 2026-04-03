@@ -1,9 +1,11 @@
 import { randomBytes } from "node:crypto";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { WebAccessService } from "../core/web-access.js";
 import { readFeishuDiagnosticsSnapshot } from "./feishu-diagnostics.js";
 import { buildFeishuSmokeNextSteps } from "./feishu-verification-guide.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
+import type { TaskInputEnvelope } from "../types/index.js";
 
 export interface WebSmokeResult {
   ok: boolean;
@@ -15,6 +17,10 @@ export interface WebSmokeResult {
   observedActionRequired: boolean;
   observedCompleted: boolean;
   historyCompleted: boolean;
+  imageCompileVerified: boolean;
+  imageCompileDegradationLevel: string | null;
+  documentCompileVerified: boolean;
+  documentCompileDegradationLevel: string | null;
   message: string;
 }
 
@@ -66,6 +72,55 @@ interface SmokeStreamLine {
   };
 }
 
+interface SmokeHistoryTurnDetail {
+  requestId?: string;
+  status?: string;
+  input?: {
+    compileSummary?: {
+      runtimeTarget?: string;
+      degradationLevel?: string;
+      warnings?: Array<{
+        code?: string;
+        message?: string;
+        assetId?: string;
+      }>;
+    };
+  };
+}
+
+interface WebActionRequiredSmokeTaskResult {
+  actionId: string;
+  observedActionRequired: boolean;
+  observedCompleted: boolean;
+  historyCompleted: boolean;
+  historyDetail: {
+    turns?: SmokeHistoryTurnDetail[];
+  };
+}
+
+class WebActionRequiredSmokeTaskError extends Error {
+  readonly state: {
+    actionId: string | null;
+    observedActionRequired: boolean;
+    observedCompleted: boolean;
+    historyCompleted: boolean;
+  };
+
+  constructor(
+    message: string,
+    state: {
+      actionId: string | null;
+      observedActionRequired: boolean;
+      observedCompleted: boolean;
+      historyCompleted: boolean;
+    },
+  ) {
+    super(message);
+    this.name = "WebActionRequiredSmokeTaskError";
+    this.state = state;
+  }
+}
+
 const WEB_SMOKE_PROMPT = `你接下来要继续做当前仓库里的一个具体修改任务，但我现在先不告诉你“要改哪个文件”。
 
 要求：
@@ -106,10 +161,18 @@ export class RuntimeSmokeService {
     const sessionId = `runtime-smoke-web-session-${startedAt.toString(36)}-${this.randomHex(3)}`;
     const requestId = `runtime-smoke-web-request-${startedAt.toString(36)}-${this.randomHex(3)}`;
     const taskId = `runtime-smoke-web-task-${startedAt.toString(36)}-${this.randomHex(3)}`;
+    const documentSessionId = `runtime-smoke-web-doc-session-${startedAt.toString(36)}-${this.randomHex(3)}`;
+    const documentRequestId = `runtime-smoke-web-doc-request-${startedAt.toString(36)}-${this.randomHex(3)}`;
+    const documentTaskId = `runtime-smoke-web-doc-task-${startedAt.toString(36)}-${this.randomHex(3)}`;
     let actionId: string | null = null;
     let observedActionRequired = false;
     let observedCompleted = false;
     let historyCompleted = false;
+    let imageCompileVerified = false;
+    let imageCompileDegradationLevel: string | null = null;
+    let documentCompileVerified = false;
+    let documentCompileDegradationLevel: string | null = null;
+    const assetBundle = createWebSmokeInputAssetBundle(this.workingDirectory, startedAt, this.randomHex);
 
     try {
       webAccess.createToken({
@@ -119,151 +182,24 @@ export class RuntimeSmokeService {
       });
 
       const cookie = await loginAndReadCookie(this.baseUrl, tokenSecret, this.fetchImpl);
-      const streamResponse = await this.fetchImpl(`${this.baseUrl}/api/tasks/stream`, {
-        method: "POST",
-        headers: {
-          Cookie: cookie,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          requestId,
-          taskId,
-          sessionId,
-          goal: WEB_SMOKE_PROMPT,
-          options: {
-            runtimeEngine: "app-server",
-          },
-        }),
-      });
-
-      if (streamResponse.status !== 200 || !streamResponse.body) {
-        return this.failureResult(
-          sessionId,
-          requestId,
-          taskId,
-          actionId,
-          observedActionRequired,
-          observedCompleted,
-          historyCompleted,
-          `Web smoke 请求未进入 200/stream：status=${streamResponse.status}`,
-        );
-      }
-
-      const reader = createNdjsonStreamReader(streamResponse.body);
-      let partialLines: SmokeStreamLine[];
-
-      try {
-        partialLines = await withTimeout(
-          reader.readUntil((lines) => lines.some((line) => line.kind === "event" && line.title === "task.action_required")),
-          120_000,
-          "真实 Web task 没有进入 task.action_required",
-        );
-      } catch {
-        return this.failureResult(
-          sessionId,
-          requestId,
-          taskId,
-          actionId,
-          false,
-          false,
-          false,
-          "真实 Web task 没有进入 task.action_required。",
-        );
-      }
-      const actionRequiredLine = partialLines.find(
-        (line) => line.kind === "event" && line.title === "task.action_required",
-      ) as SmokeStreamLine | undefined;
-
-      if (!actionRequiredLine) {
-        return this.failureResult(
-          sessionId,
-          requestId,
-          taskId,
-          actionId,
-          false,
-          false,
-          false,
-          "真实 Web task 没有进入 task.action_required。",
-        );
-      }
-
-      observedActionRequired = true;
-      actionId = readActionId(actionRequiredLine);
-
-      if (!actionId) {
-        return this.failureResult(
-          sessionId,
-          requestId,
-          taskId,
-          actionId,
-          observedActionRequired,
-          false,
-          false,
-          "真实 Web task 已进入 task.action_required，但事件里缺少 actionId。",
-        );
-      }
-
-      const actionSubmitResponse = await this.fetchImpl(`${this.baseUrl}/api/tasks/actions`, {
-        method: "POST",
-        headers: {
-          Cookie: cookie,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          taskId: actionRequiredLine.taskId ?? taskId,
-          requestId: actionRequiredLine.requestId ?? requestId,
-          actionId,
-          inputText: "src/core/app-server-task-runtime.ts",
-        }),
-      });
-
-      if (actionSubmitResponse.status !== 200) {
-        return this.failureResult(
-          sessionId,
-          requestId,
-          taskId,
-          actionId,
-          observedActionRequired,
-          false,
-          false,
-          `真实 Web task 提交 action 失败：status=${actionSubmitResponse.status}`,
-        );
-      }
-
-      const remainingLines = await withTimeout(
-        reader.readAll(),
-        120_000,
-        "真实 Web task 在提交补充输入后没有正常收口",
-      );
-      const ndjson = [...partialLines, ...remainingLines];
-      const resultLine = ndjson.find((line) => line.kind === "result") as SmokeStreamLine | undefined;
-      const doneLine = [...ndjson].reverse().find((line) => line.kind === "done") as SmokeStreamLine | undefined;
-      observedCompleted = isCompletedResultLine(resultLine) || doneLine?.result?.status === "completed";
-
-      if (!observedCompleted) {
-        return this.failureResult(
-          sessionId,
-          requestId,
-          taskId,
-          actionId,
-          observedActionRequired,
-          observedCompleted,
-          false,
-          "真实 Web task 的 stream 没有收口为 completed。",
-        );
-      }
-
-      const historyDetail = await waitForHistoryTurnStatus(
-        this.baseUrl,
+      const imageSmoke = await this.runWebActionRequiredSmokeTask({
         cookie,
         sessionId,
-        "completed",
-        this.fetchImpl,
-        120_000,
-      );
-      historyCompleted = historyDetail.turns?.some((turn) => turn.status === "completed") ?? false;
+        requestId,
+        taskId,
+        inputEnvelope: createWebSmokeImageEnvelope(assetBundle.imagePath, startedAt),
+      });
+      actionId = imageSmoke.actionId;
+      observedActionRequired = imageSmoke.observedActionRequired;
+      observedCompleted = imageSmoke.observedCompleted;
+      historyCompleted = imageSmoke.historyCompleted;
 
-      if (!historyCompleted) {
+      const imageCompileSummary = readTurnCompileSummary(imageSmoke.historyDetail, requestId);
+      imageCompileDegradationLevel = imageCompileSummary?.degradationLevel ?? null;
+      imageCompileVerified = imageCompileSummary?.runtimeTarget === "app-server"
+        && imageCompileSummary.degradationLevel === "native";
+
+      if (!imageCompileVerified) {
         return this.failureResult(
           sessionId,
           requestId,
@@ -272,7 +208,40 @@ export class RuntimeSmokeService {
           observedActionRequired,
           observedCompleted,
           historyCompleted,
-          "真实 Web task 的 history/detail 没有收口为 completed。",
+          imageCompileVerified,
+          imageCompileDegradationLevel,
+          documentCompileVerified,
+          documentCompileDegradationLevel,
+          "真实 Web 图片 smoke 已收口，但 history/detail 没有写出 app-server native compile summary。",
+        );
+      }
+
+      const documentSmoke = await this.runWebActionRequiredSmokeTask({
+        cookie,
+        sessionId: documentSessionId,
+        requestId: documentRequestId,
+        taskId: documentTaskId,
+        inputEnvelope: createWebSmokeDocumentEnvelope(assetBundle.documentPath, startedAt),
+      });
+      const documentCompileSummary = readTurnCompileSummary(documentSmoke.historyDetail, documentRequestId);
+      documentCompileDegradationLevel = documentCompileSummary?.degradationLevel ?? null;
+      documentCompileVerified = documentCompileSummary?.runtimeTarget === "app-server"
+        && documentCompileSummary.degradationLevel === "controlled_fallback";
+
+      if (!documentCompileVerified) {
+        return this.failureResult(
+          sessionId,
+          requestId,
+          taskId,
+          actionId,
+          observedActionRequired,
+          observedCompleted,
+          historyCompleted,
+          imageCompileVerified,
+          imageCompileDegradationLevel,
+          documentCompileVerified,
+          documentCompileDegradationLevel,
+          "真实 Web 文档 smoke 已收口，但 history/detail 没有写出 app-server controlled_fallback compile summary。",
         );
       }
 
@@ -286,9 +255,20 @@ export class RuntimeSmokeService {
         observedActionRequired,
         observedCompleted,
         historyCompleted,
-        message: "Web smoke 成功：真实链路已进入 task.action_required，并在 action 提交后收口为 completed。",
+        imageCompileVerified,
+        imageCompileDegradationLevel,
+        documentCompileVerified,
+        documentCompileDegradationLevel,
+        message: "Web smoke 成功：真实图片 native smoke 与文档 fallback smoke 都已完成，history/detail compile summary 也符合预期。",
       };
     } catch (error) {
+      if (error instanceof WebActionRequiredSmokeTaskError) {
+        actionId = error.state.actionId;
+        observedActionRequired = error.state.observedActionRequired;
+        observedCompleted = error.state.observedCompleted;
+        historyCompleted = error.state.historyCompleted;
+      }
+
       return this.failureResult(
         sessionId,
         requestId,
@@ -297,9 +277,14 @@ export class RuntimeSmokeService {
         observedActionRequired,
         observedCompleted,
         historyCompleted,
+        imageCompileVerified,
+        imageCompileDegradationLevel,
+        documentCompileVerified,
+        documentCompileDegradationLevel,
         toErrorMessage(error),
       );
     } finally {
+      assetBundle.cleanup();
       try {
         webAccess.revokeTokenByLabel({
           label: tokenLabel,
@@ -408,6 +393,10 @@ export class RuntimeSmokeService {
     observedActionRequired: boolean,
     observedCompleted: boolean,
     historyCompleted: boolean,
+    imageCompileVerified: boolean,
+    imageCompileDegradationLevel: string | null,
+    documentCompileVerified: boolean,
+    documentCompileDegradationLevel: string | null,
     message: string,
   ): WebSmokeResult {
     return {
@@ -420,7 +409,180 @@ export class RuntimeSmokeService {
       observedActionRequired,
       observedCompleted,
       historyCompleted,
+      imageCompileVerified,
+      imageCompileDegradationLevel,
+      documentCompileVerified,
+      documentCompileDegradationLevel,
       message,
+    };
+  }
+
+  private async runWebActionRequiredSmokeTask(input: {
+    cookie: string;
+    sessionId: string;
+    requestId: string;
+    taskId: string;
+    inputEnvelope?: TaskInputEnvelope;
+  }): Promise<WebActionRequiredSmokeTaskResult> {
+    let actionId: string | null = null;
+    let observedActionRequired = false;
+    let observedCompleted = false;
+    let historyCompleted = false;
+    const streamResponse = await this.fetchImpl(`${this.baseUrl}/api/tasks/stream`, {
+      method: "POST",
+      headers: {
+        Cookie: input.cookie,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        requestId: input.requestId,
+        taskId: input.taskId,
+        sessionId: input.sessionId,
+        goal: WEB_SMOKE_PROMPT,
+        ...(input.inputEnvelope ? { inputEnvelope: input.inputEnvelope } : {}),
+        options: {
+          runtimeEngine: "app-server",
+        },
+      }),
+    });
+
+    if (streamResponse.status !== 200 || !streamResponse.body) {
+      throw new Error(`Web smoke 请求未进入 200/stream：status=${streamResponse.status}`);
+    }
+
+    const reader = createNdjsonStreamReader(streamResponse.body);
+    let partialLines: SmokeStreamLine[];
+
+    try {
+      partialLines = await withTimeout(
+        reader.readUntil((lines) => lines.some((line) => line.kind === "event" && line.title === "task.action_required")),
+        120_000,
+        "真实 Web task 没有进入 task.action_required",
+      );
+    } catch {
+      throw new WebActionRequiredSmokeTaskError("真实 Web task 没有进入 task.action_required。", {
+        actionId,
+        observedActionRequired,
+        observedCompleted,
+        historyCompleted,
+      });
+    }
+    const actionRequiredLine = partialLines.find(
+      (line) => line.kind === "event" && line.title === "task.action_required",
+    );
+
+    if (!actionRequiredLine) {
+      throw new WebActionRequiredSmokeTaskError("真实 Web task 没有进入 task.action_required。", {
+        actionId,
+        observedActionRequired,
+        observedCompleted,
+        historyCompleted,
+      });
+    }
+
+    observedActionRequired = true;
+    actionId = readActionId(actionRequiredLine);
+
+    if (!actionId) {
+      throw new WebActionRequiredSmokeTaskError("真实 Web task 已进入 task.action_required，但事件里缺少 actionId。", {
+        actionId,
+        observedActionRequired,
+        observedCompleted,
+        historyCompleted,
+      });
+    }
+
+    const actionSubmitResponse = await this.fetchImpl(`${this.baseUrl}/api/tasks/actions`, {
+      method: "POST",
+      headers: {
+        Cookie: input.cookie,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        taskId: actionRequiredLine.taskId ?? input.taskId,
+        requestId: actionRequiredLine.requestId ?? input.requestId,
+        actionId,
+        inputText: "src/core/app-server-task-runtime.ts",
+      }),
+    });
+
+    if (actionSubmitResponse.status !== 200) {
+      throw new WebActionRequiredSmokeTaskError(`真实 Web task 提交 action 失败：status=${actionSubmitResponse.status}`, {
+        actionId,
+        observedActionRequired,
+        observedCompleted,
+        historyCompleted,
+      });
+    }
+
+    let remainingLines: SmokeStreamLine[];
+
+    try {
+      remainingLines = await withTimeout(
+        reader.readAll(),
+        120_000,
+        "真实 Web task 在提交补充输入后没有正常收口",
+      );
+    } catch (error) {
+      throw new WebActionRequiredSmokeTaskError(toErrorMessage(error), {
+        actionId,
+        observedActionRequired,
+        observedCompleted,
+        historyCompleted,
+      });
+    }
+    const ndjson = [...partialLines, ...remainingLines];
+    const resultLine = ndjson.find((line) => line.kind === "result");
+    const doneLine = [...ndjson].reverse().find((line) => line.kind === "done");
+    observedCompleted = isCompletedResultLine(resultLine) || doneLine?.result?.status === "completed";
+
+    if (!observedCompleted) {
+      throw new WebActionRequiredSmokeTaskError("真实 Web task 的 stream 没有收口为 completed。", {
+        actionId,
+        observedActionRequired,
+        observedCompleted,
+        historyCompleted,
+      });
+    }
+
+    let historyDetail: {
+      turns?: SmokeHistoryTurnDetail[];
+    };
+
+    try {
+      historyDetail = await waitForHistoryTurnStatus(
+        this.baseUrl,
+        input.cookie,
+        input.sessionId,
+        "completed",
+        this.fetchImpl,
+        120_000,
+      );
+    } catch (error) {
+      throw new WebActionRequiredSmokeTaskError(toErrorMessage(error), {
+        actionId,
+        observedActionRequired,
+        observedCompleted,
+        historyCompleted,
+      });
+    }
+    historyCompleted = historyDetail.turns?.some((turn) => turn.status === "completed") ?? false;
+
+    if (!historyCompleted) {
+      throw new WebActionRequiredSmokeTaskError("真实 Web task 的 history/detail 没有收口为 completed。", {
+        actionId,
+        observedActionRequired,
+        observedCompleted,
+        historyCompleted,
+      });
+    }
+
+    return {
+      actionId,
+      observedActionRequired: true,
+      observedCompleted,
+      historyCompleted,
+      historyDetail,
     };
   }
 }
@@ -475,9 +637,7 @@ async function waitForHistoryTurnStatus(
   fetchImpl: typeof fetch,
   timeoutMs: number,
 ): Promise<{
-  turns?: Array<{
-    status?: string;
-  }>;
+  turns?: SmokeHistoryTurnDetail[];
 }> {
   const startedAt = Date.now();
 
@@ -493,9 +653,7 @@ async function waitForHistoryTurnStatus(
     }
 
     const payload = await response.json() as {
-      turns?: Array<{
-        status?: string;
-      }>;
+      turns?: SmokeHistoryTurnDetail[];
     };
 
     if (payload.turns?.some((turn) => turn.status === expectedStatus)) {
@@ -637,4 +795,120 @@ function normalizeClockMillis(clock: () => number | Date): number {
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function createWebSmokeInputAssetBundle(
+  workingDirectory: string,
+  startedAt: number,
+  randomHex: (bytes: number) => string,
+): {
+  imagePath: string;
+  documentPath: string;
+  cleanup: () => void;
+} {
+  const root = join(
+    workingDirectory,
+    "temp",
+    "runtime-smoke-input-assets",
+    `${startedAt.toString(36)}-${randomHex(3)}`,
+  );
+  mkdirSync(root, { recursive: true });
+  const imagePath = join(root, "smoke-image.png");
+  const documentPath = join(root, "smoke-brief.md");
+  writeFileSync(
+    imagePath,
+    Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRX0AAAAASUVORK5CYII=", "base64"),
+  );
+  writeFileSync(documentPath, "# Smoke Brief\n\nThis file verifies app-server document fallback.\n", "utf8");
+
+  return {
+    imagePath,
+    documentPath,
+    cleanup: () => {
+      try {
+        rmSync(root, { recursive: true, force: true });
+      } catch {
+        // smoke 清理失败不覆盖主结果。
+      }
+    },
+  };
+}
+
+function createWebSmokeImageEnvelope(imagePath: string, startedAt: number): TaskInputEnvelope {
+  const createdAt = new Date(startedAt).toISOString();
+
+  return {
+    envelopeId: `runtime-smoke-image-envelope-${startedAt.toString(36)}`,
+    sourceChannel: "web",
+    parts: [
+      {
+        partId: "part-image-1",
+        type: "image",
+        role: "user",
+        order: 1,
+        assetId: "asset-image-1",
+      },
+    ],
+    assets: [
+      {
+        assetId: "asset-image-1",
+        kind: "image",
+        mimeType: "image/png",
+        localPath: imagePath,
+        sourceChannel: "web",
+        ingestionStatus: "ready",
+      },
+    ],
+    createdAt,
+  };
+}
+
+function createWebSmokeDocumentEnvelope(documentPath: string, startedAt: number): TaskInputEnvelope {
+  const createdAt = new Date(startedAt + 1_000).toISOString();
+
+  return {
+    envelopeId: `runtime-smoke-document-envelope-${startedAt.toString(36)}`,
+    sourceChannel: "web",
+    parts: [
+      {
+        partId: "part-document-1",
+        type: "document",
+        role: "user",
+        order: 1,
+        assetId: "asset-document-1",
+      },
+    ],
+    assets: [
+      {
+        assetId: "asset-document-1",
+        kind: "document",
+        name: "smoke-brief.md",
+        mimeType: "text/markdown",
+        localPath: documentPath,
+        sourceChannel: "web",
+        ingestionStatus: "ready",
+      },
+    ],
+    createdAt,
+  };
+}
+
+function readTurnCompileSummary(
+  historyDetail: { turns?: SmokeHistoryTurnDetail[] },
+  requestId: string,
+): {
+  runtimeTarget: string | null;
+  degradationLevel: string | null;
+} | null {
+  const turn = historyDetail.turns?.find((item) => item.requestId === requestId);
+  const compileSummary = turn?.input?.compileSummary;
+
+  if (!compileSummary) {
+    return null;
+  }
+
+  return {
+    runtimeTarget: normalizeText(compileSummary.runtimeTarget),
+    degradationLevel: normalizeText(compileSummary.degradationLevel),
+  };
 }

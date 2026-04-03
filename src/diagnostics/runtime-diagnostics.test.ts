@@ -40,11 +40,206 @@ test("RuntimeDiagnosticsService.readSummary 返回 auth/provider/context/memory/
     assert.ok(summary.context);
     assert.ok(summary.memory);
     assert.ok(summary.service);
+    assert.ok(summary.service.multimodal);
     assert.ok(summary.mcp);
     assert.ok(Array.isArray(summary.mcp.servers));
     assert.equal(summary.context.files.some((item) => item.path === "README.md" && item.status === "ok"), true);
     assert.equal(summary.context.files.some((item) => item.path === "AGENTS.md" && item.status === "missing"), true);
     assert.equal(summary.provider.activeMode === "auth" || summary.provider.activeMode === "third-party", true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("RuntimeDiagnosticsService.readSummary 会汇总最近 turn input 的多模态事实", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-diagnostics-multimodal-"));
+
+  try {
+    writeFileSync(join(root, "README.md"), "# demo\n", "utf8");
+    mkdirSync(join(root, "memory", "architecture"), { recursive: true });
+    writeFileSync(join(root, "memory", "architecture", "overview.md"), "# arch\n", "utf8");
+    mkdirSync(join(root, "memory", "tasks"), { recursive: true });
+    writeFileSync(join(root, "memory", "tasks", "backlog.md"), "# backlog\n", "utf8");
+    writeFileSync(join(root, "memory", "tasks", "in-progress.md"), "# in-progress\n", "utf8");
+    writeFileSync(join(root, "memory", "tasks", "done.md"), "# done\n", "utf8");
+    const runtimeStore = new SqliteCodexSessionRegistry({
+      databaseFile: join(root, "infra/local/themis.db"),
+    });
+
+    runtimeStore.saveSession({
+      sessionId: "session-1",
+      threadId: "thread-1",
+      createdAt: "2026-04-03T09:00:00.000Z",
+      updatedAt: "2026-04-03T09:10:00.000Z",
+    });
+    runtimeStore.saveSession({
+      sessionId: "session-2",
+      threadId: "thread-2",
+      createdAt: "2026-04-03T09:20:00.000Z",
+      updatedAt: "2026-04-03T09:30:00.000Z",
+    });
+
+    runtimeStore.upsertTurnFromRequest(createTaskRequest("feishu", "session-1", "request-native-image", "2026-04-03T09:10:00.000Z"), "task-native-image");
+    runtimeStore.saveTurnInput({
+      requestId: "request-native-image",
+      createdAt: "2026-04-03T09:10:01.000Z",
+      envelope: {
+        envelopeId: "envelope-native-image",
+        sourceChannel: "feishu",
+        sourceSessionId: "session-1",
+        createdAt: "2026-04-03T09:10:01.000Z",
+        parts: [
+          {
+            partId: "part-text-1",
+            type: "text",
+            role: "user",
+            order: 1,
+            text: "请看图",
+          },
+          {
+            partId: "part-image-1",
+            type: "image",
+            role: "user",
+            order: 2,
+            assetId: "asset-image-1",
+          },
+        ],
+        assets: [
+          {
+            assetId: "asset-image-1",
+            kind: "image",
+            mimeType: "image/png",
+            localPath: "/tmp/native-image.png",
+            sourceChannel: "feishu",
+            ingestionStatus: "ready",
+          },
+        ],
+      },
+      compileSummary: {
+        runtimeTarget: "app-server",
+        degradationLevel: "native",
+        warnings: [],
+      },
+    });
+
+    runtimeStore.upsertTurnFromRequest(createTaskRequest("web", "session-1", "request-document-fallback", "2026-04-03T09:15:00.000Z"), "task-document-fallback");
+    runtimeStore.saveTurnInput({
+      requestId: "request-document-fallback",
+      createdAt: "2026-04-03T09:15:01.000Z",
+      envelope: {
+        envelopeId: "envelope-document-fallback",
+        sourceChannel: "web",
+        sourceSessionId: "session-1",
+        createdAt: "2026-04-03T09:15:01.000Z",
+        parts: [
+          {
+            partId: "part-document-1",
+            type: "document",
+            role: "user",
+            order: 1,
+            assetId: "asset-document-1",
+          },
+        ],
+        assets: [
+          {
+            assetId: "asset-document-1",
+            kind: "document",
+            mimeType: "application/pdf",
+            localPath: "/tmp/fallback-document.pdf",
+            sourceChannel: "web",
+            ingestionStatus: "ready",
+          },
+        ],
+      },
+      compileSummary: {
+        runtimeTarget: "app-server",
+        degradationLevel: "controlled_fallback",
+        warnings: [],
+      },
+    });
+
+    runtimeStore.upsertTurnFromRequest(createTaskRequest("feishu", "session-2", "request-image-blocked", "2026-04-03T09:30:00.000Z"), "task-image-blocked");
+    runtimeStore.saveTurnInput({
+      requestId: "request-image-blocked",
+      createdAt: "2026-04-03T09:30:01.000Z",
+      envelope: {
+        envelopeId: "envelope-image-blocked",
+        sourceChannel: "feishu",
+        sourceSessionId: "session-2",
+        createdAt: "2026-04-03T09:30:01.000Z",
+        parts: [
+          {
+            partId: "part-image-2",
+            type: "image",
+            role: "user",
+            order: 1,
+            assetId: "asset-image-2",
+          },
+        ],
+        assets: [
+          {
+            assetId: "asset-image-2",
+            kind: "image",
+            mimeType: "image/jpeg",
+            localPath: "/tmp/blocked-image.jpg",
+            sourceChannel: "feishu",
+            ingestionStatus: "ready",
+          },
+        ],
+      },
+      compileSummary: {
+        runtimeTarget: "codex-sdk",
+        degradationLevel: "blocked",
+        warnings: [
+          {
+            code: "IMAGE_NATIVE_INPUT_REQUIRED",
+            message: "当前 runtime 不支持 native image input。",
+            assetId: "asset-image-2",
+          },
+        ],
+      },
+    });
+
+    const service = new RuntimeDiagnosticsService({
+      workingDirectory: root,
+      runtimeStore,
+      mcpInspector: {
+        list: async () => ({ servers: [] }),
+      } as never,
+    });
+    const summary = await service.readSummary();
+
+    assert.equal(summary.service.multimodal.available, true);
+    assert.equal(summary.service.multimodal.sampleWindowSize, 24);
+    assert.equal(summary.service.multimodal.recentTurnInputCount, 3);
+    assert.deepEqual(summary.service.multimodal.assetCounts, {
+      image: 2,
+      document: 1,
+    });
+    assert.deepEqual(summary.service.multimodal.degradationCounts, {
+      native: 1,
+      losslessTextualization: 0,
+      controlledFallback: 1,
+      blocked: 1,
+      unknown: 0,
+    });
+    assert.deepEqual(summary.service.multimodal.sourceChannelCounts, [
+      { sourceChannel: "feishu", count: 2 },
+      { sourceChannel: "web", count: 1 },
+    ]);
+    assert.deepEqual(summary.service.multimodal.runtimeTargetCounts, [
+      { runtimeTarget: "app-server", count: 2 },
+      { runtimeTarget: "codex-sdk", count: 1 },
+    ]);
+    assert.equal(summary.service.multimodal.lastTurn?.requestId, "request-image-blocked");
+    assert.equal(summary.service.multimodal.lastTurn?.sourceChannel, "feishu");
+    assert.equal(summary.service.multimodal.lastTurn?.sessionId, "session-2");
+    assert.equal(summary.service.multimodal.lastTurn?.runtimeTarget, "codex-sdk");
+    assert.equal(summary.service.multimodal.lastTurn?.degradationLevel, "blocked");
+    assert.deepEqual(summary.service.multimodal.lastTurn?.partTypes, ["image"]);
+    assert.deepEqual(summary.service.multimodal.lastTurn?.assetKinds, ["image"]);
+    assert.deepEqual(summary.service.multimodal.lastTurn?.warningCodes, ["IMAGE_NATIVE_INPUT_REQUIRED"]);
+    assert.equal(summary.overview.hotspots.some((item) => item.id === "multimodal_inputs_blocked"), true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1087,10 +1282,19 @@ function restoreEnv(key: string, value: string | undefined): void {
 }
 
 function createFeishuTaskRequest(sessionId: string, requestId: string): TaskRequest {
+  return createTaskRequest("feishu", sessionId, requestId, "2026-04-01T01:00:00.000Z");
+}
+
+function createTaskRequest(
+  sourceChannel: TaskRequest["sourceChannel"],
+  sessionId: string,
+  requestId: string,
+  createdAt: string,
+): TaskRequest {
   return {
     requestId,
     taskId: requestId.replace("request", "task"),
-    sourceChannel: "feishu",
+    sourceChannel,
     user: {
       userId: "user-1",
     },
@@ -1098,6 +1302,6 @@ function createFeishuTaskRequest(sessionId: string, requestId: string): TaskRequ
     channelContext: {
       sessionId,
     },
-    createdAt: "2026-04-01T01:00:00.000Z",
+    createdAt,
   };
 }

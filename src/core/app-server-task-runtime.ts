@@ -21,15 +21,24 @@ import type {
   TaskRuntimeThreadSnapshot,
 } from "../types/index.js";
 import type {
+  CodexRuntimeCatalog,
   AppServerReverseRequest,
   AppServerTurnInputPart,
   AppServerThreadStartParams,
   CodexAppServerNotification,
 } from "./codex-app-server.js";
-import { CodexAppServerSession } from "./codex-app-server.js";
+import {
+  CodexAppServerSession,
+  readCodexRuntimeCatalog,
+  toRuntimeInputCapabilities,
+} from "./codex-app-server.js";
 import { translateAppServerNotification } from "./app-server-event-translator.js";
 import { ConversationService } from "./conversation-service.js";
-import { createTaskEvent, finalizeTaskResult } from "./codex-runtime.js";
+import {
+  buildStoredTurnInputCompileSummary,
+  createTaskEvent,
+  finalizeTaskResult,
+} from "./codex-runtime.js";
 import { IdentityLinkService } from "./identity-link-service.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
 import { buildTaskPrompt } from "./prompt.js";
@@ -39,13 +48,16 @@ import { validateWorkspacePath } from "./session-workspace.js";
 
 const SESSION_WORKSPACE_UNAVAILABLE_ERROR = "当前会话绑定的工作区不可用，请新建会话后重新设置。";
 const APP_SERVER_AUX_TIMEOUT_MS = 15_000;
-const APP_SERVER_INPUT_CAPABILITIES: RuntimeInputCapabilities = {
+const APP_SERVER_TRANSPORT_INPUT_CAPABILITIES: RuntimeInputCapabilities = {
   nativeTextInput: true,
   nativeImageInput: true,
   nativeDocumentInput: false,
   supportedDocumentMimeTypes: [],
   supportsPdfTextExtraction: true,
   supportsDocumentPageRasterization: false,
+};
+const APP_SERVER_FALLBACK_INPUT_CAPABILITIES: RuntimeInputCapabilities = {
+  ...APP_SERVER_TRANSPORT_INPUT_CAPABILITIES,
 };
 export const APP_SERVER_TASK_CONFIG_OVERRIDES: CodexCliConfigOverrides = {
   "features.default_mode_request_user_input": true,
@@ -78,6 +90,7 @@ export interface AppServerTaskRuntimeOptions {
   principalSkillsService?: PrincipalSkillsService;
   sessionFactory?: () => Promise<AppServerTaskRuntimeSession> | AppServerTaskRuntimeSession;
   actionBridge?: AppServerActionBridge;
+  runtimeCatalogReader?: () => Promise<CodexRuntimeCatalog>;
 }
 
 export class AppServerTaskRuntime {
@@ -88,6 +101,7 @@ export class AppServerTaskRuntime {
   private readonly principalSkillsService: PrincipalSkillsService;
   private readonly sessionFactory: () => Promise<AppServerTaskRuntimeSession>;
   private readonly actionBridge: AppServerActionBridge;
+  private readonly runtimeCatalogReader: (() => Promise<CodexRuntimeCatalog>) | null;
 
   constructor(options: AppServerTaskRuntimeOptions = {}) {
     this.workingDirectory = options.workingDirectory ?? process.cwd();
@@ -102,6 +116,12 @@ export class AppServerTaskRuntime {
       configOverrides: APP_SERVER_TASK_CONFIG_OVERRIDES,
     });
     this.actionBridge = options.actionBridge ?? new AppServerActionBridge();
+    this.runtimeCatalogReader = options.runtimeCatalogReader
+      ?? (options.sessionFactory
+        ? null
+        : async () => await readCodexRuntimeCatalog(this.workingDirectory, {
+          configOverrides: APP_SERVER_TASK_CONFIG_OVERRIDES,
+        }));
   }
 
   async runTask(request: TaskRequest, hooks: TaskRuntimeRunHooks = {}): Promise<TaskResult> {
@@ -134,15 +154,29 @@ export class AppServerTaskRuntime {
 
     try {
       throwIfAborted(signal);
+      const inputCapabilities = request.inputEnvelope
+        ? await this.resolveInputCapabilities(request)
+        : APP_SERVER_FALLBACK_INPUT_CAPABILITIES;
       const compiledInput = request.inputEnvelope
         ? compileTaskInputForRuntime({
           envelope: request.inputEnvelope,
           target: {
             runtimeId: "app-server",
-            capabilities: APP_SERVER_INPUT_CAPABILITIES,
+            capabilities: inputCapabilities,
           },
         })
         : null;
+      if (request.inputEnvelope && compiledInput) {
+        this.runtimeStore.saveTurnInput({
+          requestId: request.requestId,
+          envelope: request.inputEnvelope,
+          compileSummary: buildStoredTurnInputCompileSummary({
+            runtimeTarget: "app-server",
+            compiledInput,
+          }),
+          createdAt: request.createdAt,
+        });
+      }
 
       if (compiledInput?.degradationLevel === "blocked") {
         throw new Error(compiledInput.compileWarnings[0]?.message ?? "当前输入无法发送到 app-server。");
@@ -194,10 +228,7 @@ export class AppServerTaskRuntime {
       const executionWorkingDirectory = this.resolveExecutionWorkingDirectory(request);
       const resumableThreadId = sessionId ? resolveAppServerThreadId(this.runtimeStore, sessionId) : null;
       sessionMode = resolveSessionMode(sessionId, resumableThreadId);
-      const threadStartParams: AppServerThreadStartParams = {
-        cwd: executionWorkingDirectory,
-        persistExtendedHistory: true,
-      };
+      const threadStartParams = createAppServerThreadStartParams(request, executionWorkingDirectory);
 
       const thread = resumableThreadId
         ? await abortable(() => activeSession.resumeThread(resumableThreadId, threadStartParams), signal)
@@ -311,6 +342,19 @@ export class AppServerTaskRuntime {
       unsubscribeServerRequest?.();
       await session?.close();
       cleanup();
+    }
+  }
+
+  private async resolveInputCapabilities(request: TaskRequest): Promise<RuntimeInputCapabilities> {
+    if (!this.runtimeCatalogReader) {
+      return APP_SERVER_FALLBACK_INPUT_CAPABILITIES;
+    }
+
+    try {
+      const runtimeCatalog = await this.runtimeCatalogReader();
+      return resolveAppServerInputCapabilities(runtimeCatalog, request, APP_SERVER_FALLBACK_INPUT_CAPABILITIES);
+    } catch {
+      return APP_SERVER_FALLBACK_INPUT_CAPABILITIES;
     }
   }
 
@@ -1172,6 +1216,99 @@ function withoutTaskAttachments(request: TaskRequest): TaskRequest {
   return rest;
 }
 
+function createAppServerThreadStartParams(
+  request: TaskRequest,
+  cwd: string,
+): AppServerThreadStartParams {
+  const model = normalizeTextValue(request.options?.model);
+  const approvalPolicy = normalizeTextValue(request.options?.approvalPolicy);
+  const sandboxMode = normalizeTextValue(request.options?.sandboxMode);
+  const webSearchMode = normalizeTextValue(request.options?.webSearchMode);
+
+  return {
+    cwd,
+    persistExtendedHistory: true,
+    ...(model ? { model } : {}),
+    ...(approvalPolicy ? { approvalPolicy } : {}),
+    ...(sandboxMode ? { sandbox: sandboxMode } : {}),
+    ...(webSearchMode ? { webSearchMode } : {}),
+  };
+}
+
+function resolveAppServerInputCapabilities(
+  runtimeCatalog: CodexRuntimeCatalog,
+  request: TaskRequest,
+  fallback: RuntimeInputCapabilities,
+): RuntimeInputCapabilities {
+  const selectedModel = selectRuntimeModel(runtimeCatalog, request.options?.model);
+
+  if (!selectedModel) {
+    return fallback;
+  }
+
+  return {
+    ...intersectAppServerInputCapabilities(
+      toRuntimeInputCapabilities(selectedModel.capabilities, fallback),
+      APP_SERVER_TRANSPORT_INPUT_CAPABILITIES,
+    ),
+  };
+}
+
+function intersectAppServerInputCapabilities(
+  modelCapabilities: RuntimeInputCapabilities,
+  transportCapabilities: RuntimeInputCapabilities,
+): RuntimeInputCapabilities {
+  const nativeTextInput = modelCapabilities.nativeTextInput && transportCapabilities.nativeTextInput;
+  const nativeImageInput = modelCapabilities.nativeImageInput && transportCapabilities.nativeImageInput;
+  const nativeDocumentInput = modelCapabilities.nativeDocumentInput && transportCapabilities.nativeDocumentInput;
+
+  return {
+    nativeTextInput,
+    nativeImageInput,
+    nativeDocumentInput,
+    supportedDocumentMimeTypes: nativeDocumentInput
+      ? intersectSupportedDocumentMimeTypes(
+        modelCapabilities.supportedDocumentMimeTypes,
+        transportCapabilities.supportedDocumentMimeTypes,
+      )
+      : [],
+    supportsPdfTextExtraction: modelCapabilities.supportsPdfTextExtraction,
+    supportsDocumentPageRasterization: modelCapabilities.supportsDocumentPageRasterization,
+  };
+}
+
+function intersectSupportedDocumentMimeTypes(modelMimeTypes: string[], transportMimeTypes: string[]): string[] {
+  if (modelMimeTypes.length === 0) {
+    return [...transportMimeTypes];
+  }
+
+  if (transportMimeTypes.length === 0) {
+    return [...modelMimeTypes];
+  }
+
+  const allowedMimeTypes = new Set(transportMimeTypes);
+  return modelMimeTypes.filter((mimeType) => allowedMimeTypes.has(mimeType));
+}
+
+function selectRuntimeModel(
+  runtimeCatalog: CodexRuntimeCatalog,
+  requestedModel: string | undefined,
+): CodexRuntimeCatalog["models"][number] | null {
+  const normalizedRequestedModel = normalizeTextValue(requestedModel);
+
+  if (normalizedRequestedModel) {
+    return runtimeCatalog.models.find((model) => model.model === normalizedRequestedModel) ?? null;
+  }
+
+  const normalizedDefaultModel = normalizeTextValue(runtimeCatalog.defaults.model);
+
+  if (normalizedDefaultModel) {
+    return runtimeCatalog.models.find((model) => model.model === normalizedDefaultModel) ?? null;
+  }
+
+  return runtimeCatalog.models[0] ?? null;
+}
+
 function mapAppServerTurnInputPart(part: {
   type: "text" | "image" | "document";
   text?: string;
@@ -1188,9 +1325,8 @@ function mapAppServerTurnInputPart(part: {
 
   if (part.type === "image") {
     return {
-      type: "image",
-      assetPath: part.assetPath ?? "",
-      ...(part.mimeType ? { mimeType: part.mimeType } : {}),
+      type: "localImage",
+      path: part.assetPath ?? "",
     };
   }
 

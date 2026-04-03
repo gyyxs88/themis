@@ -6,6 +6,10 @@ import test from "node:test";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { AppServerActionBridge } from "./app-server-action-bridge.js";
 import type {
+  AppServerThreadStartParams,
+  CodexRuntimeCatalog,
+} from "./codex-app-server.js";
+import type {
   AppServerTaskRuntimeOptions,
   AppServerTaskRuntimeSession,
 } from "./app-server-task-runtime.js";
@@ -17,17 +21,16 @@ import {
 interface SessionDoubleState {
   initialized: number;
   factoryCalls: number;
-  started: Array<{ cwd: string }>;
-  resumed: Array<{ threadId: string; cwd: string }>;
+  started: AppServerThreadStartParams[];
+  resumed: Array<{ threadId: string; params: AppServerThreadStartParams }>;
   turns: Array<{
     threadId: string;
     prompt: string | null;
     input: string | Array<{
-      type: "text" | "image";
+      type: "text" | "localImage";
       text?: string;
       text_elements?: [];
-      assetPath?: string;
-      mimeType?: string;
+      path?: string;
     }>;
   }>;
   reviews: Array<{ threadId: string; instructions: string }>;
@@ -42,6 +45,7 @@ interface SessionDoubleState {
 
 function createRuntimeFixture(overrides: {
   sessionFactory?: AppServerTaskRuntimeOptions["sessionFactory"];
+  runtimeCatalogReader?: AppServerTaskRuntimeOptions["runtimeCatalogReader"];
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "themis-app-server-runtime-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
@@ -51,6 +55,7 @@ function createRuntimeFixture(overrides: {
     workingDirectory: root,
     runtimeStore,
     ...(overrides.sessionFactory ? { sessionFactory: overrides.sessionFactory } : {}),
+    ...(overrides.runtimeCatalogReader ? { runtimeCatalogReader: overrides.runtimeCatalogReader } : {}),
   });
 
   return {
@@ -66,7 +71,7 @@ function createRuntimeFixture(overrides: {
 function createSessionFactory(overrides: {
   startThreadId?: string;
   startThread?: (
-    params: { cwd: string },
+    params: AppServerThreadStartParams,
     state: SessionDoubleState,
   ) => Promise<{ threadId: string }>;
   resumeThreadId?: string;
@@ -118,14 +123,14 @@ function createSessionFactory(overrides: {
         state.initialized += 1;
       },
       startThread: async (params) => {
-        state.started.push({ cwd: params.cwd });
+        state.started.push({ ...params });
         if (overrides.startThread) {
-          return await overrides.startThread({ cwd: params.cwd }, state);
+          return await overrides.startThread(params, state);
         }
         return { threadId: overrides.startThreadId ?? "thread-app-start" };
       },
       resumeThread: async (threadId, params) => {
-        state.resumed.push({ threadId, cwd: params.cwd });
+        state.resumed.push({ threadId, params: { ...params } });
         return { threadId: overrides.resumeThreadId ?? threadId };
       },
       startReview: async (threadId, instructions) => {
@@ -190,6 +195,71 @@ function createSessionFactory(overrides: {
       },
       };
     },
+  };
+}
+
+function createRuntimeCatalog(overrides: {
+  model?: string;
+  defaultsModel?: string;
+  capabilities?: Partial<CodexRuntimeCatalog["models"][number]["capabilities"]>;
+} = {}): CodexRuntimeCatalog {
+  const model = overrides.model ?? "gpt-5.4";
+  const capabilities = {
+    textInput: true,
+    imageInput: true,
+    nativeTextInput: true,
+    nativeImageInput: true,
+    nativeDocumentInput: false,
+    supportedDocumentMimeTypes: [],
+    supportsPdfTextExtraction: true,
+    supportsDocumentPageRasterization: false,
+    supportsCodexTasks: true,
+    supportsReasoningSummaries: false,
+    supportsVerbosity: false,
+    supportsParallelToolCalls: false,
+    supportsSearchTool: false,
+    supportsImageDetailOriginal: false,
+    ...(overrides.capabilities ?? {}),
+  };
+
+  return {
+    models: [{
+      id: model,
+      model,
+      displayName: model,
+      description: "",
+      hidden: false,
+      supportedReasoningEfforts: [],
+      defaultReasoningEffort: "medium",
+      contextWindow: null,
+      capabilities,
+      supportsPersonality: false,
+      supportsCodexTasks: capabilities.supportsCodexTasks,
+      isDefault: true,
+    }],
+    defaults: {
+      profile: null,
+      model: overrides.defaultsModel ?? model,
+      reasoning: null,
+      approvalPolicy: null,
+      sandboxMode: null,
+      webSearchMode: null,
+      networkAccessEnabled: null,
+    },
+    provider: {
+      type: "codex-default",
+      name: "Codex CLI",
+      baseUrl: null,
+      model: overrides.defaultsModel ?? model,
+      lockedModel: false,
+    },
+    accessModes: [{
+      id: "auth",
+      label: "认证",
+      description: "通过 Codex / ChatGPT 认证运行任务。",
+    }],
+    thirdPartyProviders: [],
+    personas: [],
   };
 }
 
@@ -345,18 +415,244 @@ test("AppServerTaskRuntime 会把 inputEnvelope 里的图片作为 native image 
     assert.equal(state.turns.length, 1);
     assert.equal(Array.isArray(state.turns[0]?.input), true);
     const input = state.turns[0]?.input as Array<{
-      type: "text" | "image";
+      type: "text" | "localImage";
       text?: string;
-      assetPath?: string;
-      mimeType?: string;
+      path?: string;
     }>;
     assert.equal(input[0]?.type, "text");
     assert.match(input[0]?.text ?? "", /帮我看图/);
-    assert.equal(input.some((part) => part.type === "image"), true);
+    assert.equal(input.some((part) => part.type === "localImage"), true);
     assert.equal(
-      input.find((part) => part.type === "image")?.assetPath,
+      input.find((part) => part.type === "localImage")?.path,
       "/workspace/temp/input-assets/shot.png",
     );
+    const storedInput = fixture.runtimeStore.getTurnInput("req-app-native-image-1");
+    assert.equal(storedInput?.envelope.assets[0]?.assetId, "asset-image-1");
+    assert.equal(storedInput?.compileSummary?.runtimeTarget, "app-server");
+    assert.equal(storedInput?.compileSummary?.degradationLevel, "native");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 会根据当前模型能力阻止不支持图片输入的 image envelope", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-image-blocked-by-model",
+  });
+  const fixture = createRuntimeFixture({
+    sessionFactory,
+    runtimeCatalogReader: async () => createRuntimeCatalog({
+      capabilities: {
+        imageInput: false,
+        nativeImageInput: false,
+      },
+    }),
+  });
+
+  try {
+    await assert.rejects(
+      fixture.runtime.runTask({
+        requestId: "req-app-image-blocked-by-model",
+        taskId: "task-app-image-blocked-by-model",
+        sourceChannel: "web",
+        user: { userId: "webui" },
+        goal: "帮我看图",
+        inputEnvelope: {
+          envelopeId: "env-app-image-blocked-by-model",
+          sourceChannel: "web",
+          parts: [
+            { partId: "part-1", type: "text", role: "user", order: 1, text: "帮我看图" },
+            { partId: "part-2", type: "image", role: "user", order: 2, assetId: "asset-image-1" },
+          ],
+          assets: [
+            {
+              assetId: "asset-image-1",
+              kind: "image",
+              mimeType: "image/png",
+              localPath: "/workspace/temp/input-assets/shot.png",
+              sourceChannel: "web",
+              ingestionStatus: "ready",
+            },
+          ],
+          createdAt: "2026-04-03T16:10:00.000Z",
+        },
+        options: {
+          model: "gpt-5.4",
+        },
+        channelContext: { sessionId: "web-session-image-blocked-by-model" },
+        createdAt: "2026-04-03T16:10:00.000Z",
+      }),
+      /图片原生输入/,
+    );
+
+    assert.equal(state.factoryCalls, 0);
+    const storedInput = fixture.runtimeStore.getTurnInput("req-app-image-blocked-by-model");
+    assert.equal(storedInput?.compileSummary?.runtimeTarget, "app-server");
+    assert.equal(storedInput?.compileSummary?.degradationLevel, "blocked");
+    assert.equal(storedInput?.compileSummary?.warnings[0]?.code, "IMAGE_NATIVE_INPUT_REQUIRED");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 会把模型和关键运行参数透传给 thread/start", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-request-options-1",
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    await fixture.runtime.runTask({
+      requestId: "req-app-request-options-1",
+      taskId: "task-app-request-options-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "hello",
+      options: {
+        model: "gpt-5.4",
+        approvalPolicy: "on-failure",
+        sandboxMode: "danger-full-access",
+        webSearchMode: "live",
+      },
+      channelContext: { sessionId: "web-session-request-options-1" },
+      createdAt: "2026-04-03T16:20:00.000Z",
+    });
+
+    assert.equal(state.started.length, 1);
+    assert.equal(state.started[0]?.cwd?.length ? true : false, true);
+    assert.equal(state.started[0]?.model, "gpt-5.4");
+    assert.equal(state.started[0]?.approvalPolicy, "on-failure");
+    assert.equal(state.started[0]?.sandbox, "danger-full-access");
+    assert.equal(state.started[0]?.webSearchMode, "live");
+    assert.equal(state.started[0]?.persistExtendedHistory, true);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 会把 document envelope 的路径 fallback 持久化到 turn input", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-document-fallback-1",
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    const documentDirectory = join(fixture.root, "temp", "input-assets");
+    mkdirSync(documentDirectory, { recursive: true });
+    const documentPath = join(documentDirectory, "brief.md");
+    await import("node:fs/promises").then(({ writeFile }) => writeFile(documentPath, "# Brief\n\nhello"));
+
+    await fixture.runtime.runTask({
+      requestId: "req-app-document-fallback-1",
+      taskId: "task-app-document-fallback-1",
+      sourceChannel: "feishu",
+      user: { userId: "feishu-user-1" },
+      goal: "帮我看看文档",
+      inputEnvelope: {
+        envelopeId: "env-app-document-fallback-1",
+        sourceChannel: "feishu",
+        parts: [
+          { partId: "part-1", type: "text", role: "user", order: 1, text: "帮我看看文档" },
+          { partId: "part-2", type: "document", role: "user", order: 2, assetId: "asset-doc-1" },
+        ],
+        assets: [
+          {
+            assetId: "asset-doc-1",
+            kind: "document",
+            name: "brief.md",
+            mimeType: "text/markdown",
+            localPath: documentPath,
+            sourceChannel: "feishu",
+            ingestionStatus: "ready",
+          },
+        ],
+        createdAt: "2026-04-03T15:00:00.000Z",
+      },
+      channelContext: { sessionId: "feishu-session-document-fallback-1" },
+      createdAt: "2026-04-03T15:00:00.000Z",
+    });
+
+    assert.equal(Array.isArray(state.turns[0]?.input), true);
+    const input = state.turns[0]?.input as Array<{
+      type: "text" | "localImage";
+      text?: string;
+    }>;
+    assert.equal(input[0]?.type, "text");
+    assert.match(input[0]?.text ?? "", /Attached document paths:/);
+    assert.match(input[0]?.text ?? "", /brief\.md/);
+    const storedInput = fixture.runtimeStore.getTurnInput("req-app-document-fallback-1");
+    assert.equal(storedInput?.compileSummary?.runtimeTarget, "app-server");
+    assert.equal(storedInput?.compileSummary?.degradationLevel, "controlled_fallback");
+    assert.equal(storedInput?.compileSummary?.warnings.length ?? -1, 0);
+    assert.equal(storedInput?.envelope.parts[1]?.type, "document");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 即使模型声明 nativeDocumentInput 也会按 app-server transport 边界走路径 fallback", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-document-transport-fallback-1",
+  });
+  const fixture = createRuntimeFixture({
+    sessionFactory,
+    runtimeCatalogReader: async () => createRuntimeCatalog({
+      capabilities: {
+        nativeDocumentInput: true,
+        supportedDocumentMimeTypes: ["text/markdown"],
+      },
+    }),
+  });
+
+  try {
+    const documentDirectory = join(fixture.root, "temp", "input-assets");
+    mkdirSync(documentDirectory, { recursive: true });
+    const documentPath = join(documentDirectory, "capability-brief.md");
+    await import("node:fs/promises").then(({ writeFile }) => writeFile(documentPath, "# Brief\n\nhello"));
+
+    await fixture.runtime.runTask({
+      requestId: "req-app-document-transport-fallback-1",
+      taskId: "task-app-document-transport-fallback-1",
+      sourceChannel: "feishu",
+      user: { userId: "feishu-user-1" },
+      goal: "帮我看看文档",
+      inputEnvelope: {
+        envelopeId: "env-app-document-transport-fallback-1",
+        sourceChannel: "feishu",
+        parts: [
+          { partId: "part-1", type: "text", role: "user", order: 1, text: "帮我看看文档" },
+          { partId: "part-2", type: "document", role: "user", order: 2, assetId: "asset-doc-1" },
+        ],
+        assets: [
+          {
+            assetId: "asset-doc-1",
+            kind: "document",
+            name: "capability-brief.md",
+            mimeType: "text/markdown",
+            localPath: documentPath,
+            sourceChannel: "feishu",
+            ingestionStatus: "ready",
+          },
+        ],
+        createdAt: "2026-04-03T17:20:00.000Z",
+      },
+      options: {
+        model: "gpt-5.4",
+      },
+      channelContext: { sessionId: "feishu-session-document-transport-fallback-1" },
+      createdAt: "2026-04-03T17:20:00.000Z",
+    });
+
+    assert.equal(Array.isArray(state.turns[0]?.input), true);
+    const input = state.turns[0]?.input as Array<{
+      type: "text" | "localImage";
+      text?: string;
+    }>;
+    assert.equal(input[0]?.type, "text");
+    assert.match(input[0]?.text ?? "", /Attached document paths:/);
+    assert.match(input[0]?.text ?? "", /capability-brief\.md/);
+    const storedInput = fixture.runtimeStore.getTurnInput("req-app-document-transport-fallback-1");
+    assert.equal(storedInput?.compileSummary?.degradationLevel, "controlled_fallback");
   } finally {
     fixture.cleanup();
   }

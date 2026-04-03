@@ -51,6 +51,48 @@ export interface RuntimeDiagnosticsOverview {
   suggestedCommands: string[];
 }
 
+export interface RuntimeMultimodalSourceChannelCount {
+  sourceChannel: string;
+  count: number;
+}
+
+export interface RuntimeMultimodalRuntimeTargetCount {
+  runtimeTarget: string;
+  count: number;
+}
+
+export interface RuntimeMultimodalLastTurnSummary {
+  requestId: string;
+  sourceChannel: string;
+  sessionId?: string;
+  createdAt: string;
+  runtimeTarget: string | null;
+  degradationLevel: "native" | "lossless_textualization" | "controlled_fallback" | "blocked" | "unknown";
+  partTypes: string[];
+  assetKinds: string[];
+  warningCodes: string[];
+}
+
+export interface RuntimeMultimodalDiagnosticsSummary {
+  available: boolean;
+  sampleWindowSize: number;
+  recentTurnInputCount: number;
+  assetCounts: {
+    image: number;
+    document: number;
+  };
+  degradationCounts: {
+    native: number;
+    losslessTextualization: number;
+    controlledFallback: number;
+    blocked: number;
+    unknown: number;
+  };
+  sourceChannelCounts: RuntimeMultimodalSourceChannelCount[];
+  runtimeTargetCounts: RuntimeMultimodalRuntimeTargetCount[];
+  lastTurn: RuntimeMultimodalLastTurnSummary | null;
+}
+
 export interface RuntimeDiagnosticsSummary {
   generatedAt: string;
   workingDirectory: string;
@@ -80,6 +122,7 @@ export interface RuntimeDiagnosticsSummary {
       path: string;
       exists: boolean;
     };
+    multimodal: RuntimeMultimodalDiagnosticsSummary;
   };
   mcp: McpInspectorListResult & {
     readError?: string;
@@ -108,6 +151,9 @@ const MEMORY_FILES = [
   "memory/tasks/in-progress.md",
   "memory/tasks/done.md",
 ] as const;
+
+const RECENT_MULTIMODAL_TURN_INPUT_LIMIT = 24;
+const RECENT_MULTIMODAL_SESSION_SCAN_LIMIT = 64;
 
 export class RuntimeDiagnosticsService {
   private readonly workingDirectory: string;
@@ -162,11 +208,13 @@ export class RuntimeDiagnosticsService {
     });
     const contextFiles = CONTEXT_FILES.map((path) => readPathStatus(this.workingDirectory, path));
     const memoryFiles = MEMORY_FILES.map((path) => readPathStatus(this.workingDirectory, path));
+    const multimodal = summarizeRecentTurnInputDiagnostics(this.runtimeStore);
     const service = {
       sqlite: {
         path: this.sqliteFilePath,
         exists: existsSync(this.sqliteFilePath),
       },
+      multimodal,
     };
     const provider = {
       activeMode: this.authRuntime
@@ -516,6 +564,17 @@ function summarizeRuntimeOverview(input: {
     });
   }
 
+  if (input.service.multimodal.degradationCounts.blocked > 0) {
+    hotspots.push({
+      id: "multimodal_inputs_blocked",
+      scope: "service",
+      severity: "warning",
+      title: "最近存在被阻止的多模态输入",
+      summary: summarizeBlockedMultimodalInputs(input.service.multimodal),
+      nextStep: "./themis doctor service",
+    });
+  }
+
   const feishuDiagnosis = input.feishu.diagnostics.primaryDiagnosis;
   if (feishuDiagnosis && feishuDiagnosis.id !== "healthy") {
     hotspots.push({
@@ -624,4 +683,207 @@ function compareScopePriority(left: RuntimeDiagnosticsHotspot["scope"], right: R
   };
 
   return scopeRank[left] - scopeRank[right];
+}
+
+function summarizeRecentTurnInputDiagnostics(
+  runtimeStore: SqliteCodexSessionRegistry | null,
+): RuntimeMultimodalDiagnosticsSummary {
+  const baseSummary = createEmptyMultimodalDiagnosticsSummary(Boolean(runtimeStore));
+
+  if (!runtimeStore) {
+    return baseSummary;
+  }
+
+  const recentTurnInputs = runtimeStore
+    .listRecentSessions(RECENT_MULTIMODAL_SESSION_SCAN_LIMIT)
+    .flatMap((session) => runtimeStore.listSessionTurns(session.sessionId))
+    .map((turn) => {
+      const input = runtimeStore.getTurnInput(turn.requestId);
+      return input
+        ? {
+            turn,
+            input,
+          }
+        : null;
+    })
+    .filter((item): item is {
+      turn: ReturnType<SqliteCodexSessionRegistry["listSessionTurns"]>[number];
+      input: NonNullable<ReturnType<SqliteCodexSessionRegistry["getTurnInput"]>>;
+    } => item !== null)
+    .sort((left, right) => compareRecentTurnInput(left.input.createdAt, left.turn.requestId, right.input.createdAt, right.turn.requestId))
+    .slice(0, RECENT_MULTIMODAL_TURN_INPUT_LIMIT);
+
+  if (recentTurnInputs.length === 0) {
+    return baseSummary;
+  }
+
+  const sourceChannelCounts = new Map<string, number>();
+  const runtimeTargetCounts = new Map<string, number>();
+  const assetCounts = {
+    image: 0,
+    document: 0,
+  };
+  const degradationCounts = {
+    native: 0,
+    losslessTextualization: 0,
+    controlledFallback: 0,
+    blocked: 0,
+    unknown: 0,
+  };
+
+  for (const record of recentTurnInputs) {
+    incrementCount(sourceChannelCounts, record.input.envelope.sourceChannel);
+
+    for (const asset of record.input.assets) {
+      if (asset.kind === "image") {
+        assetCounts.image += 1;
+      } else if (asset.kind === "document") {
+        assetCounts.document += 1;
+      }
+    }
+
+    const compileSummary = record.input.compileSummary;
+    const runtimeTarget = normalizeCountKey(compileSummary?.runtimeTarget);
+    incrementCount(runtimeTargetCounts, runtimeTarget);
+
+    switch (compileSummary?.degradationLevel) {
+      case "native":
+        degradationCounts.native += 1;
+        break;
+      case "lossless_textualization":
+        degradationCounts.losslessTextualization += 1;
+        break;
+      case "controlled_fallback":
+        degradationCounts.controlledFallback += 1;
+        break;
+      case "blocked":
+        degradationCounts.blocked += 1;
+        break;
+      default:
+        degradationCounts.unknown += 1;
+        break;
+    }
+  }
+
+  const lastRecord = recentTurnInputs[0] ?? null;
+
+  return {
+    available: true,
+    sampleWindowSize: RECENT_MULTIMODAL_TURN_INPUT_LIMIT,
+    recentTurnInputCount: recentTurnInputs.length,
+    assetCounts,
+    degradationCounts,
+    sourceChannelCounts: mapCountEntries(sourceChannelCounts).map(([sourceChannel, count]) => ({
+      sourceChannel,
+      count,
+    })),
+    runtimeTargetCounts: mapCountEntries(runtimeTargetCounts).map(([runtimeTarget, count]) => ({
+      runtimeTarget,
+      count,
+    })),
+    lastTurn: lastRecord
+      ? buildMultimodalLastTurnSummary(lastRecord)
+      : null,
+  };
+}
+
+function createEmptyMultimodalDiagnosticsSummary(available: boolean): RuntimeMultimodalDiagnosticsSummary {
+  return {
+    available,
+    sampleWindowSize: RECENT_MULTIMODAL_TURN_INPUT_LIMIT,
+    recentTurnInputCount: 0,
+    assetCounts: {
+      image: 0,
+      document: 0,
+    },
+    degradationCounts: {
+      native: 0,
+      losslessTextualization: 0,
+      controlledFallback: 0,
+      blocked: 0,
+      unknown: 0,
+    },
+    sourceChannelCounts: [],
+    runtimeTargetCounts: [],
+    lastTurn: null,
+  };
+}
+
+function compareRecentTurnInput(
+  leftCreatedAt: string,
+  leftRequestId: string,
+  rightCreatedAt: string,
+  rightRequestId: string,
+): number {
+  const timestampDiff = rightCreatedAt.localeCompare(leftCreatedAt);
+  if (timestampDiff !== 0) {
+    return timestampDiff;
+  }
+
+  return rightRequestId.localeCompare(leftRequestId);
+}
+
+function incrementCount(counter: Map<string, number>, key: string): void {
+  counter.set(key, (counter.get(key) ?? 0) + 1);
+}
+
+function mapCountEntries(counter: Map<string, number>): Array<[string, number]> {
+  return [...counter.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+}
+
+function normalizeCountKey(value: string | undefined): string {
+  const normalized = normalizeOptionalText(value);
+  return normalized ?? "unknown";
+}
+
+function normalizeOptionalText(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function normalizeDegradationLevel(
+  value: "native" | "lossless_textualization" | "controlled_fallback" | "blocked" | undefined,
+): RuntimeMultimodalLastTurnSummary["degradationLevel"] {
+  return value ?? "unknown";
+}
+
+function dedupeStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter((value) => value.trim().length > 0)));
+}
+
+function buildMultimodalLastTurnSummary(record: {
+  turn: ReturnType<SqliteCodexSessionRegistry["listSessionTurns"]>[number];
+  input: NonNullable<ReturnType<SqliteCodexSessionRegistry["getTurnInput"]>>;
+}): RuntimeMultimodalLastTurnSummary {
+  const sessionId = normalizeOptionalText(record.input.envelope.sourceSessionId) ?? normalizeOptionalText(record.turn.sessionId);
+
+  return {
+    requestId: record.turn.requestId,
+    sourceChannel: record.input.envelope.sourceChannel,
+    ...(sessionId ? { sessionId } : {}),
+    createdAt: record.input.createdAt,
+    runtimeTarget: normalizeOptionalText(record.input.compileSummary?.runtimeTarget) ?? null,
+    degradationLevel: normalizeDegradationLevel(record.input.compileSummary?.degradationLevel),
+    partTypes: dedupeStrings(
+      [...record.input.envelope.parts]
+        .sort((left, right) => left.order - right.order)
+        .map((part) => part.type),
+    ),
+    assetKinds: dedupeStrings(record.input.assets.map((asset) => asset.kind)),
+    warningCodes: dedupeStrings(record.input.compileSummary?.warnings.map((warning) => warning.code) ?? []),
+  };
+}
+
+function summarizeBlockedMultimodalInputs(summary: RuntimeMultimodalDiagnosticsSummary): string {
+  const parts = [
+    `最近 ${summary.recentTurnInputCount} 条 turn input 中有 ${summary.degradationCounts.blocked} 条被 runtime 阻止。`,
+  ];
+
+  if (summary.lastTurn) {
+    parts.push(
+      `最新一条来自 ${summary.lastTurn.sourceChannel}，编译结果是 ${summary.lastTurn.runtimeTarget ?? "unknown"} / ${summary.lastTurn.degradationLevel}。`,
+    );
+  }
+
+  return parts.join(" ");
 }

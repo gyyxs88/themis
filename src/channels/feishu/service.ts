@@ -48,7 +48,11 @@ import {
   type FeishuDiagnosticsPendingAction,
 } from "./diagnostics-state-store.js";
 import { renderFeishuAssistantMessage, type FeishuRenderedMessageDraft } from "./message-renderer.js";
-import { extractFeishuPostText } from "./message-content.js";
+import {
+  extractFeishuPostContentItems,
+  extractFeishuPostText,
+  type FeishuPostContentItem,
+} from "./message-content.js";
 import {
   buildLegacyAttachmentsFromEnvelope,
   createTaskInputEnvelope,
@@ -96,6 +100,7 @@ type FeishuIncomingContext =
     kind: "text";
     text: string;
     attachments?: FeishuMessageResourceReference[];
+    postContentItems?: FeishuPostContentItem[];
   })
   | (FeishuIncomingContextBase & {
     kind: "attachment";
@@ -2898,6 +2903,8 @@ function normalizeIncomingContext(event: FeishuMessageReceiveEvent): FeishuIncom
   const messageCreateTimeMs = parseFeishuMessageCreateTime(event.message?.create_time);
   const userId = normalizeText(event.sender?.sender_id?.user_id)
     ?? normalizeText(event.sender?.sender_id?.open_id);
+  const messageType = normalizeText(event.message?.message_type);
+  const rawContent = normalizeText(event.message?.content);
   const text = extractFeishuText(event);
   const attachments = extractFeishuMessageResources(event);
   const openId = normalizeText(event.sender?.sender_id?.open_id);
@@ -2926,6 +2933,9 @@ function normalizeIncomingContext(event: FeishuMessageReceiveEvent): FeishuIncom
       kind: "text",
       text,
       ...(attachments?.length ? { attachments } : {}),
+      ...(messageType === "post" && rawContent
+        ? { postContentItems: extractFeishuPostContentItems(rawContent) }
+        : {}),
     };
   }
 
@@ -3066,17 +3076,48 @@ function buildFeishuInputEnvelope(
 ): TaskInputEnvelope | undefined {
   const parts: FeishuAttachmentDraftPart[] = [];
   const assets = [...(draft?.assets ?? []), ...inlineAssets];
+  const inlineAssetById = new Map(inlineAssets.map((asset) => [asset.assetId, asset]));
+  let order = 0;
 
-  if (context.text.trim()) {
+  if (context.postContentItems?.length) {
+    for (const item of context.postContentItems) {
+      if (item.type === "text") {
+        parts.push({
+          type: "text",
+          role: "user",
+          order,
+          text: item.text,
+        });
+        order += 1;
+        continue;
+      }
+
+      const assetId = `${context.messageId}::${item.imageKey}`;
+      const asset = inlineAssetById.get(assetId);
+
+      if (!asset) {
+        continue;
+      }
+
+      parts.push({
+        type: "image",
+        role: "user",
+        order,
+        assetId,
+        ...(asset.name ? { caption: asset.name } : {}),
+      });
+      order += 1;
+    }
+  } else if (context.text.trim()) {
     parts.push({
       type: "text",
       role: "user",
-      order: 0,
+      order,
       text: context.text,
     });
+    order += 1;
   }
 
-  let order = 1;
   for (const part of draft?.parts ?? []) {
     if (part.type === "text") {
       if (part.text?.trim()) {
@@ -3101,15 +3142,17 @@ function buildFeishuInputEnvelope(
     order += 1;
   }
 
-  for (const asset of inlineAssets) {
-    parts.push({
-      type: asset.kind === "image" ? "image" : "document",
-      role: "user",
-      order,
-      assetId: asset.assetId,
-      ...(asset.name ? { caption: asset.name } : {}),
-    });
-    order += 1;
+  if (!context.postContentItems?.length) {
+    for (const asset of inlineAssets) {
+      parts.push({
+        type: asset.kind === "image" ? "image" : "document",
+        role: "user",
+        order,
+        assetId: asset.assetId,
+        ...(asset.name ? { caption: asset.name } : {}),
+      });
+      order += 1;
+    }
   }
 
   if (assets.length === 0 || parts.length === 0) {

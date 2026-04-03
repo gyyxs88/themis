@@ -60,6 +60,12 @@ test("第三方模型能力字段会完整写入并从配置里读回", () => {
     assert.deepEqual(provider?.models[0]?.profile?.capabilities, {
       textInput: true,
       imageInput: true,
+      nativeTextInput: true,
+      nativeImageInput: true,
+      nativeDocumentInput: false,
+      supportedDocumentMimeTypes: [],
+      supportsPdfTextExtraction: false,
+      supportsDocumentPageRasterization: false,
       supportsCodexTasks: true,
       supportsReasoningSummaries: true,
       supportsVerbosity: true,

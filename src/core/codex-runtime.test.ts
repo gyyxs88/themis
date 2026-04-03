@@ -44,6 +44,12 @@ function createProviderConfig(): OpenAICompatibleProviderConfig {
           capabilities: {
             textInput: true,
             imageInput: false,
+            nativeTextInput: true,
+            nativeImageInput: false,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+            supportsPdfTextExtraction: false,
+            supportsDocumentPageRasterization: false,
             supportsCodexTasks: true,
             supportsReasoningSummaries: false,
             supportsVerbosity: false,
@@ -307,6 +313,11 @@ test("runTask 在 codex-sdk 路径遇到图片 envelope 时会在 acquire 前阻
       /图片原生输入/,
     );
     assert.equal(acquireCalled, false);
+    const storedInput = runtimeStore.getTurnInput("req-sdk-envelope-image-blocked");
+    assert.equal(storedInput?.envelope.parts[0]?.type, "image");
+    assert.equal(storedInput?.compileSummary?.runtimeTarget, "codex-sdk");
+    assert.equal(storedInput?.compileSummary?.degradationLevel, "blocked");
+    assert.equal(storedInput?.compileSummary?.warnings[0]?.code, "IMAGE_NATIVE_INPUT_REQUIRED");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -646,6 +657,11 @@ test("runTask 会把 inputEnvelope 文档只保留为路径提示，不再拼正
     assert.doesNotMatch(capturedPrompts[0] ?? "", /Document text fallback:/);
     assert.doesNotMatch(capturedPrompts[0] ?? "", /This is the document body\./);
     assert.doesNotMatch(capturedPrompts[0] ?? "", /Attachments:/);
+    const storedInput = runtimeStore.getTurnInput("req-runtime-envelope-document-fallback");
+    assert.equal(storedInput?.envelope.assets[0]?.assetId, "asset-doc-1");
+    assert.equal(storedInput?.compileSummary?.runtimeTarget, "codex-sdk");
+    assert.equal(storedInput?.compileSummary?.degradationLevel, "controlled_fallback");
+    assert.equal(storedInput?.compileSummary?.warnings.length ?? -1, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

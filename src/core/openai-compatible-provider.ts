@@ -11,6 +11,12 @@ export const OPENAI_COMPATIBLE_PROVIDER_ID = "themis_openai_compatible";
 export interface OpenAICompatibleProviderModelCapabilities {
   textInput: boolean;
   imageInput: boolean;
+  nativeTextInput: boolean;
+  nativeImageInput: boolean;
+  nativeDocumentInput: boolean;
+  supportedDocumentMimeTypes: string[];
+  supportsPdfTextExtraction: boolean;
+  supportsDocumentPageRasterization: boolean;
   supportsCodexTasks: boolean;
   supportsReasoningSummaries: boolean;
   supportsVerbosity: boolean;
@@ -116,6 +122,12 @@ interface ProviderModelEntryPayload {
 interface ProviderModelCapabilitiesPayload {
   textInput?: unknown;
   imageInput?: unknown;
+  nativeTextInput?: unknown;
+  nativeImageInput?: unknown;
+  nativeDocumentInput?: unknown;
+  supportedDocumentMimeTypes?: unknown;
+  supportsPdfTextExtraction?: unknown;
+  supportsDocumentPageRasterization?: unknown;
   supportsCodexTasks?: unknown;
   supportsReasoningSummaries?: unknown;
   supportsVerbosity?: unknown;
@@ -455,10 +467,18 @@ function normalizeModelCapabilities(
   defaultSupportsCodexTasks: boolean,
 ): OpenAICompatibleProviderModelCapabilities {
   const payload = value && typeof value === "object" ? (value as ProviderModelCapabilitiesPayload) : {};
+  const textInput = normalizeOptionalBoolean(payload.textInput) ?? true;
+  const imageInput = normalizeOptionalBoolean(payload.imageInput) ?? false;
 
   return {
-    textInput: normalizeOptionalBoolean(payload.textInput) ?? true,
-    imageInput: normalizeOptionalBoolean(payload.imageInput) ?? false,
+    textInput,
+    imageInput,
+    nativeTextInput: normalizeOptionalBoolean(payload.nativeTextInput) ?? textInput,
+    nativeImageInput: normalizeOptionalBoolean(payload.nativeImageInput) ?? imageInput,
+    nativeDocumentInput: normalizeOptionalBoolean(payload.nativeDocumentInput) ?? false,
+    supportedDocumentMimeTypes: normalizeOptionalStringArray(payload.supportedDocumentMimeTypes),
+    supportsPdfTextExtraction: normalizeOptionalBoolean(payload.supportsPdfTextExtraction) ?? false,
+    supportsDocumentPageRasterization: normalizeOptionalBoolean(payload.supportsDocumentPageRasterization) ?? false,
     supportsCodexTasks: normalizeOptionalBoolean(payload.supportsCodexTasks) ?? defaultSupportsCodexTasks,
     supportsReasoningSummaries: normalizeOptionalBoolean(payload.supportsReasoningSummaries) ?? false,
     supportsVerbosity: normalizeOptionalBoolean(payload.supportsVerbosity) ?? false,
@@ -767,6 +787,9 @@ function normalizeProviderModelCreateInput(
     throw new Error("添加模型时必须填写供应商和模型名称。");
   }
 
+  const defaultCapabilities = createDefaultWriteCapabilities(true);
+  const rawCapabilities = input.capabilities ?? {};
+
   return {
     providerId,
     model,
@@ -778,10 +801,22 @@ function normalizeProviderModelCreateInput(
     truncationMode: input.truncationMode === "bytes" ? "bytes" : "tokens",
     truncationLimit: normalizeCreateInteger(input.truncationLimit),
     setAsDefault: input.setAsDefault === true,
-    capabilities: {
-      ...createDefaultWriteCapabilities(true),
-      ...(input.capabilities ?? {}),
-    },
+    capabilities: normalizeModelCapabilities({
+      textInput: rawCapabilities.textInput ?? defaultCapabilities.textInput,
+      imageInput: rawCapabilities.imageInput ?? defaultCapabilities.imageInput,
+      nativeTextInput: rawCapabilities.nativeTextInput,
+      nativeImageInput: rawCapabilities.nativeImageInput,
+      nativeDocumentInput: rawCapabilities.nativeDocumentInput,
+      supportedDocumentMimeTypes: rawCapabilities.supportedDocumentMimeTypes,
+      supportsPdfTextExtraction: rawCapabilities.supportsPdfTextExtraction,
+      supportsDocumentPageRasterization: rawCapabilities.supportsDocumentPageRasterization,
+      supportsCodexTasks: rawCapabilities.supportsCodexTasks ?? defaultCapabilities.supportsCodexTasks,
+      supportsReasoningSummaries: rawCapabilities.supportsReasoningSummaries ?? defaultCapabilities.supportsReasoningSummaries,
+      supportsVerbosity: rawCapabilities.supportsVerbosity ?? defaultCapabilities.supportsVerbosity,
+      supportsParallelToolCalls: rawCapabilities.supportsParallelToolCalls ?? defaultCapabilities.supportsParallelToolCalls,
+      supportsSearchTool: rawCapabilities.supportsSearchTool ?? defaultCapabilities.supportsSearchTool,
+      supportsImageDetailOriginal: rawCapabilities.supportsImageDetailOriginal ?? defaultCapabilities.supportsImageDetailOriginal,
+    }, true),
   };
 }
 
@@ -789,6 +824,12 @@ function createDefaultWriteCapabilities(defaultSupportsCodexTasks: boolean): Ope
   return {
     textInput: true,
     imageInput: false,
+    nativeTextInput: true,
+    nativeImageInput: false,
+    nativeDocumentInput: false,
+    supportedDocumentMimeTypes: [],
+    supportsPdfTextExtraction: false,
+    supportsDocumentPageRasterization: false,
     supportsCodexTasks: defaultSupportsCodexTasks,
     supportsReasoningSummaries: false,
     supportsVerbosity: false,
@@ -959,7 +1000,11 @@ function buildGeneratedCatalogModel(
   providerName: string,
 ): Record<string, unknown> {
   const profile = resolveModelProfile(entry, providerName);
-  const inputModalities = profile.capabilities.imageInput ? ["text", "image"] : ["text"];
+  const inputModalities = [
+    ...(profile.capabilities.nativeTextInput ? ["text"] : []),
+    ...(profile.capabilities.nativeImageInput ? ["image"] : []),
+    ...(profile.capabilities.nativeDocumentInput ? ["document"] : []),
+  ];
 
   return {
     slug: entry.model,
@@ -991,7 +1036,13 @@ function buildGeneratedCatalogModel(
     supports_image_detail_original: profile.capabilities.supportsImageDetailOriginal,
     ...(profile.contextWindow ? { context_window: profile.contextWindow } : {}),
     experimental_supported_tools: [],
-    input_modalities: inputModalities,
+    input_modalities: inputModalities.length ? inputModalities : ["text"],
+    native_text_input: profile.capabilities.nativeTextInput,
+    native_image_input: profile.capabilities.nativeImageInput,
+    native_document_input: profile.capabilities.nativeDocumentInput,
+    supported_document_mime_types: profile.capabilities.supportedDocumentMimeTypes,
+    supports_pdf_text_extraction: profile.capabilities.supportsPdfTextExtraction,
+    supports_document_page_rasterization: profile.capabilities.supportsDocumentPageRasterization,
     supports_search_tool: profile.capabilities.supportsSearchTool,
   };
 }
@@ -1036,6 +1087,16 @@ function resolveProviderModelCatalogPath(cwd: string, ...candidates: Array<strin
 
 function normalizeOptionalText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeOptionalStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => normalizeOptionalText(entry))
+    .filter(Boolean);
 }
 
 function normalizeRequiredText(value: unknown): string {

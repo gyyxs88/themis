@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import type { RuntimeInputCapabilities } from "../types/index.js";
 import type {
   TaskRuntimeThreadSnapshot,
   TaskRuntimeThreadSnapshotTurn,
@@ -16,6 +17,12 @@ export interface CodexRuntimeReasoningOption {
 export interface CodexRuntimeModelCapabilities {
   textInput: boolean;
   imageInput: boolean;
+  nativeTextInput: boolean;
+  nativeImageInput: boolean;
+  nativeDocumentInput: boolean;
+  supportedDocumentMimeTypes: string[];
+  supportsPdfTextExtraction: boolean;
+  supportsDocumentPageRasterization: boolean;
   supportsCodexTasks: boolean;
   supportsReasoningSummaries: boolean;
   supportsVerbosity: boolean;
@@ -171,13 +178,12 @@ export interface AppServerTextInputPart {
   text_elements: [];
 }
 
-export interface AppServerImageInputPart {
-  type: "image";
-  assetPath: string;
-  mimeType?: string;
+export interface AppServerLocalImageInputPart {
+  type: "localImage";
+  path: string;
 }
 
-export type AppServerTurnInputPart = AppServerTextInputPart | AppServerImageInputPart;
+export type AppServerTurnInputPart = AppServerTextInputPart | AppServerLocalImageInputPart;
 
 interface AppServerModelListResponse {
   data?: unknown;
@@ -503,7 +509,7 @@ export class CodexAppServerSession {
       ? [normalizeAppServerTextInputPart(input)]
       : input.map((part) => (part.type === "text"
         ? normalizeAppServerTextInputPart(part.text)
-        : normalizeAppServerImageInputPart(part)));
+        : normalizeAppServerLocalImageInputPart(part)));
 
     const response = await this.request<AppServerTurnResponse>("turn/start", {
       threadId,
@@ -713,11 +719,10 @@ function normalizeAppServerTextInputPart(text: string): AppServerTextInputPart {
   };
 }
 
-function normalizeAppServerImageInputPart(part: AppServerImageInputPart): AppServerImageInputPart {
+function normalizeAppServerLocalImageInputPart(part: AppServerLocalImageInputPart): AppServerLocalImageInputPart {
   return {
-    type: "image",
-    assetPath: part.assetPath,
-    ...(part.mimeType ? { mimeType: part.mimeType } : {}),
+    type: "localImage",
+    path: part.path,
   };
 }
 
@@ -835,6 +840,12 @@ function createDefaultRuntimeModelCapabilities(supportsCodexTasks: boolean): Cod
   return {
     textInput: true,
     imageInput: false,
+    nativeTextInput: true,
+    nativeImageInput: false,
+    nativeDocumentInput: false,
+    supportedDocumentMimeTypes: [],
+    supportsPdfTextExtraction: false,
+    supportsDocumentPageRasterization: false,
     supportsCodexTasks,
     supportsReasoningSummaries: false,
     supportsVerbosity: false,
@@ -855,10 +866,38 @@ function normalizeRuntimeModelCapabilities(
     : normalizeCapabilityBoolean(value.textInput, value.text_input) ?? defaults.textInput;
   const imageInput = inputModalities.includes("image")
     || (normalizeCapabilityBoolean(value.imageInput, value.image_input) ?? defaults.imageInput);
+  const nativeTextInput = normalizeCapabilityBoolean(
+    value.nativeTextInput,
+    value.native_text_input,
+  ) ?? textInput;
+  const nativeImageInput = normalizeCapabilityBoolean(
+    value.nativeImageInput,
+    value.native_image_input,
+  ) ?? imageInput;
+  const nativeDocumentInput = inputModalities.includes("document")
+    || inputModalities.includes("file")
+    || (normalizeCapabilityBoolean(
+      value.nativeDocumentInput,
+      value.native_document_input,
+    ) ?? defaults.nativeDocumentInput);
 
   return {
     textInput,
     imageInput,
+    nativeTextInput,
+    nativeImageInput,
+    nativeDocumentInput,
+    supportedDocumentMimeTypes: normalizeStringArray(
+      value.supportedDocumentMimeTypes ?? value.supported_document_mime_types,
+    ),
+    supportsPdfTextExtraction: normalizeCapabilityBoolean(
+      value.supportsPdfTextExtraction,
+      value.supports_pdf_text_extraction,
+    ) ?? defaults.supportsPdfTextExtraction,
+    supportsDocumentPageRasterization: normalizeCapabilityBoolean(
+      value.supportsDocumentPageRasterization,
+      value.supports_document_page_rasterization,
+    ) ?? defaults.supportsDocumentPageRasterization,
     supportsCodexTasks,
     supportsReasoningSummaries: normalizeCapabilityBoolean(
       value.supportsReasoningSummaries,
@@ -884,6 +923,26 @@ function normalizeRuntimeModelCapabilities(
   };
 }
 
+export function toRuntimeInputCapabilities(
+  capabilities: CodexRuntimeModelCapabilities,
+  fallback?: RuntimeInputCapabilities,
+): RuntimeInputCapabilities {
+  return {
+    nativeTextInput: capabilities.nativeTextInput,
+    nativeImageInput: capabilities.nativeImageInput,
+    nativeDocumentInput: capabilities.nativeDocumentInput,
+    supportedDocumentMimeTypes: capabilities.supportedDocumentMimeTypes.length
+      ? [...capabilities.supportedDocumentMimeTypes]
+      : [...(fallback?.supportedDocumentMimeTypes ?? [])],
+    supportsPdfTextExtraction: capabilities.supportsPdfTextExtraction
+      ?? fallback?.supportsPdfTextExtraction
+      ?? false,
+    supportsDocumentPageRasterization: capabilities.supportsDocumentPageRasterization
+      ?? fallback?.supportsDocumentPageRasterization
+      ?? false,
+  };
+}
+
 function normalizeInputModalities(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -904,6 +963,16 @@ function normalizeCapabilityBoolean(...values: unknown[]): boolean | null {
   }
 
   return null;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => normalizeOptionalText(entry)?.trim())
+    .filter((entry): entry is string => Boolean(entry));
 }
 
 function resolveCodexBinary(): string {

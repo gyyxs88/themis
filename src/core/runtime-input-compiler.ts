@@ -99,6 +99,25 @@ export function compileTaskInputForRuntime(input: {
     }
 
     if (part.type === "document") {
+      if (supportsNativeDocumentMimeType(input.target.capabilities, asset.mimeType)) {
+        if (!isTrustedDocumentPath(asset.localPath)) {
+          return blocked({
+            code: "DOCUMENT_PATH_UNAVAILABLE",
+            message: "当前文档缺少可信本地路径，无法作为原生文档输入发送。",
+            assetId: asset.assetId,
+          });
+        }
+
+        nativeInputParts.push({
+          type: "document",
+          assetPath: asset.localPath,
+          mimeType: asset.mimeType,
+          sourcePartId: part.partId,
+          assetId: asset.assetId,
+        });
+        continue;
+      }
+
       if (!isTrustedDocumentPath(asset.localPath)) {
         return blocked({
           code: "DOCUMENT_PATH_UNAVAILABLE",
@@ -155,6 +174,32 @@ function requireAsset(assets: TaskInputAsset[], assetId: string): TaskInputAsset
   return asset;
 }
 
+function supportsNativeDocumentMimeType(capabilities: RuntimeInputCapabilities, mimeType: string): boolean {
+  if (!capabilities.nativeDocumentInput) {
+    return false;
+  }
+
+  const normalizedMimeType = normalizeMimeType(mimeType);
+
+  if (!normalizedMimeType) {
+    return false;
+  }
+
+  const supportedMimeTypes = capabilities.supportedDocumentMimeTypes
+    .map((entry) => normalizeMimeType(entry))
+    .filter((entry) => entry.length > 0);
+
+  if (supportedMimeTypes.length === 0) {
+    return true;
+  }
+
+  const [majorType] = normalizedMimeType.split("/", 1);
+
+  return supportedMimeTypes.some((entry) => entry === "*/*"
+    || entry === normalizedMimeType
+    || entry === `${majorType}/*`);
+}
+
 function isTrustedDocumentPath(localPath: string): boolean {
   if (localPath.trim().length === 0) {
     return false;
@@ -165,6 +210,10 @@ function isTrustedDocumentPath(localPath: string): boolean {
   } catch {
     return false;
   }
+}
+
+function normalizeMimeType(mimeType: string): string {
+  return mimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
 }
 
 function formatDocumentPathSection(

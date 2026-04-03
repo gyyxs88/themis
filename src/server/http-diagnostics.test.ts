@@ -78,6 +78,47 @@ test("GET /api/diagnostics 会返回结构化 summary", async () => {
     process.env.THEMIS_OPENAI_COMPAT_BASE_URL = "https://example.com/v1";
     process.env.THEMIS_OPENAI_COMPAT_API_KEY = "sk-test";
     process.env.THEMIS_OPENAI_COMPAT_MODEL = "gpt-5.4";
+    runtimeStore.saveSession({
+      sessionId: "session-1",
+      threadId: "thread-1",
+      createdAt: "2026-04-02T00:00:00.000Z",
+      updatedAt: "2026-04-02T00:05:00.000Z",
+    });
+    runtimeStore.upsertTurnFromRequest(createFeishuTaskRequest("session-1", "request-1"), "task-1");
+    runtimeStore.saveTurnInput({
+      requestId: "request-1",
+      createdAt: "2026-04-02T00:00:01.000Z",
+      envelope: {
+        envelopeId: "envelope-http-diagnostics-1",
+        sourceChannel: "feishu",
+        sourceSessionId: "session-1",
+        createdAt: "2026-04-02T00:00:01.000Z",
+        parts: [
+          {
+            partId: "part-image-1",
+            type: "image",
+            role: "user",
+            order: 1,
+            assetId: "asset-image-1",
+          },
+        ],
+        assets: [
+          {
+            assetId: "asset-image-1",
+            kind: "image",
+            mimeType: "image/png",
+            localPath: "/tmp/http-diagnostics-image.png",
+            sourceChannel: "feishu",
+            ingestionStatus: "ready",
+          },
+        ],
+      },
+      compileSummary: {
+        runtimeTarget: "app-server",
+        degradationLevel: "native",
+        warnings: [],
+      },
+    });
     const headers = await createAuthenticatedWebHeaders({
       baseUrl,
       runtimeStore,
@@ -103,7 +144,14 @@ test("GET /api/diagnostics 会返回结构化 summary", async () => {
             scope?: string;
           }>;
         };
-        service?: unknown;
+        service?: {
+          multimodal?: {
+            recentTurnInputCount?: number;
+            lastTurn?: {
+              degradationLevel?: string;
+            };
+          };
+        };
         mcp?: {
           servers?: Array<{
             id?: string;
@@ -131,6 +179,8 @@ test("GET /api/diagnostics 会返回结构化 summary", async () => {
     assert.equal(payload.summary?.workingDirectory, root);
     assert.equal(payload.summary?.provider?.activeMode, "third-party");
     assert.equal(payload.summary?.provider?.providerCount, 1);
+    assert.equal(payload.summary?.service?.multimodal?.recentTurnInputCount, 1);
+    assert.equal(payload.summary?.service?.multimodal?.lastTurn?.degradationLevel, "native");
     assert.equal(payload.summary?.mcp?.servers?.[0]?.id, "context7");
     assert.equal(payload.summary?.mcp?.servers?.[0]?.transport, "stdio");
     assert.equal(payload.summary?.mcp?.diagnostics?.statusCounts?.healthyCount, 1);

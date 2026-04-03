@@ -50,7 +50,11 @@ import {
   type CodexSessionMode,
 } from "./codex-session-store.js";
 import { ContextBuilder } from "../context/context-builder.js";
-import { SqliteCodexSessionRegistry, type StoredAuthAccountRecord } from "../storage/index.js";
+import {
+  SqliteCodexSessionRegistry,
+  type StoredAuthAccountRecord,
+  type StoredTurnInputCompileSummary,
+} from "../storage/index.js";
 import type {
   PrincipalTaskSettings,
   RuntimeInputCapabilities,
@@ -219,15 +223,27 @@ export class CodexTaskRuntime {
       throwIfAborted(signal);
 
       const target = this.resolveRuntimeTarget(request, hooks.allowUnsupportedThirdPartyModel === true);
+      const runtimeTargetId = target.providerConfig ? `third-party:${target.providerId}` : "codex-sdk";
       const compiledInput = request.inputEnvelope
         ? compileTaskInputForRuntime({
           envelope: request.inputEnvelope,
           target: {
-            runtimeId: target.providerConfig ? `third-party:${target.providerId}` : "codex-sdk",
+            runtimeId: runtimeTargetId,
             capabilities: resolveCodexRuntimeInputCapabilities(),
           },
         })
         : null;
+      if (request.inputEnvelope && compiledInput) {
+        this.runtimeStore.saveTurnInput({
+          requestId: request.requestId,
+          envelope: request.inputEnvelope,
+          compileSummary: buildStoredTurnInputCompileSummary({
+            runtimeTarget: runtimeTargetId,
+            compiledInput,
+          }),
+          createdAt: request.createdAt,
+        });
+      }
       if (compiledInput?.degradationLevel === "blocked") {
         throw new Error(compiledInput.compileWarnings[0]?.message ?? "当前输入不受支持。");
       }
@@ -1149,6 +1165,12 @@ function createProviderRuntimeModel(
     capabilities: {
       textInput: modelProfile?.capabilities.textInput ?? true,
       imageInput: modelProfile?.capabilities.imageInput ?? false,
+      nativeTextInput: modelProfile?.capabilities.nativeTextInput ?? (modelProfile?.capabilities.textInput ?? true),
+      nativeImageInput: modelProfile?.capabilities.nativeImageInput ?? (modelProfile?.capabilities.imageInput ?? false),
+      nativeDocumentInput: modelProfile?.capabilities.nativeDocumentInput ?? false,
+      supportedDocumentMimeTypes: [...(modelProfile?.capabilities.supportedDocumentMimeTypes ?? [])],
+      supportsPdfTextExtraction: modelProfile?.capabilities.supportsPdfTextExtraction ?? false,
+      supportsDocumentPageRasterization: modelProfile?.capabilities.supportsDocumentPageRasterization ?? false,
       supportsCodexTasks: modelProfile?.capabilities.supportsCodexTasks ?? true,
       supportsReasoningSummaries: modelProfile?.capabilities.supportsReasoningSummaries ?? false,
       supportsVerbosity: modelProfile?.capabilities.supportsVerbosity ?? false,
@@ -1378,6 +1400,21 @@ export function buildCodexFallbackPromptSections(
     : [];
 
   return [...compiledInput.fallbackPromptSections, ...envelopeTextSections];
+}
+
+export function buildStoredTurnInputCompileSummary(input: {
+  runtimeTarget: string;
+  compiledInput: CompiledTaskInput;
+}): StoredTurnInputCompileSummary {
+  return {
+    runtimeTarget: input.runtimeTarget,
+    degradationLevel: input.compiledInput.degradationLevel,
+    warnings: input.compiledInput.compileWarnings.map((warning) => ({
+      code: warning.code,
+      message: warning.message,
+      ...(warning.assetId ? { assetId: warning.assetId } : {}),
+    })),
+  };
 }
 
 function withoutTaskAttachments(request: TaskRequest): TaskRequest {

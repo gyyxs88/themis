@@ -12,96 +12,12 @@ test("RuntimeSmokeService.runWebSmoke 在 action_required -> completed 的真实
 
   try {
     const fetchCalls: Array<{ input: string; init?: RequestInit | undefined }> = [];
+    const webSmokeFetch = createSuccessfulWebSmokeFetch();
     const service = createService(root, {
       fetchImpl: async (input, init) => {
         const url = normalizeUrl(input);
         fetchCalls.push({ input: url, init });
-
-        if (url.endsWith("/api/web-auth/login")) {
-          return new Response(null, {
-            status: 200,
-            headers: {
-              "set-cookie": "themis_web_session=session-smoke-1; Path=/; HttpOnly",
-            },
-          });
-        }
-
-        if (url.endsWith("/api/tasks/stream")) {
-          return new Response(
-            [
-              JSON.stringify({
-                kind: "ack",
-                requestId: "req-smoke-1",
-                taskId: "task-smoke-1",
-                title: "task.accepted",
-                text: "accepted",
-              }),
-              JSON.stringify({
-                kind: "event",
-                requestId: "req-smoke-1",
-                taskId: "task-smoke-1",
-                title: "task.action_required",
-                text: "请补充输入",
-                metadata: {
-                  actionId: "action-smoke-1",
-                },
-              }),
-              JSON.stringify({
-                kind: "result",
-                requestId: "req-smoke-1",
-                taskId: "task-smoke-1",
-                metadata: {
-                  structuredOutput: {
-                    status: "completed",
-                  },
-                },
-              }),
-              JSON.stringify({
-                kind: "done",
-                requestId: "req-smoke-1",
-                taskId: "task-smoke-1",
-                result: {
-                  status: "completed",
-                },
-              }),
-            ].join("\n"),
-            {
-              status: 200,
-              headers: {
-                "content-type": "application/x-ndjson; charset=utf-8",
-              },
-            },
-          );
-        }
-
-        if (url.endsWith("/api/tasks/actions")) {
-          return new Response(JSON.stringify({ ok: true }), {
-            status: 200,
-            headers: {
-              "content-type": "application/json; charset=utf-8",
-            },
-          });
-        }
-
-        if (url.includes("/api/history/sessions/")) {
-          return new Response(
-            JSON.stringify({
-              turns: [
-                {
-                  status: "completed",
-                },
-              ],
-            }),
-            {
-              status: 200,
-              headers: {
-                "content-type": "application/json; charset=utf-8",
-              },
-            },
-          );
-        }
-
-        throw new Error(`unexpected fetch: ${url}`);
+        return await webSmokeFetch(input, init);
       },
     });
 
@@ -112,15 +28,19 @@ test("RuntimeSmokeService.runWebSmoke 在 action_required -> completed 的真实
     assert.equal(result.sessionId!.length > 0, true);
     assert.equal(result.requestId!.length > 0, true);
     assert.equal(result.taskId!.length > 0, true);
-    assert.equal(result.actionId, "action-smoke-1");
+    assert.match(result.actionId ?? "", /^action-/);
     assert.equal(result.observedActionRequired, true);
     assert.equal(result.observedCompleted, true);
     assert.equal(result.historyCompleted, true);
-    assert.match(result.message, /completed/);
+    assert.equal(result.imageCompileVerified, true);
+    assert.equal(result.imageCompileDegradationLevel, "native");
+    assert.equal(result.documentCompileVerified, true);
+    assert.equal(result.documentCompileDegradationLevel, "controlled_fallback");
+    assert.match(result.message, /compile summary/);
     assert.ok(fetchCalls.some((call) => call.input.endsWith("/api/web-auth/login")));
-    assert.ok(fetchCalls.some((call) => call.input.endsWith("/api/tasks/stream")));
+    assert.equal(fetchCalls.filter((call) => call.input.endsWith("/api/tasks/stream")).length, 2);
     assert.ok(fetchCalls.some((call) => call.input.endsWith("/api/tasks/actions")));
-    assert.ok(fetchCalls.some((call) => call.input.includes("/api/history/sessions/")));
+    assert.equal(fetchCalls.filter((call) => call.input.includes("/api/history/sessions/")).length, 2);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -130,88 +50,9 @@ test("RuntimeSmokeService.runWebSmoke 在 action_required/result/done 同一 chu
   const root = mkdtempSync(join(tmpdir(), "themis-runtime-smoke-web-single-chunk-"));
 
   try {
+    const webSmokeFetch = createSuccessfulWebSmokeFetch({ singleChunk: true });
     const service = createService(root, {
-      fetchImpl: async (input) => {
-        const url = normalizeUrl(input);
-
-        if (url.endsWith("/api/web-auth/login")) {
-          return new Response(null, {
-            status: 200,
-            headers: {
-              "set-cookie": "themis_web_session=session-smoke-single-chunk; Path=/; HttpOnly",
-            },
-          });
-        }
-
-        if (url.endsWith("/api/tasks/stream")) {
-          return createSingleChunkNdjsonResponse([
-            {
-              kind: "ack",
-              requestId: "req-smoke-single-chunk",
-              taskId: "task-smoke-single-chunk",
-              title: "task.accepted",
-              text: "accepted",
-            },
-            {
-              kind: "event",
-              requestId: "req-smoke-single-chunk",
-              taskId: "task-smoke-single-chunk",
-              title: "task.action_required",
-              text: "请补充输入",
-              metadata: {
-                actionId: "action-smoke-single-chunk",
-              },
-            },
-            {
-              kind: "result",
-              requestId: "req-smoke-single-chunk",
-              taskId: "task-smoke-single-chunk",
-              metadata: {
-                structuredOutput: {
-                  status: "completed",
-                },
-              },
-            },
-            {
-              kind: "done",
-              requestId: "req-smoke-single-chunk",
-              taskId: "task-smoke-single-chunk",
-              result: {
-                status: "completed",
-              },
-            },
-          ]);
-        }
-
-        if (url.endsWith("/api/tasks/actions")) {
-          return new Response(JSON.stringify({ ok: true }), {
-            status: 200,
-            headers: {
-              "content-type": "application/json; charset=utf-8",
-            },
-          });
-        }
-
-        if (url.includes("/api/history/sessions/")) {
-          return new Response(
-            JSON.stringify({
-              turns: [
-                {
-                  status: "completed",
-                },
-              ],
-            }),
-            {
-              status: 200,
-              headers: {
-                "content-type": "application/json; charset=utf-8",
-              },
-            },
-          );
-        }
-
-        throw new Error(`unexpected fetch: ${url}`);
-      },
+      fetchImpl: async (input, init) => await webSmokeFetch(input, init),
     });
 
     const result = await service.runWebSmoke();
@@ -220,7 +61,11 @@ test("RuntimeSmokeService.runWebSmoke 在 action_required/result/done 同一 chu
     assert.equal(result.observedActionRequired, true);
     assert.equal(result.observedCompleted, true);
     assert.equal(result.historyCompleted, true);
-    assert.equal(result.actionId, "action-smoke-single-chunk");
+    assert.equal(result.imageCompileVerified, true);
+    assert.equal(result.imageCompileDegradationLevel, "native");
+    assert.equal(result.documentCompileVerified, true);
+    assert.equal(result.documentCompileDegradationLevel, "controlled_fallback");
+    assert.match(result.actionId ?? "", /^action-/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -776,93 +621,17 @@ test("RuntimeSmokeService.runAllSmoke 在 web 通过但 feishu 前置检查失�
   const root = mkdtempSync(join(tmpdir(), "themis-runtime-smoke-all-feishu-fail-"));
 
   try {
+    const webSmokeFetch = createSuccessfulWebSmokeFetch();
     const service = createService(root, {
       env: {},
-      fetchImpl: async (input) => {
+      fetchImpl: async (input, init) => {
         const url = normalizeUrl(input);
 
-        if (url.endsWith("/api/web-auth/login")) {
-          return new Response(null, {
-            status: 200,
-            headers: {
-              "set-cookie": "themis_web_session=session-smoke-4; Path=/; HttpOnly",
-            },
-          });
-        }
-
-        if (url.endsWith("/api/tasks/stream")) {
-          return new Response(
-            [
-              JSON.stringify({
-                kind: "ack",
-                requestId: "req-smoke-4",
-                taskId: "task-smoke-4",
-                title: "task.accepted",
-                text: "accepted",
-              }),
-              JSON.stringify({
-                kind: "event",
-                requestId: "req-smoke-4",
-                taskId: "task-smoke-4",
-                title: "task.action_required",
-                text: "请补充输入",
-                metadata: {
-                  actionId: "action-smoke-4",
-                },
-              }),
-              JSON.stringify({
-                kind: "result",
-                requestId: "req-smoke-4",
-                taskId: "task-smoke-4",
-                metadata: {
-                  structuredOutput: {
-                    status: "completed",
-                  },
-                },
-              }),
-              JSON.stringify({
-                kind: "done",
-                requestId: "req-smoke-4",
-                taskId: "task-smoke-4",
-                result: {
-                  status: "completed",
-                },
-              }),
-            ].join("\n"),
-            {
-              status: 200,
-              headers: {
-                "content-type": "application/x-ndjson; charset=utf-8",
-              },
-            },
-          );
-        }
-
-        if (url.endsWith("/api/tasks/actions")) {
-          return new Response(JSON.stringify({ ok: true }), {
-            status: 200,
-            headers: {
-              "content-type": "application/json; charset=utf-8",
-            },
-          });
-        }
-
-        if (url.includes("/api/history/sessions/")) {
-          return new Response(
-            JSON.stringify({
-              turns: [
-                {
-                  status: "completed",
-                },
-              ],
-            }),
-            {
-              status: 200,
-              headers: {
-                "content-type": "application/json; charset=utf-8",
-              },
-            },
-          );
+        if (url.endsWith("/api/web-auth/login")
+          || url.endsWith("/api/tasks/stream")
+          || url.endsWith("/api/tasks/actions")
+          || url.includes("/api/history/sessions/")) {
+          return await webSmokeFetch(input, init);
         }
 
         if (url === "http://127.0.0.1:3100/") {
@@ -882,6 +651,8 @@ test("RuntimeSmokeService.runAllSmoke 在 web 通过但 feishu 前置检查失�
 
     assert.equal(result.ok, false);
     assert.equal(result.web.ok, true);
+    assert.equal(result.web.imageCompileVerified, true);
+    assert.equal(result.web.documentCompileVerified, true);
     assert.ok(result.feishu);
     assert.equal(result.feishu?.ok, false);
     assert.equal(result.feishu?.diagnosisId, "config_missing");
@@ -934,6 +705,134 @@ function createSingleChunkNdjsonResponse(lines: Array<Record<string, unknown>>):
       "content-type": "application/x-ndjson; charset=utf-8",
     },
   });
+}
+
+function createSuccessfulWebSmokeFetch(options: { singleChunk?: boolean } = {}): typeof fetch {
+  const sessionRequestMap = new Map<string, { requestId: string; kind: "image" | "document" }>();
+
+  return async (input, init) => {
+    const url = normalizeUrl(input);
+
+    if (url.endsWith("/api/web-auth/login")) {
+      return new Response(null, {
+        status: 200,
+        headers: {
+          "set-cookie": "themis_web_session=session-smoke-shared; Path=/; HttpOnly",
+        },
+      });
+    }
+
+    if (url.endsWith("/api/tasks/stream")) {
+      const payload = readJsonRequestBody(init) as {
+        requestId?: string;
+        taskId?: string;
+        sessionId?: string;
+        inputEnvelope?: {
+          parts?: Array<{ type?: string }>;
+        };
+      };
+      const requestId = payload.requestId ?? "req-smoke-shared";
+      const taskId = payload.taskId ?? "task-smoke-shared";
+      const sessionId = payload.sessionId ?? "session-smoke-shared";
+      const firstPartType = payload.inputEnvelope?.parts?.[0]?.type;
+      const kind = firstPartType === "document" ? "document" : "image";
+      sessionRequestMap.set(sessionId, { requestId, kind });
+      const lines = [
+        {
+          kind: "ack",
+          requestId,
+          taskId,
+          title: "task.accepted",
+          text: "accepted",
+        },
+        {
+          kind: "event",
+          requestId,
+          taskId,
+          title: "task.action_required",
+          text: "请补充输入",
+          metadata: {
+            actionId: `action-${requestId}`,
+          },
+        },
+        {
+          kind: "result",
+          requestId,
+          taskId,
+          metadata: {
+            structuredOutput: {
+              status: "completed",
+            },
+          },
+        },
+        {
+          kind: "done",
+          requestId,
+          taskId,
+          result: {
+            status: "completed",
+          },
+        },
+      ];
+
+      return options.singleChunk
+        ? createSingleChunkNdjsonResponse(lines)
+        : new Response(lines.map((line) => JSON.stringify(line)).join("\n"), {
+          status: 200,
+          headers: {
+            "content-type": "application/x-ndjson; charset=utf-8",
+          },
+        });
+    }
+
+    if (url.endsWith("/api/tasks/actions")) {
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+        },
+      });
+    }
+
+    if (url.includes("/api/history/sessions/")) {
+      const sessionId = decodeURIComponent(url.slice(url.lastIndexOf("/") + 1));
+      const taskRequest = sessionRequestMap.get(sessionId);
+
+      return new Response(
+        JSON.stringify({
+          turns: [
+            {
+              requestId: taskRequest?.requestId,
+              status: "completed",
+              input: {
+                compileSummary: {
+                  runtimeTarget: "app-server",
+                  degradationLevel: taskRequest?.kind === "document" ? "controlled_fallback" : "native",
+                  warnings: [],
+                },
+              },
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json; charset=utf-8",
+          },
+        },
+      );
+    }
+
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+}
+
+function readJsonRequestBody(init: RequestInit | undefined): unknown {
+  if (!init?.body || typeof init.body !== "string") {
+    return null;
+  }
+
+  return JSON.parse(init.body);
 }
 
 function createSnapshotAwareEnv(): NodeJS.ProcessEnv & { getAccessCount(): number } {
