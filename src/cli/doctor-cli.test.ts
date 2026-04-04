@@ -190,8 +190,16 @@ test("themis doctor smoke web 会输出真实 Web smoke 结果", async () => {
     assert.match(result.stdout, /actionId：action-/);
     assert.match(result.stdout, /imageCompileVerified：yes/);
     assert.match(result.stdout, /imageCompileDegradationLevel：native/);
+    assert.match(result.stdout, /imageCompileWarningCodes：<none>/);
+    assert.match(result.stdout, /imageCompileMatrixVerified：yes/);
+    assert.match(result.stdout, /imageCompileMatrixImageNative：transport=yes effective=yes/);
+    assert.match(result.stdout, /imageCompileMatrixAssetHandling：native/);
     assert.match(result.stdout, /documentCompileVerified：yes/);
     assert.match(result.stdout, /documentCompileDegradationLevel：controlled_fallback/);
+    assert.match(result.stdout, /documentCompileWarningCodes：DOCUMENT_NATIVE_INPUT_FALLBACK/);
+    assert.match(result.stdout, /documentCompileMatrixVerified：yes/);
+    assert.match(result.stdout, /documentCompileMatrixDocumentNative：transport=no effective=no/);
+    assert.match(result.stdout, /documentCompileMatrixAssetHandling：path_fallback/);
   } finally {
     if (server) {
       server.closeAllConnections?.();
@@ -520,7 +528,13 @@ test("themis doctor smoke all 会先输出 web，再输出 feishu 前置检查",
     assert.ok(feishuIndex > webIndex);
     assert.match(result.stdout, /Web smoke 成功/);
     assert.match(result.stdout, /imageCompileVerified：yes/);
+    assert.match(result.stdout, /imageCompileWarningCodes：<none>/);
+    assert.match(result.stdout, /imageCompileMatrixVerified：yes/);
+    assert.match(result.stdout, /imageCompileMatrixImageNative：transport=yes effective=yes/);
     assert.match(result.stdout, /documentCompileVerified：yes/);
+    assert.match(result.stdout, /documentCompileWarningCodes：DOCUMENT_NATIVE_INPUT_FALLBACK/);
+    assert.match(result.stdout, /documentCompileMatrixVerified：yes/);
+    assert.match(result.stdout, /documentCompileMatrixDocumentNative：transport=no effective=no/);
     assert.match(result.stdout, /Feishu smoke 前置检查通过/);
   } finally {
     if (server) {
@@ -1052,7 +1066,159 @@ test("themis doctor feishu 会输出当前会话快照和最近 5 条事件轨�
       createdAt: "2026-04-02T09:00:00.000Z",
       updatedAt: "2026-04-02T10:00:00.000Z",
     });
+    runtimeStore.upsertTurnFromRequest(createFeishuTaskRequest("session-1", "request-0"), "task-0");
+    runtimeStore.saveTurnInput({
+      requestId: "request-0",
+      envelope: {
+        envelopeId: "env-feishu-0",
+        sourceChannel: "feishu",
+        sourceSessionId: "session-1",
+        sourceMessageId: "message-5",
+        parts: [
+          {
+            partId: "part-image-0",
+            type: "image",
+            role: "user",
+            order: 0,
+            assetId: "asset-image-0",
+          },
+        ],
+        assets: [
+          {
+            assetId: "asset-image-0",
+            kind: "image",
+            name: "photo.png",
+            mimeType: "image/png",
+            localPath: resolve(workspace, "temp", "photo.png"),
+            sourceChannel: "feishu",
+            sourceMessageId: "message-5",
+            ingestionStatus: "ready",
+          },
+        ],
+        createdAt: "2026-04-02T09:55:00.000Z",
+      },
+      compileSummary: {
+        runtimeTarget: "codex-sdk",
+        degradationLevel: "blocked",
+        warnings: [
+          {
+            code: "IMAGE_NATIVE_INPUT_REQUIRED",
+            message: "当前 runtime 不支持 native image input。",
+            assetId: "asset-image-0",
+          },
+        ],
+        capabilityMatrix: {
+          modelCapabilities: null,
+          transportCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: false,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          effectiveCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: false,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          assetFacts: [
+            {
+              assetId: "asset-image-0",
+              kind: "image",
+              mimeType: "image/png",
+              localPathStatus: "ready",
+              modelNativeSupport: null,
+              transportNativeSupport: false,
+              effectiveNativeSupport: false,
+              modelMimeTypeSupported: null,
+              transportMimeTypeSupported: null,
+              effectiveMimeTypeSupported: null,
+              handling: "blocked",
+            },
+          ],
+        },
+      },
+      createdAt: "2026-04-02T09:55:00.000Z",
+    });
     runtimeStore.upsertTurnFromRequest(createFeishuTaskRequest("session-1", "request-1"), "task-1");
+    runtimeStore.saveTurnInput({
+      requestId: "request-1",
+      envelope: {
+        envelopeId: "env-feishu-1",
+        sourceChannel: "feishu",
+        sourceSessionId: "session-1",
+        sourceMessageId: "message-6",
+        parts: [
+          {
+            partId: "part-document-1",
+            type: "document",
+            role: "user",
+            order: 0,
+            assetId: "asset-document-1",
+          },
+        ],
+        assets: [
+          {
+            assetId: "asset-document-1",
+            kind: "document",
+            name: "report.pdf",
+            mimeType: "application/pdf",
+            localPath: resolve(workspace, "temp", "report.pdf"),
+            sourceChannel: "feishu",
+            sourceMessageId: "message-6",
+            ingestionStatus: "ready",
+          },
+        ],
+        createdAt: "2026-04-02T10:00:00.000Z",
+      },
+      compileSummary: {
+        runtimeTarget: "app-server",
+        degradationLevel: "controlled_fallback",
+        warnings: [
+          {
+            code: "DOCUMENT_NATIVE_INPUT_FALLBACK",
+            message: "当前 runtime 未声明支持原生文档输入，文档已退化为路径提示。",
+            assetId: "asset-document-1",
+          },
+        ],
+        capabilityMatrix: {
+          modelCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: true,
+            supportedDocumentMimeTypes: ["application/pdf"],
+          },
+          transportCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          effectiveCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          assetFacts: [
+            {
+              assetId: "asset-document-1",
+              kind: "document",
+              mimeType: "application/pdf",
+              localPathStatus: "ready",
+              modelNativeSupport: true,
+              transportNativeSupport: false,
+              effectiveNativeSupport: false,
+              modelMimeTypeSupported: true,
+              transportMimeTypeSupported: null,
+              effectiveMimeTypeSupported: null,
+              handling: "path_fallback",
+            },
+          ],
+        },
+      },
+      createdAt: "2026-04-02T10:00:00.000Z",
+    });
     runtimeStore.appendTaskEvent({
       eventId: "event-runtime-1",
       taskId: "task-1",
@@ -1084,6 +1250,24 @@ test("themis doctor feishu 会输出当前会话快照和最近 5 条事件轨�
     assert.match(result.stdout, /threadId：thread-1/);
     assert.match(result.stdout, /threadStatus：running/);
     assert.match(result.stdout, /pendingActionCount：2/);
+    assert.match(result.stdout, /multimodal\.sampleCount：2/);
+    assert.match(result.stdout, /multimodal\.warningCodes：DOCUMENT_NATIVE_INPUT_FALLBACK=1, IMAGE_NATIVE_INPUT_REQUIRED=1/);
+    assert.match(result.stdout, /lastMultimodal\.requestId：request-1/);
+    assert.match(result.stdout, /lastMultimodal\.compile：app-server \/ controlled_fallback/);
+    assert.match(result.stdout, /lastMultimodal\.warningCodes：DOCUMENT_NATIVE_INPUT_FALLBACK/);
+    assert.match(result.stdout, /lastMultimodal\.warningMessages：当前 runtime 未声明支持原生文档输入，文档已退化为路径提示。/);
+    assert.match(result.stdout, /lastMultimodal\.assetKinds：document/);
+    assert.match(result.stdout, /lastMultimodal\.assetCount：1/);
+    assert.match(result.stdout, /lastMultimodal\.matrix\.imageNative：model=yes transport=yes effective=yes/);
+    assert.match(result.stdout, /lastMultimodal\.matrix\.documentNative：model=yes transport=no effective=no/);
+    assert.match(result.stdout, /lastMultimodal\.matrix\.assetFacts：asset-document-1\[document\] localPath=ready handling=path_fallback/);
+    assert.match(result.stdout, /lastBlockedMultimodal\.requestId：request-0/);
+    assert.match(result.stdout, /lastBlockedMultimodal\.compile：codex-sdk \/ blocked/);
+    assert.match(result.stdout, /lastBlockedMultimodal\.warningCodes：IMAGE_NATIVE_INPUT_REQUIRED/);
+    assert.match(result.stdout, /lastBlockedMultimodal\.warningMessages：当前 runtime 不支持 native image input。/);
+    assert.match(result.stdout, /lastBlockedMultimodal\.matrix\.imageNative：model=<unknown> transport=no effective=no/);
+    assert.match(result.stdout, /lastBlockedMultimodal\.matrix\.documentNative：model=<unknown> transport=no effective=no/);
+    assert.match(result.stdout, /lastBlockedMultimodal\.matrix\.assetFacts：asset-image-0\[image\] localPath=ready handling=blocked/);
     assert.match(result.stdout, /当前接管判断/);
     assert.match(result.stdout, /takeoverState：blocked_by_approval/);
     assert.match(result.stdout, /takeoverHint：.*action-2.*action-1/);
@@ -1665,6 +1849,41 @@ test("themis doctor service 会输出最近 turn input 的多模态摘要", () =
         runtimeTarget: "app-server",
         degradationLevel: "native",
         warnings: [],
+        capabilityMatrix: {
+          modelCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: true,
+            supportedDocumentMimeTypes: ["application/pdf"],
+          },
+          transportCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          effectiveCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          assetFacts: [
+            {
+              assetId: "asset-image-1",
+              kind: "image",
+              mimeType: "image/png",
+              localPathStatus: "ready",
+              modelNativeSupport: true,
+              transportNativeSupport: true,
+              effectiveNativeSupport: true,
+              modelMimeTypeSupported: null,
+              transportMimeTypeSupported: null,
+              effectiveMimeTypeSupported: null,
+              handling: "native",
+            },
+          ],
+        },
       },
     });
     runtimeStore.upsertTurnFromRequest(createDiagnosticsTaskRequest("web", "session-1", "request-2", "2026-04-02T09:05:00.000Z"), "task-2");
@@ -1699,7 +1918,48 @@ test("themis doctor service 会输出最近 turn input 的多模态摘要", () =
       compileSummary: {
         runtimeTarget: "app-server",
         degradationLevel: "controlled_fallback",
-        warnings: [],
+        warnings: [
+          {
+            code: "DOCUMENT_NATIVE_INPUT_FALLBACK",
+            message: "当前 runtime 未声明支持原生文档输入，文档已退化为路径提示。",
+            assetId: "asset-document-1",
+          },
+        ],
+        capabilityMatrix: {
+          modelCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: true,
+            supportedDocumentMimeTypes: ["application/pdf"],
+          },
+          transportCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          effectiveCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          assetFacts: [
+            {
+              assetId: "asset-document-1",
+              kind: "document",
+              mimeType: "application/pdf",
+              localPathStatus: "ready",
+              modelNativeSupport: true,
+              transportNativeSupport: false,
+              effectiveNativeSupport: false,
+              modelMimeTypeSupported: true,
+              transportMimeTypeSupported: null,
+              effectiveMimeTypeSupported: null,
+              handling: "path_fallback",
+            },
+          ],
+        },
       },
     });
     runtimeStore.upsertTurnFromRequest(createDiagnosticsTaskRequest("feishu", "session-1", "request-3", "2026-04-02T09:10:00.000Z"), "task-3");
@@ -1741,6 +2001,36 @@ test("themis doctor service 会输出最近 turn input 的多模态摘要", () =
             assetId: "asset-image-2",
           },
         ],
+        capabilityMatrix: {
+          modelCapabilities: null,
+          transportCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: false,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          effectiveCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: false,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          assetFacts: [
+            {
+              assetId: "asset-image-2",
+              kind: "image",
+              mimeType: "image/jpeg",
+              localPathStatus: "ready",
+              modelNativeSupport: null,
+              transportNativeSupport: false,
+              effectiveNativeSupport: false,
+              modelMimeTypeSupported: null,
+              transportMimeTypeSupported: null,
+              effectiveMimeTypeSupported: null,
+              handling: "blocked",
+            },
+          ],
+        },
       },
     });
 
@@ -1753,9 +2043,21 @@ test("themis doctor service 会输出最近 turn input 的多模态摘要", () =
     assert.match(result.stdout, /multimodal\.degradationCounts：native=1, lossless_textualization=0, controlled_fallback=1, blocked=1, unknown=0/);
     assert.match(result.stdout, /multimodal\.sourceChannels：feishu=2, web=1/);
     assert.match(result.stdout, /multimodal\.runtimeTargets：app-server=2, codex-sdk=1/);
+    assert.match(result.stdout, /multimodal\.warningCodes：DOCUMENT_NATIVE_INPUT_FALLBACK=1, IMAGE_NATIVE_INPUT_REQUIRED=1/);
     assert.match(result.stdout, /multimodal\.lastTurn\.requestId：request-3/);
     assert.match(result.stdout, /multimodal\.lastTurn\.compile：codex-sdk \/ blocked/);
     assert.match(result.stdout, /multimodal\.lastTurn\.warningCodes：IMAGE_NATIVE_INPUT_REQUIRED/);
+    assert.match(result.stdout, /multimodal\.lastTurn\.warningMessages：当前 runtime 不支持 native image input。/);
+    assert.match(result.stdout, /multimodal\.lastTurn\.matrix\.imageNative：model=<unknown> transport=no effective=no/);
+    assert.match(result.stdout, /multimodal\.lastTurn\.matrix\.documentNative：model=<unknown> transport=no effective=no/);
+    assert.match(result.stdout, /multimodal\.lastTurn\.matrix\.assetFacts：asset-image-2\[image\] localPath=ready handling=blocked/);
+    assert.match(result.stdout, /multimodal\.lastBlocked\.requestId：request-3/);
+    assert.match(result.stdout, /multimodal\.lastBlocked\.compile：codex-sdk \/ blocked/);
+    assert.match(result.stdout, /multimodal\.lastBlocked\.warningCodes：IMAGE_NATIVE_INPUT_REQUIRED/);
+    assert.match(result.stdout, /multimodal\.lastBlocked\.warningMessages：当前 runtime 不支持 native image input。/);
+    assert.match(result.stdout, /multimodal\.lastBlocked\.matrix\.imageNative：model=<unknown> transport=no effective=no/);
+    assert.match(result.stdout, /multimodal\.lastBlocked\.matrix\.documentNative：model=<unknown> transport=no effective=no/);
+    assert.match(result.stdout, /multimodal\.lastBlocked\.matrix\.assetFacts：asset-image-2\[image\] localPath=ready handling=blocked/);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
@@ -1921,7 +2223,48 @@ function createWebSmokeHttpDouble(): {
                 compileSummary: {
                   runtimeTarget: "app-server",
                   degradationLevel: taskRequest?.kind === "document" ? "controlled_fallback" : "native",
-                  warnings: [],
+                  warnings: taskRequest?.kind === "document"
+                    ? [
+                      {
+                        code: "DOCUMENT_NATIVE_INPUT_FALLBACK",
+                        message: "当前 runtime 未声明支持原生文档输入，文档已退化为路径提示。",
+                        assetId: "asset-document-1",
+                      },
+                    ]
+                    : [],
+                  capabilityMatrix: taskRequest?.kind === "document"
+                    ? {
+                      transportCapabilities: {
+                        nativeImageInput: true,
+                        nativeDocumentInput: false,
+                      },
+                      effectiveCapabilities: {
+                        nativeImageInput: true,
+                        nativeDocumentInput: false,
+                      },
+                      assetFacts: [
+                        {
+                          kind: "document",
+                          handling: "path_fallback",
+                        },
+                      ],
+                    }
+                    : {
+                      transportCapabilities: {
+                        nativeImageInput: true,
+                        nativeDocumentInput: false,
+                      },
+                      effectiveCapabilities: {
+                        nativeImageInput: true,
+                        nativeDocumentInput: false,
+                      },
+                      assetFacts: [
+                        {
+                          kind: "image",
+                          handling: "native",
+                        },
+                      ],
+                    },
                 },
               },
             },

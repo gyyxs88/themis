@@ -645,12 +645,14 @@ export class FeishuChannelService {
 
       discardDraftRestore();
       await router.publishResult(result);
+      await this.publishTaskInputCompileFollowupIfNeeded(context.chatId, normalizedRequest.requestId, result.status);
     } catch (error) {
       restoreDraft();
       const taskError = createTaskError(error, Boolean(normalizedRequest));
 
       if (normalizedRequest) {
         await router.publishError(taskError, normalizedRequest);
+        await this.publishTaskInputCompileFollowupIfNeeded(context.chatId, normalizedRequest.requestId, "failed");
       } else {
         await this.safeSendTaggedText(context.chatId, taskError.message, "执行异常");
       }
@@ -678,6 +680,44 @@ export class FeishuChannelService {
         context.messageId,
       ),
     });
+  }
+
+  private async publishTaskInputCompileFollowupIfNeeded(
+    chatId: string,
+    requestId: string,
+    resultStatus: "completed" | "failed" | "cancelled",
+  ): Promise<void> {
+    if (resultStatus === "cancelled") {
+      return;
+    }
+
+    const text = this.buildTaskInputCompileFollowupText(requestId);
+
+    if (!text) {
+      return;
+    }
+
+    await this.safeSendText(chatId, text);
+  }
+
+  private buildTaskInputCompileFollowupText(requestId: string): string | null {
+    const storedInput = this.runtime.getRuntimeStore().getTurnInput(requestId);
+    const messages = dedupeTextValues(
+      (storedInput?.compileSummary?.warnings ?? []).map((warning) => describeFeishuTaskInputWarningCode(warning.code)),
+    );
+
+    if (messages.length === 0) {
+      return null;
+    }
+
+    if (messages.length === 1) {
+      return `输入说明：${messages[0]}`;
+    }
+
+    return [
+      "输入说明：",
+      ...messages.map((message) => `- ${message}`),
+    ].join("\n");
   }
 
   private async decorateDeliveryMessageForMobile(
@@ -2895,6 +2935,39 @@ function normalizeFeishuRuntimeRegistry(
   }
 
   return normalizedRegistry;
+}
+
+function describeFeishuTaskInputWarningCode(code: string): string | null {
+  switch (code) {
+    case "DOCUMENT_NATIVE_INPUT_FALLBACK":
+      return "当前执行链这一跳还不支持原生文档附件，所以这份文档只按文件路径提示处理，没有直接作为原生文档输入发送给 runtime。";
+    case "DOCUMENT_MIME_TYPE_FALLBACK":
+      return "当前文档类型暂时不在原生文档支持范围内，所以先按文件路径提示处理。";
+    case "IMAGE_PATH_UNAVAILABLE":
+      return "当前图片的本地临时文件已经失效，没法继续发送给 runtime，请重新发送这张图片后再试。";
+    case "DOCUMENT_PATH_UNAVAILABLE":
+      return "当前文档的本地临时文件已经失效，没法继续处理，请重新发送这个文档后再试。";
+    default:
+      return null;
+  }
+}
+
+function dedupeTextValues(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const results: string[] = [];
+
+  for (const value of values) {
+    const normalized = normalizeText(value);
+
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    results.push(normalized);
+  }
+
+  return results;
 }
 
 function normalizeIncomingContext(event: FeishuMessageReceiveEvent): FeishuIncomingContext | null {

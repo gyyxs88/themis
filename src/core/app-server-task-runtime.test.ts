@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -383,6 +383,11 @@ test("AppServerTaskRuntime 会把 inputEnvelope 里的图片作为 native image 
   const fixture = createRuntimeFixture({ sessionFactory });
 
   try {
+    const imageDirectory = join(fixture.root, "temp", "input-assets");
+    mkdirSync(imageDirectory, { recursive: true });
+    const imagePath = join(imageDirectory, "shot.png");
+    writeFileSync(imagePath, "fake-image");
+
     await fixture.runtime.runTask({
       requestId: "req-app-native-image-1",
       taskId: "task-app-native-image-1",
@@ -401,7 +406,7 @@ test("AppServerTaskRuntime 会把 inputEnvelope 里的图片作为 native image 
             assetId: "asset-image-1",
             kind: "image",
             mimeType: "image/png",
-            localPath: "/workspace/temp/input-assets/shot.png",
+            localPath: imagePath,
             sourceChannel: "web",
             ingestionStatus: "ready",
           },
@@ -424,12 +429,67 @@ test("AppServerTaskRuntime 会把 inputEnvelope 里的图片作为 native image 
     assert.equal(input.some((part) => part.type === "localImage"), true);
     assert.equal(
       input.find((part) => part.type === "localImage")?.path,
-      "/workspace/temp/input-assets/shot.png",
+      imagePath,
     );
     const storedInput = fixture.runtimeStore.getTurnInput("req-app-native-image-1");
     assert.equal(storedInput?.envelope.assets[0]?.assetId, "asset-image-1");
     assert.equal(storedInput?.compileSummary?.runtimeTarget, "app-server");
     assert.equal(storedInput?.compileSummary?.degradationLevel, "native");
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.modelCapabilities, null);
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.transportCapabilities?.nativeImageInput, true);
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.effectiveCapabilities.nativeImageInput, true);
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.assetFacts[0]?.handling, "native");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 会在图片缺少可信本地路径时直接阻止 native image input", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-image-missing-path-1",
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    await assert.rejects(
+      fixture.runtime.runTask({
+        requestId: "req-app-image-missing-path-1",
+        taskId: "task-app-image-missing-path-1",
+        sourceChannel: "web",
+        user: { userId: "webui" },
+        goal: "帮我看图",
+        inputEnvelope: {
+          envelopeId: "env-app-image-missing-path-1",
+          sourceChannel: "web",
+          parts: [
+            { partId: "part-1", type: "text", role: "user", order: 1, text: "帮我看图" },
+            { partId: "part-2", type: "image", role: "user", order: 2, assetId: "asset-image-1" },
+          ],
+          assets: [
+            {
+              assetId: "asset-image-1",
+              kind: "image",
+              mimeType: "image/png",
+              localPath: join(fixture.root, "temp", "input-assets", "missing-shot.png"),
+              sourceChannel: "web",
+              ingestionStatus: "ready",
+            },
+          ],
+          createdAt: "2026-04-03T18:10:00.000Z",
+        },
+        channelContext: { sessionId: "web-session-image-missing-path-1" },
+        createdAt: "2026-04-03T18:10:00.000Z",
+      }),
+      /可信本地路径/,
+    );
+
+    assert.equal(state.factoryCalls, 0);
+    const storedInput = fixture.runtimeStore.getTurnInput("req-app-image-missing-path-1");
+    assert.equal(storedInput?.compileSummary?.runtimeTarget, "app-server");
+    assert.equal(storedInput?.compileSummary?.degradationLevel, "blocked");
+    assert.equal(storedInput?.compileSummary?.warnings[0]?.code, "IMAGE_PATH_UNAVAILABLE");
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.assetFacts[0]?.localPathStatus, "unavailable");
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.assetFacts[0]?.handling, "blocked");
   } finally {
     fixture.cleanup();
   }
@@ -490,6 +550,10 @@ test("AppServerTaskRuntime 会根据当前模型能力阻止不支持图片输�
     assert.equal(storedInput?.compileSummary?.runtimeTarget, "app-server");
     assert.equal(storedInput?.compileSummary?.degradationLevel, "blocked");
     assert.equal(storedInput?.compileSummary?.warnings[0]?.code, "IMAGE_NATIVE_INPUT_REQUIRED");
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.modelCapabilities?.nativeImageInput, false);
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.transportCapabilities?.nativeImageInput, true);
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.effectiveCapabilities.nativeImageInput, false);
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.assetFacts[0]?.handling, "blocked");
   } finally {
     fixture.cleanup();
   }
@@ -583,7 +647,13 @@ test("AppServerTaskRuntime 会把 document envelope 的路径 fallback 持久化
     const storedInput = fixture.runtimeStore.getTurnInput("req-app-document-fallback-1");
     assert.equal(storedInput?.compileSummary?.runtimeTarget, "app-server");
     assert.equal(storedInput?.compileSummary?.degradationLevel, "controlled_fallback");
-    assert.equal(storedInput?.compileSummary?.warnings.length ?? -1, 0);
+    assert.deepEqual(
+      storedInput?.compileSummary?.warnings.map((warning) => warning.code),
+      ["DOCUMENT_NATIVE_INPUT_FALLBACK"],
+    );
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.modelCapabilities, null);
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.transportCapabilities?.nativeDocumentInput, false);
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.assetFacts[0]?.handling, "path_fallback");
     assert.equal(storedInput?.envelope.parts[1]?.type, "document");
   } finally {
     fixture.cleanup();
@@ -653,6 +723,14 @@ test("AppServerTaskRuntime 即使模型声明 nativeDocumentInput 也会按 app-
     assert.match(input[0]?.text ?? "", /capability-brief\.md/);
     const storedInput = fixture.runtimeStore.getTurnInput("req-app-document-transport-fallback-1");
     assert.equal(storedInput?.compileSummary?.degradationLevel, "controlled_fallback");
+    assert.deepEqual(
+      storedInput?.compileSummary?.warnings.map((warning) => warning.code),
+      ["DOCUMENT_NATIVE_INPUT_FALLBACK"],
+    );
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.modelCapabilities?.nativeDocumentInput, true);
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.transportCapabilities?.nativeDocumentInput, false);
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.effectiveCapabilities.nativeDocumentInput, false);
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.assetFacts[0]?.handling, "path_fallback");
   } finally {
     fixture.cleanup();
   }

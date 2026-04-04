@@ -34,9 +34,17 @@ test("RuntimeSmokeService.runWebSmoke 在 action_required -> completed 的真实
     assert.equal(result.historyCompleted, true);
     assert.equal(result.imageCompileVerified, true);
     assert.equal(result.imageCompileDegradationLevel, "native");
+    assert.deepEqual(result.imageCompileWarningCodes, []);
+    assert.equal(result.imageCompileMatrixVerified, true);
+    assert.equal(result.imageCompileMatrixImageNative, "transport=yes effective=yes");
+    assert.deepEqual(result.imageCompileMatrixAssetHandling, ["native"]);
     assert.equal(result.documentCompileVerified, true);
     assert.equal(result.documentCompileDegradationLevel, "controlled_fallback");
-    assert.match(result.message, /compile summary/);
+    assert.deepEqual(result.documentCompileWarningCodes, ["DOCUMENT_NATIVE_INPUT_FALLBACK"]);
+    assert.equal(result.documentCompileMatrixVerified, true);
+    assert.equal(result.documentCompileMatrixDocumentNative, "transport=no effective=no");
+    assert.deepEqual(result.documentCompileMatrixAssetHandling, ["path_fallback"]);
+    assert.match(result.message, /能力矩阵事实/);
     assert.ok(fetchCalls.some((call) => call.input.endsWith("/api/web-auth/login")));
     assert.equal(fetchCalls.filter((call) => call.input.endsWith("/api/tasks/stream")).length, 2);
     assert.ok(fetchCalls.some((call) => call.input.endsWith("/api/tasks/actions")));
@@ -63,9 +71,39 @@ test("RuntimeSmokeService.runWebSmoke 在 action_required/result/done 同一 chu
     assert.equal(result.historyCompleted, true);
     assert.equal(result.imageCompileVerified, true);
     assert.equal(result.imageCompileDegradationLevel, "native");
+    assert.deepEqual(result.imageCompileWarningCodes, []);
+    assert.equal(result.imageCompileMatrixVerified, true);
+    assert.equal(result.imageCompileMatrixImageNative, "transport=yes effective=yes");
+    assert.deepEqual(result.imageCompileMatrixAssetHandling, ["native"]);
     assert.equal(result.documentCompileVerified, true);
     assert.equal(result.documentCompileDegradationLevel, "controlled_fallback");
+    assert.deepEqual(result.documentCompileWarningCodes, ["DOCUMENT_NATIVE_INPUT_FALLBACK"]);
+    assert.equal(result.documentCompileMatrixVerified, true);
+    assert.equal(result.documentCompileMatrixDocumentNative, "transport=no effective=no");
+    assert.deepEqual(result.documentCompileMatrixAssetHandling, ["path_fallback"]);
     assert.match(result.actionId ?? "", /^action-/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("RuntimeSmokeService.runWebSmoke 在 compile summary 缺少能力矩阵事实时返回失败结果", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-smoke-web-matrix-fail-"));
+
+  try {
+    const webSmokeFetch = createSuccessfulWebSmokeFetch({ omitCapabilityMatrix: true });
+    const service = createService(root, {
+      fetchImpl: async (input, init) => await webSmokeFetch(input, init),
+    });
+
+    const result = await service.runWebSmoke();
+
+    assert.equal(result.ok, false);
+    assert.equal(result.imageCompileVerified, true);
+    assert.equal(result.imageCompileMatrixVerified, false);
+    assert.equal(result.imageCompileMatrixImageNative, null);
+    assert.deepEqual(result.imageCompileMatrixAssetHandling, []);
+    assert.match(result.message, /能力矩阵/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -707,7 +745,7 @@ function createSingleChunkNdjsonResponse(lines: Array<Record<string, unknown>>):
   });
 }
 
-function createSuccessfulWebSmokeFetch(options: { singleChunk?: boolean } = {}): typeof fetch {
+function createSuccessfulWebSmokeFetch(options: { singleChunk?: boolean; omitCapabilityMatrix?: boolean } = {}): typeof fetch {
   const sessionRequestMap = new Map<string, { requestId: string; kind: "image" | "document" }>();
 
   return async (input, init) => {
@@ -808,7 +846,52 @@ function createSuccessfulWebSmokeFetch(options: { singleChunk?: boolean } = {}):
                 compileSummary: {
                   runtimeTarget: "app-server",
                   degradationLevel: taskRequest?.kind === "document" ? "controlled_fallback" : "native",
-                  warnings: [],
+                  warnings: taskRequest?.kind === "document"
+                    ? [
+                      {
+                        code: "DOCUMENT_NATIVE_INPUT_FALLBACK",
+                        message: "当前 runtime 未声明支持原生文档输入，文档已退化为路径提示。",
+                        assetId: "asset-document-1",
+                      },
+                    ]
+                    : [],
+                  ...(options.omitCapabilityMatrix
+                    ? {}
+                    : {
+                      capabilityMatrix: taskRequest?.kind === "document"
+                        ? {
+                          transportCapabilities: {
+                            nativeImageInput: true,
+                            nativeDocumentInput: false,
+                          },
+                          effectiveCapabilities: {
+                            nativeImageInput: true,
+                            nativeDocumentInput: false,
+                          },
+                          assetFacts: [
+                            {
+                              kind: "document",
+                              handling: "path_fallback",
+                            },
+                          ],
+                        }
+                        : {
+                          transportCapabilities: {
+                            nativeImageInput: true,
+                            nativeDocumentInput: false,
+                          },
+                          effectiveCapabilities: {
+                            nativeImageInput: true,
+                            nativeDocumentInput: false,
+                          },
+                          assetFacts: [
+                            {
+                              kind: "image",
+                              handling: "native",
+                            },
+                          ],
+                        },
+                    }),
                 },
               },
             },

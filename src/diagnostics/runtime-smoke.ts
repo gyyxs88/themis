@@ -19,8 +19,16 @@ export interface WebSmokeResult {
   historyCompleted: boolean;
   imageCompileVerified: boolean;
   imageCompileDegradationLevel: string | null;
+  imageCompileWarningCodes: string[];
+  imageCompileMatrixVerified: boolean;
+  imageCompileMatrixImageNative: string | null;
+  imageCompileMatrixAssetHandling: string[];
   documentCompileVerified: boolean;
   documentCompileDegradationLevel: string | null;
+  documentCompileWarningCodes: string[];
+  documentCompileMatrixVerified: boolean;
+  documentCompileMatrixDocumentNative: string | null;
+  documentCompileMatrixAssetHandling: string[];
   message: string;
 }
 
@@ -84,6 +92,20 @@ interface SmokeHistoryTurnDetail {
         message?: string;
         assetId?: string;
       }>;
+      capabilityMatrix?: {
+        transportCapabilities?: {
+          nativeImageInput?: boolean;
+          nativeDocumentInput?: boolean;
+        };
+        effectiveCapabilities?: {
+          nativeImageInput?: boolean;
+          nativeDocumentInput?: boolean;
+        };
+        assetFacts?: Array<{
+          kind?: string;
+          handling?: string;
+        }>;
+      };
     };
   };
 }
@@ -170,8 +192,16 @@ export class RuntimeSmokeService {
     let historyCompleted = false;
     let imageCompileVerified = false;
     let imageCompileDegradationLevel: string | null = null;
+    let imageCompileWarningCodes: string[] = [];
+    let imageCompileMatrixVerified = false;
+    let imageCompileMatrixImageNative: string | null = null;
+    let imageCompileMatrixAssetHandling: string[] = [];
     let documentCompileVerified = false;
     let documentCompileDegradationLevel: string | null = null;
+    let documentCompileWarningCodes: string[] = [];
+    let documentCompileMatrixVerified = false;
+    let documentCompileMatrixDocumentNative: string | null = null;
+    let documentCompileMatrixAssetHandling: string[] = [];
     const assetBundle = createWebSmokeInputAssetBundle(this.workingDirectory, startedAt, this.randomHex);
 
     try {
@@ -196,8 +226,14 @@ export class RuntimeSmokeService {
 
       const imageCompileSummary = readTurnCompileSummary(imageSmoke.historyDetail, requestId);
       imageCompileDegradationLevel = imageCompileSummary?.degradationLevel ?? null;
+      imageCompileWarningCodes = imageCompileSummary?.warningCodes ?? [];
+      imageCompileMatrixImageNative = formatSmokeCapabilityNativeSupport(imageCompileSummary?.capabilityMatrix ?? null, "image");
+      imageCompileMatrixAssetHandling = readSmokeCapabilityAssetHandling(imageCompileSummary?.capabilityMatrix ?? null, "image");
       imageCompileVerified = imageCompileSummary?.runtimeTarget === "app-server"
         && imageCompileSummary.degradationLevel === "native";
+      imageCompileMatrixVerified = imageCompileSummary?.capabilityMatrix?.transportCapabilities?.nativeImageInput === true
+        && imageCompileSummary.capabilityMatrix.effectiveCapabilities?.nativeImageInput === true
+        && imageCompileMatrixAssetHandling.includes("native");
 
       if (!imageCompileVerified) {
         return this.failureResult(
@@ -210,9 +246,42 @@ export class RuntimeSmokeService {
           historyCompleted,
           imageCompileVerified,
           imageCompileDegradationLevel,
+          imageCompileWarningCodes,
+          imageCompileMatrixVerified,
+          imageCompileMatrixImageNative,
+          imageCompileMatrixAssetHandling,
           documentCompileVerified,
           documentCompileDegradationLevel,
+          documentCompileWarningCodes,
+          documentCompileMatrixVerified,
+          documentCompileMatrixDocumentNative,
+          documentCompileMatrixAssetHandling,
           "真实 Web 图片 smoke 已收口，但 history/detail 没有写出 app-server native compile summary。",
+        );
+      }
+
+      if (!imageCompileMatrixVerified) {
+        return this.failureResult(
+          sessionId,
+          requestId,
+          taskId,
+          actionId,
+          observedActionRequired,
+          observedCompleted,
+          historyCompleted,
+          imageCompileVerified,
+          imageCompileDegradationLevel,
+          imageCompileWarningCodes,
+          imageCompileMatrixVerified,
+          imageCompileMatrixImageNative,
+          imageCompileMatrixAssetHandling,
+          documentCompileVerified,
+          documentCompileDegradationLevel,
+          documentCompileWarningCodes,
+          documentCompileMatrixVerified,
+          documentCompileMatrixDocumentNative,
+          documentCompileMatrixAssetHandling,
+          "真实 Web 图片 smoke 已收口，但 history/detail 没有写出 transport/effective 都支持且 asset handling=native 的能力矩阵事实。",
         );
       }
 
@@ -225,8 +294,15 @@ export class RuntimeSmokeService {
       });
       const documentCompileSummary = readTurnCompileSummary(documentSmoke.historyDetail, documentRequestId);
       documentCompileDegradationLevel = documentCompileSummary?.degradationLevel ?? null;
+      documentCompileWarningCodes = documentCompileSummary?.warningCodes ?? [];
+      documentCompileMatrixDocumentNative = formatSmokeCapabilityNativeSupport(documentCompileSummary?.capabilityMatrix ?? null, "document");
+      documentCompileMatrixAssetHandling = readSmokeCapabilityAssetHandling(documentCompileSummary?.capabilityMatrix ?? null, "document");
       documentCompileVerified = documentCompileSummary?.runtimeTarget === "app-server"
-        && documentCompileSummary.degradationLevel === "controlled_fallback";
+        && documentCompileSummary.degradationLevel === "controlled_fallback"
+        && documentCompileWarningCodes.includes("DOCUMENT_NATIVE_INPUT_FALLBACK");
+      documentCompileMatrixVerified = documentCompileSummary?.capabilityMatrix?.transportCapabilities?.nativeDocumentInput === false
+        && documentCompileSummary.capabilityMatrix.effectiveCapabilities?.nativeDocumentInput === false
+        && documentCompileMatrixAssetHandling.includes("path_fallback");
 
       if (!documentCompileVerified) {
         return this.failureResult(
@@ -239,9 +315,42 @@ export class RuntimeSmokeService {
           historyCompleted,
           imageCompileVerified,
           imageCompileDegradationLevel,
+          imageCompileWarningCodes,
+          imageCompileMatrixVerified,
+          imageCompileMatrixImageNative,
+          imageCompileMatrixAssetHandling,
           documentCompileVerified,
           documentCompileDegradationLevel,
-          "真实 Web 文档 smoke 已收口，但 history/detail 没有写出 app-server controlled_fallback compile summary。",
+          documentCompileWarningCodes,
+          documentCompileMatrixVerified,
+          documentCompileMatrixDocumentNative,
+          documentCompileMatrixAssetHandling,
+          "真实 Web 文档 smoke 已收口，但 history/detail 没有写出带 DOCUMENT_NATIVE_INPUT_FALLBACK 的 app-server controlled_fallback compile summary。",
+        );
+      }
+
+      if (!documentCompileMatrixVerified) {
+        return this.failureResult(
+          sessionId,
+          requestId,
+          taskId,
+          actionId,
+          observedActionRequired,
+          observedCompleted,
+          historyCompleted,
+          imageCompileVerified,
+          imageCompileDegradationLevel,
+          imageCompileWarningCodes,
+          imageCompileMatrixVerified,
+          imageCompileMatrixImageNative,
+          imageCompileMatrixAssetHandling,
+          documentCompileVerified,
+          documentCompileDegradationLevel,
+          documentCompileWarningCodes,
+          documentCompileMatrixVerified,
+          documentCompileMatrixDocumentNative,
+          documentCompileMatrixAssetHandling,
+          "真实 Web 文档 smoke 已收口，但 history/detail 没有写出 document transport gap 与 path_fallback 的能力矩阵事实。",
         );
       }
 
@@ -257,9 +366,17 @@ export class RuntimeSmokeService {
         historyCompleted,
         imageCompileVerified,
         imageCompileDegradationLevel,
+        imageCompileWarningCodes,
+        imageCompileMatrixVerified,
+        imageCompileMatrixImageNative,
+        imageCompileMatrixAssetHandling,
         documentCompileVerified,
         documentCompileDegradationLevel,
-        message: "Web smoke 成功：真实图片 native smoke 与文档 fallback smoke 都已完成，history/detail compile summary 也符合预期。",
+        documentCompileWarningCodes,
+        documentCompileMatrixVerified,
+        documentCompileMatrixDocumentNative,
+        documentCompileMatrixAssetHandling,
+        message: "Web smoke 成功：真实图片 native smoke、文档 fallback smoke 以及对应的能力矩阵事实都符合预期。",
       };
     } catch (error) {
       if (error instanceof WebActionRequiredSmokeTaskError) {
@@ -279,8 +396,16 @@ export class RuntimeSmokeService {
         historyCompleted,
         imageCompileVerified,
         imageCompileDegradationLevel,
+        imageCompileWarningCodes,
+        imageCompileMatrixVerified,
+        imageCompileMatrixImageNative,
+        imageCompileMatrixAssetHandling,
         documentCompileVerified,
         documentCompileDegradationLevel,
+        documentCompileWarningCodes,
+        documentCompileMatrixVerified,
+        documentCompileMatrixDocumentNative,
+        documentCompileMatrixAssetHandling,
         toErrorMessage(error),
       );
     } finally {
@@ -395,8 +520,16 @@ export class RuntimeSmokeService {
     historyCompleted: boolean,
     imageCompileVerified: boolean,
     imageCompileDegradationLevel: string | null,
+    imageCompileWarningCodes: string[],
+    imageCompileMatrixVerified: boolean,
+    imageCompileMatrixImageNative: string | null,
+    imageCompileMatrixAssetHandling: string[],
     documentCompileVerified: boolean,
     documentCompileDegradationLevel: string | null,
+    documentCompileWarningCodes: string[],
+    documentCompileMatrixVerified: boolean,
+    documentCompileMatrixDocumentNative: string | null,
+    documentCompileMatrixAssetHandling: string[],
     message: string,
   ): WebSmokeResult {
     return {
@@ -411,8 +544,16 @@ export class RuntimeSmokeService {
       historyCompleted,
       imageCompileVerified,
       imageCompileDegradationLevel,
+      imageCompileWarningCodes,
+      imageCompileMatrixVerified,
+      imageCompileMatrixImageNative,
+      imageCompileMatrixAssetHandling,
       documentCompileVerified,
       documentCompileDegradationLevel,
+      documentCompileWarningCodes,
+      documentCompileMatrixVerified,
+      documentCompileMatrixDocumentNative,
+      documentCompileMatrixAssetHandling,
       message,
     };
   }
@@ -899,6 +1040,8 @@ function readTurnCompileSummary(
 ): {
   runtimeTarget: string | null;
   degradationLevel: string | null;
+  warningCodes: string[];
+  capabilityMatrix: NonNullable<NonNullable<NonNullable<SmokeHistoryTurnDetail["input"]>["compileSummary"]>["capabilityMatrix"]> | null;
 } | null {
   const turn = historyDetail.turns?.find((item) => item.requestId === requestId);
   const compileSummary = turn?.input?.compileSummary;
@@ -910,5 +1053,50 @@ function readTurnCompileSummary(
   return {
     runtimeTarget: normalizeText(compileSummary.runtimeTarget),
     degradationLevel: normalizeText(compileSummary.degradationLevel),
+    warningCodes: Array.from(new Set(
+      (compileSummary.warnings ?? [])
+        .map((warning) => normalizeText(warning.code))
+        .filter((code): code is string => code !== null),
+    )),
+    capabilityMatrix: compileSummary.capabilityMatrix ?? null,
   };
+}
+
+function formatSmokeCapabilityNativeSupport(
+  matrix: NonNullable<ReturnType<typeof readTurnCompileSummary>>["capabilityMatrix"] | null,
+  kind: "image" | "document",
+): string | null {
+  if (!matrix) {
+    return null;
+  }
+
+  const capabilityKey = kind === "image" ? "nativeImageInput" : "nativeDocumentInput";
+  return [
+    `transport=${formatSmokeBooleanFlag(matrix.transportCapabilities?.[capabilityKey])}`,
+    `effective=${formatSmokeBooleanFlag(matrix.effectiveCapabilities?.[capabilityKey])}`,
+  ].join(" ");
+}
+
+function readSmokeCapabilityAssetHandling(
+  matrix: NonNullable<ReturnType<typeof readTurnCompileSummary>>["capabilityMatrix"] | null,
+  kind: "image" | "document",
+): string[] {
+  if (!matrix?.assetFacts?.length) {
+    return [];
+  }
+
+  return Array.from(new Set(
+    matrix.assetFacts
+      .filter((fact) => fact.kind === kind)
+      .map((fact) => normalizeText(fact.handling))
+      .filter((handling): handling is string => handling !== null),
+  ));
+}
+
+function formatSmokeBooleanFlag(value: boolean | undefined): string {
+  if (value === undefined) {
+    return "<unknown>";
+  }
+
+  return value ? "yes" : "no";
 }

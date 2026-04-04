@@ -4,7 +4,7 @@ import { resolveCodexAuthFilePath, resolveDefaultCodexHome } from "../core/auth-
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
 import { readOpenAICompatibleProviderConfigs } from "../core/openai-compatible-provider.js";
 import { McpInspector, type McpInspectorListResult, type McpServerSummary } from "../mcp/mcp-inspector.js";
-import type { SqliteCodexSessionRegistry } from "../storage/index.js";
+import type { SqliteCodexSessionRegistry, StoredTurnInputCompileCapabilityMatrix } from "../storage/index.js";
 import { readFeishuDiagnosticsSnapshot, type FeishuDiagnosticsSummary } from "./feishu-diagnostics.js";
 
 export interface RuntimeDiagnosticFileStatus {
@@ -61,6 +61,11 @@ export interface RuntimeMultimodalRuntimeTargetCount {
   count: number;
 }
 
+export interface RuntimeMultimodalWarningCodeCount {
+  code: string;
+  count: number;
+}
+
 export interface RuntimeMultimodalLastTurnSummary {
   requestId: string;
   sourceChannel: string;
@@ -71,6 +76,8 @@ export interface RuntimeMultimodalLastTurnSummary {
   partTypes: string[];
   assetKinds: string[];
   warningCodes: string[];
+  warningMessages: string[];
+  capabilityMatrix: StoredTurnInputCompileCapabilityMatrix | null;
 }
 
 export interface RuntimeMultimodalDiagnosticsSummary {
@@ -90,7 +97,9 @@ export interface RuntimeMultimodalDiagnosticsSummary {
   };
   sourceChannelCounts: RuntimeMultimodalSourceChannelCount[];
   runtimeTargetCounts: RuntimeMultimodalRuntimeTargetCount[];
+  warningCodeCounts: RuntimeMultimodalWarningCodeCount[];
   lastTurn: RuntimeMultimodalLastTurnSummary | null;
+  lastBlockedTurn: RuntimeMultimodalLastTurnSummary | null;
 }
 
 export interface RuntimeDiagnosticsSummary {
@@ -719,6 +728,7 @@ function summarizeRecentTurnInputDiagnostics(
 
   const sourceChannelCounts = new Map<string, number>();
   const runtimeTargetCounts = new Map<string, number>();
+  const warningCodeCounts = new Map<string, number>();
   const assetCounts = {
     image: 0,
     document: 0,
@@ -745,6 +755,15 @@ function summarizeRecentTurnInputDiagnostics(
     const compileSummary = record.input.compileSummary;
     const runtimeTarget = normalizeCountKey(compileSummary?.runtimeTarget);
     incrementCount(runtimeTargetCounts, runtimeTarget);
+    for (const warning of compileSummary?.warnings ?? []) {
+      const warningCode = normalizeOptionalText(warning.code);
+
+      if (!warningCode) {
+        continue;
+      }
+
+      incrementCount(warningCodeCounts, warningCode);
+    }
 
     switch (compileSummary?.degradationLevel) {
       case "native":
@@ -766,6 +785,7 @@ function summarizeRecentTurnInputDiagnostics(
   }
 
   const lastRecord = recentTurnInputs[0] ?? null;
+  const lastBlockedRecord = recentTurnInputs.find((record) => record.input.compileSummary?.degradationLevel === "blocked") ?? null;
 
   return {
     available: true,
@@ -781,8 +801,15 @@ function summarizeRecentTurnInputDiagnostics(
       runtimeTarget,
       count,
     })),
+    warningCodeCounts: mapCountEntries(warningCodeCounts).map(([code, count]) => ({
+      code,
+      count,
+    })),
     lastTurn: lastRecord
       ? buildMultimodalLastTurnSummary(lastRecord)
+      : null,
+    lastBlockedTurn: lastBlockedRecord
+      ? buildMultimodalLastTurnSummary(lastBlockedRecord)
       : null,
   };
 }
@@ -805,7 +832,9 @@ function createEmptyMultimodalDiagnosticsSummary(available: boolean): RuntimeMul
     },
     sourceChannelCounts: [],
     runtimeTargetCounts: [],
+    warningCodeCounts: [],
     lastTurn: null,
+    lastBlockedTurn: null,
   };
 }
 
@@ -871,6 +900,8 @@ function buildMultimodalLastTurnSummary(record: {
     ),
     assetKinds: dedupeStrings(record.input.assets.map((asset) => asset.kind)),
     warningCodes: dedupeStrings(record.input.compileSummary?.warnings.map((warning) => warning.code) ?? []),
+    warningMessages: dedupeStrings(record.input.compileSummary?.warnings.map((warning) => warning.message) ?? []),
+    capabilityMatrix: record.input.compileSummary?.capabilityMatrix ?? null,
   };
 }
 
@@ -879,7 +910,16 @@ function summarizeBlockedMultimodalInputs(summary: RuntimeMultimodalDiagnosticsS
     `最近 ${summary.recentTurnInputCount} 条 turn input 中有 ${summary.degradationCounts.blocked} 条被 runtime 阻止。`,
   ];
 
-  if (summary.lastTurn) {
+  if (summary.lastBlockedTurn) {
+    parts.push(
+      `最近一次 blocked 来自 ${summary.lastBlockedTurn.sourceChannel}，编译结果是 ${summary.lastBlockedTurn.runtimeTarget ?? "unknown"} / ${summary.lastBlockedTurn.degradationLevel}。`,
+    );
+    if (summary.lastBlockedTurn.warningCodes.length > 0) {
+      parts.push(`原因码：${summary.lastBlockedTurn.warningCodes.join(", ")}。`);
+    } else if (summary.lastBlockedTurn.warningMessages.length > 0) {
+      parts.push(`原因：${summary.lastBlockedTurn.warningMessages.join(" / ")}。`);
+    }
+  } else if (summary.lastTurn) {
     parts.push(
       `最新一条来自 ${summary.lastTurn.sourceChannel}，编译结果是 ${summary.lastTurn.runtimeTarget ?? "unknown"} / ${summary.lastTurn.degradationLevel}。`,
     );

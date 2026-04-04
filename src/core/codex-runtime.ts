@@ -53,6 +53,9 @@ import { ContextBuilder } from "../context/context-builder.js";
 import {
   SqliteCodexSessionRegistry,
   type StoredAuthAccountRecord,
+  type StoredTurnInputCompileAssetFact,
+  type StoredTurnInputCompileCapabilityMatrix,
+  type StoredTurnInputCompileCapabilitySnapshot,
   type StoredTurnInputCompileSummary,
 } from "../storage/index.js";
 import type {
@@ -224,12 +227,14 @@ export class CodexTaskRuntime {
 
       const target = this.resolveRuntimeTarget(request, hooks.allowUnsupportedThirdPartyModel === true);
       const runtimeTargetId = target.providerConfig ? `third-party:${target.providerId}` : "codex-sdk";
+      const runtimeInputCapabilities = resolveCodexRuntimeInputCapabilities();
       const compiledInput = request.inputEnvelope
         ? compileTaskInputForRuntime({
           envelope: request.inputEnvelope,
           target: {
             runtimeId: runtimeTargetId,
-            capabilities: resolveCodexRuntimeInputCapabilities(),
+            capabilities: runtimeInputCapabilities,
+            transportCapabilities: runtimeInputCapabilities,
           },
         })
         : null;
@@ -1414,6 +1419,51 @@ export function buildStoredTurnInputCompileSummary(input: {
       message: warning.message,
       ...(warning.assetId ? { assetId: warning.assetId } : {}),
     })),
+    capabilityMatrix: buildStoredTurnInputCapabilityMatrix(input.compiledInput),
+  };
+}
+
+function buildStoredTurnInputCapabilityMatrix(
+  compiledInput: CompiledTaskInput,
+): StoredTurnInputCompileCapabilityMatrix {
+  return {
+    modelCapabilities: compiledInput.capabilityMatrix.modelCapabilities
+      ? mapStoredTurnInputCompileCapabilitySnapshot(compiledInput.capabilityMatrix.modelCapabilities)
+      : null,
+    transportCapabilities: compiledInput.capabilityMatrix.transportCapabilities
+      ? mapStoredTurnInputCompileCapabilitySnapshot(compiledInput.capabilityMatrix.transportCapabilities)
+      : null,
+    effectiveCapabilities: mapStoredTurnInputCompileCapabilitySnapshot(compiledInput.capabilityMatrix.effectiveCapabilities),
+    assetFacts: compiledInput.capabilityMatrix.assetFacts.map(mapStoredTurnInputCompileAssetFact),
+  };
+}
+
+function mapStoredTurnInputCompileCapabilitySnapshot(
+  snapshot: CompiledTaskInput["capabilityMatrix"]["effectiveCapabilities"],
+): StoredTurnInputCompileCapabilitySnapshot {
+  return {
+    nativeTextInput: snapshot.nativeTextInput,
+    nativeImageInput: snapshot.nativeImageInput,
+    nativeDocumentInput: snapshot.nativeDocumentInput,
+    supportedDocumentMimeTypes: [...snapshot.supportedDocumentMimeTypes],
+  };
+}
+
+function mapStoredTurnInputCompileAssetFact(
+  fact: CompiledTaskInput["capabilityMatrix"]["assetFacts"][number],
+): StoredTurnInputCompileAssetFact {
+  return {
+    assetId: fact.assetId,
+    kind: fact.kind,
+    mimeType: fact.mimeType,
+    localPathStatus: fact.localPathStatus,
+    modelNativeSupport: fact.modelNativeSupport,
+    transportNativeSupport: fact.transportNativeSupport,
+    effectiveNativeSupport: fact.effectiveNativeSupport,
+    modelMimeTypeSupported: fact.modelMimeTypeSupported,
+    transportMimeTypeSupported: fact.transportMimeTypeSupported,
+    effectiveMimeTypeSupported: fact.effectiveMimeTypeSupported,
+    handling: fact.handling,
   };
 }
 

@@ -8,6 +8,8 @@ export type RuntimeInputDegradationLevel = "native" | "lossless_textualization" 
 export interface RuntimeCompileTarget {
   runtimeId: string;
   capabilities: RuntimeInputCapabilities;
+  modelCapabilities?: RuntimeInputCapabilities | null;
+  transportCapabilities?: RuntimeInputCapabilities | null;
 }
 
 export type CompiledTaskInputPart =
@@ -38,11 +40,40 @@ export interface RuntimeCompileWarning {
   assetId?: string;
 }
 
+export interface RuntimeCompileCapabilitySnapshot {
+  nativeTextInput: boolean;
+  nativeImageInput: boolean;
+  nativeDocumentInput: boolean;
+  supportedDocumentMimeTypes: string[];
+}
+
+export interface RuntimeCompileAssetFact {
+  assetId: string;
+  kind: "image" | "document";
+  mimeType: string;
+  localPathStatus: "ready" | "unavailable";
+  modelNativeSupport: boolean | null;
+  transportNativeSupport: boolean | null;
+  effectiveNativeSupport: boolean;
+  modelMimeTypeSupported: boolean | null;
+  transportMimeTypeSupported: boolean | null;
+  effectiveMimeTypeSupported: boolean | null;
+  handling: "native" | "path_fallback" | "blocked";
+}
+
+export interface RuntimeCompileCapabilityMatrix {
+  modelCapabilities: RuntimeCompileCapabilitySnapshot | null;
+  transportCapabilities: RuntimeCompileCapabilitySnapshot | null;
+  effectiveCapabilities: RuntimeCompileCapabilitySnapshot;
+  assetFacts: RuntimeCompileAssetFact[];
+}
+
 export interface CompiledTaskInput {
   nativeInputParts: CompiledTaskInputPart[];
   fallbackPromptSections: string[];
   compileWarnings: RuntimeCompileWarning[];
   degradationLevel: RuntimeInputDegradationLevel;
+  capabilityMatrix: RuntimeCompileCapabilityMatrix;
 }
 
 export function compileTaskInputForRuntime(input: {
@@ -58,6 +89,7 @@ export function compileTaskInputForRuntime(input: {
     mimeType: string;
     localPath: string;
   }> = [];
+  const capabilityMatrix = createCapabilityMatrix(input.target);
   let degradationLevel: RuntimeInputDegradationLevel = "native";
 
   for (const part of [...input.envelope.parts].sort((left, right) => left.order - right.order)) {
@@ -80,7 +112,18 @@ export function compileTaskInputForRuntime(input: {
     const asset = requireAsset(input.envelope.assets, part.assetId);
 
     if (part.type === "image") {
+      const localPathStatus = resolveLocalPathStatus(asset.localPath);
+      const assetFact = buildCompileAssetFact({
+        target: input.target,
+        asset,
+        localPathStatus,
+      });
+
       if (!input.target.capabilities.nativeImageInput) {
+        capabilityMatrix.assetFacts.push({
+          ...assetFact,
+          handling: "blocked",
+        });
         return blocked({
           code: "IMAGE_NATIVE_INPUT_REQUIRED",
           message: "当前 runtime 未声明支持图片原生输入，任务已阻止。",
@@ -88,6 +131,22 @@ export function compileTaskInputForRuntime(input: {
         });
       }
 
+      if (localPathStatus !== "ready") {
+        capabilityMatrix.assetFacts.push({
+          ...assetFact,
+          handling: "blocked",
+        });
+        return blocked({
+          code: "IMAGE_PATH_UNAVAILABLE",
+          message: "当前图片缺少可信本地路径，无法作为原生图片输入发送。",
+          assetId: asset.assetId,
+        });
+      }
+
+      capabilityMatrix.assetFacts.push({
+        ...assetFact,
+        handling: "native",
+      });
       nativeInputParts.push({
         type: "image",
         assetPath: asset.localPath,
@@ -99,8 +158,19 @@ export function compileTaskInputForRuntime(input: {
     }
 
     if (part.type === "document") {
+      const localPathStatus = resolveLocalPathStatus(asset.localPath);
+      const assetFact = buildCompileAssetFact({
+        target: input.target,
+        asset,
+        localPathStatus,
+      });
+
       if (supportsNativeDocumentMimeType(input.target.capabilities, asset.mimeType)) {
-        if (!isTrustedDocumentPath(asset.localPath)) {
+        if (localPathStatus !== "ready") {
+          capabilityMatrix.assetFacts.push({
+            ...assetFact,
+            handling: "blocked",
+          });
           return blocked({
             code: "DOCUMENT_PATH_UNAVAILABLE",
             message: "当前文档缺少可信本地路径，无法作为原生文档输入发送。",
@@ -108,6 +178,10 @@ export function compileTaskInputForRuntime(input: {
           });
         }
 
+        capabilityMatrix.assetFacts.push({
+          ...assetFact,
+          handling: "native",
+        });
         nativeInputParts.push({
           type: "document",
           assetPath: asset.localPath,
@@ -118,7 +192,11 @@ export function compileTaskInputForRuntime(input: {
         continue;
       }
 
-      if (!isTrustedDocumentPath(asset.localPath)) {
+      if (localPathStatus !== "ready") {
+        capabilityMatrix.assetFacts.push({
+          ...assetFact,
+          handling: "blocked",
+        });
         return blocked({
           code: "DOCUMENT_PATH_UNAVAILABLE",
           message: "当前文档缺少可信本地路径，无法生成路径提示块。",
@@ -126,6 +204,11 @@ export function compileTaskInputForRuntime(input: {
         });
       }
 
+      capabilityMatrix.assetFacts.push({
+        ...assetFact,
+        handling: "path_fallback",
+      });
+      compileWarnings.push(createDocumentFallbackWarning(input.target.capabilities, asset));
       documentPathEntries.push({
         assetId: asset.assetId,
         name: asset.name ?? basename(asset.localPath),
@@ -152,6 +235,7 @@ export function compileTaskInputForRuntime(input: {
     fallbackPromptSections,
     compileWarnings,
     degradationLevel,
+    capabilityMatrix,
   };
 
   function blocked(warning: RuntimeCompileWarning): CompiledTaskInput {
@@ -160,6 +244,7 @@ export function compileTaskInputForRuntime(input: {
       fallbackPromptSections: [],
       compileWarnings: [...compileWarnings, warning],
       degradationLevel: "blocked",
+      capabilityMatrix,
     };
   }
 }
@@ -200,7 +285,7 @@ function supportsNativeDocumentMimeType(capabilities: RuntimeInputCapabilities, 
     || entry === `${majorType}/*`);
 }
 
-function isTrustedDocumentPath(localPath: string): boolean {
+function isTrustedLocalAssetPath(localPath: string): boolean {
   if (localPath.trim().length === 0) {
     return false;
   }
@@ -212,8 +297,116 @@ function isTrustedDocumentPath(localPath: string): boolean {
   }
 }
 
+function resolveLocalPathStatus(localPath: string): RuntimeCompileAssetFact["localPathStatus"] {
+  return isTrustedLocalAssetPath(localPath) ? "ready" : "unavailable";
+}
+
 function normalizeMimeType(mimeType: string): string {
   return mimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+}
+
+function createCapabilityMatrix(target: RuntimeCompileTarget): RuntimeCompileCapabilityMatrix {
+  return {
+    modelCapabilities: target.modelCapabilities ? snapshotCapabilities(target.modelCapabilities) : null,
+    transportCapabilities: target.transportCapabilities ? snapshotCapabilities(target.transportCapabilities) : null,
+    effectiveCapabilities: snapshotCapabilities(target.capabilities),
+    assetFacts: [],
+  };
+}
+
+function snapshotCapabilities(capabilities: RuntimeInputCapabilities): RuntimeCompileCapabilitySnapshot {
+  return {
+    nativeTextInput: capabilities.nativeTextInput,
+    nativeImageInput: capabilities.nativeImageInput,
+    nativeDocumentInput: capabilities.nativeDocumentInput,
+    supportedDocumentMimeTypes: [...capabilities.supportedDocumentMimeTypes],
+  };
+}
+
+function buildCompileAssetFact(input: {
+  target: RuntimeCompileTarget;
+  asset: TaskInputAsset;
+  localPathStatus: RuntimeCompileAssetFact["localPathStatus"];
+}): Omit<RuntimeCompileAssetFact, "handling"> {
+  if (input.asset.kind === "image") {
+    return {
+      assetId: input.asset.assetId,
+      kind: input.asset.kind,
+      mimeType: input.asset.mimeType,
+      localPathStatus: input.localPathStatus,
+      modelNativeSupport: input.target.modelCapabilities?.nativeImageInput ?? null,
+      transportNativeSupport: input.target.transportCapabilities?.nativeImageInput ?? null,
+      effectiveNativeSupport: input.target.capabilities.nativeImageInput,
+      modelMimeTypeSupported: null,
+      transportMimeTypeSupported: null,
+      effectiveMimeTypeSupported: null,
+    };
+  }
+
+  const modelDocumentFacts = describeDocumentSupport(input.target.modelCapabilities, input.asset.mimeType);
+  const transportDocumentFacts = describeDocumentSupport(input.target.transportCapabilities, input.asset.mimeType);
+  const effectiveDocumentFacts = describeDocumentSupport(input.target.capabilities, input.asset.mimeType);
+
+  return {
+    assetId: input.asset.assetId,
+    kind: input.asset.kind,
+    mimeType: input.asset.mimeType,
+    localPathStatus: input.localPathStatus,
+    modelNativeSupport: modelDocumentFacts.nativeSupported,
+    transportNativeSupport: transportDocumentFacts.nativeSupported,
+    effectiveNativeSupport: effectiveDocumentFacts.nativeSupported ?? false,
+    modelMimeTypeSupported: modelDocumentFacts.mimeTypeSupported,
+    transportMimeTypeSupported: transportDocumentFacts.mimeTypeSupported,
+    effectiveMimeTypeSupported: effectiveDocumentFacts.mimeTypeSupported,
+  };
+}
+
+function describeDocumentSupport(
+  capabilities: RuntimeInputCapabilities | null | undefined,
+  mimeType: string,
+): {
+  nativeSupported: boolean | null;
+  mimeTypeSupported: boolean | null;
+} {
+  if (!capabilities) {
+    return {
+      nativeSupported: null,
+      mimeTypeSupported: null,
+    };
+  }
+
+  if (!capabilities.nativeDocumentInput) {
+    return {
+      nativeSupported: false,
+      mimeTypeSupported: null,
+    };
+  }
+
+  const mimeTypeSupported = supportsNativeDocumentMimeType(capabilities, mimeType);
+  return {
+    nativeSupported: mimeTypeSupported,
+    mimeTypeSupported,
+  };
+}
+
+function createDocumentFallbackWarning(
+  capabilities: RuntimeInputCapabilities,
+  asset: TaskInputAsset,
+): RuntimeCompileWarning {
+  if (!capabilities.nativeDocumentInput) {
+    return {
+      code: "DOCUMENT_NATIVE_INPUT_FALLBACK",
+      message: "当前 runtime 未声明支持原生文档输入，文档已退化为路径提示。",
+      assetId: asset.assetId,
+    };
+  }
+
+  const normalizedMimeType = normalizeMimeType(asset.mimeType) || asset.mimeType || "<unknown>";
+  return {
+    code: "DOCUMENT_MIME_TYPE_FALLBACK",
+    message: `当前 runtime 未声明支持文档 MIME 类型 ${normalizedMimeType}，文档已退化为路径提示。`,
+    assetId: asset.assetId,
+  };
 }
 
 function formatDocumentPathSection(

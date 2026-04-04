@@ -63,6 +63,12 @@ export const APP_SERVER_TASK_CONFIG_OVERRIDES: CodexCliConfigOverrides = {
   "features.default_mode_request_user_input": true,
 };
 
+interface AppServerRuntimeInputCapabilityMatrix {
+  modelCapabilities: RuntimeInputCapabilities | null;
+  transportCapabilities: RuntimeInputCapabilities;
+  effectiveCapabilities: RuntimeInputCapabilities;
+}
+
 export interface AppServerTaskRuntimeSession {
   initialize(): Promise<void>;
   startThread(params: AppServerThreadStartParams): Promise<{ threadId: string }>;
@@ -154,15 +160,21 @@ export class AppServerTaskRuntime {
 
     try {
       throwIfAborted(signal);
-      const inputCapabilities = request.inputEnvelope
+      const inputCapabilityMatrix = request.inputEnvelope
         ? await this.resolveInputCapabilities(request)
-        : APP_SERVER_FALLBACK_INPUT_CAPABILITIES;
+        : {
+          modelCapabilities: null,
+          transportCapabilities: APP_SERVER_TRANSPORT_INPUT_CAPABILITIES,
+          effectiveCapabilities: APP_SERVER_FALLBACK_INPUT_CAPABILITIES,
+        } satisfies AppServerRuntimeInputCapabilityMatrix;
       const compiledInput = request.inputEnvelope
         ? compileTaskInputForRuntime({
           envelope: request.inputEnvelope,
           target: {
             runtimeId: "app-server",
-            capabilities: inputCapabilities,
+            capabilities: inputCapabilityMatrix.effectiveCapabilities,
+            ...(inputCapabilityMatrix.modelCapabilities ? { modelCapabilities: inputCapabilityMatrix.modelCapabilities } : {}),
+            transportCapabilities: inputCapabilityMatrix.transportCapabilities,
           },
         })
         : null;
@@ -345,16 +357,24 @@ export class AppServerTaskRuntime {
     }
   }
 
-  private async resolveInputCapabilities(request: TaskRequest): Promise<RuntimeInputCapabilities> {
+  private async resolveInputCapabilities(request: TaskRequest): Promise<AppServerRuntimeInputCapabilityMatrix> {
     if (!this.runtimeCatalogReader) {
-      return APP_SERVER_FALLBACK_INPUT_CAPABILITIES;
+      return {
+        modelCapabilities: null,
+        transportCapabilities: APP_SERVER_TRANSPORT_INPUT_CAPABILITIES,
+        effectiveCapabilities: APP_SERVER_FALLBACK_INPUT_CAPABILITIES,
+      };
     }
 
     try {
       const runtimeCatalog = await this.runtimeCatalogReader();
       return resolveAppServerInputCapabilities(runtimeCatalog, request, APP_SERVER_FALLBACK_INPUT_CAPABILITIES);
     } catch {
-      return APP_SERVER_FALLBACK_INPUT_CAPABILITIES;
+      return {
+        modelCapabilities: null,
+        transportCapabilities: APP_SERVER_TRANSPORT_INPUT_CAPABILITIES,
+        effectiveCapabilities: APP_SERVER_FALLBACK_INPUT_CAPABILITIES,
+      };
     }
   }
 
@@ -1239,16 +1259,23 @@ function resolveAppServerInputCapabilities(
   runtimeCatalog: CodexRuntimeCatalog,
   request: TaskRequest,
   fallback: RuntimeInputCapabilities,
-): RuntimeInputCapabilities {
+): AppServerRuntimeInputCapabilityMatrix {
   const selectedModel = selectRuntimeModel(runtimeCatalog, request.options?.model);
 
   if (!selectedModel) {
-    return fallback;
+    return {
+      modelCapabilities: null,
+      transportCapabilities: APP_SERVER_TRANSPORT_INPUT_CAPABILITIES,
+      effectiveCapabilities: fallback,
+    };
   }
 
+  const modelCapabilities = toRuntimeInputCapabilities(selectedModel.capabilities, fallback);
   return {
-    ...intersectAppServerInputCapabilities(
-      toRuntimeInputCapabilities(selectedModel.capabilities, fallback),
+    modelCapabilities,
+    transportCapabilities: APP_SERVER_TRANSPORT_INPUT_CAPABILITIES,
+    effectiveCapabilities: intersectAppServerInputCapabilities(
+      modelCapabilities,
       APP_SERVER_TRANSPORT_INPUT_CAPABILITIES,
     ),
   };

@@ -978,7 +978,162 @@ test("readFeishuDiagnosticsSnapshot 会返回 diagnostics store 状态、current
       createdAt: "2026-04-02T08:59:00.000Z",
       updatedAt: "2026-04-02T09:00:00.000Z",
     });
+    runtimeStore.upsertTurnFromRequest({
+      ...createFeishuTaskRequest("session-2", "request-2-blocked"),
+      createdAt: "2026-04-02T08:59:30.000Z",
+    }, "task-2-blocked");
+    runtimeStore.saveTurnInput({
+      requestId: "request-2-blocked",
+      envelope: {
+        envelopeId: "env-2-blocked",
+        sourceChannel: "feishu",
+        sourceSessionId: "session-2",
+        sourceMessageId: "message-2-blocked",
+        parts: [
+          {
+            partId: "part-image-2-blocked",
+            type: "image",
+            role: "user",
+            order: 0,
+            assetId: "asset-image-2-blocked",
+          },
+        ],
+        assets: [
+          {
+            assetId: "asset-image-2-blocked",
+            kind: "image",
+            name: "photo.png",
+            mimeType: "image/png",
+            localPath: join(root, "temp", "photo.png"),
+            sourceChannel: "feishu",
+            sourceMessageId: "message-2-blocked",
+            ingestionStatus: "ready",
+          },
+        ],
+        createdAt: "2026-04-02T08:59:30.000Z",
+      },
+      compileSummary: {
+        runtimeTarget: "codex-sdk",
+        degradationLevel: "blocked",
+        warnings: [
+          {
+            code: "IMAGE_NATIVE_INPUT_REQUIRED",
+            message: "当前 runtime 不支持 native image input。",
+            assetId: "asset-image-2-blocked",
+          },
+        ],
+        capabilityMatrix: {
+          modelCapabilities: null,
+          transportCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: false,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          effectiveCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: false,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          assetFacts: [
+            {
+              assetId: "asset-image-2-blocked",
+              kind: "image",
+              mimeType: "image/png",
+              localPathStatus: "ready",
+              modelNativeSupport: null,
+              transportNativeSupport: false,
+              effectiveNativeSupport: false,
+              modelMimeTypeSupported: null,
+              transportMimeTypeSupported: null,
+              effectiveMimeTypeSupported: null,
+              handling: "blocked",
+            },
+          ],
+        },
+      },
+      createdAt: "2026-04-02T08:59:30.000Z",
+    });
     runtimeStore.upsertTurnFromRequest(createFeishuTaskRequest("session-2", "request-2"), "task-2");
+    runtimeStore.saveTurnInput({
+      requestId: "request-2",
+      envelope: {
+        envelopeId: "env-2",
+        sourceChannel: "feishu",
+        sourceSessionId: "session-2",
+        sourceMessageId: "message-2",
+        parts: [
+          {
+            partId: "part-document-2",
+            type: "document",
+            role: "user",
+            order: 0,
+            assetId: "asset-document-2",
+          },
+        ],
+        assets: [
+          {
+            assetId: "asset-document-2",
+            kind: "document",
+            name: "report.pdf",
+            mimeType: "application/pdf",
+            localPath: join(root, "temp", "report.pdf"),
+            sourceChannel: "feishu",
+            sourceMessageId: "message-2",
+            ingestionStatus: "ready",
+          },
+        ],
+        createdAt: "2026-04-02T09:00:00.000Z",
+      },
+      compileSummary: {
+        runtimeTarget: "app-server",
+        degradationLevel: "controlled_fallback",
+        warnings: [
+          {
+            code: "DOCUMENT_NATIVE_INPUT_FALLBACK",
+            message: "当前 runtime 未声明支持原生文档输入，文档已退化为路径提示。",
+            assetId: "asset-document-2",
+          },
+        ],
+        capabilityMatrix: {
+          modelCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: true,
+            supportedDocumentMimeTypes: ["application/pdf"],
+          },
+          transportCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          effectiveCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          assetFacts: [
+            {
+              assetId: "asset-document-2",
+              kind: "document",
+              mimeType: "application/pdf",
+              localPathStatus: "ready",
+              modelNativeSupport: true,
+              transportNativeSupport: false,
+              effectiveNativeSupport: false,
+              modelMimeTypeSupported: true,
+              transportMimeTypeSupported: null,
+              effectiveMimeTypeSupported: null,
+              handling: "path_fallback",
+            },
+          ],
+        },
+      },
+      createdAt: "2026-04-02T09:00:00.000Z",
+    });
     runtimeStore.appendTaskEvent({
       eventId: "event-runtime-1",
       taskId: "task-2",
@@ -1161,6 +1316,102 @@ test("readFeishuDiagnosticsSnapshot 会返回 diagnostics store 状态、current
       activeSessionId: "session-2",
       threadId: "thread-2",
       threadStatus: "running",
+      multimodalSampleCount: 2,
+      multimodalWarningCodeCounts: [
+        {
+          code: "DOCUMENT_NATIVE_INPUT_FALLBACK",
+          count: 1,
+        },
+        {
+          code: "IMAGE_NATIVE_INPUT_REQUIRED",
+          count: 1,
+        },
+      ],
+      lastMultimodalInput: {
+        requestId: "request-2",
+        assetCount: 1,
+        assetKinds: ["document"],
+        runtimeTarget: "app-server",
+        degradationLevel: "controlled_fallback",
+        warningCodes: ["DOCUMENT_NATIVE_INPUT_FALLBACK"],
+        warningMessages: ["当前 runtime 未声明支持原生文档输入，文档已退化为路径提示。"],
+        capabilityMatrix: {
+          modelCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: true,
+            supportedDocumentMimeTypes: ["application/pdf"],
+          },
+          transportCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          effectiveCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          assetFacts: [
+            {
+              assetId: "asset-document-2",
+              kind: "document",
+              mimeType: "application/pdf",
+              localPathStatus: "ready",
+              modelNativeSupport: true,
+              transportNativeSupport: false,
+              effectiveNativeSupport: false,
+              modelMimeTypeSupported: true,
+              transportMimeTypeSupported: null,
+              effectiveMimeTypeSupported: null,
+              handling: "path_fallback",
+            },
+          ],
+        },
+        createdAt: "2026-04-02T09:00:00.000Z",
+      },
+      lastBlockedMultimodalInput: {
+        requestId: "request-2-blocked",
+        assetCount: 1,
+        assetKinds: ["image"],
+        runtimeTarget: "codex-sdk",
+        degradationLevel: "blocked",
+        warningCodes: ["IMAGE_NATIVE_INPUT_REQUIRED"],
+        warningMessages: ["当前 runtime 不支持 native image input。"],
+        capabilityMatrix: {
+          modelCapabilities: null,
+          transportCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: false,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          effectiveCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: false,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          assetFacts: [
+            {
+              assetId: "asset-image-2-blocked",
+              kind: "image",
+              mimeType: "image/png",
+              localPathStatus: "ready",
+              modelNativeSupport: null,
+              transportNativeSupport: false,
+              effectiveNativeSupport: false,
+              modelMimeTypeSupported: null,
+              transportMimeTypeSupported: null,
+              effectiveMimeTypeSupported: null,
+              handling: "blocked",
+            },
+          ],
+        },
+        createdAt: "2026-04-02T08:59:30.000Z",
+      },
       lastMessageId: "message-2",
       lastEventType: "message.received",
       pendingActionCount: 1,

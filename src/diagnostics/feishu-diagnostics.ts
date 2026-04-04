@@ -7,7 +7,11 @@ import {
   type FeishuDiagnosticsEventDetailValue,
   type FeishuDiagnosticsStateSnapshot,
 } from "../channels/feishu/diagnostics-state-store.js";
-import { SqliteCodexSessionRegistry } from "../storage/index.js";
+import {
+  SqliteCodexSessionRegistry,
+  type StoredTurnInputCompileCapabilityMatrix,
+  type StoredTurnInputRecord,
+} from "../storage/index.js";
 
 export interface FeishuDiagnosticFileStatus {
   path: string;
@@ -103,6 +107,11 @@ export interface FeishuDiagnosticsPendingActionSummary {
   principalId: string;
 }
 
+export interface FeishuDiagnosticsWarningCodeCount {
+  code: string;
+  count: number;
+}
+
 export interface FeishuDiagnosticsConversationSummary {
   key: string;
   chatId: string;
@@ -111,11 +120,27 @@ export interface FeishuDiagnosticsConversationSummary {
   activeSessionId: string;
   threadId: string | null;
   threadStatus: string | null;
+  multimodalSampleCount?: number;
+  multimodalWarningCodeCounts?: FeishuDiagnosticsWarningCodeCount[];
+  lastMultimodalInput?: FeishuDiagnosticsConversationMultimodalSummary | null;
+  lastBlockedMultimodalInput?: FeishuDiagnosticsConversationMultimodalSummary | null;
   lastMessageId: string | null;
   lastEventType: string | null;
   pendingActionCount: number;
   pendingActions: FeishuDiagnosticsPendingActionSummary[];
   updatedAt: string;
+}
+
+export interface FeishuDiagnosticsConversationMultimodalSummary {
+  requestId: string;
+  assetCount: number;
+  assetKinds: string[];
+  runtimeTarget: string | null;
+  degradationLevel: string | null;
+  warningCodes: string[];
+  warningMessages: string[];
+  capabilityMatrix: StoredTurnInputCompileCapabilityMatrix | null;
+  createdAt: string;
 }
 
 export interface FeishuTakeoverGuidance {
@@ -158,6 +183,7 @@ const FEISHU_SESSION_STORE_PATH = "infra/local/feishu-sessions.json";
 const FEISHU_ATTACHMENT_DRAFT_STORE_PATH = "infra/local/feishu-attachment-drafts.json";
 const FEISHU_DIAGNOSTICS_STORE_PATH = "infra/local/feishu-diagnostics.json";
 const FEISHU_SQLITE_FILE_PATH = "infra/local/themis.db";
+const FEISHU_RECENT_MULTIMODAL_TURN_INPUT_LIMIT = 24;
 
 export async function readFeishuDiagnosticsSnapshot(
   options: ReadFeishuDiagnosticsOptions,
@@ -460,6 +486,24 @@ function normalizeText(value: string | undefined): string | undefined {
   return normalized ? normalized : undefined;
 }
 
+function dedupeTextValues(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const results: string[] = [];
+
+  for (const value of values) {
+    const normalized = normalizeText(value ?? undefined);
+
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    results.push(normalized);
+  }
+
+  return results;
+}
+
 function selectCurrentConversation(
   conversations: FeishuDiagnosticsConversation[],
 ): FeishuDiagnosticsConversation | null {
@@ -481,6 +525,7 @@ function summarizeConversation(
   }
 
   const threadContext = resolveConversationThreadContext(conversation, runtimeStore);
+  const multimodalContext = resolveConversationMultimodalContext(conversation, runtimeStore);
 
   return {
     key: conversation.key,
@@ -490,6 +535,10 @@ function summarizeConversation(
     activeSessionId: conversation.activeSessionId,
     threadId: threadContext.threadId,
     threadStatus: threadContext.threadStatus,
+    multimodalSampleCount: multimodalContext.sampleCount,
+    multimodalWarningCodeCounts: multimodalContext.warningCodeCounts,
+    lastMultimodalInput: multimodalContext.lastMultimodalInput,
+    lastBlockedMultimodalInput: multimodalContext.lastBlockedMultimodalInput,
     lastMessageId: conversation.lastMessageId ?? null,
     lastEventType: conversation.lastEventType ?? null,
     pendingActionCount: conversation.pendingActions.length,
@@ -528,6 +577,105 @@ function resolveConversationThreadContext(
     threadId: normalizeText(session?.threadId) ?? normalizeText(latestTurn?.codexThreadId) ?? null,
     threadStatus: normalizeText(latestTurn?.status) ?? null,
   };
+}
+
+function resolveConversationMultimodalContext(
+  conversation: FeishuDiagnosticsConversation,
+  runtimeStore: SqliteCodexSessionRegistry | null,
+): {
+  sampleCount: number;
+  warningCodeCounts: FeishuDiagnosticsWarningCodeCount[];
+  lastMultimodalInput: FeishuDiagnosticsConversationMultimodalSummary | null;
+  lastBlockedMultimodalInput: FeishuDiagnosticsConversationMultimodalSummary | null;
+} {
+  if (!runtimeStore) {
+    return {
+      sampleCount: 0,
+      warningCodeCounts: [],
+      lastMultimodalInput: null,
+      lastBlockedMultimodalInput: null,
+    };
+  }
+
+  const sessionId = normalizeText(conversation.activeSessionId);
+
+  if (!sessionId) {
+    return {
+      sampleCount: 0,
+      warningCodeCounts: [],
+      lastMultimodalInput: null,
+      lastBlockedMultimodalInput: null,
+    };
+  }
+
+  const recentInputs = listRecentConversationMultimodalInputs(runtimeStore, sessionId);
+  const warningCodeCounts = new Map<string, number>();
+
+  for (const storedInput of recentInputs) {
+    for (const warning of storedInput.compileSummary?.warnings ?? []) {
+      const warningCode = normalizeText(warning.code);
+
+      if (!warningCode) {
+        continue;
+      }
+
+      warningCodeCounts.set(warningCode, (warningCodeCounts.get(warningCode) ?? 0) + 1);
+    }
+  }
+
+  return {
+    sampleCount: recentInputs.length,
+    warningCodeCounts: mapWarningCodeEntries(warningCodeCounts).map(([code, count]) => ({ code, count })),
+    lastMultimodalInput: recentInputs[0] ? summarizeConversationMultimodalInput(recentInputs[0]) : null,
+    lastBlockedMultimodalInput: summarizeConversationMultimodalInput(
+      recentInputs.find((storedInput) => storedInput.compileSummary?.degradationLevel === "blocked") ?? null,
+    ),
+  };
+}
+
+function listRecentConversationMultimodalInputs(
+  runtimeStore: SqliteCodexSessionRegistry,
+  sessionId: string,
+): StoredTurnInputRecord[] {
+  const turns = runtimeStore.listSessionTurns(sessionId);
+  const results: StoredTurnInputRecord[] = [];
+
+  for (let index = turns.length - 1; index >= 0 && results.length < FEISHU_RECENT_MULTIMODAL_TURN_INPUT_LIMIT; index -= 1) {
+    const turn = turns[index];
+    const storedInput = runtimeStore.getTurnInput(turn?.requestId ?? "");
+
+    if (!storedInput || storedInput.assets.length === 0) {
+      continue;
+    }
+
+    results.push(storedInput);
+  }
+
+  return results;
+}
+
+function summarizeConversationMultimodalInput(
+  storedInput: StoredTurnInputRecord | null,
+): FeishuDiagnosticsConversationMultimodalSummary | null {
+  if (!storedInput) {
+    return null;
+  }
+
+  return {
+    requestId: storedInput.requestId,
+    assetCount: storedInput.assets.length,
+    assetKinds: dedupeTextValues(storedInput.assets.map((asset) => asset.kind)),
+    runtimeTarget: normalizeText(storedInput.compileSummary?.runtimeTarget) ?? null,
+    degradationLevel: normalizeText(storedInput.compileSummary?.degradationLevel) ?? null,
+    warningCodes: dedupeTextValues(storedInput.compileSummary?.warnings.map((warning) => warning.code) ?? []),
+    warningMessages: dedupeTextValues(storedInput.compileSummary?.warnings.map((warning) => warning.message) ?? []),
+    capabilityMatrix: storedInput.compileSummary?.capabilityMatrix ?? null,
+    createdAt: storedInput.createdAt,
+  };
+}
+
+function mapWarningCodeEntries(counter: Map<string, number>): Array<[string, number]> {
+  return [...counter.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
 }
 
 function readFeishuDiagnosticsStateSnapshot(filePath: string): FeishuDiagnosticsStateSnapshot {

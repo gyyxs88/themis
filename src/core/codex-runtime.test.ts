@@ -249,6 +249,17 @@ test("buildCodexFallbackPromptSections 只消费路径提示块和额外纯文�
       ],
       compileWarnings: [],
       degradationLevel: "controlled_fallback",
+      capabilityMatrix: {
+        modelCapabilities: null,
+        transportCapabilities: null,
+        effectiveCapabilities: {
+          nativeTextInput: true,
+          nativeImageInput: false,
+          nativeDocumentInput: false,
+          supportedDocumentMimeTypes: [],
+        },
+        assetFacts: [],
+      },
     },
   );
 
@@ -318,6 +329,11 @@ test("runTask 在 codex-sdk 路径遇到图片 envelope 时会在 acquire 前阻
     assert.equal(storedInput?.compileSummary?.runtimeTarget, "codex-sdk");
     assert.equal(storedInput?.compileSummary?.degradationLevel, "blocked");
     assert.equal(storedInput?.compileSummary?.warnings[0]?.code, "IMAGE_NATIVE_INPUT_REQUIRED");
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.modelCapabilities, null);
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.transportCapabilities?.nativeImageInput, false);
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.effectiveCapabilities.nativeImageInput, false);
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.assetFacts[0]?.localPathStatus, "unavailable");
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.assetFacts[0]?.handling, "blocked");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -661,7 +677,15 @@ test("runTask 会把 inputEnvelope 文档只保留为路径提示，不再拼正
     assert.equal(storedInput?.envelope.assets[0]?.assetId, "asset-doc-1");
     assert.equal(storedInput?.compileSummary?.runtimeTarget, "codex-sdk");
     assert.equal(storedInput?.compileSummary?.degradationLevel, "controlled_fallback");
-    assert.equal(storedInput?.compileSummary?.warnings.length ?? -1, 0);
+    assert.deepEqual(
+      storedInput?.compileSummary?.warnings.map((warning) => warning.code),
+      ["DOCUMENT_NATIVE_INPUT_FALLBACK"],
+    );
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.modelCapabilities, null);
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.transportCapabilities?.nativeDocumentInput, false);
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.effectiveCapabilities.nativeDocumentInput, false);
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.assetFacts[0]?.localPathStatus, "ready");
+    assert.equal(storedInput?.compileSummary?.capabilityMatrix?.assetFacts[0]?.handling, "path_fallback");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

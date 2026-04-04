@@ -51,6 +51,41 @@ test("SqliteCodexSessionRegistry 会保存 turn input envelope 与 compile summa
         runtimeTarget: "app-server",
         degradationLevel: "native",
         warnings: [],
+        capabilityMatrix: {
+          modelCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          transportCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          effectiveCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          assetFacts: [
+            {
+              assetId: "asset-image-1",
+              kind: "image",
+              mimeType: "image/png",
+              localPathStatus: "ready",
+              modelNativeSupport: true,
+              transportNativeSupport: true,
+              effectiveNativeSupport: true,
+              modelMimeTypeSupported: null,
+              transportMimeTypeSupported: null,
+              effectiveMimeTypeSupported: null,
+              handling: "native",
+            },
+          ],
+        },
       },
       createdAt: "2026-04-01T21:00:00.000Z",
     });
@@ -59,6 +94,8 @@ test("SqliteCodexSessionRegistry 会保存 turn input envelope 与 compile summa
     assert.equal(stored?.envelope.parts[1]?.type, "image");
     assert.equal(stored?.assets[0]?.assetId, "asset-image-1");
     assert.equal(stored?.compileSummary?.degradationLevel, "native");
+    assert.equal(stored?.compileSummary?.capabilityMatrix?.assetFacts[0]?.handling, "native");
+    assert.equal(stored?.compileSummary?.capabilityMatrix?.effectiveCapabilities.nativeImageInput, true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

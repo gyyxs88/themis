@@ -135,10 +135,39 @@ export interface StoredTurnInputCompileWarning {
   assetId?: string;
 }
 
+export interface StoredTurnInputCompileCapabilitySnapshot {
+  nativeTextInput: boolean;
+  nativeImageInput: boolean;
+  nativeDocumentInput: boolean;
+  supportedDocumentMimeTypes: string[];
+}
+
+export interface StoredTurnInputCompileAssetFact {
+  assetId: string;
+  kind: "image" | "document";
+  mimeType: string;
+  localPathStatus: "ready" | "unavailable";
+  modelNativeSupport: boolean | null;
+  transportNativeSupport: boolean | null;
+  effectiveNativeSupport: boolean;
+  modelMimeTypeSupported: boolean | null;
+  transportMimeTypeSupported: boolean | null;
+  effectiveMimeTypeSupported: boolean | null;
+  handling: "native" | "path_fallback" | "blocked";
+}
+
+export interface StoredTurnInputCompileCapabilityMatrix {
+  modelCapabilities: StoredTurnInputCompileCapabilitySnapshot | null;
+  transportCapabilities: StoredTurnInputCompileCapabilitySnapshot | null;
+  effectiveCapabilities: StoredTurnInputCompileCapabilitySnapshot;
+  assetFacts: StoredTurnInputCompileAssetFact[];
+}
+
 export interface StoredTurnInputCompileSummary {
   runtimeTarget: string;
   degradationLevel: "native" | "lossless_textualization" | "controlled_fallback" | "blocked";
   warnings: StoredTurnInputCompileWarning[];
+  capabilityMatrix?: StoredTurnInputCompileCapabilityMatrix;
 }
 
 export interface SaveTurnInputInput {
@@ -6339,10 +6368,13 @@ function normalizeTurnInputCompileSummary(value: unknown): StoredTurnInputCompil
     return null;
   }
 
+  const capabilityMatrix = normalizeTurnInputCompileCapabilityMatrix(value.capabilityMatrix);
+
   return {
     runtimeTarget,
     degradationLevel,
     warnings,
+    ...(capabilityMatrix ? { capabilityMatrix } : {}),
   };
 }
 
@@ -6369,6 +6401,128 @@ function normalizeTurnInputCompileWarning(value: unknown): StoredTurnInputCompil
     message,
     ...(assetId ? { assetId } : {}),
   };
+}
+
+function normalizeTurnInputCompileCapabilityMatrix(
+  value: unknown,
+): StoredTurnInputCompileCapabilityMatrix | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const effectiveCapabilities = normalizeTurnInputCompileCapabilitySnapshot(value.effectiveCapabilities);
+  if (!effectiveCapabilities) {
+    return undefined;
+  }
+
+  const assetFacts = Array.isArray(value.assetFacts)
+    ? value.assetFacts
+      .map(normalizeTurnInputCompileAssetFact)
+      .filter((fact): fact is StoredTurnInputCompileAssetFact => fact !== null)
+    : null;
+
+  if (assetFacts === null) {
+    return undefined;
+  }
+
+  const modelCapabilities = value.modelCapabilities === null
+    ? null
+    : normalizeTurnInputCompileCapabilitySnapshot(value.modelCapabilities);
+  const transportCapabilities = value.transportCapabilities === null
+    ? null
+    : normalizeTurnInputCompileCapabilitySnapshot(value.transportCapabilities);
+
+  return {
+    modelCapabilities,
+    transportCapabilities,
+    effectiveCapabilities,
+    assetFacts,
+  };
+}
+
+function normalizeTurnInputCompileCapabilitySnapshot(
+  value: unknown,
+): StoredTurnInputCompileCapabilitySnapshot | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const nativeTextInput = typeof value.nativeTextInput === "boolean" ? value.nativeTextInput : null;
+  const nativeImageInput = typeof value.nativeImageInput === "boolean" ? value.nativeImageInput : null;
+  const nativeDocumentInput = typeof value.nativeDocumentInput === "boolean" ? value.nativeDocumentInput : null;
+  const supportedDocumentMimeTypes = Array.isArray(value.supportedDocumentMimeTypes)
+    ? value.supportedDocumentMimeTypes
+      .map((entry) => normalizeText(typeof entry === "string" ? entry : undefined))
+      .filter((entry): entry is string => Boolean(entry))
+    : null;
+
+  if (
+    nativeTextInput === null
+    || nativeImageInput === null
+    || nativeDocumentInput === null
+    || supportedDocumentMimeTypes === null
+  ) {
+    return null;
+  }
+
+  return {
+    nativeTextInput,
+    nativeImageInput,
+    nativeDocumentInput,
+    supportedDocumentMimeTypes,
+  };
+}
+
+function normalizeTurnInputCompileAssetFact(
+  value: unknown,
+): StoredTurnInputCompileAssetFact | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const assetId = normalizeText(typeof value.assetId === "string" ? value.assetId : undefined);
+  const kind = value.kind === "image" || value.kind === "document" ? value.kind : null;
+  const mimeType = normalizeText(typeof value.mimeType === "string" ? value.mimeType : undefined);
+  const localPathStatus = value.localPathStatus === "ready" || value.localPathStatus === "unavailable"
+    ? value.localPathStatus
+    : null;
+  const effectiveNativeSupport = typeof value.effectiveNativeSupport === "boolean"
+    ? value.effectiveNativeSupport
+    : null;
+  const effectiveMimeTypeSupported = normalizeNullableBoolean(value.effectiveMimeTypeSupported);
+  const modelNativeSupport = normalizeNullableBoolean(value.modelNativeSupport);
+  const transportNativeSupport = normalizeNullableBoolean(value.transportNativeSupport);
+  const modelMimeTypeSupported = normalizeNullableBoolean(value.modelMimeTypeSupported);
+  const transportMimeTypeSupported = normalizeNullableBoolean(value.transportMimeTypeSupported);
+  const handling = value.handling === "native" || value.handling === "path_fallback" || value.handling === "blocked"
+    ? value.handling
+    : null;
+
+  if (!assetId || !kind || !mimeType || !localPathStatus || effectiveNativeSupport === null || !handling) {
+    return null;
+  }
+
+  return {
+    assetId,
+    kind,
+    mimeType,
+    localPathStatus,
+    modelNativeSupport,
+    transportNativeSupport,
+    effectiveNativeSupport,
+    modelMimeTypeSupported,
+    transportMimeTypeSupported,
+    effectiveMimeTypeSupported,
+    handling,
+  };
+}
+
+function normalizeNullableBoolean(value: unknown): boolean | null {
+  if (value === null) {
+    return null;
+  }
+
+  return typeof value === "boolean" ? value : null;
 }
 
 function normalizeTaskInputTextExtraction(value: unknown): TaskInputAsset["textExtraction"] | undefined {

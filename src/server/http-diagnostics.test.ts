@@ -117,6 +117,41 @@ test("GET /api/diagnostics 会返回结构化 summary", async () => {
         runtimeTarget: "app-server",
         degradationLevel: "native",
         warnings: [],
+        capabilityMatrix: {
+          modelCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: true,
+            supportedDocumentMimeTypes: ["application/pdf"],
+          },
+          transportCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          effectiveCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          assetFacts: [
+            {
+              assetId: "asset-image-1",
+              kind: "image",
+              mimeType: "image/png",
+              localPathStatus: "ready",
+              modelNativeSupport: true,
+              transportNativeSupport: true,
+              effectiveNativeSupport: true,
+              modelMimeTypeSupported: null,
+              transportMimeTypeSupported: null,
+              effectiveMimeTypeSupported: null,
+              handling: "native",
+            },
+          ],
+        },
       },
     });
     const headers = await createAuthenticatedWebHeaders({
@@ -149,6 +184,14 @@ test("GET /api/diagnostics 会返回结构化 summary", async () => {
             recentTurnInputCount?: number;
             lastTurn?: {
               degradationLevel?: string;
+              capabilityMatrix?: {
+                effectiveCapabilities?: {
+                  nativeImageInput?: boolean;
+                };
+                assetFacts?: Array<{
+                  handling?: string;
+                }>;
+              };
             };
           };
         };
@@ -181,6 +224,8 @@ test("GET /api/diagnostics 会返回结构化 summary", async () => {
     assert.equal(payload.summary?.provider?.providerCount, 1);
     assert.equal(payload.summary?.service?.multimodal?.recentTurnInputCount, 1);
     assert.equal(payload.summary?.service?.multimodal?.lastTurn?.degradationLevel, "native");
+    assert.equal(payload.summary?.service?.multimodal?.lastTurn?.capabilityMatrix?.effectiveCapabilities?.nativeImageInput, true);
+    assert.equal(payload.summary?.service?.multimodal?.lastTurn?.capabilityMatrix?.assetFacts?.[0]?.handling, "native");
     assert.equal(payload.summary?.mcp?.servers?.[0]?.id, "context7");
     assert.equal(payload.summary?.mcp?.servers?.[0]?.transport, "stdio");
     assert.equal(payload.summary?.mcp?.diagnostics?.statusCounts?.healthyCount, 1);
@@ -430,6 +475,10 @@ test("GET /api/diagnostics 会返回 feishu summary", async () => {
       activeSessionId: "session-1",
       threadId: "thread-1",
       threadStatus: "running",
+      multimodalSampleCount: 0,
+      multimodalWarningCodeCounts: [],
+      lastMultimodalInput: null,
+      lastBlockedMultimodalInput: null,
       lastMessageId: "message-1",
       lastEventType: "message.created",
       pendingActionCount: 1,

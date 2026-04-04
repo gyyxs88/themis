@@ -119,6 +119,41 @@ test("RuntimeDiagnosticsService.readSummary 会汇总最近 turn input 的多模
         runtimeTarget: "app-server",
         degradationLevel: "native",
         warnings: [],
+        capabilityMatrix: {
+          modelCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: true,
+            supportedDocumentMimeTypes: ["application/pdf"],
+          },
+          transportCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          effectiveCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          assetFacts: [
+            {
+              assetId: "asset-image-1",
+              kind: "image",
+              mimeType: "image/png",
+              localPathStatus: "ready",
+              modelNativeSupport: true,
+              transportNativeSupport: true,
+              effectiveNativeSupport: true,
+              modelMimeTypeSupported: null,
+              transportMimeTypeSupported: null,
+              effectiveMimeTypeSupported: null,
+              handling: "native",
+            },
+          ],
+        },
       },
     });
 
@@ -154,7 +189,48 @@ test("RuntimeDiagnosticsService.readSummary 会汇总最近 turn input 的多模
       compileSummary: {
         runtimeTarget: "app-server",
         degradationLevel: "controlled_fallback",
-        warnings: [],
+        warnings: [
+          {
+            code: "DOCUMENT_NATIVE_INPUT_FALLBACK",
+            message: "当前 runtime 未声明支持原生文档输入，文档已退化为路径提示。",
+            assetId: "asset-document-1",
+          },
+        ],
+        capabilityMatrix: {
+          modelCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: true,
+            supportedDocumentMimeTypes: ["application/pdf"],
+          },
+          transportCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          effectiveCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          assetFacts: [
+            {
+              assetId: "asset-document-1",
+              kind: "document",
+              mimeType: "application/pdf",
+              localPathStatus: "ready",
+              modelNativeSupport: true,
+              transportNativeSupport: false,
+              effectiveNativeSupport: false,
+              modelMimeTypeSupported: true,
+              transportMimeTypeSupported: null,
+              effectiveMimeTypeSupported: null,
+              handling: "path_fallback",
+            },
+          ],
+        },
       },
     });
 
@@ -197,6 +273,36 @@ test("RuntimeDiagnosticsService.readSummary 会汇总最近 turn input 的多模
             assetId: "asset-image-2",
           },
         ],
+        capabilityMatrix: {
+          modelCapabilities: null,
+          transportCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: false,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          effectiveCapabilities: {
+            nativeTextInput: true,
+            nativeImageInput: false,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+          },
+          assetFacts: [
+            {
+              assetId: "asset-image-2",
+              kind: "image",
+              mimeType: "image/jpeg",
+              localPathStatus: "ready",
+              modelNativeSupport: null,
+              transportNativeSupport: false,
+              effectiveNativeSupport: false,
+              modelMimeTypeSupported: null,
+              transportMimeTypeSupported: null,
+              effectiveMimeTypeSupported: null,
+              handling: "blocked",
+            },
+          ],
+        },
       },
     });
 
@@ -231,6 +337,10 @@ test("RuntimeDiagnosticsService.readSummary 会汇总最近 turn input 的多模
       { runtimeTarget: "app-server", count: 2 },
       { runtimeTarget: "codex-sdk", count: 1 },
     ]);
+    assert.deepEqual(summary.service.multimodal.warningCodeCounts, [
+      { code: "DOCUMENT_NATIVE_INPUT_FALLBACK", count: 1 },
+      { code: "IMAGE_NATIVE_INPUT_REQUIRED", count: 1 },
+    ]);
     assert.equal(summary.service.multimodal.lastTurn?.requestId, "request-image-blocked");
     assert.equal(summary.service.multimodal.lastTurn?.sourceChannel, "feishu");
     assert.equal(summary.service.multimodal.lastTurn?.sessionId, "session-2");
@@ -239,6 +349,17 @@ test("RuntimeDiagnosticsService.readSummary 会汇总最近 turn input 的多模
     assert.deepEqual(summary.service.multimodal.lastTurn?.partTypes, ["image"]);
     assert.deepEqual(summary.service.multimodal.lastTurn?.assetKinds, ["image"]);
     assert.deepEqual(summary.service.multimodal.lastTurn?.warningCodes, ["IMAGE_NATIVE_INPUT_REQUIRED"]);
+    assert.deepEqual(summary.service.multimodal.lastTurn?.warningMessages, ["当前 runtime 不支持 native image input。"]);
+    assert.equal(summary.service.multimodal.lastTurn?.capabilityMatrix?.modelCapabilities, null);
+    assert.equal(summary.service.multimodal.lastTurn?.capabilityMatrix?.transportCapabilities?.nativeImageInput, false);
+    assert.equal(summary.service.multimodal.lastTurn?.capabilityMatrix?.effectiveCapabilities.nativeImageInput, false);
+    assert.equal(summary.service.multimodal.lastTurn?.capabilityMatrix?.assetFacts[0]?.handling, "blocked");
+    assert.equal(summary.service.multimodal.lastBlockedTurn?.requestId, "request-image-blocked");
+    assert.equal(summary.service.multimodal.lastBlockedTurn?.runtimeTarget, "codex-sdk");
+    assert.equal(summary.service.multimodal.lastBlockedTurn?.degradationLevel, "blocked");
+    assert.deepEqual(summary.service.multimodal.lastBlockedTurn?.warningCodes, ["IMAGE_NATIVE_INPUT_REQUIRED"]);
+    assert.deepEqual(summary.service.multimodal.lastBlockedTurn?.warningMessages, ["当前 runtime 不支持 native image input。"]);
+    assert.equal(summary.service.multimodal.lastBlockedTurn?.capabilityMatrix?.assetFacts[0]?.handling, "blocked");
     assert.equal(summary.overview.hotspots.some((item) => item.id === "multimodal_inputs_blocked"), true);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -535,6 +656,10 @@ test("RuntimeDiagnosticsService.readSummary 会汇总 feishu diagnostics 快照"
       activeSessionId: "session-2",
       threadId: "thread-2",
       threadStatus: "running",
+      multimodalSampleCount: 0,
+      multimodalWarningCodeCounts: [],
+      lastMultimodalInput: null,
+      lastBlockedMultimodalInput: null,
       lastMessageId: "message-2",
       lastEventType: "message.received",
       pendingActionCount: 1,

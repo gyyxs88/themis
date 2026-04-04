@@ -364,6 +364,7 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
       );
       console.log(`multimodal.sourceChannels：${formatNamedCountList(summary.service.multimodal.sourceChannelCounts, "sourceChannel")}`);
       console.log(`multimodal.runtimeTargets：${formatNamedCountList(summary.service.multimodal.runtimeTargetCounts, "runtimeTarget")}`);
+      console.log(`multimodal.warningCodes：${formatNamedCountList(summary.service.multimodal.warningCodeCounts, "code")}`);
       if (summary.service.multimodal.lastTurn) {
         console.log(`multimodal.lastTurn.requestId：${summary.service.multimodal.lastTurn.requestId}`);
         console.log(`multimodal.lastTurn.sourceChannel：${summary.service.multimodal.lastTurn.sourceChannel}`);
@@ -381,8 +382,46 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
         console.log(
           `multimodal.lastTurn.warningCodes：${summary.service.multimodal.lastTurn.warningCodes.join(", ") || "<none>"}`,
         );
+        console.log(
+          `multimodal.lastTurn.warningMessages：${summary.service.multimodal.lastTurn.warningMessages.join(" / ") || "<none>"}`,
+        );
+        console.log(
+          `multimodal.lastTurn.matrix.imageNative：${formatCapabilityNativeSupport(summary.service.multimodal.lastTurn.capabilityMatrix, "image")}`,
+        );
+        console.log(
+          `multimodal.lastTurn.matrix.documentNative：${formatCapabilityNativeSupport(summary.service.multimodal.lastTurn.capabilityMatrix, "document")}`,
+        );
+        console.log(
+          `multimodal.lastTurn.matrix.assetFacts：${formatCapabilityAssetFacts(summary.service.multimodal.lastTurn.capabilityMatrix)}`,
+        );
       } else {
         console.log("multimodal.lastTurn：<none>");
+      }
+      if (summary.service.multimodal.lastBlockedTurn) {
+        console.log(`multimodal.lastBlocked.requestId：${summary.service.multimodal.lastBlockedTurn.requestId}`);
+        console.log(`multimodal.lastBlocked.sourceChannel：${summary.service.multimodal.lastBlockedTurn.sourceChannel}`);
+        console.log(`multimodal.lastBlocked.sessionId：${summary.service.multimodal.lastBlockedTurn.sessionId ?? "<none>"}`);
+        console.log(`multimodal.lastBlocked.createdAt：${summary.service.multimodal.lastBlockedTurn.createdAt}`);
+        console.log(
+          `multimodal.lastBlocked.compile：${summary.service.multimodal.lastBlockedTurn.runtimeTarget ?? "unknown"} / ${summary.service.multimodal.lastBlockedTurn.degradationLevel}`,
+        );
+        console.log(
+          `multimodal.lastBlocked.warningCodes：${summary.service.multimodal.lastBlockedTurn.warningCodes.join(", ") || "<none>"}`,
+        );
+        console.log(
+          `multimodal.lastBlocked.warningMessages：${summary.service.multimodal.lastBlockedTurn.warningMessages.join(" / ") || "<none>"}`,
+        );
+        console.log(
+          `multimodal.lastBlocked.matrix.imageNative：${formatCapabilityNativeSupport(summary.service.multimodal.lastBlockedTurn.capabilityMatrix, "image")}`,
+        );
+        console.log(
+          `multimodal.lastBlocked.matrix.documentNative：${formatCapabilityNativeSupport(summary.service.multimodal.lastBlockedTurn.capabilityMatrix, "document")}`,
+        );
+        console.log(
+          `multimodal.lastBlocked.matrix.assetFacts：${formatCapabilityAssetFacts(summary.service.multimodal.lastBlockedTurn.capabilityMatrix)}`,
+        );
+      } else {
+        console.log("multimodal.lastBlocked：<none>");
       }
       return;
     case "mcp":
@@ -690,6 +729,57 @@ function formatNamedCountList<T extends { count: number }>(
     .join(", ");
 }
 
+type MultimodalCapabilityMatrix = NonNullable<RuntimeMultimodalDiagnosticsSummary["lastTurn"]>["capabilityMatrix"];
+
+function formatCapabilityNativeSupport(
+  matrix: MultimodalCapabilityMatrix | null,
+  kind: "image" | "document",
+): string {
+  if (!matrix) {
+    return "<none>";
+  }
+
+  const capabilityKey = kind === "image" ? "nativeImageInput" : "nativeDocumentInput";
+  return [
+    `model=${formatNullableBooleanFlag(matrix.modelCapabilities?.[capabilityKey] ?? null)}`,
+    `transport=${formatNullableBooleanFlag(matrix.transportCapabilities?.[capabilityKey] ?? null)}`,
+    `effective=${formatNullableBooleanFlag(matrix.effectiveCapabilities[capabilityKey])}`,
+  ].join(" ");
+}
+
+function formatCapabilityAssetFacts(
+  matrix: MultimodalCapabilityMatrix | null,
+): string {
+  if (!matrix || matrix.assetFacts.length === 0) {
+    return "<none>";
+  }
+
+  return matrix.assetFacts.map((fact) => {
+    const parts = [
+      `${fact.assetId}[${fact.kind}]`,
+      `localPath=${fact.localPathStatus}`,
+      `handling=${fact.handling}`,
+      `native(model=${formatNullableBooleanFlag(fact.modelNativeSupport)}, transport=${formatNullableBooleanFlag(fact.transportNativeSupport)}, effective=${formatNullableBooleanFlag(fact.effectiveNativeSupport)})`,
+    ];
+
+    if (fact.kind === "document") {
+      parts.push(
+        `mime(model=${formatNullableBooleanFlag(fact.modelMimeTypeSupported)}, transport=${formatNullableBooleanFlag(fact.transportMimeTypeSupported)}, effective=${formatNullableBooleanFlag(fact.effectiveMimeTypeSupported)})`,
+      );
+    }
+
+    return parts.join(" ");
+  }).join(" | ");
+}
+
+function formatNullableBooleanFlag(value: boolean | null): string {
+  if (value === null) {
+    return "<unknown>";
+  }
+
+  return value ? "yes" : "no";
+}
+
 function printWebSmokeResult(result: Awaited<ReturnType<RuntimeSmokeService["runWebSmoke"]>>): void {
   console.log("Themis smoke - web");
   console.log(`ok：${result.ok ? "yes" : "no"}`);
@@ -703,8 +793,16 @@ function printWebSmokeResult(result: Awaited<ReturnType<RuntimeSmokeService["run
   console.log(`historyCompleted：${result.historyCompleted ? "yes" : "no"}`);
   console.log(`imageCompileVerified：${result.imageCompileVerified ? "yes" : "no"}`);
   console.log(`imageCompileDegradationLevel：${result.imageCompileDegradationLevel ?? "<none>"}`);
+  console.log(`imageCompileWarningCodes：${result.imageCompileWarningCodes.join(", ") || "<none>"}`);
+  console.log(`imageCompileMatrixVerified：${result.imageCompileMatrixVerified ? "yes" : "no"}`);
+  console.log(`imageCompileMatrixImageNative：${result.imageCompileMatrixImageNative ?? "<none>"}`);
+  console.log(`imageCompileMatrixAssetHandling：${result.imageCompileMatrixAssetHandling.join(", ") || "<none>"}`);
   console.log(`documentCompileVerified：${result.documentCompileVerified ? "yes" : "no"}`);
   console.log(`documentCompileDegradationLevel：${result.documentCompileDegradationLevel ?? "<none>"}`);
+  console.log(`documentCompileWarningCodes：${result.documentCompileWarningCodes.join(", ") || "<none>"}`);
+  console.log(`documentCompileMatrixVerified：${result.documentCompileMatrixVerified ? "yes" : "no"}`);
+  console.log(`documentCompileMatrixDocumentNative：${result.documentCompileMatrixDocumentNative ?? "<none>"}`);
+  console.log(`documentCompileMatrixAssetHandling：${result.documentCompileMatrixAssetHandling.join(", ") || "<none>"}`);
   console.log(`message：${result.message}`);
 }
 
@@ -767,6 +865,56 @@ function printFeishuDiagnosticsSummary(summary: FeishuDiagnosticsSummary): void 
   console.log(`threadId：${currentConversation?.threadId ?? "<none>"}`);
   console.log(`threadStatus：${currentConversation?.threadStatus ?? "<none>"}`);
   console.log(`pendingActionCount：${currentConversation?.pendingActionCount ?? 0}`);
+  console.log(`multimodal.sampleCount：${currentConversation?.multimodalSampleCount ?? 0}`);
+  console.log(
+    `multimodal.warningCodes：${formatNamedCountList(currentConversation?.multimodalWarningCodeCounts ?? [], "code")}`,
+  );
+  console.log(`lastMultimodal.requestId：${currentConversation?.lastMultimodalInput?.requestId ?? "<none>"}`);
+  console.log(
+    `lastMultimodal.compile：${currentConversation?.lastMultimodalInput
+      ? `${currentConversation.lastMultimodalInput.runtimeTarget ?? "<unknown>"} / ${currentConversation.lastMultimodalInput.degradationLevel ?? "<unknown>"}`
+      : "<none>"}`,
+  );
+  console.log(
+    `lastMultimodal.warningCodes：${currentConversation?.lastMultimodalInput?.warningCodes.join(", ") || "<none>"}`,
+  );
+  console.log(
+    `lastMultimodal.warningMessages：${currentConversation?.lastMultimodalInput?.warningMessages.join(" / ") || "<none>"}`,
+  );
+  console.log(
+    `lastMultimodal.assetKinds：${currentConversation?.lastMultimodalInput?.assetKinds.join(", ") || "<none>"}`,
+  );
+  console.log(`lastMultimodal.assetCount：${currentConversation?.lastMultimodalInput?.assetCount ?? 0}`);
+  console.log(
+    `lastMultimodal.matrix.imageNative：${formatCapabilityNativeSupport(currentConversation?.lastMultimodalInput?.capabilityMatrix ?? null, "image")}`,
+  );
+  console.log(
+    `lastMultimodal.matrix.documentNative：${formatCapabilityNativeSupport(currentConversation?.lastMultimodalInput?.capabilityMatrix ?? null, "document")}`,
+  );
+  console.log(
+    `lastMultimodal.matrix.assetFacts：${formatCapabilityAssetFacts(currentConversation?.lastMultimodalInput?.capabilityMatrix ?? null)}`,
+  );
+  console.log(`lastBlockedMultimodal.requestId：${currentConversation?.lastBlockedMultimodalInput?.requestId ?? "<none>"}`);
+  console.log(
+    `lastBlockedMultimodal.compile：${currentConversation?.lastBlockedMultimodalInput
+      ? `${currentConversation.lastBlockedMultimodalInput.runtimeTarget ?? "<unknown>"} / ${currentConversation.lastBlockedMultimodalInput.degradationLevel ?? "<unknown>"}`
+      : "<none>"}`,
+  );
+  console.log(
+    `lastBlockedMultimodal.warningCodes：${currentConversation?.lastBlockedMultimodalInput?.warningCodes.join(", ") || "<none>"}`,
+  );
+  console.log(
+    `lastBlockedMultimodal.warningMessages：${currentConversation?.lastBlockedMultimodalInput?.warningMessages.join(" / ") || "<none>"}`,
+  );
+  console.log(
+    `lastBlockedMultimodal.matrix.imageNative：${formatCapabilityNativeSupport(currentConversation?.lastBlockedMultimodalInput?.capabilityMatrix ?? null, "image")}`,
+  );
+  console.log(
+    `lastBlockedMultimodal.matrix.documentNative：${formatCapabilityNativeSupport(currentConversation?.lastBlockedMultimodalInput?.capabilityMatrix ?? null, "document")}`,
+  );
+  console.log(
+    `lastBlockedMultimodal.matrix.assetFacts：${formatCapabilityAssetFacts(currentConversation?.lastBlockedMultimodalInput?.capabilityMatrix ?? null)}`,
+  );
   const takeoverGuidance = describeFeishuTakeoverGuidance(currentConversation);
   console.log("当前接管判断");
   console.log(`takeoverState：${takeoverGuidance.state}`);
