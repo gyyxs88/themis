@@ -568,6 +568,163 @@ test("themis doctor smoke all 会先输出 web，再输出 feishu 前置检查",
   }
 });
 
+test("themis doctor release 会输出发布就绪摘要，并在 smoke 与文档都通过时返回 0", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "themis-doctor-cli-release-success-"));
+  let server: ReturnType<typeof createServer> | null = null;
+
+  try {
+    mkdirSync(resolve(workspace, "docs", "feishu"), { recursive: true });
+    mkdirSync(resolve(workspace, "infra", "local"), { recursive: true });
+    writeFileSync(resolve(workspace, "docs/feishu/themis-feishu-real-journey-smoke.md"), "# smoke\n", "utf8");
+    writeReleaseDocs(workspace);
+    writeFileSync(
+      resolve(workspace, "infra/local/feishu-diagnostics.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          conversations: [],
+          recentEvents: [],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const webSmokeDouble = createWebSmokeHttpDouble();
+    server = createServer(async (req, res) => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+
+      if (await webSmokeDouble.handle(req, res)) {
+        return;
+      }
+
+      if (req.method === "GET" && url.pathname === "/") {
+        res.writeHead(302, {
+          Location: "/login",
+        });
+        res.end();
+        return;
+      }
+
+      res.writeHead(404);
+      res.end();
+    });
+
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+
+    if (!address || typeof address === "string") {
+      throw new Error("test server failed to bind");
+    }
+
+    const result = await runCliAsync(["doctor", "release"], workspace, {
+      THEMIS_BASE_URL: `http://127.0.0.1:${address.port}`,
+      FEISHU_APP_ID: "cli_xxx",
+      FEISHU_APP_SECRET: "secret_xxx",
+    });
+
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /Themis 发布就绪检查/);
+    assert.match(result.stdout, /ok：yes/);
+    assert.match(result.stdout, /acceptanceMatrix\.automatedCommandCount：7/);
+    assert.match(result.stdout, /acceptanceMatrix\.feishuScenarioCount：7/);
+    assert.match(result.stdout, /docs\/repository\/themis-release-acceptance-matrix\.md：ok/);
+    assert.match(result.stdout, /docs\/repository\/themis-release-rollout-and-rollback\.md：ok/);
+    assert.match(result.stdout, /docs\/repository\/themis-operator-onboarding\.md：ok/);
+    assert.match(result.stdout, /1\. 运行诊断基线：pass/);
+    assert.match(result.stdout, /2\. 真实 Web smoke：pass/);
+    assert.match(result.stdout, /3\. 飞书 smoke 前置检查：pass/);
+  } finally {
+    if (server) {
+      server.closeAllConnections?.();
+      server.closeIdleConnections?.();
+      server.unref();
+      server.close();
+    }
+
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("themis doctor release 会在发布文档缺失时返回非 0", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "themis-doctor-cli-release-missing-doc-"));
+  let server: ReturnType<typeof createServer> | null = null;
+
+  try {
+    mkdirSync(resolve(workspace, "docs", "feishu"), { recursive: true });
+    mkdirSync(resolve(workspace, "infra", "local"), { recursive: true });
+    writeFileSync(resolve(workspace, "docs/feishu/themis-feishu-real-journey-smoke.md"), "# smoke\n", "utf8");
+    writeReleaseDocs(workspace, {
+      missing: ["acceptance_matrix"],
+    });
+    writeFileSync(
+      resolve(workspace, "infra/local/feishu-diagnostics.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          conversations: [],
+          recentEvents: [],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const webSmokeDouble = createWebSmokeHttpDouble();
+    server = createServer(async (req, res) => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+
+      if (await webSmokeDouble.handle(req, res)) {
+        return;
+      }
+
+      if (req.method === "GET" && url.pathname === "/") {
+        res.writeHead(302, {
+          Location: "/login",
+        });
+        res.end();
+        return;
+      }
+
+      res.writeHead(404);
+      res.end();
+    });
+
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+
+    if (!address || typeof address === "string") {
+      throw new Error("test server failed to bind");
+    }
+
+    const result = await runCliAsync(["doctor", "release"], workspace, {
+      THEMIS_BASE_URL: `http://127.0.0.1:${address.port}`,
+      FEISHU_APP_ID: "cli_xxx",
+      FEISHU_APP_SECRET: "secret_xxx",
+    });
+
+    assert.notEqual(result.code, 0);
+    assert.match(result.stdout, /Themis 发布就绪检查/);
+    assert.match(result.stdout, /ok：no/);
+    assert.match(result.stdout, /docs\/repository\/themis-release-acceptance-matrix\.md：missing/);
+    assert.match(result.stdout, /4\. 发布验收矩阵文档：fail/);
+    assert.match(result.stdout, /补齐 docs\/repository\/themis-release-acceptance-matrix\.md/);
+  } finally {
+    if (server) {
+      server.closeAllConnections?.();
+      server.closeIdleConnections?.();
+      server.unref();
+      server.close();
+    }
+
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("themis doctor smoke all 在 web 失败时会明确提示跳过 feishu", async () => {
   const workspace = mkdtempSync(join(tmpdir(), "themis-doctor-cli-smoke-all-web-fail-"));
   let server: ReturnType<typeof createServer> | null = null;
@@ -2316,3 +2473,27 @@ async function readJsonRequest(req: any): Promise<unknown> {
 function join(...parts: string[]): string {
   return resolve(...parts);
 }
+
+function writeReleaseDocs(
+  workspace: string,
+  options: {
+    missing?: ReleaseDocumentationId[];
+  } = {},
+): void {
+  const missing = new Set(options.missing ?? []);
+  mkdirSync(resolve(workspace, "docs", "repository"), { recursive: true });
+
+  if (!missing.has("acceptance_matrix")) {
+    writeFileSync(resolve(workspace, "docs/repository/themis-release-acceptance-matrix.md"), "# acceptance\n", "utf8");
+  }
+
+  if (!missing.has("rollout_and_rollback")) {
+    writeFileSync(resolve(workspace, "docs/repository/themis-release-rollout-and-rollback.md"), "# rollout\n", "utf8");
+  }
+
+  if (!missing.has("operator_onboarding")) {
+    writeFileSync(resolve(workspace, "docs/repository/themis-operator-onboarding.md"), "# onboarding\n", "utf8");
+  }
+}
+
+type ReleaseDocumentationId = "acceptance_matrix" | "rollout_and_rollback" | "operator_onboarding";

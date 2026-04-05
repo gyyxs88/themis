@@ -11,6 +11,7 @@ import {
   type RuntimeDiagnosticFileStatus,
   type RuntimeMultimodalDiagnosticsSummary,
 } from "../diagnostics/runtime-diagnostics.js";
+import { summarizeReleaseReadiness, type ReleaseReadinessSummary } from "../diagnostics/release-readiness.js";
 import {
   buildFeishuTroubleshootingPlaybook,
   describeFeishuTakeoverGuidance,
@@ -266,12 +267,12 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
 
   const sections = [subcommand, ...args].filter((item): item is string => Boolean(item && item.trim()));
   if (sections.length > 1) {
-    throw new Error("用法：themis doctor [context|auth|provider|memory|service|mcp|feishu|smoke]");
+    throw new Error("用法：themis doctor [context|auth|provider|memory|service|mcp|feishu|release|smoke]");
   }
 
   const selectedSection = sections[0]?.trim().toLowerCase();
-  if (selectedSection && !["context", "auth", "provider", "memory", "service", "mcp", "feishu"].includes(selectedSection)) {
-    throw new Error("doctor 子命令仅支持 context / auth / provider / memory / service / mcp / feishu。");
+  if (selectedSection && !["context", "auth", "provider", "memory", "service", "mcp", "feishu", "release"].includes(selectedSection)) {
+    throw new Error("doctor 子命令仅支持 context / auth / provider / memory / service / mcp / feishu / release。");
   }
 
   const dbPath = resolve(cwd, "infra/local/themis.db");
@@ -459,6 +460,21 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
     case "feishu":
       printFeishuDiagnosticsSummary(summary.feishu);
       return;
+    case "release": {
+      const smokeService = new RuntimeSmokeService({
+        workingDirectory: cwd,
+        env: process.env,
+      });
+      const smoke = await smokeService.runAllSmoke();
+      const releaseSummary = summarizeReleaseReadiness({
+        workingDirectory: cwd,
+        diagnostics: summary,
+        smoke,
+      });
+      printReleaseReadinessSummary(releaseSummary);
+      process.exitCode = releaseSummary.ok ? 0 : 1;
+      return;
+    }
     default:
       return;
   }
@@ -672,7 +688,7 @@ function printHelp(): void {
   console.log("- ./themis status");
   console.log("- ./themis check");
   console.log("- ./themis doctor");
-  console.log("- ./themis doctor <context|auth|provider|memory|service|mcp|feishu>");
+  console.log("- ./themis doctor <context|auth|provider|memory|service|mcp|feishu|release>");
   console.log("- ./themis doctor smoke <web|feishu|all>");
   console.log("- ./themis config list [--show-secrets]");
   console.log("- ./themis config set <KEY> <VALUE>");
@@ -691,6 +707,34 @@ function printHelp(): void {
   console.log("- ./themis skill sync <SKILL_NAME> [--force]");
   console.log("");
   console.log("如果希望像 codex/openclaw 一样直接输入 `themis`，建议执行 `./themis install`。");
+}
+
+function printReleaseReadinessSummary(summary: ReleaseReadinessSummary): void {
+  console.log("Themis 发布就绪检查");
+  console.log(`ok：${summary.ok ? "yes" : "no"}`);
+  console.log(`generatedAt：${summary.generatedAt}`);
+  console.log(`workingDirectory：${summary.workingDirectory}`);
+  console.log(`acceptanceMatrix.automatedCommandCount：${summary.acceptanceMatrix.automatedCommands.length}`);
+  console.log(`acceptanceMatrix.feishuScenarioCount：${summary.acceptanceMatrix.feishuScenarioCount}`);
+  console.log(`acceptanceMatrix.rerunSequenceCount：${summary.acceptanceMatrix.rerunSequence.length}`);
+  console.log(`acceptanceMatrix.manualDocs：${summary.acceptanceMatrix.manualDocs.join(", ")}`);
+
+  console.log("文档状态");
+  for (const document of summary.documentation) {
+    console.log(`${document.path}：${document.status}`);
+  }
+
+  console.log("检查项");
+  for (const [index, check] of summary.checks.entries()) {
+    console.log(`${index + 1}. ${check.title}：${check.status}`);
+    console.log(`摘要：${check.summary}`);
+    console.log(`下一步：${check.nextStep}`);
+  }
+
+  console.log("建议下一步");
+  for (const [index, step] of summary.nextSteps.entries()) {
+    console.log(`${index + 1}. ${step}`);
+  }
 }
 
 function printFileStatuses(files: RuntimeDiagnosticFileStatus[]): void {
