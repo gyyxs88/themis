@@ -200,6 +200,19 @@ test("themis doctor smoke web 会输出真实 Web smoke 结果", async () => {
     assert.match(result.stdout, /documentCompileMatrixVerified：yes/);
     assert.match(result.stdout, /documentCompileMatrixDocumentNative：transport=no effective=no/);
     assert.match(result.stdout, /documentCompileMatrixAssetHandling：path_fallback/);
+    assert.match(result.stdout, /sharedBoundaryVerified：yes/);
+    assert.match(result.stdout, /sharedBoundaryImagePathBlocked：yes/);
+    assert.match(result.stdout, /sharedBoundaryImagePathWarningCodes：IMAGE_PATH_UNAVAILABLE/);
+    assert.match(result.stdout, /sharedBoundaryDocumentPathBlocked：yes/);
+    assert.match(result.stdout, /sharedBoundaryDocumentPathWarningCodes：DOCUMENT_PATH_UNAVAILABLE/);
+    assert.match(result.stdout, /sharedBoundaryTextNativeBlocked：yes/);
+    assert.match(result.stdout, /sharedBoundaryTextNativeWarningCodes：TEXT_NATIVE_INPUT_REQUIRED/);
+    assert.match(result.stdout, /sharedBoundaryImageNativeBlocked：yes/);
+    assert.match(result.stdout, /sharedBoundaryImageNativeWarningCodes：IMAGE_NATIVE_INPUT_REQUIRED/);
+    assert.match(result.stdout, /sharedBoundaryDocumentMimeNative：yes/);
+    assert.match(result.stdout, /sharedBoundaryDocumentMimeNativeWarningCodes：<none>/);
+    assert.match(result.stdout, /sharedBoundaryDocumentMimeFallback：yes/);
+    assert.match(result.stdout, /sharedBoundaryDocumentMimeWarningCodes：DOCUMENT_MIME_TYPE_FALLBACK/);
   } finally {
     if (server) {
       server.closeAllConnections?.();
@@ -535,6 +548,13 @@ test("themis doctor smoke all 会先输出 web，再输出 feishu 前置检查",
     assert.match(result.stdout, /documentCompileWarningCodes：DOCUMENT_NATIVE_INPUT_FALLBACK/);
     assert.match(result.stdout, /documentCompileMatrixVerified：yes/);
     assert.match(result.stdout, /documentCompileMatrixDocumentNative：transport=no effective=no/);
+    assert.match(result.stdout, /sharedBoundaryVerified：yes/);
+    assert.match(result.stdout, /sharedBoundaryImagePathWarningCodes：IMAGE_PATH_UNAVAILABLE/);
+    assert.match(result.stdout, /sharedBoundaryDocumentPathWarningCodes：DOCUMENT_PATH_UNAVAILABLE/);
+    assert.match(result.stdout, /sharedBoundaryTextNativeWarningCodes：TEXT_NATIVE_INPUT_REQUIRED/);
+    assert.match(result.stdout, /sharedBoundaryImageNativeWarningCodes：IMAGE_NATIVE_INPUT_REQUIRED/);
+    assert.match(result.stdout, /sharedBoundaryDocumentMimeNativeWarningCodes：<none>/);
+    assert.match(result.stdout, /sharedBoundaryDocumentMimeWarningCodes：DOCUMENT_MIME_TYPE_FALLBACK/);
     assert.match(result.stdout, /Feishu smoke 前置检查通过/);
   } finally {
     if (server) {

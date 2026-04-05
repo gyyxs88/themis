@@ -803,6 +803,19 @@ function printWebSmokeResult(result: Awaited<ReturnType<RuntimeSmokeService["run
   console.log(`documentCompileMatrixVerified：${result.documentCompileMatrixVerified ? "yes" : "no"}`);
   console.log(`documentCompileMatrixDocumentNative：${result.documentCompileMatrixDocumentNative ?? "<none>"}`);
   console.log(`documentCompileMatrixAssetHandling：${result.documentCompileMatrixAssetHandling.join(", ") || "<none>"}`);
+  console.log(`sharedBoundaryVerified：${result.sharedBoundary.ok ? "yes" : "no"}`);
+  console.log(`sharedBoundaryImagePathBlocked：${result.sharedBoundary.imagePathBlockedVerified ? "yes" : "no"}`);
+  console.log(`sharedBoundaryImagePathWarningCodes：${result.sharedBoundary.imagePathWarningCodes.join(", ") || "<none>"}`);
+  console.log(`sharedBoundaryDocumentPathBlocked：${result.sharedBoundary.documentPathBlockedVerified ? "yes" : "no"}`);
+  console.log(`sharedBoundaryDocumentPathWarningCodes：${result.sharedBoundary.documentPathWarningCodes.join(", ") || "<none>"}`);
+  console.log(`sharedBoundaryTextNativeBlocked：${result.sharedBoundary.textNativeBlockedVerified ? "yes" : "no"}`);
+  console.log(`sharedBoundaryTextNativeWarningCodes：${result.sharedBoundary.textNativeWarningCodes.join(", ") || "<none>"}`);
+  console.log(`sharedBoundaryImageNativeBlocked：${result.sharedBoundary.imageNativeBlockedVerified ? "yes" : "no"}`);
+  console.log(`sharedBoundaryImageNativeWarningCodes：${result.sharedBoundary.imageNativeWarningCodes.join(", ") || "<none>"}`);
+  console.log(`sharedBoundaryDocumentMimeNative：${result.sharedBoundary.documentMimeNativeVerified ? "yes" : "no"}`);
+  console.log(`sharedBoundaryDocumentMimeNativeWarningCodes：${result.sharedBoundary.documentMimeNativeWarningCodes.join(", ") || "<none>"}`);
+  console.log(`sharedBoundaryDocumentMimeFallback：${result.sharedBoundary.documentMimeFallbackVerified ? "yes" : "no"}`);
+  console.log(`sharedBoundaryDocumentMimeWarningCodes：${result.sharedBoundary.documentMimeWarningCodes.join(", ") || "<none>"}`);
   console.log(`message：${result.message}`);
 }
 

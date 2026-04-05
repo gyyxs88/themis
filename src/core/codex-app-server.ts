@@ -696,7 +696,12 @@ export class CodexAppServerSession {
       throw new Error("codex app-server is not available.");
     }
 
-    const payload = JSON.stringify(message);
+    const payload = JSON.stringify(Object.prototype.hasOwnProperty.call(message, "jsonrpc")
+      ? message
+      : {
+        jsonrpc: "2.0",
+        ...message,
+      });
 
     await new Promise<void>((resolve, reject) => {
       this.child.stdin.write(`${payload}\n`, "utf8", (error) => {

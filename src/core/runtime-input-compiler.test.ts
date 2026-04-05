@@ -51,6 +51,35 @@ test("图片输入在 runtime 不支持 nativeImageInput 时会被 blocked", () 
   assert.match(compiled.compileWarnings[0]?.message ?? "", /当前 runtime 未声明支持图片原生输入/);
 });
 
+test("文本输入在 runtime 不支持 nativeTextInput 时会被 blocked", () => {
+  const compiled = compileTaskInputForRuntime({
+    envelope: {
+      envelopeId: "env-text-blocked",
+      sourceChannel: "web",
+      parts: [
+        { partId: "part-1", type: "text", role: "user", order: 1, text: "请直接总结这段文字" },
+      ],
+      assets: [],
+      createdAt: "2026-04-05T10:00:00.000Z",
+    },
+    target: {
+      runtimeId: "third-party",
+      capabilities: {
+        nativeTextInput: false,
+        nativeImageInput: true,
+        nativeDocumentInput: false,
+        supportedDocumentMimeTypes: [],
+        supportsPdfTextExtraction: false,
+        supportsDocumentPageRasterization: false,
+      },
+    },
+  });
+
+  assert.equal(compiled.degradationLevel, "blocked");
+  assert.equal(compiled.compileWarnings[0]?.code, "TEXT_NATIVE_INPUT_REQUIRED");
+  assert.match(compiled.compileWarnings[0]?.message ?? "", /文本原生输入/);
+});
+
 test("图片在 nativeImageInput 可用但本地路径不可信时会被 blocked", () => {
   const compiled = compileTaskInputForRuntime({
     envelope: {
@@ -471,6 +500,65 @@ test("runtime 支持 nativeDocumentInput 但 mimeType 不在支持列表时仍�
   );
   assert.match(compiled.fallbackPromptSections[0] ?? "", /name: brief\.docx/);
   assert.deepEqual(compiled.compileWarnings.map((warning) => warning.code), ["DOCUMENT_MIME_TYPE_FALLBACK"]);
+});
+
+test("runtime 支持 nativeDocumentInput 且 mimeType 带参数仍会按 wildcard 命中 native document", () => {
+  const markdownPath = createTempTextFile("guide-param.md", "# Guide\n\nparam");
+  const compiled = compileTaskInputForRuntime({
+    envelope: {
+      envelopeId: "env-doc-native-parameterized-1",
+      sourceChannel: "web",
+      parts: [
+        { partId: "part-1", type: "document", role: "user", order: 1, assetId: "asset-doc-1" },
+      ],
+      assets: [
+        {
+          assetId: "asset-doc-1",
+          kind: "document",
+          name: "guide-param.md",
+          mimeType: "text/markdown; charset=utf-8",
+          localPath: markdownPath,
+          sourceChannel: "web",
+          ingestionStatus: "ready",
+        },
+      ],
+      createdAt: "2026-04-05T10:05:00.000Z",
+    },
+    target: {
+      runtimeId: "app-server",
+      capabilities: {
+        nativeTextInput: true,
+        nativeImageInput: true,
+        nativeDocumentInput: true,
+        supportedDocumentMimeTypes: ["text/*"],
+        supportsPdfTextExtraction: true,
+        supportsDocumentPageRasterization: true,
+      },
+    },
+  });
+
+  assert.equal(compiled.degradationLevel, "native");
+  assert.deepEqual(compiled.compileWarnings, []);
+  assert.deepEqual(compiled.nativeInputParts, [{
+    type: "document",
+    assetPath: markdownPath,
+    mimeType: "text/markdown; charset=utf-8",
+    sourcePartId: "part-1",
+    assetId: "asset-doc-1",
+  }]);
+  assert.deepEqual(compiled.capabilityMatrix.assetFacts, [{
+    assetId: "asset-doc-1",
+    kind: "document",
+    mimeType: "text/markdown; charset=utf-8",
+    localPathStatus: "ready",
+    modelNativeSupport: null,
+    transportNativeSupport: null,
+    effectiveNativeSupport: true,
+    modelMimeTypeSupported: null,
+    transportMimeTypeSupported: null,
+    effectiveMimeTypeSupported: true,
+    handling: "native",
+  }]);
 });
 
 test("runtime 不支持该文档 mimeType 时也会统一走路径提示块", () => {

@@ -1,11 +1,28 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { compileTaskInputForRuntime } from "../core/runtime-input-compiler.js";
 import { WebAccessService } from "../core/web-access.js";
 import { readFeishuDiagnosticsSnapshot } from "./feishu-diagnostics.js";
 import { buildFeishuSmokeNextSteps } from "./feishu-verification-guide.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
-import type { TaskInputEnvelope } from "../types/index.js";
+import type { RuntimeInputCapabilities, TaskInputEnvelope } from "../types/index.js";
+
+export interface WebSmokeSharedBoundaryResult {
+  ok: boolean;
+  imagePathBlockedVerified: boolean;
+  imagePathWarningCodes: string[];
+  documentPathBlockedVerified: boolean;
+  documentPathWarningCodes: string[];
+  textNativeBlockedVerified: boolean;
+  textNativeWarningCodes: string[];
+  imageNativeBlockedVerified: boolean;
+  imageNativeWarningCodes: string[];
+  documentMimeNativeVerified: boolean;
+  documentMimeNativeWarningCodes: string[];
+  documentMimeFallbackVerified: boolean;
+  documentMimeWarningCodes: string[];
+}
 
 export interface WebSmokeResult {
   ok: boolean;
@@ -29,6 +46,7 @@ export interface WebSmokeResult {
   documentCompileMatrixVerified: boolean;
   documentCompileMatrixDocumentNative: string | null;
   documentCompileMatrixAssetHandling: string[];
+  sharedBoundary: WebSmokeSharedBoundaryResult;
   message: string;
 }
 
@@ -202,6 +220,7 @@ export class RuntimeSmokeService {
     let documentCompileMatrixVerified = false;
     let documentCompileMatrixDocumentNative: string | null = null;
     let documentCompileMatrixAssetHandling: string[] = [];
+    let sharedBoundary = createEmptyWebSmokeSharedBoundaryResult();
     const assetBundle = createWebSmokeInputAssetBundle(this.workingDirectory, startedAt, this.randomHex);
 
     try {
@@ -256,6 +275,7 @@ export class RuntimeSmokeService {
           documentCompileMatrixVerified,
           documentCompileMatrixDocumentNative,
           documentCompileMatrixAssetHandling,
+          sharedBoundary,
           "真实 Web 图片 smoke 已收口，但 history/detail 没有写出 app-server native compile summary。",
         );
       }
@@ -281,6 +301,7 @@ export class RuntimeSmokeService {
           documentCompileMatrixVerified,
           documentCompileMatrixDocumentNative,
           documentCompileMatrixAssetHandling,
+          sharedBoundary,
           "真实 Web 图片 smoke 已收口，但 history/detail 没有写出 transport/effective 都支持且 asset handling=native 的能力矩阵事实。",
         );
       }
@@ -325,6 +346,7 @@ export class RuntimeSmokeService {
           documentCompileMatrixVerified,
           documentCompileMatrixDocumentNative,
           documentCompileMatrixAssetHandling,
+          sharedBoundary,
           "真实 Web 文档 smoke 已收口，但 history/detail 没有写出带 DOCUMENT_NATIVE_INPUT_FALLBACK 的 app-server controlled_fallback compile summary。",
         );
       }
@@ -350,7 +372,37 @@ export class RuntimeSmokeService {
           documentCompileMatrixVerified,
           documentCompileMatrixDocumentNative,
           documentCompileMatrixAssetHandling,
+          sharedBoundary,
           "真实 Web 文档 smoke 已收口，但 history/detail 没有写出 document transport gap 与 path_fallback 的能力矩阵事实。",
+        );
+      }
+
+      sharedBoundary = runWebSmokeSharedBoundaryChecks(assetBundle, startedAt);
+      const sharedBoundaryFailure = describeWebSmokeSharedBoundaryFailure(sharedBoundary);
+
+      if (sharedBoundaryFailure) {
+        return this.failureResult(
+          sessionId,
+          requestId,
+          taskId,
+          actionId,
+          observedActionRequired,
+          observedCompleted,
+          historyCompleted,
+          imageCompileVerified,
+          imageCompileDegradationLevel,
+          imageCompileWarningCodes,
+          imageCompileMatrixVerified,
+          imageCompileMatrixImageNative,
+          imageCompileMatrixAssetHandling,
+          documentCompileVerified,
+          documentCompileDegradationLevel,
+          documentCompileWarningCodes,
+          documentCompileMatrixVerified,
+          documentCompileMatrixDocumentNative,
+          documentCompileMatrixAssetHandling,
+          sharedBoundary,
+          sharedBoundaryFailure,
         );
       }
 
@@ -376,7 +428,8 @@ export class RuntimeSmokeService {
         documentCompileMatrixVerified,
         documentCompileMatrixDocumentNative,
         documentCompileMatrixAssetHandling,
-        message: "Web smoke 成功：真实图片 native smoke、文档 fallback smoke 以及对应的能力矩阵事实都符合预期。",
+        sharedBoundary,
+        message: "Web smoke 成功：真实图片 native smoke、文档 fallback smoke，以及共享附件异常 / MIME 边界 compile smoke 都符合预期。",
       };
     } catch (error) {
       if (error instanceof WebActionRequiredSmokeTaskError) {
@@ -406,6 +459,7 @@ export class RuntimeSmokeService {
         documentCompileMatrixVerified,
         documentCompileMatrixDocumentNative,
         documentCompileMatrixAssetHandling,
+        sharedBoundary,
         toErrorMessage(error),
       );
     } finally {
@@ -530,6 +584,7 @@ export class RuntimeSmokeService {
     documentCompileMatrixVerified: boolean,
     documentCompileMatrixDocumentNative: string | null,
     documentCompileMatrixAssetHandling: string[],
+    sharedBoundary: WebSmokeSharedBoundaryResult,
     message: string,
   ): WebSmokeResult {
     return {
@@ -554,6 +609,7 @@ export class RuntimeSmokeService {
       documentCompileMatrixVerified,
       documentCompileMatrixDocumentNative,
       documentCompileMatrixAssetHandling,
+      sharedBoundary,
       message,
     };
   }
@@ -1004,7 +1060,41 @@ function createWebSmokeImageEnvelope(imagePath: string, startedAt: number): Task
   };
 }
 
+function createWebSmokeTextEnvelope(text: string, startedAt: number): TaskInputEnvelope {
+  const createdAt = new Date(startedAt).toISOString();
+
+  return {
+    envelopeId: `runtime-smoke-text-envelope-${startedAt.toString(36)}`,
+    sourceChannel: "web",
+    parts: [
+      {
+        partId: "part-text-1",
+        type: "text",
+        role: "user",
+        order: 1,
+        text,
+      },
+    ],
+    assets: [],
+    createdAt,
+  };
+}
+
 function createWebSmokeDocumentEnvelope(documentPath: string, startedAt: number): TaskInputEnvelope {
+  return createWebSmokeDocumentEnvelopeWithAsset(documentPath, startedAt, {
+    name: "smoke-brief.md",
+    mimeType: "text/markdown",
+  });
+}
+
+function createWebSmokeDocumentEnvelopeWithAsset(
+  documentPath: string,
+  startedAt: number,
+  asset: {
+    name: string;
+    mimeType: string;
+  },
+): TaskInputEnvelope {
   const createdAt = new Date(startedAt + 1_000).toISOString();
 
   return {
@@ -1023,8 +1113,8 @@ function createWebSmokeDocumentEnvelope(documentPath: string, startedAt: number)
       {
         assetId: "asset-document-1",
         kind: "document",
-        name: "smoke-brief.md",
-        mimeType: "text/markdown",
+        name: asset.name,
+        mimeType: asset.mimeType,
         localPath: documentPath,
         sourceChannel: "web",
         ingestionStatus: "ready",
@@ -1032,6 +1122,249 @@ function createWebSmokeDocumentEnvelope(documentPath: string, startedAt: number)
     ],
     createdAt,
   };
+}
+
+function createEmptyWebSmokeSharedBoundaryResult(): WebSmokeSharedBoundaryResult {
+  return {
+    ok: false,
+    imagePathBlockedVerified: false,
+    imagePathWarningCodes: [],
+    documentPathBlockedVerified: false,
+    documentPathWarningCodes: [],
+    textNativeBlockedVerified: false,
+    textNativeWarningCodes: [],
+    imageNativeBlockedVerified: false,
+    imageNativeWarningCodes: [],
+    documentMimeNativeVerified: false,
+    documentMimeNativeWarningCodes: [],
+    documentMimeFallbackVerified: false,
+    documentMimeWarningCodes: [],
+  };
+}
+
+function runWebSmokeSharedBoundaryChecks(
+  assetBundle: {
+    imagePath: string;
+    documentPath: string;
+  },
+  startedAt: number,
+): WebSmokeSharedBoundaryResult {
+  const imagePathCompiled = compileTaskInputForRuntime({
+    envelope: createWebSmokeImageEnvelope(`${assetBundle.imagePath}.missing`, startedAt + 2_000),
+    target: {
+      runtimeId: "shared-boundary-image-path",
+      capabilities: createWebSmokeAppServerCapabilities(),
+    },
+  });
+  const imagePathWarningCodes = readCompiledWarningCodes(imagePathCompiled.compileWarnings);
+  const imagePathFact = imagePathCompiled.capabilityMatrix.assetFacts.find((fact) => fact.kind === "image");
+  const imagePathBlockedVerified = imagePathCompiled.degradationLevel === "blocked"
+    && imagePathWarningCodes.includes("IMAGE_PATH_UNAVAILABLE")
+    && imagePathFact?.localPathStatus === "unavailable"
+    && imagePathFact.handling === "blocked";
+
+  const documentPathCompiled = compileTaskInputForRuntime({
+    envelope: createWebSmokeDocumentEnvelope(`${assetBundle.documentPath}.missing`, startedAt + 3_000),
+    target: {
+      runtimeId: "shared-boundary-document-path",
+      capabilities: createWebSmokeAppServerCapabilities(),
+    },
+  });
+  const documentPathWarningCodes = readCompiledWarningCodes(documentPathCompiled.compileWarnings);
+  const documentPathFact = documentPathCompiled.capabilityMatrix.assetFacts.find((fact) => fact.kind === "document");
+  const documentPathBlockedVerified = documentPathCompiled.degradationLevel === "blocked"
+    && documentPathWarningCodes.includes("DOCUMENT_PATH_UNAVAILABLE")
+    && documentPathFact?.localPathStatus === "unavailable"
+    && documentPathFact.handling === "blocked";
+
+  const textNativeCompiled = compileTaskInputForRuntime({
+    envelope: createWebSmokeTextEnvelope("请保留这段文本输入", startedAt + 4_000),
+    target: {
+      runtimeId: "shared-boundary-text-native",
+      capabilities: createTextNativeBoundaryCapabilities(),
+      modelCapabilities: createTextNativeBoundaryCapabilities(),
+      transportCapabilities: createTextNativeBoundaryCapabilities(),
+    },
+  });
+  const textNativeWarningCodes = readCompiledWarningCodes(textNativeCompiled.compileWarnings);
+  const textNativeBlockedVerified = textNativeCompiled.degradationLevel === "blocked"
+    && textNativeWarningCodes.includes("TEXT_NATIVE_INPUT_REQUIRED")
+    && textNativeCompiled.capabilityMatrix.effectiveCapabilities.nativeTextInput === false;
+
+  const imageNativeCompiled = compileTaskInputForRuntime({
+    envelope: createWebSmokeImageEnvelope(assetBundle.imagePath, startedAt + 5_000),
+    target: {
+      runtimeId: "shared-boundary-image-native",
+      capabilities: createImageNativeBoundaryCapabilities(),
+      modelCapabilities: createImageNativeBoundaryCapabilities(),
+      transportCapabilities: createImageNativeBoundaryCapabilities(),
+    },
+  });
+  const imageNativeWarningCodes = readCompiledWarningCodes(imageNativeCompiled.compileWarnings);
+  const imageNativeFact = imageNativeCompiled.capabilityMatrix.assetFacts.find((fact) => fact.kind === "image");
+  const imageNativeBlockedVerified = imageNativeCompiled.degradationLevel === "blocked"
+    && imageNativeWarningCodes.includes("IMAGE_NATIVE_INPUT_REQUIRED")
+    && imageNativeFact?.localPathStatus === "ready"
+    && imageNativeFact.handling === "blocked"
+    && imageNativeFact.effectiveNativeSupport === false;
+
+  const documentMimeNativeCompiled = compileTaskInputForRuntime({
+    envelope: createWebSmokeDocumentEnvelopeWithAsset(assetBundle.documentPath, startedAt + 6_000, {
+      name: "smoke-brief-param.md",
+      mimeType: "text/markdown; charset=utf-8",
+    }),
+    target: {
+      runtimeId: "shared-boundary-document-mime-native",
+      capabilities: createWildcardNativeDocumentMimeBoundaryCapabilities(),
+      modelCapabilities: createWildcardNativeDocumentMimeBoundaryCapabilities(),
+      transportCapabilities: createWildcardNativeDocumentMimeBoundaryCapabilities(),
+    },
+  });
+  const documentMimeNativeWarningCodes = readCompiledWarningCodes(documentMimeNativeCompiled.compileWarnings);
+  const documentMimeNativeFact = documentMimeNativeCompiled.capabilityMatrix.assetFacts.find((fact) => fact.kind === "document");
+  const documentMimeNativeVerified = documentMimeNativeCompiled.degradationLevel === "native"
+    && documentMimeNativeWarningCodes.length === 0
+    && documentMimeNativeFact?.localPathStatus === "ready"
+    && documentMimeNativeFact.handling === "native"
+    && documentMimeNativeFact.effectiveNativeSupport === true
+    && documentMimeNativeFact.effectiveMimeTypeSupported === true;
+
+  const documentMimeCompiled = compileTaskInputForRuntime({
+    envelope: createWebSmokeDocumentEnvelopeWithAsset(assetBundle.documentPath, startedAt + 7_000, {
+      name: "smoke-sheet.xls",
+      mimeType: "application/vnd.ms-excel",
+    }),
+    target: {
+      runtimeId: "shared-boundary-document-mime",
+      capabilities: createNativeDocumentMimeBoundaryCapabilities(),
+      modelCapabilities: createNativeDocumentMimeBoundaryCapabilities(),
+      transportCapabilities: createNativeDocumentMimeBoundaryCapabilities(),
+    },
+  });
+  const documentMimeWarningCodes = readCompiledWarningCodes(documentMimeCompiled.compileWarnings);
+  const documentMimeFact = documentMimeCompiled.capabilityMatrix.assetFacts.find((fact) => fact.kind === "document");
+  const documentMimeFallbackVerified = documentMimeCompiled.degradationLevel === "controlled_fallback"
+    && documentMimeWarningCodes.includes("DOCUMENT_MIME_TYPE_FALLBACK")
+    && documentMimeFact?.localPathStatus === "ready"
+    && documentMimeFact.handling === "path_fallback"
+    && documentMimeFact.effectiveNativeSupport === false
+    && documentMimeFact.effectiveMimeTypeSupported === false;
+
+  return {
+    ok: imagePathBlockedVerified
+      && documentPathBlockedVerified
+      && textNativeBlockedVerified
+      && imageNativeBlockedVerified
+      && documentMimeNativeVerified
+      && documentMimeFallbackVerified,
+    imagePathBlockedVerified,
+    imagePathWarningCodes,
+    documentPathBlockedVerified,
+    documentPathWarningCodes,
+    textNativeBlockedVerified,
+    textNativeWarningCodes,
+    imageNativeBlockedVerified,
+    imageNativeWarningCodes,
+    documentMimeNativeVerified,
+    documentMimeNativeWarningCodes,
+    documentMimeFallbackVerified,
+    documentMimeWarningCodes,
+  };
+}
+
+function createWebSmokeAppServerCapabilities(): RuntimeInputCapabilities {
+  return {
+    nativeTextInput: true,
+    nativeImageInput: true,
+    nativeDocumentInput: false,
+    supportedDocumentMimeTypes: [],
+    supportsPdfTextExtraction: true,
+    supportsDocumentPageRasterization: false,
+  };
+}
+
+function createNativeDocumentMimeBoundaryCapabilities(): RuntimeInputCapabilities {
+  return {
+    nativeTextInput: true,
+    nativeImageInput: true,
+    nativeDocumentInput: true,
+    supportedDocumentMimeTypes: ["application/pdf"],
+    supportsPdfTextExtraction: true,
+    supportsDocumentPageRasterization: true,
+  };
+}
+
+function createWildcardNativeDocumentMimeBoundaryCapabilities(): RuntimeInputCapabilities {
+  return {
+    nativeTextInput: true,
+    nativeImageInput: true,
+    nativeDocumentInput: true,
+    supportedDocumentMimeTypes: ["text/*"],
+    supportsPdfTextExtraction: true,
+    supportsDocumentPageRasterization: true,
+  };
+}
+
+function createTextNativeBoundaryCapabilities(): RuntimeInputCapabilities {
+  return {
+    nativeTextInput: false,
+    nativeImageInput: true,
+    nativeDocumentInput: false,
+    supportedDocumentMimeTypes: [],
+    supportsPdfTextExtraction: true,
+    supportsDocumentPageRasterization: false,
+  };
+}
+
+function createImageNativeBoundaryCapabilities(): RuntimeInputCapabilities {
+  return {
+    nativeTextInput: true,
+    nativeImageInput: false,
+    nativeDocumentInput: false,
+    supportedDocumentMimeTypes: [],
+    supportsPdfTextExtraction: true,
+    supportsDocumentPageRasterization: false,
+  };
+}
+
+function readCompiledWarningCodes(
+  warnings: Array<{
+    code?: string | null;
+  }>,
+): string[] {
+  return Array.from(new Set(
+    warnings
+      .map((warning) => normalizeText(warning.code))
+      .filter((code): code is string => code !== null),
+  ));
+}
+
+function describeWebSmokeSharedBoundaryFailure(result: WebSmokeSharedBoundaryResult): string | null {
+  if (!result.imagePathBlockedVerified) {
+    return "共享多模态边界 smoke 失败：图片缺少本地路径时没有稳定写出 IMAGE_PATH_UNAVAILABLE blocked 事实。";
+  }
+
+  if (!result.documentPathBlockedVerified) {
+    return "共享多模态边界 smoke 失败：文档缺少本地路径时没有稳定写出 DOCUMENT_PATH_UNAVAILABLE blocked 事实。";
+  }
+
+  if (!result.textNativeBlockedVerified) {
+    return "共享多模态边界 smoke 失败：文本原生输入不可用时没有稳定写出 TEXT_NATIVE_INPUT_REQUIRED blocked 事实。";
+  }
+
+  if (!result.imageNativeBlockedVerified) {
+    return "共享多模态边界 smoke 失败：图片原生输入不可用时没有稳定写出 IMAGE_NATIVE_INPUT_REQUIRED blocked 事实。";
+  }
+
+  if (!result.documentMimeNativeVerified) {
+    return "共享多模态边界 smoke 失败：带参数文档 MIME 在 wildcard 支持下没有稳定命中 native document 事实。";
+  }
+
+  if (!result.documentMimeFallbackVerified) {
+    return "共享多模态边界 smoke 失败：文档 MIME 不受支持时没有稳定写出 DOCUMENT_MIME_TYPE_FALLBACK controlled_fallback 事实。";
+  }
+
+  return null;
 }
 
 function readTurnCompileSummary(

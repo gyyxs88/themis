@@ -88,3 +88,63 @@ test("extractFeishuPostContentItems 也支持真实入站 post 顶层结构", ()
   assert.equal(extractFeishuPostText(rawContent), "帮我看看这张图");
   assert.deepEqual(extractFeishuPostImageKeys(rawContent), ["img-key-2"]);
 });
+
+test("extractFeishuPostContentItems 会保留同一条 post 中多段 text/image 交错顺序", () => {
+  const rawContent = JSON.stringify({
+    zh_cn: {
+      title: "缺陷复盘",
+      content: [[
+        {
+          tag: "text",
+          text: "先看第一张",
+        },
+        {
+          tag: "img",
+          image_key: "img-key-3",
+        },
+        {
+          tag: "text",
+          text: "再看第二张",
+        },
+      ], [
+        {
+          tag: "img",
+          image_key: "img-key-4",
+        },
+        {
+          tag: "text",
+          text: "最后给结论",
+        },
+      ]],
+    },
+  });
+
+  assert.deepEqual(extractFeishuPostContentItems(rawContent), [
+    {
+      type: "text",
+      text: "缺陷复盘",
+    },
+    {
+      type: "text",
+      text: "先看第一张",
+    },
+    {
+      type: "image",
+      imageKey: "img-key-3",
+    },
+    {
+      type: "text",
+      text: "再看第二张",
+    },
+    {
+      type: "image",
+      imageKey: "img-key-4",
+    },
+    {
+      type: "text",
+      text: "最后给结论",
+    },
+  ]);
+  assert.equal(extractFeishuPostText(rawContent), "缺陷复盘\n先看第一张\n再看第二张\n最后给结论");
+  assert.deepEqual(extractFeishuPostImageKeys(rawContent), ["img-key-3", "img-key-4"]);
+});

@@ -101,9 +101,30 @@ test("respondToServerRequest 和 rejectServerRequest 会写出 JSON-RPC 回包",
   await session.rejectServerRequest(7, new Error("nope"));
 
   assert.deepEqual(writes, [
-    `{"id":"server-1","result":{"accepted":true}}\n`,
-    `{"id":7,"error":{"code":-32000,"message":"nope"}}\n`,
+    `{"jsonrpc":"2.0","id":"server-1","result":{"accepted":true}}\n`,
+    `{"jsonrpc":"2.0","id":7,"error":{"code":-32000,"message":"nope"}}\n`,
   ]);
+});
+
+test("request 会写出带 jsonrpc 的 JSON-RPC 请求", async () => {
+  const { session, writes } = createSessionStub();
+
+  const pending = session.request("thread/list", {
+    limit: 1,
+  });
+
+  assert.deepEqual(writes, [
+    `{"jsonrpc":"2.0","method":"thread/list","id":1,"params":{"limit":1}}\n`,
+  ]);
+
+  session.handleOutputLine(JSON.stringify({
+    id: 1,
+    result: {
+      threads: [],
+    },
+  }));
+
+  await assert.doesNotReject(async () => await pending);
 });
 
 test("numeric id 的普通 response 会 resolve pending 且不触发通知或反向请求处理器", () => {

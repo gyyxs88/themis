@@ -38,6 +38,7 @@ import {
 import { FeishuAdapter } from "./adapter.js";
 import {
   FeishuAttachmentDraftStore,
+  type FeishuAttachmentDraftAsset,
   type FeishuAttachmentDraftPart,
   type FeishuAttachmentDraftSnapshot,
   type FeishuAttachmentDraftKey,
@@ -587,6 +588,9 @@ export class FeishuChannelService {
 
     let normalizedRequest: TaskRequest | null = null;
     let shouldRestoreDraft = Boolean(reservedDraft) || Boolean(inlineDraft);
+    const restorableDraft = inputEnvelope
+      ? buildFeishuRestorableDraftFromEnvelope(inputEnvelope)
+      : buildFeishuRestorableDraftFromSnapshots(reservedDraft, inlineDraft);
     const discardDraftRestore = () => {
       shouldRestoreDraft = false;
     };
@@ -595,25 +599,13 @@ export class FeishuChannelService {
         return;
       }
 
-      const parts = [
-        ...(reservedDraft?.parts ?? []),
-        ...(inlineDraft?.parts ?? []),
-      ];
-      const assets = [
-        ...(reservedDraft?.assets ?? []),
-        ...(inlineDraft?.assets ?? []),
-      ];
-
-      if (parts.length === 0 || assets.length === 0) {
+      if (!restorableDraft) {
         discardDraftRestore();
         return;
       }
 
       try {
-        this.attachmentDraftStore.appendEnvelope(draftKey, {
-          parts,
-          assets,
-        });
+        this.attachmentDraftStore.appendEnvelope(draftKey, restorableDraft);
       } catch (error) {
         this.logger.error(`[themis/feishu] 恢复附件草稿失败：${toErrorMessage(error)}`);
       } finally {
@@ -703,7 +695,7 @@ export class FeishuChannelService {
   private buildTaskInputCompileFollowupText(requestId: string): string | null {
     const storedInput = this.runtime.getRuntimeStore().getTurnInput(requestId);
     const messages = dedupeTextValues(
-      (storedInput?.compileSummary?.warnings ?? []).map((warning) => describeFeishuTaskInputWarningCode(warning.code)),
+      (storedInput?.compileSummary?.warnings ?? []).map((warning) => describeFeishuTaskInputWarning(warning)),
     );
 
     if (messages.length === 0) {
@@ -2937,8 +2929,19 @@ function normalizeFeishuRuntimeRegistry(
   return normalizedRegistry;
 }
 
-function describeFeishuTaskInputWarningCode(code: string): string | null {
+function describeFeishuTaskInputWarning(
+  warning: {
+    code?: string | null;
+    message?: string | null;
+  },
+): string | null {
+  const code = normalizeText(warning.code);
+
   switch (code) {
+    case "TEXT_NATIVE_INPUT_REQUIRED":
+      return "当前执行链这一跳不支持文本原生输入，所以这条消息这次没法继续处理。请切回支持文本的执行链后再试。";
+    case "IMAGE_NATIVE_INPUT_REQUIRED":
+      return "当前执行链这一跳不支持原生图片附件，所以这张图片这次没法继续发给 runtime。请切到支持图片的执行链，或先用文字描述你想让我处理的内容。";
     case "DOCUMENT_NATIVE_INPUT_FALLBACK":
       return "当前执行链这一跳还不支持原生文档附件，所以这份文档只按文件路径提示处理，没有直接作为原生文档输入发送给 runtime。";
     case "DOCUMENT_MIME_TYPE_FALLBACK":
@@ -2947,9 +2950,31 @@ function describeFeishuTaskInputWarningCode(code: string): string | null {
       return "当前图片的本地临时文件已经失效，没法继续发送给 runtime，请重新发送这张图片后再试。";
     case "DOCUMENT_PATH_UNAVAILABLE":
       return "当前文档的本地临时文件已经失效，没法继续处理，请重新发送这个文档后再试。";
+    case "DOCUMENT_INPUT_UNSUPPORTED": {
+      const detail = normalizeDocumentInputUnsupportedDetail(warning.message);
+      return detail
+        ? `当前执行链这一跳还不支持这种文档输入（${detail}），所以这份附件这次没法继续处理。请换成受支持的文档类型，或直接把关键信息发成文本。`
+        : "当前执行链这一跳还不支持这种文档输入，所以这份附件这次没法继续处理。请换成受支持的文档类型，或直接把关键信息发成文本。";
+    }
     default:
       return null;
   }
+}
+
+function normalizeDocumentInputUnsupportedDetail(message: string | null | undefined): string | null {
+  const normalized = normalizeText(message);
+
+  if (!normalized) {
+    return null;
+  }
+
+  const marker = "当前 runtime 不支持文档输入：";
+
+  if (normalized.startsWith(marker)) {
+    return normalizeText(normalized.slice(marker.length));
+  }
+
+  return normalized;
 }
 
 function dedupeTextValues(values: Array<string | null | undefined>): string[] {
@@ -3150,6 +3175,8 @@ function buildFeishuInputEnvelope(
   const parts: FeishuAttachmentDraftPart[] = [];
   const assets = [...(draft?.assets ?? []), ...inlineAssets];
   const inlineAssetById = new Map(inlineAssets.map((asset) => [asset.assetId, asset]));
+  const assetById = new Map(assets.map((asset) => [asset.assetId, asset]));
+  const orderedDraftParts = orderFeishuDraftPartsByAssetCreatedAt(draft?.parts ?? [], assetById);
   let order = 0;
 
   if (context.postContentItems?.length) {
@@ -3191,7 +3218,7 @@ function buildFeishuInputEnvelope(
     order += 1;
   }
 
-  for (const part of draft?.parts ?? []) {
+  for (const part of orderedDraftParts) {
     if (part.type === "text") {
       if (part.text?.trim()) {
         parts.push({
@@ -3238,8 +3265,167 @@ function buildFeishuInputEnvelope(
     sourceMessageId: context.messageId,
     createdAt: new Date().toISOString(),
     parts,
-    assets,
+    assets: orderFeishuAssetsByPartSequence(parts, assets),
   });
+}
+
+function buildFeishuRestorableDraftFromSnapshots(
+  reservedDraft: FeishuAttachmentDraftSnapshot | null,
+  inlineDraft: {
+    parts: FeishuAttachmentDraftPart[];
+    assets: FeishuMessageResourceAsset[];
+  } | null,
+): {
+  parts: FeishuAttachmentDraftPart[];
+  assets: FeishuAttachmentDraftAsset[];
+} | null {
+  const parts = [
+    ...(reservedDraft?.parts ?? []),
+    ...(inlineDraft?.parts ?? []),
+  ];
+  const assets = [
+    ...(reservedDraft?.assets ?? []),
+    ...(inlineDraft?.assets ?? []),
+  ];
+
+  if (parts.length === 0 || assets.length === 0) {
+    return null;
+  }
+
+  return {
+    parts,
+    assets,
+  };
+}
+
+function buildFeishuRestorableDraftFromEnvelope(
+  envelope: TaskInputEnvelope,
+): {
+  parts: FeishuAttachmentDraftPart[];
+  assets: FeishuAttachmentDraftAsset[];
+} | null {
+  const nonTextParts = envelope.parts.filter((part): part is Extract<typeof envelope.parts[number], { type: "image" | "document" }> => (
+    part.type === "image" || part.type === "document"
+  ));
+
+  if (nonTextParts.length === 0) {
+    return null;
+  }
+
+  const assetById = new Map(envelope.assets.map((asset) => [asset.assetId, asset]));
+  const baseMs = Number.isFinite(Date.parse(envelope.createdAt)) ? Date.parse(envelope.createdAt) : Date.now();
+  const parts: FeishuAttachmentDraftPart[] = [];
+  const assets: FeishuAttachmentDraftAsset[] = [];
+  const seenAssetIds = new Set<string>();
+
+  for (const [index, part] of nonTextParts.entries()) {
+    const asset = assetById.get(part.assetId);
+
+    if (!asset) {
+      continue;
+    }
+
+    parts.push({
+      type: part.type,
+      role: "user",
+      order: index,
+      assetId: part.assetId,
+      ...("caption" in part && part.caption ? { caption: part.caption } : {}),
+    });
+
+    if (seenAssetIds.has(part.assetId)) {
+      continue;
+    }
+
+    seenAssetIds.add(part.assetId);
+    assets.push({
+      ...asset,
+      id: asset.assetId,
+      type: asset.kind === "image" ? "image" : "file",
+      value: asset.localPath,
+      // Restore drafts in the exact asset order of the failed submission instead of re-sorting by old message times.
+      createdAt: new Date(baseMs + index).toISOString(),
+    });
+  }
+
+  if (parts.length === 0 || assets.length === 0) {
+    return null;
+  }
+
+  return {
+    parts,
+    assets,
+  };
+}
+
+function orderFeishuDraftPartsByAssetCreatedAt(
+  parts: FeishuAttachmentDraftPart[],
+  assetById: Map<string, {
+    assetId: string;
+    createdAt?: string;
+  }>,
+): FeishuAttachmentDraftPart[] {
+  return [...parts]
+    .map((part, index) => ({
+      part,
+      index,
+      createdAtMs: part.type === "text"
+        ? null
+        : parseFeishuAssetCreatedAt(assetById.get(part.assetId)?.createdAt),
+    }))
+    .sort((left, right) => {
+      if (left.createdAtMs !== null && right.createdAtMs !== null && left.createdAtMs !== right.createdAtMs) {
+        return left.createdAtMs - right.createdAtMs;
+      }
+
+      return left.index - right.index;
+    })
+    .map((entry) => entry.part);
+}
+
+function orderFeishuAssetsByPartSequence<T extends {
+  assetId: string;
+}>(
+  parts: FeishuAttachmentDraftPart[],
+  assets: T[],
+): T[] {
+  const assetById = new Map(assets.map((asset) => [asset.assetId, asset]));
+  const seen = new Set<string>();
+  const ordered: T[] = [];
+
+  for (const part of parts) {
+    if (part.type === "text" || seen.has(part.assetId)) {
+      continue;
+    }
+
+    const asset = assetById.get(part.assetId);
+
+    if (!asset) {
+      continue;
+    }
+
+    ordered.push(asset);
+    seen.add(part.assetId);
+  }
+
+  for (const asset of assets) {
+    if (seen.has(asset.assetId)) {
+      continue;
+    }
+
+    ordered.push(asset);
+  }
+
+  return ordered;
+}
+
+function parseFeishuAssetCreatedAt(value: string | undefined): number | null {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function decorateTaggedChunks(text: string, tag: string): string[] {
