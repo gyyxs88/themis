@@ -18,7 +18,7 @@
 
 ## 当前落地状态
 
-- 飞书第二阶段第一刀已经完成；阶段 5、阶段 6，以及 `结构化输出 / 自动化接口` 也已收口，当前 open 主线已切到 `云端 / 远程执行能力评估`。飞书侧当前重点不是继续扩 Web，也不是提前开 `card.action.trigger`，而是守住现有群路由、shared 会话和诊断复验边界。
+- 飞书第二阶段第一刀已经完成；阶段 5、阶段 6、`结构化输出 / 自动化接口` 和 `云端 / 远程执行能力评估` 也都已收口。当前结论不是把远程执行或 `codex cloud` 混进飞书主链，而是继续守住现有群路由、shared 会话和诊断复验边界；`card.action.trigger` 仍保持 gated evaluation。
 - Themis 已接入飞书长连接，`im.message.receive_v1` 能进入现有 runtime 主链路。
 - 当前已支持飞书文本收发、`/help`、`/sessions`、`/new`、`/use`、`/current`、`/review`、`/steer`、`/workspace`、`/group`、`/link`、`/settings` 命令树、`/msgupdate`、`/quota`，以及 `/account`、`/sandbox`、`/search`、`/network`、`/approval` 这些兼容入口。
 - Codex 在飞书里已改成“占位槽位 + 顺序延迟缓冲”体验：用户发消息后先立刻返回 `处理中...`；第一条中途回复先缓存；只有切到新的正文 item、静默超时或最终结果收口时，缓存才会真正发送；同一 `agent_message itemId` 的连续 delta 只会覆盖当前缓存，不会把半句增量一条条刷到飞书里。
