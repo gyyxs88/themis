@@ -279,6 +279,125 @@ test("/api/tasks/run 在未显式传 runtimeEngine 时会走 default runtime", a
   }));
 });
 
+test("/api/tasks/run 显式传 sdk runtimeEngine 时返回 400，且不会执行任何 runtime", async () => {
+  let defaultRunCount = 0;
+  let sdkRunCount = 0;
+
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/run`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请检查公开任务入口拒绝 sdk",
+        sessionId: "session-task-run-sdk-runtime",
+        options: {
+          runtimeEngine: "sdk",
+        },
+      }),
+    });
+
+    assert.equal(response.status, 400);
+
+    const payload = await response.json() as {
+      error?: {
+        code?: string;
+        message?: string;
+      };
+    };
+    assert.equal(payload.error?.code, "INVALID_REQUEST");
+    assert.match(payload.error?.message ?? "", /public task execution: sdk/);
+    assert.equal(defaultRunCount, 0);
+    assert.equal(sdkRunCount, 0);
+  }, ({ runtimeStore }) => ({
+    defaultRuntime: {
+      runTask: async () => {
+        defaultRunCount += 1;
+        throw new Error("default runtime should not be used");
+      },
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => ({}),
+      getPrincipalSkillsService: () => ({}),
+    },
+    runtimes: {
+      sdk: {
+        runTask: async () => {
+          sdkRunCount += 1;
+          throw new Error("sdk runtime should not be used");
+        },
+        getRuntimeStore: () => runtimeStore,
+        getIdentityLinkService: () => ({}),
+        getPrincipalSkillsService: () => ({}),
+      },
+    },
+  }));
+});
+
+test("/api/tasks/run 显式请求未注册的 app-server runtime 时返回 400，且不会静默回退到 default runtime", async () => {
+  let defaultRunCount = 0;
+
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/run`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请检查未注册 app-server fail-fast",
+        sessionId: "session-task-run-missing-app-server",
+        options: {
+          runtimeEngine: "app-server",
+        },
+      }),
+    });
+
+    assert.equal(response.status, 400);
+
+    const payload = await response.json() as {
+      error?: {
+        code?: string;
+        message?: string;
+      };
+    };
+    assert.equal(payload.error?.code, "INVALID_REQUEST");
+    assert.match(payload.error?.message ?? "", /Requested runtimeEngine is not enabled: app-server/);
+    assert.equal(defaultRunCount, 0);
+  }, ({ runtimeStore }) => ({
+    defaultRuntime: {
+      runTask: async () => {
+        defaultRunCount += 1;
+        throw new Error("default runtime should not be used");
+      },
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => ({}),
+      getPrincipalSkillsService: () => ({}),
+    },
+    runtimes: {
+      sdk: {
+        runTask: async () => {
+          throw new Error("sdk runtime should not be used");
+        },
+        getRuntimeStore: () => runtimeStore,
+        getIdentityLinkService: () => ({}),
+        getPrincipalSkillsService: () => ({}),
+      },
+    },
+  }));
+});
+
 test("/api/tasks/run 在显式传非法 runtimeEngine 时返回 400，且不会落到 default runtime", async () => {
   let defaultRunCount = 0;
 

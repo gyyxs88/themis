@@ -153,7 +153,7 @@ test("/api/tasks/stream 会按 ack -> event* -> result -> done 顺序返回 NDJS
   }));
 });
 
-test("/api/tasks/stream 会按 runtimeEngine 选择对应 runtime，并保持 NDJSON 契约", async () => {
+test("/api/tasks/stream 显式传 app-server runtimeEngine 时会走对应 runtime，并保持 NDJSON 契约", async () => {
   let appServerState: AppServerSessionDoubleState | null = null;
 
   await withHttpServer(async ({ baseUrl, runtimeStore, runtime }) => {
@@ -168,43 +168,41 @@ test("/api/tasks/stream 会按 runtimeEngine 选择对应 runtime，并保持 ND
       taskId: request.taskId ?? "task-stream-runtime-engine-sdk",
       requestId: request.requestId,
       status: "completed",
-      summary: "sdk runtime finished",
+      summary: "sdk runtime should not run",
       structuredOutput: {
         runtimeEngine: "sdk",
       },
       completedAt: "2026-03-28T09:00:01.000Z",
     });
 
-    for (const runtimeEngine of ["sdk", "app-server"] as const) {
-      const response = await fetch(`${baseUrl}/api/tasks/stream`, {
-        method: "POST",
-        headers: {
-          ...authHeaders,
-          "Content-Type": "application/json",
+    const response = await fetch(`${baseUrl}/api/tasks/stream`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请检查 app-server stream parity",
+        sessionId: "session-task-stream-engine-app-server",
+        options: {
+          runtimeEngine: "app-server",
         },
-        body: JSON.stringify({
-          goal: `请检查 ${runtimeEngine} stream parity`,
-          sessionId: `session-task-stream-engine-${runtimeEngine}`,
-          options: {
-            runtimeEngine,
-          },
-        }),
-      });
+      }),
+    });
 
-      assert.equal(response.status, 200);
+    assert.equal(response.status, 200);
 
-      const lines = parseNdjson(await response.text());
-      assert.deepEqual(lines.slice(0, 1).map((line) => line.kind), ["ack"]);
-      assert.ok(lines.some((line) => line.kind === "result"));
-      assert.deepEqual(lines.slice(-1).map((line) => line.kind), ["done"]);
+    const lines = parseNdjson(await response.text());
+    assert.deepEqual(lines.slice(0, 1).map((line) => line.kind), ["ack"]);
+    assert.ok(lines.some((line) => line.kind === "result"));
+    assert.deepEqual(lines.slice(-1).map((line) => line.kind), ["done"]);
 
-      const result = lines.find((line) => line.kind === "result");
-      assert.equal(result?.metadata && typeof result.metadata === "object"
-        ? (result.metadata as { structuredOutput?: { runtimeEngine?: string; session?: { engine?: string } } }).structuredOutput?.runtimeEngine
-          ?? (result.metadata as { structuredOutput?: { runtimeEngine?: string; session?: { engine?: string } } }).structuredOutput?.session?.engine
-        : undefined,
-      runtimeEngine);
-    }
+    const result = lines.find((line) => line.kind === "result");
+    assert.equal(result?.metadata && typeof result.metadata === "object"
+      ? (result.metadata as { structuredOutput?: { runtimeEngine?: string; session?: { engine?: string } } }).structuredOutput?.runtimeEngine
+        ?? (result.metadata as { structuredOutput?: { runtimeEngine?: string; session?: { engine?: string } } }).structuredOutput?.session?.engine
+      : undefined,
+    "app-server");
 
     assert.equal(appServerState?.started.length, 1);
     assert.equal(appServerState?.resumed.length, 0);
@@ -214,6 +212,10 @@ test("/api/tasks/stream 会按 runtimeEngine 选择对应 runtime，并保持 ND
   }, ({ root, runtimeStore, runtime }) => {
     appServerState = createAppServerSessionDoubleState();
     const currentAppServerState = appServerState;
+    let notificationHandler: ((notification: {
+      method: string;
+      params?: unknown;
+    }) => void) | null = null;
     const appServerRuntime = new AppServerTaskRuntime({
       workingDirectory: root,
       runtimeStore,
@@ -227,9 +229,42 @@ test("/api/tasks/stream 会按 runtimeEngine 选择对应 runtime，并保持 ND
           currentAppServerState.resumed.push({ threadId, cwd: params.cwd });
           return { threadId };
         },
-        startTurn: async () => ({ turnId: "turn-app-server-stream-1" }),
+        startTurn: async () => {
+          setTimeout(() => {
+            notificationHandler?.({
+              method: "item/completed",
+              params: {
+                threadId: "thread-app-server-stream-1",
+                turnId: "turn-app-server-stream-1",
+                item: {
+                  type: "agentMessage",
+                  id: "item-app-server-stream-final-1",
+                  text: "app-server stream parity",
+                  phase: "final_answer",
+                  memoryCitation: null,
+                },
+              },
+            });
+            notificationHandler?.({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-app-server-stream-1",
+                turn: {
+                  id: "turn-app-server-stream-1",
+                  items: [],
+                  status: "completed",
+                  error: null,
+                },
+              },
+            });
+          }, 0);
+
+          return { turnId: "turn-app-server-stream-1" };
+        },
         close: async () => {},
-        onNotification: () => {},
+        onNotification: (handler) => {
+          notificationHandler = handler;
+        },
         onServerRequest: () => {},
       }),
     });
@@ -241,6 +276,66 @@ test("/api/tasks/stream 会按 runtimeEngine 选择对应 runtime，并保持 ND
       },
     };
   });
+});
+
+test("/api/tasks/stream 显式传 sdk runtimeEngine 时会返回 INVALID_REQUEST，且不会执行任何 runtime", async () => {
+  let defaultRuntimeRunCount = 0;
+  let sdkRunCount = 0;
+
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/stream`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请检查公开 stream 入口拒绝 sdk",
+        sessionId: "session-task-stream-sdk-runtime",
+        options: {
+          runtimeEngine: "sdk",
+        },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+
+    const lines = parseNdjson(await response.text());
+    assert.deepEqual(lines.map((line) => line.kind), ["error", "fatal"]);
+    assert.equal(lines[0]?.title, "INVALID_REQUEST");
+    assert.match(String(lines[0]?.text ?? ""), /public task execution: sdk/);
+    assert.equal(defaultRuntimeRunCount, 0);
+    assert.equal(sdkRunCount, 0);
+  }, {
+    authenticated: false,
+    requiresOpenaiAuth: false,
+  }, ({ runtimeStore }) => ({
+    defaultRuntime: {
+      runTask: async () => {
+        defaultRuntimeRunCount += 1;
+        throw new Error("default runtime should not be used");
+      },
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => ({}),
+      getPrincipalSkillsService: () => ({}),
+    },
+    runtimes: {
+      sdk: {
+        runTask: async () => {
+          sdkRunCount += 1;
+          throw new Error("sdk runtime should not be used");
+        },
+        getRuntimeStore: () => runtimeStore,
+        getIdentityLinkService: () => ({}),
+        getPrincipalSkillsService: () => ({}),
+      },
+    },
+  }));
 });
 
 test("/api/tasks/stream 在未传 runtimeRegistry 时默认走内建 app-server runtime", async () => {

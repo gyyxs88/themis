@@ -31,9 +31,9 @@ import {
   type TaskRequest,
   type TaskRuntimeFacade,
   type TaskRuntimeRegistry,
+  resolvePublicTaskRuntime,
   type WebSearchMode,
   resolveTaskRuntime,
-  resolveRequestedTaskRuntime,
 } from "../../types/index.js";
 import { FeishuAdapter } from "./adapter.js";
 import {
@@ -1114,7 +1114,7 @@ export class FeishuChannelService {
       );
       await bridge.prepareResponseSlot();
       await ensureAuthAvailable(this.authRuntime, normalizedRequest);
-      const selectedRuntime = resolveRequestedTaskRuntime(this.runtimeRegistry, normalizedRequest.options?.runtimeEngine);
+      const selectedRuntime = resolvePublicTaskRuntime(this.runtimeRegistry, normalizedRequest.options?.runtimeEngine);
 
       const result = await selectedRuntime.runTask(normalizedRequest, {
         signal: taskLease.signal,

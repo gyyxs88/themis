@@ -7,7 +7,7 @@ import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { appendTaskReplyQuotaFooter } from "../core/task-reply-quota.js";
 import {
   InvalidTaskRuntimeSelectionError,
-  resolveRequestedTaskRuntime,
+  resolvePublicTaskRuntime,
   type TaskRequest,
   type TaskResult,
   type TaskRuntimeFacade,
@@ -349,7 +349,7 @@ function resolveTaskRuntimeForHttpRequest(
   runtimeRegistry: TaskRuntimeRegistry,
   request: TaskRequest,
 ): TaskRuntimeFacade {
-  return resolveRequestedTaskRuntime(runtimeRegistry, readRequestedRuntimeEngine(request));
+  return resolvePublicTaskRuntime(runtimeRegistry, readRequestedRuntimeEngine(request));
 }
 
 function readRequestedRuntimeEngine(request: TaskRequest): string | null | undefined {

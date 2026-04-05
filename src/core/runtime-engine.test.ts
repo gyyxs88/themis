@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   InvalidTaskRuntimeSelectionError,
+  UnsupportedPublicTaskRuntimeSelectionError,
   parseRuntimeEngine,
+  resolvePublicTaskRuntime,
   resolveRequestedTaskRuntime,
   resolveTaskRuntime,
   resolveRuntimeEngine,
@@ -151,6 +153,86 @@ test("resolveRequestedTaskRuntime 在显式请求非法 runtime 时抛 InvalidTa
     (error) => {
       assert.ok(error instanceof InvalidTaskRuntimeSelectionError);
       assert.match(error.message, /Invalid runtimeEngine: bad-runtime/);
+      return true;
+    },
+  );
+});
+
+test("resolvePublicTaskRuntime 在未显式请求时返回 defaultRuntime", () => {
+  const defaultRuntime = createRuntime("default");
+
+  assert.equal(
+    resolvePublicTaskRuntime(
+      {
+        defaultRuntime,
+        runtimes: {
+          sdk: createRuntime("sdk"),
+          "app-server": createRuntime("app-server"),
+        },
+      },
+      undefined,
+    ),
+    defaultRuntime,
+  );
+});
+
+test("resolvePublicTaskRuntime 在显式请求 app-server 时返回已注册 runtime", () => {
+  const defaultRuntime = createRuntime("default");
+  const appServerRuntime = createRuntime("app-server");
+
+  assert.equal(
+    resolvePublicTaskRuntime(
+      {
+        defaultRuntime,
+        runtimes: {
+          sdk: createRuntime("sdk"),
+          "app-server": appServerRuntime,
+        },
+      },
+      "app-server",
+    ),
+    appServerRuntime,
+  );
+});
+
+test("resolvePublicTaskRuntime 在显式请求 sdk 时抛 UnsupportedPublicTaskRuntimeSelectionError", () => {
+  const defaultRuntime = createRuntime("default");
+
+  assert.throws(
+    () => resolvePublicTaskRuntime(
+      {
+        defaultRuntime,
+        runtimes: {
+          sdk: createRuntime("sdk"),
+          "app-server": createRuntime("app-server"),
+        },
+      },
+      "sdk",
+    ),
+    (error) => {
+      assert.ok(error instanceof UnsupportedPublicTaskRuntimeSelectionError);
+      assert.match(error.message, /no longer available for public task execution: sdk/);
+      return true;
+    },
+  );
+});
+
+test("resolvePublicTaskRuntime 在显式请求未注册的 app-server 时抛 InvalidTaskRuntimeSelectionError", () => {
+  const defaultRuntime = createRuntime("default");
+
+  assert.throws(
+    () => resolvePublicTaskRuntime(
+      {
+        defaultRuntime,
+        runtimes: {
+          sdk: createRuntime("sdk"),
+        },
+      },
+      "app-server",
+    ),
+    (error) => {
+      assert.ok(error instanceof InvalidTaskRuntimeSelectionError);
+      assert.match(error.message, /Requested runtimeEngine is not enabled: app-server/);
       return true;
     },
   );

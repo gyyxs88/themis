@@ -85,6 +85,8 @@ export interface TaskRuntimeRegistry {
 
 export class InvalidTaskRuntimeSelectionError extends Error {}
 
+export class UnsupportedPublicTaskRuntimeSelectionError extends InvalidTaskRuntimeSelectionError {}
+
 export function parseRuntimeEngine(value: string | undefined | null): RuntimeEngine | null {
   if (value === "sdk" || value === "app-server") {
     return value;
@@ -121,6 +123,36 @@ export function resolveRequestedTaskRuntime(
 
   if (!parsedEngine) {
     throw new InvalidTaskRuntimeSelectionError(`Invalid runtimeEngine: ${String(requestedValue)}`);
+  }
+
+  const selectedRuntime = registry.runtimes?.[parsedEngine];
+
+  if (!selectedRuntime) {
+    throw new InvalidTaskRuntimeSelectionError(`Requested runtimeEngine is not enabled: ${parsedEngine}`);
+  }
+
+  return selectedRuntime;
+}
+
+export function resolvePublicTaskRuntime(
+  registry: TaskRuntimeRegistry,
+  requestedValue: string | undefined | null,
+): TaskRuntimeFacade {
+  if (requestedValue === undefined) {
+    return registry.defaultRuntime;
+  }
+
+  const parsedEngine = parseRuntimeEngine(requestedValue);
+
+  if (!parsedEngine) {
+    throw new InvalidTaskRuntimeSelectionError(`Invalid runtimeEngine: ${String(requestedValue)}`);
+  }
+
+  if (parsedEngine !== "app-server") {
+    throw new UnsupportedPublicTaskRuntimeSelectionError(
+      `Requested runtimeEngine is no longer available for public task execution: ${parsedEngine}. ` +
+      "Themis 现在只接受 app-server 作为公开任务执行入口；历史 sdk 会话兼容仅保留给恢复与 fork。",
+    );
   }
 
   const selectedRuntime = registry.runtimes?.[parsedEngine];
