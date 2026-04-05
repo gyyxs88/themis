@@ -48,6 +48,12 @@ import {
   type FeishuDiagnosticsEventDetailValue,
   type FeishuDiagnosticsPendingAction,
 } from "./diagnostics-state-store.js";
+import {
+  FeishuChatSettingsStore,
+  type FeishuChatRoutePolicy,
+  type FeishuChatSessionScope,
+  type FeishuChatSettings,
+} from "./chat-settings-store.js";
 import { renderFeishuAssistantMessage, type FeishuRenderedMessageDraft } from "./message-renderer.js";
 import {
   extractFeishuPostContentItems,
@@ -94,6 +100,7 @@ interface FeishuIncomingContextBase {
   tenantKey?: string;
   threadId?: string;
   chatType?: string;
+  mentionCount?: number;
 }
 
 type FeishuIncomingContext =
@@ -139,6 +146,7 @@ export interface FeishuChannelServiceOptions {
   progressFlushTimeoutMs?: number;
   sessionStore?: FeishuSessionStore;
   diagnosticsStateStore?: FeishuDiagnosticsStateStore;
+  chatSettingsStore?: FeishuChatSettingsStore;
   logger?: FeishuChannelLogger;
 }
 
@@ -148,6 +156,7 @@ const FEISHU_SETTINGS_SCOPE_LINE = "作用范围：Themis 中间层长期默认�
 const FEISHU_SETTINGS_EFFECT_LINE = "生效规则：只影响之后新发起的任务，不会打断已经在运行中的任务。";
 const FEISHU_ATTACHMENT_DRAFT_CONFIRMATION = "请直接回复你的问题，我会和附件一起处理。";
 const SESSION_WORKSPACE_UNAVAILABLE_ERROR = "当前会话绑定的工作区不可用，请新建会话后重新设置。";
+const FEISHU_SHARED_GROUP_SCOPE_USER_ID = "__shared_group__";
 
 export class FeishuChannelService {
   private readonly runtime: CodexTaskRuntime;
@@ -163,6 +172,7 @@ export class FeishuChannelService {
   private readonly sessionStore: FeishuSessionStore;
   private readonly diagnosticsStateStore: FeishuDiagnosticsStateStore;
   private readonly attachmentDraftStore: FeishuAttachmentDraftStore;
+  private readonly chatSettingsStore: FeishuChatSettingsStore;
   private readonly logger: FeishuChannelLogger;
   private readonly client: Lark.Client | null;
   private readonly wsClient: Lark.WSClient | null;
@@ -198,6 +208,9 @@ export class FeishuChannelService {
     this.sessionStore = options.sessionStore ?? new FeishuSessionStore();
     this.diagnosticsStateStore = options.diagnosticsStateStore ?? new FeishuDiagnosticsStateStore({
       filePath: join(this.runtime.getWorkingDirectory(), "infra/local/feishu-diagnostics.json"),
+    });
+    this.chatSettingsStore = options.chatSettingsStore ?? new FeishuChatSettingsStore({
+      filePath: join(this.runtime.getWorkingDirectory(), "infra/local/feishu-chat-settings.json"),
     });
     this.attachmentDraftStore = new FeishuAttachmentDraftStore({
       filePath: join(this.runtime.getWorkingDirectory(), "infra/local/feishu-attachment-drafts.json"),
@@ -321,15 +334,44 @@ export class FeishuChannelService {
 
   private async handleMessageReceiveEvent(context: FeishuIncomingContext): Promise<void> {
     try {
-      if (context.kind === "attachment") {
-        await this.handleAttachmentMessage(context);
-        return;
-      }
-
       const command = parseFeishuCommand(context.text);
 
       if (command) {
         await this.handleCommand(command, context);
+        return;
+      }
+
+      const routingDecision = this.evaluateIncomingRoute(context);
+
+      if (!routingDecision.allowed) {
+        this.recordFeishuDiagnosticsEvent({
+          type: "message.route_ignored",
+          context,
+          summary: "当前群聊消息未命中路由策略，已忽略。",
+          lastMessageId: context.messageId,
+          details: {
+            chatType: routingDecision.chatType,
+            routePolicy: routingDecision.routePolicy,
+            sessionScope: routingDecision.sessionScope,
+            reason: routingDecision.reason,
+          },
+        });
+        return;
+      }
+
+      if (routingDecision.routeKey) {
+        const acceptedAt = typeof context.messageCreateTimeMs === "number"
+          ? new Date(context.messageCreateTimeMs).toISOString()
+          : new Date().toISOString();
+        this.chatSettingsStore.noteRecentRoute({
+          chatId: context.chatId,
+          routeKey: routingDecision.routeKey,
+          acceptedAt,
+        });
+      }
+
+      if (context.kind === "attachment") {
+        await this.handleAttachmentMessage(context);
         return;
       }
 
@@ -348,7 +390,8 @@ export class FeishuChannelService {
   private async handleAttachmentMessage(
     context: Extract<FeishuIncomingContext, { kind: "attachment" }>,
   ): Promise<void> {
-    const sessionId = this.sessionStore.ensureActiveSessionId(toConversationKey(context));
+    const conversationKey = this.resolveConversationKey(context);
+    const sessionId = this.sessionStore.ensureActiveSessionId(conversationKey);
     const assets = await downloadFeishuMessageResources({
       client: this.requireClient(),
       resources: context.attachments,
@@ -361,7 +404,7 @@ export class FeishuChannelService {
       ),
     });
 
-    this.attachmentDraftStore.appendEnvelope(createAttachmentDraftKey(context, sessionId), {
+    this.attachmentDraftStore.appendEnvelope(createAttachmentDraftKey(conversationKey, sessionId), {
       parts: buildFeishuDraftPartsFromAssets(assets),
       assets,
     });
@@ -369,6 +412,453 @@ export class FeishuChannelService {
       context.chatId,
       `已收到 ${assets.length} 个附件，${FEISHU_ATTACHMENT_DRAFT_CONFIRMATION}`,
     );
+  }
+
+  private evaluateIncomingRoute(context: FeishuIncomingContext): {
+    allowed: boolean;
+    chatType: string;
+    routePolicy: FeishuChatRoutePolicy;
+    sessionScope: FeishuChatSessionScope;
+    reason: string;
+    routeKey: string;
+  } {
+    const settings = this.readChatSettings(context);
+    const routeKey = this.resolveScopedConversationUserId(context, settings);
+
+    if (!isGroupChatType(settings.chatType)) {
+      return {
+        allowed: true,
+        chatType: settings.chatType,
+        routePolicy: settings.routePolicy,
+        sessionScope: settings.sessionScope,
+        reason: "p2p",
+        routeKey,
+      };
+    }
+
+    if (settings.routePolicy === "always") {
+      return {
+        allowed: true,
+        chatType: settings.chatType,
+        routePolicy: settings.routePolicy,
+        sessionScope: settings.sessionScope,
+        reason: "group_always",
+        routeKey,
+      };
+    }
+
+    if ((context.mentionCount ?? 0) > 0) {
+      return {
+        allowed: true,
+        chatType: settings.chatType,
+        routePolicy: settings.routePolicy,
+        sessionScope: settings.sessionScope,
+        reason: "group_mention",
+        routeKey,
+      };
+    }
+
+    const sessionId = this.sessionStore.getActiveSessionId({
+      chatId: context.chatId,
+      userId: routeKey,
+    });
+    const principalId = this.ensurePrincipalIdentity(context).principalId;
+
+    if (sessionId && this.actionBridge.list({ sessionId, principalId }).length > 0) {
+      return {
+        allowed: true,
+        chatType: settings.chatType,
+        routePolicy: settings.routePolicy,
+        sessionScope: settings.sessionScope,
+        reason: "group_pending_action",
+        routeKey,
+      };
+    }
+
+    if (sessionId && this.activeSessionTasks.has(sessionId)) {
+      return {
+        allowed: true,
+        chatType: settings.chatType,
+        routePolicy: settings.routePolicy,
+        sessionScope: settings.sessionScope,
+        reason: "group_active_task",
+        routeKey,
+      };
+    }
+
+    const routeSeenAtMs = typeof context.messageCreateTimeMs === "number" ? context.messageCreateTimeMs : Date.now();
+
+    if (this.chatSettingsStore.hasRecentRoute({
+      chatId: context.chatId,
+      routeKey,
+      currentTimeMs: routeSeenAtMs,
+    })) {
+      return {
+        allowed: true,
+        chatType: settings.chatType,
+        routePolicy: settings.routePolicy,
+        sessionScope: settings.sessionScope,
+        reason: "group_recent_route",
+        routeKey,
+      };
+    }
+
+    return {
+      allowed: false,
+      chatType: settings.chatType,
+      routePolicy: settings.routePolicy,
+      sessionScope: settings.sessionScope,
+      reason: "group_requires_explicit_trigger",
+      routeKey,
+    };
+  }
+
+  private readChatSettings(context: Pick<FeishuIncomingContextBase, "chatId" | "chatType">): FeishuChatSettings {
+    return this.chatSettingsStore.getChatSettings({
+      chatId: context.chatId,
+      chatType: context.chatType ?? null,
+    });
+  }
+
+  private resolveScopedConversationUserId(
+    context: Pick<FeishuIncomingContextBase, "userId">,
+    settings: Pick<FeishuChatSettings, "chatType" | "sessionScope">,
+  ): string {
+    return isGroupChatType(settings.chatType) && settings.sessionScope === "shared"
+      ? FEISHU_SHARED_GROUP_SCOPE_USER_ID
+      : context.userId;
+  }
+
+  private resolveConversationKey(context: FeishuIncomingContext): FeishuConversationKey {
+    const settings = this.readChatSettings(context);
+    return {
+      chatId: context.chatId,
+      userId: this.resolveScopedConversationUserId(context, settings),
+    };
+  }
+
+  private async handleGroupCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const settings = this.readChatSettings(context);
+
+    if (!isGroupChatType(settings.chatType)) {
+      await this.safeSendText(context.chatId, "当前聊天是单聊，`/group` 只在群聊中生效。");
+      return;
+    }
+
+    const subcommand = normalizeText(args[0])?.toLowerCase() ?? "";
+    const restArgs = args.slice(1);
+
+    switch (subcommand) {
+      case "":
+      case "status":
+      case "show":
+        await this.sendGroupStatus(context.chatId, context);
+        return;
+      case "route":
+        await this.updateGroupRoutePolicy(restArgs, context);
+        return;
+      case "session":
+        await this.updateGroupSessionScope(restArgs, context);
+        return;
+      case "admin":
+      case "admins":
+        await this.handleGroupAdminCommand(restArgs, context);
+        return;
+      default:
+        await this.sendGroupStatus(context.chatId, context, subcommand);
+    }
+  }
+
+  private async sendGroupStatus(
+    chatId: string,
+    context: FeishuIncomingContext,
+    invalidSegment?: string,
+  ): Promise<void> {
+    const settings = this.readChatSettings(context);
+    const isAdmin = settings.adminUserIds.includes(context.userId);
+    const scopedSessionId = this.sessionStore.getActiveSessionId(this.resolveConversationKey(context));
+    const lines = [
+      invalidSegment ? `未识别的群设置项：${invalidSegment}` : "群设置：",
+      `聊天类型：${settings.chatType}`,
+      `会话策略：${settings.sessionScope}`,
+      `消息路由：${settings.routePolicy}`,
+      `当前用户权限：${isAdmin ? "管理员" : "普通成员"}`,
+      `群管理员：${settings.adminUserIds.length > 0 ? settings.adminUserIds.join("、") : "未设置"}`,
+      scopedSessionId ? `当前群会话：${scopedSessionId}` : "当前群会话：未激活",
+      "",
+      "/group route <smart|always>",
+      "/group session <personal|shared>",
+      "/group admin list",
+      "/group admin add <userId>",
+      "/group admin remove <userId>",
+    ];
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async updateGroupRoutePolicy(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const nextPolicy = parseGroupRoutePolicyArgument(args);
+
+    if (!nextPolicy) {
+      const settings = this.readChatSettings(context);
+      await this.safeSendText(
+        context.chatId,
+        [
+          "群设置项：/group route",
+          `当前值：${settings.routePolicy}`,
+          "可选值：smart | always",
+          "说明：smart 要先显式触达，always 表示当前群消息默认直接进入 Themis。",
+        ].join("\n"),
+      );
+      return;
+    }
+
+    const access = await this.ensureGroupAdminAccess(context);
+
+    if (!access) {
+      return;
+    }
+
+    const saved = this.chatSettingsStore.saveChatSettings({
+      ...access.settings,
+      routePolicy: nextPolicy,
+      updatedAt: new Date().toISOString(),
+    });
+    this.recordFeishuDiagnosticsEvent({
+      type: "group.route.updated",
+      context,
+      summary: `群消息路由已更新为：${nextPolicy}`,
+      lastMessageId: context.messageId,
+      details: {
+        routePolicy: nextPolicy,
+      },
+    });
+    await this.safeSendText(
+      context.chatId,
+      [
+        ...(access.bootstrapped ? ["已将你设为当前群的首个 Themis 管理员。"] : []),
+        `群消息路由已更新为：${saved.routePolicy}`,
+      ].join("\n"),
+    );
+  }
+
+  private async updateGroupSessionScope(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const nextScope = parseGroupSessionScopeArgument(args);
+
+    if (!nextScope) {
+      const settings = this.readChatSettings(context);
+      await this.safeSendText(
+        context.chatId,
+        [
+          "群设置项：/group session",
+          `当前值：${settings.sessionScope}`,
+          "可选值：personal | shared",
+          "说明：personal 继续按人隔离会话，shared 表示当前群共用一条会话与附件草稿。",
+        ].join("\n"),
+      );
+      return;
+    }
+
+    const access = await this.ensureGroupAdminAccess(context);
+
+    if (!access) {
+      return;
+    }
+
+    const saved = this.chatSettingsStore.saveChatSettings({
+      ...access.settings,
+      sessionScope: nextScope,
+      updatedAt: new Date().toISOString(),
+    });
+    this.recordFeishuDiagnosticsEvent({
+      type: "group.session.updated",
+      context,
+      summary: `群会话策略已更新为：${nextScope}`,
+      lastMessageId: context.messageId,
+      details: {
+        sessionScope: nextScope,
+      },
+    });
+    await this.safeSendText(
+      context.chatId,
+      [
+        ...(access.bootstrapped ? ["已将你设为当前群的首个 Themis 管理员。"] : []),
+        `群会话策略已更新为：${saved.sessionScope}`,
+      ].join("\n"),
+    );
+  }
+
+  private async handleGroupAdminCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const subcommand = normalizeText(args[0])?.toLowerCase() ?? "";
+
+    switch (subcommand) {
+      case "":
+      case "list":
+      case "ls":
+        await this.sendGroupAdmins(context.chatId, context);
+        return;
+      case "add":
+        await this.addGroupAdmin(args.slice(1), context);
+        return;
+      case "remove":
+      case "rm":
+      case "delete":
+        await this.removeGroupAdmin(args.slice(1), context);
+        return;
+      default:
+        await this.safeSendText(
+          context.chatId,
+          [
+            `未识别的群管理员子命令：${subcommand}`,
+            "/group admin list",
+            "/group admin add <userId>",
+            "/group admin remove <userId>",
+          ].join("\n"),
+        );
+    }
+  }
+
+  private async sendGroupAdmins(chatId: string, context: FeishuIncomingContext): Promise<void> {
+    const settings = this.readChatSettings(context);
+    const lines = [
+      "群管理员：",
+      ...(settings.adminUserIds.length > 0
+        ? settings.adminUserIds.map((userId, index) => `${index + 1}. ${userId}`)
+        : ["当前还没有设置群管理员。首次成功修改群设置的人会自动成为首个管理员。"]),
+    ];
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async addGroupAdmin(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const userId = normalizeText(args.join(" "));
+
+    if (!userId) {
+      await this.safeSendText(context.chatId, "用法：/group admin add <userId>");
+      return;
+    }
+
+    const access = await this.ensureGroupAdminAccess(context);
+
+    if (!access) {
+      return;
+    }
+
+    const saved = this.chatSettingsStore.saveChatSettings({
+      ...access.settings,
+      adminUserIds: dedupeTextValues([...access.settings.adminUserIds, userId]),
+      updatedAt: new Date().toISOString(),
+    });
+    this.recordFeishuDiagnosticsEvent({
+      type: "group.admin.updated",
+      context,
+      summary: `已添加群管理员：${userId}`,
+      lastMessageId: context.messageId,
+      details: {
+        adminUserId: userId,
+        adminCount: saved.adminUserIds.length,
+      },
+    });
+    await this.safeSendText(
+      context.chatId,
+      [
+        ...(access.bootstrapped ? ["已将你设为当前群的首个 Themis 管理员。"] : []),
+        `已添加群管理员：${userId}`,
+      ].join("\n"),
+    );
+  }
+
+  private async removeGroupAdmin(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const userId = normalizeText(args.join(" "));
+
+    if (!userId) {
+      await this.safeSendText(context.chatId, "用法：/group admin remove <userId>");
+      return;
+    }
+
+    const access = await this.ensureGroupAdminAccess(context);
+
+    if (!access) {
+      return;
+    }
+
+    if (!access.settings.adminUserIds.includes(userId)) {
+      await this.safeSendText(context.chatId, `当前群管理员列表里没有：${userId}`);
+      return;
+    }
+
+    if (access.settings.adminUserIds.length <= 1) {
+      await this.safeSendText(context.chatId, "至少保留 1 个群管理员。");
+      return;
+    }
+
+    const saved = this.chatSettingsStore.saveChatSettings({
+      ...access.settings,
+      adminUserIds: access.settings.adminUserIds.filter((item) => item !== userId),
+      updatedAt: new Date().toISOString(),
+    });
+    this.recordFeishuDiagnosticsEvent({
+      type: "group.admin.updated",
+      context,
+      summary: `已移除群管理员：${userId}`,
+      lastMessageId: context.messageId,
+      details: {
+        adminUserId: userId,
+        adminCount: saved.adminUserIds.length,
+      },
+    });
+    await this.safeSendText(context.chatId, `已移除群管理员：${userId}`);
+  }
+
+  private async ensureGroupAdminAccess(context: FeishuIncomingContext): Promise<{
+    settings: FeishuChatSettings;
+    bootstrapped: boolean;
+  } | null> {
+    const settings = this.readChatSettings(context);
+
+    if (!isGroupChatType(settings.chatType)) {
+      await this.safeSendText(context.chatId, "当前聊天是单聊，群管理员控制只在群聊中生效。");
+      return null;
+    }
+
+    if (settings.adminUserIds.length === 0) {
+      return {
+        settings: this.chatSettingsStore.saveChatSettings({
+          ...settings,
+          adminUserIds: [context.userId],
+          updatedAt: new Date().toISOString(),
+        }),
+        bootstrapped: true,
+      };
+    }
+
+    if (!settings.adminUserIds.includes(context.userId)) {
+      await this.safeSendText(context.chatId, "只有当前群的 Themis 管理员才能修改群设置。");
+      return null;
+    }
+
+    return {
+      settings,
+      bootstrapped: false,
+    };
+  }
+
+  private async ensureSharedGroupSessionMutationAllowed(
+    context: FeishuIncomingContext,
+    commandLabel: string,
+  ): Promise<boolean> {
+    const settings = this.readChatSettings(context);
+
+    if (!isGroupChatType(settings.chatType) || settings.sessionScope !== "shared") {
+      return true;
+    }
+
+    if (settings.adminUserIds.includes(context.userId)) {
+      return true;
+    }
+
+    await this.safeSendText(context.chatId, `当前群是 shared 会话，只有群管理员才能执行 ${commandLabel}。`);
+    return false;
   }
 
   private isDuplicateMessage(messageId: string): boolean {
@@ -525,6 +1015,9 @@ export class FeishuChannelService {
       case "approval":
         await this.updateApprovalPolicy(command.args, context);
         return;
+      case "group":
+        await this.handleGroupCommand(command.args, context);
+        return;
       case "approve":
         await this.resolvePendingApproval(command.args[0], "approve", context);
         return;
@@ -550,9 +1043,9 @@ export class FeishuChannelService {
   }
 
   private async handleTaskMessage(context: Extract<FeishuIncomingContext, { kind: "text" }>): Promise<void> {
-    const conversationKey = toConversationKey(context);
+    const conversationKey = this.resolveConversationKey(context);
     const sessionId = this.sessionStore.ensureActiveSessionId(conversationKey);
-    const draftKey = createAttachmentDraftKey(context, sessionId);
+    const draftKey = createAttachmentDraftKey(conversationKey, sessionId);
     const taskLease = await this.acquireSessionTaskLease(sessionId);
     const inlineAssets = await this.downloadInlineAttachments(context, sessionId);
     const reservedDraft = this.attachmentDraftStore.consume(draftKey);
@@ -1429,7 +1922,7 @@ export class FeishuChannelService {
   }
 
   private async sendHelp(chatId: string, context: FeishuIncomingContext): Promise<void> {
-    const currentSessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
+    const currentSessionId = this.sessionStore.getActiveSessionId(this.resolveConversationKey(context));
     const helpText = [
       "Themis 飞书命令：",
       "/help 查看帮助",
@@ -1441,6 +1934,7 @@ export class FeishuChannelService {
       "/steer <指令> 对当前会话发送 Steer",
       "/workspace 查看或设置当前会话工作区",
       "/settings 查看设置树",
+      "/group 查看当前群聊设置、路由和管理员控制",
       "/skills 查看和维护当前 principal 的 skills",
       "/link <绑定码> 可选：认领一个旧 Web 浏览器身份",
       "/reset confirm 清空当前 principal 的人格档案、历史和默认配置，并重新开始",
@@ -1897,7 +2391,7 @@ export class FeishuChannelService {
 
   private async sendSessionList(chatId: string, context: FeishuIncomingContext): Promise<void> {
     const sessions = this.runtime.getRuntimeStore().listRecentSessions(12);
-    const currentSessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
+    const currentSessionId = this.sessionStore.getActiveSessionId(this.resolveConversationKey(context));
 
     if (!sessions.length) {
       await this.safeSendText(chatId, "当前还没有会话历史。直接发送文本，或先执行 /new 开始。");
@@ -1933,7 +2427,11 @@ export class FeishuChannelService {
   }
 
   private async createNewSession(chatId: string, context: FeishuIncomingContext): Promise<void> {
-    const conversationKey = toConversationKey(context);
+    if (!await this.ensureSharedGroupSessionMutationAllowed(context, "/new")) {
+      return;
+    }
+
+    const conversationKey = this.resolveConversationKey(context);
     const previousSessionId = this.sessionStore.getActiveSessionId(conversationKey);
     const inheritedWorkspacePath = previousSessionId
       ? normalizeText(this.readSessionTaskSettings(previousSessionId).workspacePath)
@@ -1971,7 +2469,11 @@ export class FeishuChannelService {
   }
 
   private async handleWorkspaceCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
-    const sessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
+    if (!await this.ensureSharedGroupSessionMutationAllowed(context, "/workspace")) {
+      return;
+    }
+
+    const sessionId = this.sessionStore.getActiveSessionId(this.resolveConversationKey(context));
 
     if (!sessionId) {
       await this.safeSendText(context.chatId, "当前还没有激活会话。直接发消息时会自动创建，或使用 /new 手动新建。");
@@ -2010,6 +2512,10 @@ export class FeishuChannelService {
   }
 
   private async switchSession(args: string[], context: FeishuIncomingContext): Promise<void> {
+    if (!await this.ensureSharedGroupSessionMutationAllowed(context, "/use")) {
+      return;
+    }
+
     const target = normalizeText(args.join(" "));
 
     if (!target) {
@@ -2037,7 +2543,7 @@ export class FeishuChannelService {
       return;
     }
 
-    this.sessionStore.setActiveSessionId(toConversationKey(context), resolvedSessionId);
+    this.sessionStore.setActiveSessionId(this.resolveConversationKey(context), resolvedSessionId);
     this.recordFeishuDiagnosticsEvent({
       type: "session.switched",
       context,
@@ -2066,7 +2572,7 @@ export class FeishuChannelService {
     const now = new Date().toISOString();
     const chatId = input.context.chatId;
     const userId = input.context.userId;
-    const sessionId = input.sessionId ?? this.sessionStore.getActiveSessionId(toConversationKey(input.context)) ?? null;
+    const sessionId = input.sessionId ?? this.sessionStore.getActiveSessionId(this.resolveConversationKey(input.context)) ?? null;
     const principalId = input.principalId ?? this.ensurePrincipalIdentity(input.context).principalId;
 
     if (sessionId) {
@@ -2134,7 +2640,7 @@ export class FeishuChannelService {
   }
 
   private async sendCurrentSession(chatId: string, context: FeishuIncomingContext): Promise<void> {
-    const sessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
+    const sessionId = this.sessionStore.getActiveSessionId(this.resolveConversationKey(context));
 
     if (!sessionId) {
       await this.safeSendText(chatId, "当前还没有激活会话。直接发消息时会自动创建，或使用 /new 手动新建。");
@@ -2171,7 +2677,7 @@ export class FeishuChannelService {
       return;
     }
 
-    const sessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
+    const sessionId = this.sessionStore.getActiveSessionId(this.resolveConversationKey(context));
 
     if (!sessionId) {
       await this.safeSendText(context.chatId, "当前还没有激活会话。直接发消息时会自动创建，或使用 /new 手动新建。");
@@ -2212,7 +2718,7 @@ export class FeishuChannelService {
       return;
     }
 
-    const sessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
+    const sessionId = this.sessionStore.getActiveSessionId(this.resolveConversationKey(context));
 
     if (!sessionId) {
       await this.safeSendText(context.chatId, "当前还没有激活会话。直接发消息时会自动创建，或使用 /new 手动新建。");
@@ -2284,7 +2790,7 @@ export class FeishuChannelService {
       return;
     }
 
-    const conversationKey = toConversationKey(context);
+    const conversationKey = this.resolveConversationKey(context);
     const currentSessionId = this.sessionStore.getActiveSessionId(conversationKey);
     const lockKey = currentSessionId || `feishu-reset:${context.chatId}:${context.userId}`;
 
@@ -2686,7 +3192,7 @@ export class FeishuChannelService {
   }
 
   private async replyActivePendingInput(context: FeishuIncomingContext): Promise<boolean> {
-    const sessionId = this.sessionStore.ensureActiveSessionId(toConversationKey(context));
+    const sessionId = this.sessionStore.ensureActiveSessionId(this.resolveConversationKey(context));
     const principal = this.ensurePrincipalIdentity(context);
     const actionScope = {
       sessionId,
@@ -2873,7 +3379,7 @@ export class FeishuChannelService {
     sessionId: string;
     principalId: string;
   } | null {
-    const sessionId = this.sessionStore.getActiveSessionId(toConversationKey(context));
+    const sessionId = this.sessionStore.getActiveSessionId(this.resolveConversationKey(context));
 
     if (!sessionId) {
       return null;
@@ -3009,6 +3515,7 @@ function normalizeIncomingContext(event: FeishuMessageReceiveEvent): FeishuIncom
   const tenantKey = normalizeText(event.sender?.tenant_key);
   const threadId = normalizeText(event.message?.thread_id);
   const chatType = normalizeText(event.message?.chat_type);
+  const mentionCount = Array.isArray(event.message?.mentions) ? event.message.mentions.length : 0;
 
   if (!chatId || !messageId || !userId) {
     return null;
@@ -3023,6 +3530,7 @@ function normalizeIncomingContext(event: FeishuMessageReceiveEvent): FeishuIncom
     ...(tenantKey ? { tenantKey } : {}),
     ...(threadId ? { threadId } : {}),
     ...(chatType ? { chatType } : {}),
+    ...(mentionCount > 0 ? { mentionCount } : {}),
   };
 
   if (text) {
@@ -3136,13 +3644,6 @@ function isResetConfirmed(args: string[]): boolean {
     const normalized = arg.trim().toLowerCase();
     return normalized === "confirm" || normalized === "确认";
   });
-}
-
-function toConversationKey(context: FeishuIncomingContext): FeishuConversationKey {
-  return {
-    chatId: context.chatId,
-    userId: context.userId,
-  };
 }
 
 function createAttachmentDraftKey(
@@ -3592,6 +4093,34 @@ function parseWebSearchModeArgument(args: string[]): WebSearchMode | null {
   }
 
   return WEB_SEARCH_MODES.includes(value as WebSearchMode) ? (value as WebSearchMode) : null;
+}
+
+function parseGroupRoutePolicyArgument(args: string[]): FeishuChatRoutePolicy | null {
+  const value = normalizeText(args.join(" "))?.toLowerCase();
+
+  if (!value) {
+    return null;
+  }
+
+  return value === "smart" || value === "always" ? value : null;
+}
+
+function parseGroupSessionScopeArgument(args: string[]): FeishuChatSessionScope | null {
+  const value = normalizeText(args.join(" "))?.toLowerCase();
+
+  if (!value) {
+    return null;
+  }
+
+  if (value === "personal" || value === "user") {
+    return "personal";
+  }
+
+  return value === "shared" ? "shared" : null;
+}
+
+function isGroupChatType(chatType: string | null | undefined): boolean {
+  return normalizeText(chatType)?.toLowerCase() === "group";
 }
 
 function parseSkillsSyncForceArgument(value: string): boolean | null {

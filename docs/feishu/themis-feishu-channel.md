@@ -1,6 +1,6 @@
 # Themis 飞书渠道说明
 
-更新日期：2026-04-02
+更新日期：2026-04-05
 
 ## 当前实现
 
@@ -12,9 +12,13 @@ Themis 已接入飞书长连接渠道，特点如下：
 - 飞书真实入站 `post` 已验证会出现顶层 `{"title":"","content":[...]}` 结构，而不一定带 `zh_cn` 这类 locale 包裹；当前解析已兼容这两种形态
 - 飞书 `image` / `file` 消息会先下载到当前会话实际执行工作目录下的 `temp/feishu-attachments/<sessionId>/<messageId>/`
 - 下载到本地的 PDF 现在会继续走共享 PDF 资产加工：统一回填 `TaskInputAsset.textExtraction`、`metadata.pageCount` 与持久 sidecar 文本路径，供 runtime / 历史 / diagnostics 复用
-- 飞书附件不会立刻起任务，而是先按 `chatId + userId + activeSessionId` 写入本地附件草稿；草稿当前以 `parts + assets` 作为 canonical 结构，等下一条真正进入普通任务路径的文本时会构造 `inputEnvelope`，同时保留 legacy `attachments[]` 兼容
+- 飞书附件不会立刻起任务，而是先按 `chatId + scopedConversationUserId + activeSessionId` 写入本地附件草稿；默认 `scopedConversationUserId = userId`，群聊切到 `shared` 会话策略后会改成整群共享作用域。草稿当前以 `parts + assets` 作为 canonical 结构，等下一条真正进入普通任务路径的文本时会构造 `inputEnvelope`，同时保留 legacy `attachments[]` 兼容
 - 命令和 waiting action 恢复优先级高于附件草稿消费；只有普通任务文本才会自动拼接附件
 - 附件任务真正开始执行后会清空已消费草稿；附件下载失败会直接返回错误且不留下脏草稿
+- 群聊默认采用 `smart` 路由：首条普通文本如果没有显式触达（@ 机器人、同一用户当前有 waiting action、同一用户当前有运行中任务，或最近 10 分钟刚命中过群路由），会被静默忽略并写入 diagnostics；切到 `always` 后，群聊普通文本会默认直接进入 Themis
+- 群聊会话策略支持 `personal / shared`：`personal` 继续按人隔离当前会话与附件草稿，`shared` 则改为整群共用一条当前会话和同一份附件草稿
+- 飞书已补 `/group` 最小管理员控制：可查看和修改当前群的路由、会话策略与管理员名单；当前群还没有管理员时，首次成功修改群设置的人会自动成为首个管理员
+- 当群聊处于 `shared` 会话策略时，只有群管理员可以执行 `/new`、`/use`、`/workspace`，避免整群当前会话被随手切乱
 - 飞书发任务前会读取当前 principal 保存的 Themis 默认任务配置，并带上对应 `options`
 - 飞书支持会话级工作区：`/workspace`（别名 `/ws`）会写当前激活会话的 `workspacePath`，不改 principal 默认配置
 - 如果当前 principal 还没有长期协作档案，首次普通消息会先进入一次性人格 bootstrap
@@ -146,7 +150,7 @@ npm run dev:web
 
 - Themis 不再把飞书 `chat_id` 直接当成唯一会话 ID。
 - 飞书消息先带着渠道侧会话键进入 runtime，再由统一会话层解析成真正的 `conversationId`。
-- 当前实现会为“同一个飞书聊天中的同一个用户”维护一个当前激活的 conversation 指针。
+- 当前实现会为“同一个飞书聊天中的当前会话作用域用户”维护一个当前激活的 conversation 指针；默认仍按真实 `userId` 隔离，群聊切到 `shared` 会话策略后会改成整群共用作用域。
 - `workspacePath` 是会话级设置，不是 principal 级默认配置。
 - 当前会话执行过任务后，`workspacePath` 会冻结；需要改目录时必须新建会话。
 - 这个“当前激活会话指针”保存在：
@@ -156,6 +160,13 @@ infra/local/feishu-sessions.json
 ```
 
 - 这个 JSON 文件只负责记录飞书侧当前激活的是哪条 conversation。
+- 群聊路由、会话策略和管理员名单保存在：
+
+```text
+infra/local/feishu-chat-settings.json
+```
+
+- 当前默认值是：单聊 `always + personal`，群聊 `smart + personal`。
 - 飞书附件草稿保存在：
 
 ```text
@@ -179,7 +190,7 @@ infra/local/themis.db
 
 ## 附件草稿规则
 
-- 飞书附件草稿按 `chatId + userId + activeSessionId` 隔离。
+- 飞书附件草稿按 `chatId + scopedConversationUserId + activeSessionId` 隔离；默认 `scopedConversationUserId = userId`，群聊 `shared` 会话策略下则改成整群共享作用域。
 - 草稿文件保存在：
 
 ```text
@@ -278,6 +289,20 @@ infra/local/feishu-attachment-drafts.json
 - 有参数：按共享校验规则写入当前会话 `workspacePath`。
 - 只影响当前会话，不会改 principal 默认配置，也不会写进任务 `options`。
 - 如果当前会话已执行过任务，会返回冻结错误，拒绝修改。
+
+### `/group`
+
+查看或修改当前群聊的路由、会话策略和管理员名单。
+
+规则：
+
+- 单聊里执行会明确提示当前不生效。
+- `/group`、`/group status`、`/group show`：查看当前群设置、当前用户权限、管理员名单和当前群会话。
+- `/group route <smart|always>`：修改群消息路由。`smart` 表示要先显式触达，或命中当前 waiting action / 运行中任务 / 最近 10 分钟已命中过路由，后续普通文本才会继续进入 Themis；`always` 表示当前群消息默认直接进入 Themis。
+- `/group session <personal|shared>`：修改群会话策略。`personal` 继续按人隔离当前会话；`shared` 表示整群共用一条当前会话和同一份附件草稿。
+- `/group admin list|add|remove`：查看或维护群管理员名单。
+- 当前群还没有管理员时，首次成功修改群设置的人会自动成为首个 Themis 群管理员。
+- 当当前群是 `shared` 会话时，只有群管理员可以执行 `/new`、`/use`、`/workspace`。
 
 ### `/link <绑定码>`
 
@@ -407,7 +432,10 @@ infra/local/feishu-attachment-drafts.json
 
 ## 普通消息行为
 
-- 直接发送普通文本：进入当前会话
+- 单聊直接发送普通文本：进入当前会话
+- 群聊默认 `smart` 路由下，首条普通文本只有在显式触达（@ 机器人）、当前用户在该群会话作用域下有 waiting action、当前用户有运行中任务，或最近 10 分钟刚命中过一次群路由时，才会进入当前会话；否则会被静默忽略并记录 `message.route_ignored`
+- 群聊切到 `always` 路由后，普通文本会默认直接进入当前会话
+- 群聊会话策略如果是 `personal`，同一群里的不同成员仍各自维护当前会话；如果是 `shared`，则整群共用同一条当前会话和同一份附件草稿
 - 如果当前在 waiting `user-input`，并且 `sessionId + principalId` scope 里只有 1 条 `user-input` pending action、且没有 `approval` pending action，普通文本会直接接管这条 waiting input；如果同一 scope 里有多条 `user-input` pending action，会提示改用 `/reply <actionId> <内容>`
 - 如果当前还没有激活会话：自动创建新会话
 - 如果当前 principal 还没有已完成的长期协作档案，普通文本会先进入一次性 bootstrap，而不是直接执行正式任务

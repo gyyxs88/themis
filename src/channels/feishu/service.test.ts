@@ -426,6 +426,353 @@ test("飞书 duplicate / stale 消息会写入诊断事件", async () => {
   }
 });
 
+test("群聊默认 smart 路由会忽略未显式触达的首条普通文本", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-smart-ignored",
+      userId: "user-group-smart-ignored",
+      messageId: "message-group-smart-ignored-1",
+      chatType: "group",
+      createTime: "1711958400000",
+      text: "大家先看一下这段日志",
+    }));
+
+    assert.deepEqual(harness.takeMessages(), []);
+    assert.equal(harness.getTaskRequests().length, 0);
+
+    const snapshot = harness.readFeishuDiagnosticsStore();
+    assert.equal(snapshot.status, "ok");
+    assert.equal(snapshot.recentEvents.at(-1)?.type, "message.route_ignored");
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.chatType, "group");
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.routePolicy, "smart");
+    assert.equal(snapshot.recentEvents.at(-1)?.details?.reason, "group_requires_explicit_trigger");
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("群聊 smart 路由会在显式触达后短时放开同一用户的后续普通文本", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-smart-followup",
+      userId: "user-group-smart-followup",
+      messageId: "message-group-smart-followup-1",
+      chatType: "group",
+      createTime: "1711958400000",
+      text: "@themis 帮我看看这段日志",
+      mentions: [{ key: "@themis" }],
+    }));
+
+    assert.equal(harness.getTaskRequests().length, 1);
+    harness.takeMessages();
+
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-smart-followup",
+      userId: "user-group-smart-followup",
+      messageId: "message-group-smart-followup-2",
+      chatType: "group",
+      createTime: "1711958401000",
+      text: "再补一句上下文",
+    }));
+
+    const requests = harness.getTaskRequests();
+    assert.equal(requests.length, 2);
+    assert.equal(
+      requests[0]?.channelContext.channelSessionKey,
+      requests[1]?.channelContext.channelSessionKey,
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("群聊 always 路由会让未显式触达的普通文本直接进入任务链", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-always-route",
+      userId: "user-group-always-owner",
+      messageId: "message-group-always-route-config",
+      chatType: "group",
+      createTime: "1711958400000",
+      text: "/group route always",
+    }));
+    harness.takeMessages();
+
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-always-route",
+      userId: "user-group-always-member",
+      messageId: "message-group-always-route-1",
+      chatType: "group",
+      createTime: "1711958401000",
+      text: "不用 @ 机器人也直接进入任务链",
+    }));
+
+    const requests = harness.getTaskRequests();
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]?.goal, "不用 @ 机器人也直接进入任务链");
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("群聊 shared 会话策略会让不同用户复用同一会话", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-shared",
+      userId: "user-group-owner",
+      messageId: "message-group-shared-config",
+      chatType: "group",
+      createTime: "1711958400000",
+      text: "/group session shared",
+    }));
+    harness.takeMessages();
+
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-shared",
+      userId: "user-group-owner",
+      messageId: "message-group-shared-1",
+      chatType: "group",
+      createTime: "1711958401000",
+      text: "@themis 建立共享群会话",
+      mentions: [{ key: "@themis" }],
+    }));
+    harness.takeMessages();
+
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-shared",
+      userId: "user-group-member",
+      messageId: "message-group-shared-2",
+      chatType: "group",
+      createTime: "1711958402000",
+      text: "我继续补充第二段上下文",
+    }));
+
+    const requests = harness.getTaskRequests();
+    assert.equal(requests.length, 2);
+    assert.equal(
+      requests[0]?.channelContext.channelSessionKey,
+      requests[1]?.channelContext.channelSessionKey,
+    );
+
+    const settings = harness.readFeishuChatSettingsStore();
+    assert.equal(settings?.chats?.[0]?.sessionScope, "shared");
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("群聊 shared 会话下非管理员不能切会话或修改工作区", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-shared-admin-only",
+      userId: "user-group-shared-admin-owner",
+      messageId: "message-group-shared-admin-only-1",
+      chatType: "group",
+      createTime: "1711958400000",
+      text: "/group session shared",
+    }));
+    harness.takeMessages();
+
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-shared-admin-only",
+      userId: "user-group-shared-admin-member",
+      messageId: "message-group-shared-admin-only-2",
+      chatType: "group",
+      createTime: "1711958401000",
+      text: "/new",
+    }));
+
+    assert.match(harness.takeSingleMessage(), /当前群是 shared 会话，只有群管理员才能执行 \/new/);
+
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-shared-admin-only",
+      userId: "user-group-shared-admin-member",
+      messageId: "message-group-shared-admin-only-3",
+      chatType: "group",
+      createTime: "1711958402000",
+      text: "/workspace /tmp/themis-shared-group",
+    }));
+
+    assert.match(harness.takeSingleMessage(), /当前群是 shared 会话，只有群管理员才能执行 \/workspace/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("群聊 personal 会话策略会继续按用户隔离会话", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-personal",
+      userId: "user-group-personal-owner",
+      messageId: "message-group-personal-config",
+      chatType: "group",
+      createTime: "1711958400000",
+      text: "/group session personal",
+    }));
+    harness.takeMessages();
+
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-personal",
+      userId: "user-group-personal-a",
+      messageId: "message-group-personal-a",
+      chatType: "group",
+      createTime: "1711958401000",
+      text: "@themis 用户 A 的会话",
+      mentions: [{ key: "@themis" }],
+    }));
+    harness.takeMessages();
+
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-personal",
+      userId: "user-group-personal-b",
+      messageId: "message-group-personal-b",
+      chatType: "group",
+      createTime: "1711958402000",
+      text: "@themis 用户 B 的会话",
+      mentions: [{ key: "@themis" }],
+    }));
+
+    const requests = harness.getTaskRequests();
+    assert.equal(requests.length, 2);
+    assert.notEqual(
+      requests[0]?.channelContext.channelSessionKey,
+      requests[1]?.channelContext.channelSessionKey,
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("群管理员首次配置会自动认领，之后非管理员不能修改群设置", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-admin-bootstrap",
+      userId: "user-group-admin-owner",
+      messageId: "message-group-admin-bootstrap-1",
+      chatType: "group",
+      createTime: "1711958400000",
+      text: "/group route always",
+    }));
+
+    const firstMessage = harness.takeSingleMessage();
+    assert.match(firstMessage, /已将你设为当前群的首个 Themis 管理员/);
+    assert.match(firstMessage, /群消息路由已更新为：always/);
+
+    let settings = harness.readFeishuChatSettingsStore();
+    assert.deepEqual(settings?.chats?.[0]?.adminUserIds, ["user-group-admin-owner"]);
+    assert.equal(settings?.chats?.[0]?.routePolicy, "always");
+
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-admin-bootstrap",
+      userId: "user-group-admin-other",
+      messageId: "message-group-admin-bootstrap-2",
+      chatType: "group",
+      createTime: "1711958401000",
+      text: "/group session shared",
+    }));
+
+    const deniedMessage = harness.takeSingleMessage();
+    assert.match(deniedMessage, /只有当前群的 Themis 管理员才能修改群设置/);
+
+    settings = harness.readFeishuChatSettingsStore();
+    assert.equal(settings?.chats?.[0]?.sessionScope, "personal");
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("群管理员可以维护管理员名单，但不能移除最后一个管理员", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-admin-manage",
+      userId: "user-group-admin-owner",
+      messageId: "message-group-admin-manage-1",
+      chatType: "group",
+      createTime: "1711958400000",
+      text: "/group route always",
+    }));
+    harness.takeMessages();
+
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-admin-manage",
+      userId: "user-group-admin-owner",
+      messageId: "message-group-admin-manage-2",
+      chatType: "group",
+      createTime: "1711958401000",
+      text: "/group admin add user-group-admin-member",
+    }));
+
+    const addMessage = harness.takeSingleMessage();
+    assert.match(addMessage, /已添加群管理员：user-group-admin-member/);
+
+    let settings = harness.readFeishuChatSettingsStore();
+    assert.deepEqual(settings?.chats?.[0]?.adminUserIds, [
+      "user-group-admin-owner",
+      "user-group-admin-member",
+    ]);
+
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-admin-manage",
+      userId: "user-group-admin-member",
+      messageId: "message-group-admin-manage-3",
+      chatType: "group",
+      createTime: "1711958402000",
+      text: "/group route smart",
+    }));
+
+    const memberWriteMessage = harness.takeSingleMessage();
+    assert.match(memberWriteMessage, /群消息路由已更新为：smart/);
+
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-admin-manage",
+      userId: "user-group-admin-member",
+      messageId: "message-group-admin-manage-4",
+      chatType: "group",
+      createTime: "1711958403000",
+      text: "/group admin remove user-group-admin-owner",
+    }));
+
+    const removeOwnerMessage = harness.takeSingleMessage();
+    assert.match(removeOwnerMessage, /已移除群管理员：user-group-admin-owner/);
+
+    settings = harness.readFeishuChatSettingsStore();
+    assert.deepEqual(settings?.chats?.[0]?.adminUserIds, ["user-group-admin-member"]);
+
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-admin-manage",
+      userId: "user-group-admin-member",
+      messageId: "message-group-admin-manage-5",
+      chatType: "group",
+      createTime: "1711958404000",
+      text: "/group admin remove user-group-admin-member",
+    }));
+
+    const removeLastDeniedMessage = harness.takeSingleMessage();
+    assert.match(removeLastDeniedMessage, /至少保留 1 个群管理员/);
+
+    settings = harness.readFeishuChatSettingsStore();
+    assert.deepEqual(settings?.chats?.[0]?.adminUserIds, ["user-group-admin-member"]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("飞书 direct-text takeover 会写入 takeover.submitted 并刷新 pendingActions", async () => {
   const harness = createHarness();
 
@@ -5578,6 +5925,22 @@ function createHarness(
         }>;
       };
     },
+    readFeishuChatSettingsStore() {
+      const filePath = join(workingDirectory, "infra/local/feishu-chat-settings.json");
+      if (!existsSync(filePath)) {
+        return null;
+      }
+      return JSON.parse(readFileSync(filePath, "utf8")) as {
+        version: number;
+        chats?: Array<{
+          chatId: string;
+          chatType: string;
+          routePolicy: string;
+          sessionScope: string;
+          adminUserIds: string[];
+        }>;
+      };
+    },
     readFeishuDiagnosticsStore() {
       return diagnosticsStateStore.readSnapshot();
     },
@@ -5906,4 +6269,31 @@ function parseSessionIdFromNewMessage(message: string): string {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function createFeishuTextEvent(input: {
+  chatId: string;
+  userId: string;
+  messageId: string;
+  text: string;
+  chatType?: string;
+  createTime?: string;
+  mentions?: Array<{ key?: string }>;
+}) {
+  return {
+    message: {
+      chat_id: input.chatId,
+      message_id: input.messageId,
+      create_time: input.createTime ?? `${Date.now()}`,
+      message_type: "text",
+      chat_type: input.chatType ?? "p2p",
+      content: JSON.stringify({ text: input.text }),
+      ...(input.mentions ? { mentions: input.mentions } : {}),
+    },
+    sender: {
+      sender_id: {
+        user_id: input.userId,
+      },
+    },
+  };
 }
