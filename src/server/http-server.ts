@@ -57,7 +57,7 @@ import {
   handleSessionSettingsWrite,
 } from "./http-session-handlers.js";
 import { handleTaskActionSubmit } from "./http-task-actions.js";
-import { handleTaskRun, handleTaskStream } from "./http-task-handlers.js";
+import { handleTaskAutomationRun, handleTaskRun, handleTaskStream } from "./http-task-handlers.js";
 import {
   handleThirdPartyCapabilityWriteback,
   handleThirdPartyEndpointProbe,
@@ -276,6 +276,10 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/tasks/run") {
         return handleTaskRun(request, response, runtime, runtimeRegistry, authRuntime, taskTimeoutMs);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/tasks/automation/run") {
+        return handleTaskAutomationRun(request, response, runtime, runtimeRegistry, authRuntime, taskTimeoutMs);
       }
 
       if (request.method === "POST" && url.pathname === "/api/tasks/stream") {

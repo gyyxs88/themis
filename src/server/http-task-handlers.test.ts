@@ -514,6 +514,846 @@ test("/api/tasks/run 在显式传 null runtimeEngine 时返回 400，且不会�
   }));
 });
 
+test("/api/tasks/automation/run 会返回稳定的自动化结果包", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/automation/run`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请返回自动化可读结果",
+        sessionId: "session-task-automation-run",
+      }),
+    });
+
+    assert.equal(response.status, 200);
+
+    const payload = await response.json() as {
+      mode?: string;
+      automationVersion?: number;
+      requestId?: string;
+      taskId?: string;
+      deliveries?: unknown[];
+      result?: {
+        status?: string;
+        summary?: string;
+        outputMode?: string;
+        outputText?: string;
+        parseStatus?: string;
+        parseError?: string | null;
+        parsedOutput?: unknown;
+        schemaValidation?: {
+          status?: string;
+          errors?: string[];
+          issues?: Array<{
+            path?: string;
+            keyword?: string;
+            message?: string;
+          }>;
+        };
+        contract?: {
+          status?: string;
+          rejected?: boolean;
+          onInvalidJson?: string;
+          onSchemaMismatch?: string;
+          failures?: Array<{
+            kind?: string;
+            message?: string;
+          }>;
+        };
+        touchedFiles?: string[];
+        memoryUpdates?: Array<{
+          kind?: string;
+          target?: string;
+          action?: string;
+        }>;
+        nextSteps?: string[];
+        session?: {
+          sessionId?: string | null;
+          conversationId?: string | null;
+          threadId?: string | null;
+          engine?: string | null;
+          mode?: string | null;
+          accessMode?: string | null;
+          authAccountId?: string | null;
+          thirdPartyProviderId?: string | null;
+        };
+        structuredOutput?: {
+          session?: {
+            threadId?: string;
+          };
+          data?: {
+            answer?: number;
+          };
+        };
+      };
+    };
+
+    assert.equal(payload.mode, "automation");
+    assert.equal(payload.automationVersion, 1);
+    assert.equal(Array.isArray(payload.deliveries), false);
+    assert.equal(payload.result?.status, "completed");
+    assert.equal(payload.result?.summary, "automation selected");
+    assert.equal(payload.result?.outputMode, "text");
+    assert.equal(payload.result?.outputText, "最终结果正文");
+    assert.equal(payload.result?.parseStatus, "not_requested");
+    assert.equal(payload.result?.parseError, null);
+    assert.equal(payload.result?.parsedOutput, null);
+    assert.deepEqual(payload.result?.schemaValidation, {
+      status: "not_requested",
+      errors: [],
+      issues: [],
+    });
+    assert.deepEqual(payload.result?.contract, {
+      status: "not_requested",
+      rejected: false,
+      onInvalidJson: "report",
+      onSchemaMismatch: "report",
+      failures: [],
+    });
+    assert.deepEqual(payload.result?.touchedFiles, ["src/server/http-task-handlers.ts"]);
+    assert.deepEqual(payload.result?.nextSteps, ["call webhook"]);
+    assert.deepEqual(payload.result?.memoryUpdates, [
+      {
+        kind: "task",
+        target: "memory/tasks/in-progress.md",
+        action: "updated",
+      },
+    ]);
+    assert.deepEqual(payload.result?.session, {
+      sessionId: "session-task-automation-run",
+      conversationId: "session-task-automation-run",
+      threadId: "thread-automation-1",
+      engine: "app-server",
+      mode: "resume",
+      accessMode: "auth",
+      authAccountId: "acc-1",
+      thirdPartyProviderId: null,
+    });
+    assert.equal(payload.result?.structuredOutput?.data?.answer, 42);
+  }, ({ runtimeStore }) => ({
+    defaultRuntime: {
+      runTask: async (request) => ({
+        taskId: request.taskId ?? "task-automation-run",
+        requestId: request.requestId,
+        status: "completed",
+        summary: "automation selected",
+        output: "最终结果正文",
+        touchedFiles: ["src/server/http-task-handlers.ts"],
+        memoryUpdates: [
+          {
+            kind: "task",
+            target: "memory/tasks/in-progress.md",
+            action: "updated",
+          },
+        ],
+        nextSteps: ["call webhook"],
+        structuredOutput: {
+          session: {
+            sessionId: "session-task-automation-run",
+            conversationId: "session-task-automation-run",
+            threadId: "thread-automation-1",
+            engine: "app-server",
+            mode: "resume",
+            accessMode: "auth",
+            authAccountId: "acc-1",
+          },
+          data: {
+            answer: 42,
+          },
+        },
+        completedAt: "2026-04-05T09:00:00.000Z",
+      }),
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => ({}),
+      getPrincipalSkillsService: () => ({}),
+    },
+    runtimes: {
+      "app-server": {
+        runTask: async () => {
+          throw new Error("selected runtime should not be used");
+        },
+        getRuntimeStore: () => runtimeStore,
+        getIdentityLinkService: () => ({}),
+        getPrincipalSkillsService: () => ({}),
+      },
+    },
+  }));
+});
+
+test("/api/tasks/automation/run 在 json 模式下会返回 parsedOutput 并校验 schema", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/automation/run`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请返回结构化 JSON",
+        sessionId: "session-task-automation-json",
+        automation: {
+          outputMode: "json",
+          jsonSchema: {
+            type: "object",
+            required: ["answer", "status"],
+            additionalProperties: false,
+            properties: {
+              answer: {
+                type: "integer",
+              },
+              status: {
+                enum: ["ok"],
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+
+    const payload = await response.json() as {
+      result?: {
+        outputMode?: string;
+        outputText?: string;
+        parseStatus?: string;
+        parseError?: string | null;
+        parsedOutput?: {
+          answer?: number;
+          status?: string;
+        } | null;
+        schemaValidation?: {
+          status?: string;
+          errors?: string[];
+          issues?: Array<{
+            path?: string;
+            keyword?: string;
+            message?: string;
+          }>;
+        };
+        contract?: {
+          status?: string;
+          rejected?: boolean;
+          failures?: Array<{
+            kind?: string;
+            message?: string;
+          }>;
+        };
+      };
+    };
+
+    assert.equal(payload.result?.outputMode, "json");
+    assert.equal(payload.result?.outputText, "{\"answer\":42,\"status\":\"ok\"}");
+    assert.equal(payload.result?.parseStatus, "parsed");
+    assert.equal(payload.result?.parseError, null);
+    assert.deepEqual(payload.result?.parsedOutput, {
+      answer: 42,
+      status: "ok",
+    });
+    assert.deepEqual(payload.result?.schemaValidation, {
+      status: "passed",
+      errors: [],
+      issues: [],
+    });
+    assert.deepEqual(payload.result?.contract, {
+      status: "passed",
+      rejected: false,
+      onInvalidJson: "report",
+      onSchemaMismatch: "report",
+      failures: [],
+    });
+  }, ({ runtimeStore }) => ({
+    defaultRuntime: {
+      runTask: async (request) => {
+        assert.match(request.inputText ?? "", /Automation output contract/);
+        assert.match(request.inputText ?? "", /Return exactly one valid JSON value/);
+        assert.match(request.inputText ?? "", /"required": \[/);
+
+        return {
+          taskId: request.taskId ?? "task-automation-json",
+          requestId: request.requestId,
+          status: "completed",
+          summary: "json automation selected",
+          output: "{\"answer\":42,\"status\":\"ok\"}",
+          completedAt: "2026-04-05T09:30:00.000Z",
+        };
+      },
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => ({}),
+      getPrincipalSkillsService: () => ({}),
+    },
+  }));
+});
+
+test("/api/tasks/automation/run 在 json 模式输出非法 JSON 时会返回 parse 失败", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/automation/run`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请返回 JSON",
+        sessionId: "session-task-automation-invalid-json",
+        automation: {
+          outputMode: "json",
+          jsonSchema: {
+            type: "object",
+            required: ["answer"],
+            properties: {
+              answer: {
+                type: "integer",
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+
+    const payload = await response.json() as {
+      result?: {
+        parseStatus?: string;
+        parseError?: string | null;
+        parsedOutput?: unknown;
+        schemaValidation?: {
+          status?: string;
+          errors?: string[];
+          issues?: Array<{
+            path?: string;
+            keyword?: string;
+            message?: string;
+          }>;
+        };
+        contract?: {
+          status?: string;
+          rejected?: boolean;
+          failures?: Array<{
+            kind?: string;
+            message?: string;
+          }>;
+        };
+      };
+    };
+
+    assert.equal(payload.result?.parseStatus, "invalid_json");
+    assert.match(payload.result?.parseError ?? "", /JSON|Unexpected|position/i);
+    assert.equal(payload.result?.parsedOutput, null);
+    assert.deepEqual(payload.result?.schemaValidation, {
+      status: "skipped_invalid_json",
+      errors: [],
+      issues: [],
+    });
+    assert.equal(payload.result?.contract?.status, "failed");
+    assert.equal(payload.result?.contract?.rejected, false);
+    assert.equal(payload.result?.contract?.failures?.[0]?.kind, "invalid_json");
+  }, ({ runtimeStore }) => ({
+    defaultRuntime: {
+      runTask: async () => ({
+        taskId: "task-automation-invalid-json",
+        requestId: "req-automation-invalid-json",
+        status: "completed",
+        summary: "invalid json automation selected",
+        output: "answer: 42",
+        completedAt: "2026-04-05T09:31:00.000Z",
+      }),
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => ({}),
+      getPrincipalSkillsService: () => ({}),
+    },
+  }));
+});
+
+test("/api/tasks/automation/run 在 schema 不通过时会返回 failed 和错误列表", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/automation/run`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请返回 JSON",
+        sessionId: "session-task-automation-schema-failed",
+        automation: {
+          outputMode: "json",
+          jsonSchema: {
+            type: "object",
+            required: ["answer"],
+            additionalProperties: false,
+            properties: {
+              answer: {
+                type: "integer",
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+
+    const payload = await response.json() as {
+      result?: {
+        parseStatus?: string;
+        parsedOutput?: unknown;
+        schemaValidation?: {
+          status?: string;
+          errors?: string[];
+          issues?: Array<{
+            path?: string;
+            keyword?: string;
+            message?: string;
+          }>;
+        };
+        contract?: {
+          status?: string;
+          rejected?: boolean;
+          failures?: Array<{
+            kind?: string;
+            message?: string;
+          }>;
+        };
+      };
+    };
+
+    assert.equal(payload.result?.parseStatus, "parsed");
+    assert.deepEqual(payload.result?.parsedOutput, {
+      answer: "forty-two",
+      extra: true,
+    });
+    assert.equal(payload.result?.schemaValidation?.status, "failed");
+    assert.ok((payload.result?.schemaValidation?.errors?.length ?? 0) >= 2);
+    assert.ok((payload.result?.schemaValidation?.issues?.length ?? 0) >= 2);
+    assert.ok(payload.result?.schemaValidation?.errors?.some((entry) => entry.includes("$.answer")));
+    assert.ok(payload.result?.schemaValidation?.errors?.some((entry) => entry.includes("$.extra")));
+    assert.ok(payload.result?.schemaValidation?.issues?.some((entry) => entry.keyword === "type" && entry.path === "$.answer"));
+    assert.ok(payload.result?.schemaValidation?.issues?.some((entry) => entry.keyword === "additionalProperties" && entry.path === "$.extra"));
+    assert.equal(payload.result?.contract?.status, "failed");
+    assert.equal(payload.result?.contract?.rejected, false);
+    assert.ok(payload.result?.contract?.failures?.some((entry) => entry.kind === "schema_mismatch"));
+  }, ({ runtimeStore }) => ({
+    defaultRuntime: {
+      runTask: async () => ({
+        taskId: "task-automation-schema-failed",
+        requestId: "req-automation-schema-failed",
+        status: "completed",
+        summary: "schema failed automation selected",
+        output: "{\"answer\":\"forty-two\",\"extra\":true}",
+        completedAt: "2026-04-05T09:32:00.000Z",
+      }),
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => ({}),
+      getPrincipalSkillsService: () => ({}),
+    },
+  }));
+});
+
+test("/api/tasks/automation/run 会返回结构化 schema issues 并支持更多高频关键词", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/automation/run`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请返回 JSON",
+        sessionId: "session-task-automation-schema-issues",
+        automation: {
+          outputMode: "json",
+          jsonSchema: {
+            type: "object",
+            required: ["status", "name", "score", "tags"],
+            properties: {
+              status: {
+                const: "ok",
+              },
+              name: {
+                type: "string",
+                minLength: 3,
+                pattern: "^[A-Z].+",
+              },
+              score: {
+                type: "integer",
+                minimum: 0,
+                maximum: 100,
+              },
+              tags: {
+                type: "array",
+                minItems: 2,
+                maxItems: 2,
+                uniqueItems: true,
+                items: {
+                  type: "string",
+                },
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+
+    const payload = await response.json() as {
+      result?: {
+        schemaValidation?: {
+          status?: string;
+          errors?: string[];
+          issues?: Array<{
+            path?: string;
+            keyword?: string;
+            message?: string;
+          }>;
+        };
+        contract?: {
+          status?: string;
+          failures?: Array<{
+            kind?: string;
+          }>;
+        };
+      };
+    };
+
+    assert.equal(payload.result?.schemaValidation?.status, "failed");
+    assert.ok((payload.result?.schemaValidation?.errors?.length ?? 0) >= 6);
+    assert.ok(payload.result?.schemaValidation?.issues?.some((entry) => entry.keyword === "const" && entry.path === "$.status"));
+    assert.ok(payload.result?.schemaValidation?.issues?.some((entry) => entry.keyword === "minLength" && entry.path === "$.name"));
+    assert.ok(payload.result?.schemaValidation?.issues?.some((entry) => entry.keyword === "pattern" && entry.path === "$.name"));
+    assert.ok(payload.result?.schemaValidation?.issues?.some((entry) => entry.keyword === "maximum" && entry.path === "$.score"));
+    assert.ok(payload.result?.schemaValidation?.issues?.some((entry) => entry.keyword === "maxItems" && entry.path === "$.tags"));
+    assert.ok(payload.result?.schemaValidation?.issues?.some((entry) => entry.keyword === "uniqueItems" && entry.path === "$.tags[1]"));
+    assert.equal(payload.result?.contract?.status, "failed");
+    assert.ok(payload.result?.contract?.failures?.some((entry) => entry.kind === "schema_mismatch"));
+  }, ({ runtimeStore }) => ({
+    defaultRuntime: {
+      runTask: async () => ({
+        taskId: "task-automation-schema-issues",
+        requestId: "req-automation-schema-issues",
+        status: "completed",
+        summary: "schema issues automation selected",
+        output: "{\"status\":\"bad\",\"name\":\"ab\",\"score\":101,\"tags\":[\"dup\",\"dup\",\"extra\"]}",
+        completedAt: "2026-04-05T10:10:00.000Z",
+      }),
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => ({}),
+      getPrincipalSkillsService: () => ({}),
+    },
+  }));
+});
+
+test("/api/tasks/automation/run 在显式要求 invalid json reject 时会返回 422", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/automation/run`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请返回 JSON",
+        sessionId: "session-task-automation-invalid-json-reject",
+        automation: {
+          outputMode: "json",
+          onInvalidJson: "reject",
+        },
+      }),
+    });
+
+    assert.equal(response.status, 422);
+
+    const payload = await response.json() as {
+      result?: {
+        parseStatus?: string;
+        contract?: {
+          status?: string;
+          rejected?: boolean;
+          onInvalidJson?: string;
+          failures?: Array<{
+            kind?: string;
+            message?: string;
+          }>;
+        };
+      };
+    };
+
+    assert.equal(payload.result?.parseStatus, "invalid_json");
+    assert.equal(payload.result?.contract?.status, "failed");
+    assert.equal(payload.result?.contract?.rejected, true);
+    assert.equal(payload.result?.contract?.onInvalidJson, "reject");
+    assert.equal(payload.result?.contract?.failures?.[0]?.kind, "invalid_json");
+  }, ({ runtimeStore }) => ({
+    defaultRuntime: {
+      runTask: async () => ({
+        taskId: "task-automation-invalid-json-reject",
+        requestId: "req-automation-invalid-json-reject",
+        status: "completed",
+        summary: "invalid json automation reject selected",
+        output: "answer: 42",
+        completedAt: "2026-04-05T10:00:00.000Z",
+      }),
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => ({}),
+      getPrincipalSkillsService: () => ({}),
+    },
+  }));
+});
+
+test("/api/tasks/automation/run 在显式要求 schema mismatch reject 时会返回 422", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/automation/run`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请返回 JSON",
+        sessionId: "session-task-automation-schema-reject",
+        automation: {
+          outputMode: "json",
+          onSchemaMismatch: "reject",
+          jsonSchema: {
+            type: "object",
+            required: ["answer"],
+            additionalProperties: false,
+            properties: {
+              answer: {
+                type: "integer",
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    assert.equal(response.status, 422);
+
+    const payload = await response.json() as {
+      result?: {
+        parseStatus?: string;
+        contract?: {
+          status?: string;
+          rejected?: boolean;
+          onSchemaMismatch?: string;
+          failures?: Array<{
+            kind?: string;
+            message?: string;
+          }>;
+        };
+      };
+    };
+
+    assert.equal(payload.result?.parseStatus, "parsed");
+    assert.equal(payload.result?.contract?.status, "failed");
+    assert.equal(payload.result?.contract?.rejected, true);
+    assert.equal(payload.result?.contract?.onSchemaMismatch, "reject");
+    assert.ok(payload.result?.contract?.failures?.some((entry) => entry.kind === "schema_mismatch"));
+  }, ({ runtimeStore }) => ({
+    defaultRuntime: {
+      runTask: async () => ({
+        taskId: "task-automation-schema-reject",
+        requestId: "req-automation-schema-reject",
+        status: "completed",
+        summary: "schema reject automation selected",
+        output: "{\"answer\":\"forty-two\"}",
+        completedAt: "2026-04-05T10:01:00.000Z",
+      }),
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => ({}),
+      getPrincipalSkillsService: () => ({}),
+    },
+  }));
+});
+
+test("/api/tasks/automation/run 在未提供 schema 时拒绝 onSchemaMismatch 配置", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/automation/run`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请检查 reject 配置",
+        sessionId: "session-task-automation-invalid-schema-mode",
+        automation: {
+          outputMode: "json",
+          onSchemaMismatch: "reject",
+        },
+      }),
+    });
+
+    assert.equal(response.status, 400);
+
+    const payload = await response.json() as {
+      mode?: string;
+      automationVersion?: number;
+      error?: {
+        code?: string;
+        message?: string;
+      };
+    };
+
+    assert.equal(payload.mode, "automation");
+    assert.equal(payload.automationVersion, 1);
+    assert.equal(payload.error?.code, "INVALID_REQUEST");
+    assert.match(payload.error?.message ?? "", /automation\.onSchemaMismatch requires automation\.jsonSchema/i);
+  });
+});
+
+test("/api/tasks/automation/run 在 text 模式下拒绝 onInvalidJson 配置", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/automation/run`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请检查 reject 配置",
+        sessionId: "session-task-automation-invalid-json-mode",
+        automation: {
+          outputMode: "text",
+          onInvalidJson: "reject",
+        },
+      }),
+    });
+
+    assert.equal(response.status, 400);
+
+    const payload = await response.json() as {
+      mode?: string;
+      automationVersion?: number;
+      error?: {
+        code?: string;
+        message?: string;
+      };
+    };
+
+    assert.equal(payload.mode, "automation");
+    assert.equal(payload.automationVersion, 1);
+    assert.equal(payload.error?.code, "INVALID_REQUEST");
+    assert.match(payload.error?.message ?? "", /automation\.onInvalidJson requires automation\.outputMode = "json"/i);
+  });
+});
+
+test("/api/tasks/automation/run 显式传 sdk runtimeEngine 时返回 400，且不会执行任何 runtime", async () => {
+  let defaultRunCount = 0;
+  let sdkRunCount = 0;
+
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({
+      baseUrl,
+      runtimeStore,
+    });
+
+    const response = await fetch(`${baseUrl}/api/tasks/automation/run`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "请检查自动化入口拒绝 sdk",
+        sessionId: "session-task-automation-sdk-runtime",
+        options: {
+          runtimeEngine: "sdk",
+        },
+      }),
+    });
+
+    assert.equal(response.status, 400);
+
+    const payload = await response.json() as {
+      mode?: string;
+      automationVersion?: number;
+      error?: {
+        code?: string;
+        message?: string;
+      };
+    };
+    assert.equal(payload.mode, "automation");
+    assert.equal(payload.automationVersion, 1);
+    assert.equal(payload.error?.code, "INVALID_REQUEST");
+    assert.match(payload.error?.message ?? "", /public task execution: sdk/);
+    assert.equal(defaultRunCount, 0);
+    assert.equal(sdkRunCount, 0);
+  }, ({ runtimeStore }) => ({
+    defaultRuntime: {
+      runTask: async () => {
+        defaultRunCount += 1;
+        throw new Error("default runtime should not be used");
+      },
+      getRuntimeStore: () => runtimeStore,
+      getIdentityLinkService: () => ({}),
+      getPrincipalSkillsService: () => ({}),
+    },
+    runtimes: {
+      sdk: {
+        runTask: async () => {
+          sdkRunCount += 1;
+          throw new Error("sdk runtime should not be used");
+        },
+        getRuntimeStore: () => runtimeStore,
+        getIdentityLinkService: () => ({}),
+        getPrincipalSkillsService: () => ({}),
+      },
+    },
+  }));
+});
+
 test("createThemisHttpServer 会拒绝使用与 base runtime 不共享 store 的 runtimeRegistry", () => {
   const root = mkdtempSync(join(tmpdir(), "themis-http-task-handlers-store-check-"));
   const runtimeStore = new SqliteCodexSessionRegistry({

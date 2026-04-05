@@ -1,6 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { InMemoryCommunicationRouter } from "../communication/router.js";
-import { WebAdapter, type WebDeliveryMessage, type WebTaskPayload } from "../channels/index.js";
+import {
+  WebAdapter,
+  type WebDeliveryMessage,
+  type WebTaskPayload,
+} from "../channels/index.js";
 import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
@@ -16,6 +20,7 @@ import {
 import type { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { appendWebAuditEvent, resolveRemoteIp } from "./http-audit.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
+import { buildAutomationTaskRunResponse, prepareAutomationTaskRequest } from "./http-task-automation.js";
 import { readJsonBody } from "./http-request.js";
 import { safeWriteNdjson, writeJson, writeNdjson } from "./http-responses.js";
 
@@ -265,6 +270,58 @@ export async function handleTaskRun(
   }
 }
 
+export async function handleTaskAutomationRun(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+  runtimeRegistry: TaskRuntimeRegistry,
+  authRuntime: CodexAuthRuntime,
+  taskTimeoutMs: number,
+): Promise<void> {
+  const payload = (await readJsonBody(request)) as WebTaskPayload;
+  const router = new InMemoryCommunicationRouter();
+  const webAdapter = new WebAdapter({
+    deliver: async () => {},
+  });
+  router.registerAdapter(webAdapter);
+  let normalizedRequest: TaskRequest | null = null;
+
+  try {
+    const baseRequest = router.normalizeRequest({
+      ...payload,
+      source: "web",
+    });
+    const automationRequest = prepareAutomationTaskRequest(baseRequest, payload.automation);
+    normalizedRequest = automationRequest.request;
+
+    await ensureAuthAvailable(authRuntime, normalizedRequest);
+
+    const selectedRuntime = resolveTaskRuntimeForHttpRequest(runtimeRegistry, normalizedRequest);
+    recordTaskAcceptedAudit(selectedRuntime, request, normalizedRequest, "/api/tasks/automation/run");
+
+    const result = await selectedRuntime.runTask(normalizedRequest, {
+      timeoutMs: taskTimeoutMs,
+      finalizeResult: (request, taskResult) => appendTaskReplyQuotaFooter(authRuntime, request, taskResult),
+    });
+
+    if (result.status === "cancelled") {
+      recordTaskCancelledAudit(selectedRuntime, request, normalizedRequest, result, "/api/tasks/automation/run");
+    }
+
+    const automationResponse = buildAutomationTaskRunResponse(normalizedRequest, result, automationRequest.contract);
+    writeJson(response, automationResponse.httpStatus, automationResponse.response);
+  } catch (error) {
+    const taskError = resolveTaskHandlerError(error, Boolean(normalizedRequest));
+
+    writeJson(response, resolveTaskHandlerErrorStatusCode(error, Boolean(normalizedRequest)), {
+      mode: "automation",
+      automationVersion: 1,
+      error: taskError,
+      ...(normalizedRequest ? { requestId: normalizedRequest.requestId } : {}),
+    });
+  }
+}
+
 function createId(prefix: string): string {
   const randomPart = Math.random().toString(36).slice(2, 10);
   return `${prefix}-${Date.now()}-${randomPart}`;
@@ -292,7 +349,7 @@ function recordTaskAcceptedAudit(
   runtime: TaskRuntimeFacade,
   request: IncomingMessage,
   taskRequest: TaskRequest,
-  route: "/api/tasks/run" | "/api/tasks/stream",
+  route: "/api/tasks/run" | "/api/tasks/stream" | "/api/tasks/automation/run",
 ): void {
   const remoteIp = resolveRemoteIp(request);
 
@@ -320,7 +377,7 @@ function recordTaskCancelledAudit(
   request: IncomingMessage,
   taskRequest: TaskRequest,
   result: Pick<TaskResult, "taskId" | "requestId" | "status" | "summary">,
-  route: "/api/tasks/run" | "/api/tasks/stream",
+  route: "/api/tasks/run" | "/api/tasks/stream" | "/api/tasks/automation/run",
 ): void {
   const remoteIp = resolveRemoteIp(request);
 
