@@ -92,16 +92,19 @@ function normalizeServer(value: unknown): McpServerSummary {
   const record = typeof value === "object" && value !== null
     ? value as Record<string, unknown>
     : {};
+  const normalizedId = toOptionalString(record.id) ?? toOptionalString(record.name) ?? "unknown";
+  const normalizedName = toOptionalString(record.name) ?? toOptionalString(record.id) ?? "unknown";
+  const normalizedStatus = inferStatus(record);
   const normalized: McpServerSummary = {
-    id: toStringOrUnknown(record.id),
-    name: toStringOrUnknown(record.name),
-    status: toStringOrUnknown(record.status),
+    id: normalizedId,
+    name: normalizedName,
+    status: normalizedStatus,
     args: toStringArray(record.args),
   };
   const transport = toOptionalString(record.transport);
   const command = toOptionalString(record.command);
   const cwd = toOptionalString(record.cwd);
-  const auth = toOptionalString(record.auth);
+  const auth = toOptionalString(record.auth) ?? toOptionalString(record.authStatus);
   const error = toOptionalString(record.error);
   const message = toOptionalString(record.message);
   const enabled = typeof record.enabled === "boolean" ? record.enabled : undefined;
@@ -146,6 +149,31 @@ function toStringOrUnknown(value: unknown): string {
   return typeof value === "string" && value.trim() ? value : "unknown";
 }
 
+function inferStatus(record: Record<string, unknown>): string {
+  const explicitStatus = toOptionalString(record.status);
+
+  if (explicitStatus) {
+    return explicitStatus;
+  }
+
+  const error = toOptionalString(record.error);
+  const message = toOptionalString(record.message);
+
+  if (error || message) {
+    return "degraded";
+  }
+
+  const authStatus = toOptionalString(record.authStatus);
+  const hasToolCollection = record.tools !== undefined || record.resources !== undefined || record.resourceTemplates !== undefined;
+  const hasConfigPresence = toOptionalString(record.name) || toOptionalString(record.command) || Array.isArray(record.args) || authStatus;
+
+  if (hasToolCollection || hasConfigPresence) {
+    return "available";
+  }
+
+  return "unknown";
+}
+
 function toOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
@@ -172,6 +200,7 @@ function buildRawRecord(record: Record<string, unknown>): Record<string, unknown
     "cwd",
     "enabled",
     "auth",
+    "authStatus",
     "error",
     "message",
   ]);

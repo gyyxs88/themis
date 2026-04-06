@@ -67,6 +67,49 @@ test("RuntimeSmokeService.runWebSmoke 在 action_required -> completed 的真实
   }
 });
 
+test("RuntimeSmokeService.runWebSmoke 会按阶段回报进度", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-smoke-web-progress-"));
+
+  try {
+    const progressSteps: string[] = [];
+    const webSmokeFetch = createSuccessfulWebSmokeFetch();
+    const service = createService(root, {
+      fetchImpl: async (input, init) => await webSmokeFetch(input, init),
+    });
+
+    const result = await service.runWebSmoke({
+      onProgress: (event) => {
+        progressSteps.push(event.step);
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(progressSteps, [
+      "login.start",
+      "login.done",
+      "image.start",
+      "image.await_action_required",
+      "image.action_required",
+      "image.action_submitted",
+      "image.stream_completed",
+      "image.history_completed",
+      "image.verified",
+      "document.start",
+      "document.await_action_required",
+      "document.action_required",
+      "document.action_submitted",
+      "document.stream_completed",
+      "document.history_completed",
+      "document.verified",
+      "shared_boundary.start",
+      "shared_boundary.verified",
+      "completed",
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("RuntimeSmokeService.runWebSmoke 在 action_required/result/done 同一 chunk 到达时仍能判定 completed", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-runtime-smoke-web-single-chunk-"));
 

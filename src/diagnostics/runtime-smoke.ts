@@ -71,6 +71,16 @@ export interface AllSmokeResult {
   message: string;
 }
 
+export interface RuntimeSmokeProgressEvent {
+  scope: "web" | "feishu";
+  step: string;
+  message: string;
+}
+
+export interface RuntimeSmokeRunOptions {
+  onProgress?: (event: RuntimeSmokeProgressEvent) => void;
+}
+
 export interface RuntimeSmokeServiceOptions {
   workingDirectory: string;
   baseUrl?: string;
@@ -191,7 +201,7 @@ export class RuntimeSmokeService {
     this.registryFactory = options.registryFactory ?? ((databaseFile) => new SqliteCodexSessionRegistry({ databaseFile }));
   }
 
-  async runWebSmoke(): Promise<WebSmokeResult> {
+  async runWebSmoke(runOptions: RuntimeSmokeRunOptions = {}): Promise<WebSmokeResult> {
     const startedAt = this.clock();
     const databaseFile = join(this.workingDirectory, "infra/local/themis.db");
     const registry = this.registryFactory(databaseFile);
@@ -224,6 +234,11 @@ export class RuntimeSmokeService {
     const assetBundle = createWebSmokeInputAssetBundle(this.workingDirectory, startedAt, this.randomHex);
 
     try {
+      emitSmokeProgress(runOptions, {
+        scope: "web",
+        step: "login.start",
+        message: "Web 登录：创建临时访问令牌并登录...",
+      });
       webAccess.createToken({
         label: tokenLabel,
         secret: tokenSecret,
@@ -231,12 +246,25 @@ export class RuntimeSmokeService {
       });
 
       const cookie = await loginAndReadCookie(this.baseUrl, tokenSecret, this.fetchImpl);
+      emitSmokeProgress(runOptions, {
+        scope: "web",
+        step: "login.done",
+        message: "Web 登录：已获取会话 cookie。",
+      });
+      emitSmokeProgress(runOptions, {
+        scope: "web",
+        step: "image.start",
+        message: "图片 native smoke：开始真实任务链路验证...",
+      });
       const imageSmoke = await this.runWebActionRequiredSmokeTask({
         cookie,
         sessionId,
         requestId,
         taskId,
         inputEnvelope: createWebSmokeImageEnvelope(assetBundle.imagePath, startedAt),
+        progressLabel: "图片 native smoke",
+        progressStepPrefix: "image",
+        onProgress: runOptions.onProgress,
       });
       actionId = imageSmoke.actionId;
       observedActionRequired = imageSmoke.observedActionRequired;
@@ -255,6 +283,11 @@ export class RuntimeSmokeService {
         && imageCompileMatrixAssetHandling.includes("native");
 
       if (!imageCompileVerified) {
+        emitSmokeProgress(runOptions, {
+          scope: "web",
+          step: "failed",
+          message: "Web smoke 失败：图片 native compile summary 校验未通过。",
+        });
         return this.failureResult(
           sessionId,
           requestId,
@@ -281,6 +314,11 @@ export class RuntimeSmokeService {
       }
 
       if (!imageCompileMatrixVerified) {
+        emitSmokeProgress(runOptions, {
+          scope: "web",
+          step: "failed",
+          message: "Web smoke 失败：图片 native 能力矩阵校验未通过。",
+        });
         return this.failureResult(
           sessionId,
           requestId,
@@ -306,12 +344,25 @@ export class RuntimeSmokeService {
         );
       }
 
+      emitSmokeProgress(runOptions, {
+        scope: "web",
+        step: "image.verified",
+        message: "图片 native smoke：compile summary 与能力矩阵校验通过。",
+      });
+      emitSmokeProgress(runOptions, {
+        scope: "web",
+        step: "document.start",
+        message: "文档 fallback smoke：开始真实任务链路验证...",
+      });
       const documentSmoke = await this.runWebActionRequiredSmokeTask({
         cookie,
         sessionId: documentSessionId,
         requestId: documentRequestId,
         taskId: documentTaskId,
         inputEnvelope: createWebSmokeDocumentEnvelope(assetBundle.documentPath, startedAt),
+        progressLabel: "文档 fallback smoke",
+        progressStepPrefix: "document",
+        onProgress: runOptions.onProgress,
       });
       const documentCompileSummary = readTurnCompileSummary(documentSmoke.historyDetail, documentRequestId);
       documentCompileDegradationLevel = documentCompileSummary?.degradationLevel ?? null;
@@ -326,6 +377,11 @@ export class RuntimeSmokeService {
         && documentCompileMatrixAssetHandling.includes("path_fallback");
 
       if (!documentCompileVerified) {
+        emitSmokeProgress(runOptions, {
+          scope: "web",
+          step: "failed",
+          message: "Web smoke 失败：文档 fallback compile summary 校验未通过。",
+        });
         return this.failureResult(
           sessionId,
           requestId,
@@ -352,6 +408,11 @@ export class RuntimeSmokeService {
       }
 
       if (!documentCompileMatrixVerified) {
+        emitSmokeProgress(runOptions, {
+          scope: "web",
+          step: "failed",
+          message: "Web smoke 失败：文档 fallback 能力矩阵校验未通过。",
+        });
         return this.failureResult(
           sessionId,
           requestId,
@@ -377,10 +438,25 @@ export class RuntimeSmokeService {
         );
       }
 
+      emitSmokeProgress(runOptions, {
+        scope: "web",
+        step: "document.verified",
+        message: "文档 fallback smoke：compile summary 与能力矩阵校验通过。",
+      });
+      emitSmokeProgress(runOptions, {
+        scope: "web",
+        step: "shared_boundary.start",
+        message: "共享边界 smoke：开始本地 compile 边界校验...",
+      });
       sharedBoundary = runWebSmokeSharedBoundaryChecks(assetBundle, startedAt);
       const sharedBoundaryFailure = describeWebSmokeSharedBoundaryFailure(sharedBoundary);
 
       if (sharedBoundaryFailure) {
+        emitSmokeProgress(runOptions, {
+          scope: "web",
+          step: "failed",
+          message: `Web smoke 失败：${sharedBoundaryFailure}`,
+        });
         return this.failureResult(
           sessionId,
           requestId,
@@ -406,6 +482,16 @@ export class RuntimeSmokeService {
         );
       }
 
+      emitSmokeProgress(runOptions, {
+        scope: "web",
+        step: "shared_boundary.verified",
+        message: "共享边界 smoke：边界校验通过。",
+      });
+      emitSmokeProgress(runOptions, {
+        scope: "web",
+        step: "completed",
+        message: "Web smoke：全部检查通过。",
+      });
       return {
         ok: true,
         baseUrl: this.baseUrl,
@@ -439,6 +525,11 @@ export class RuntimeSmokeService {
         historyCompleted = error.state.historyCompleted;
       }
 
+      emitSmokeProgress(runOptions, {
+        scope: "web",
+        step: "failed",
+        message: `Web smoke 失败：${toErrorMessage(error)}`,
+      });
       return this.failureResult(
         sessionId,
         requestId,
@@ -475,7 +566,12 @@ export class RuntimeSmokeService {
     }
   }
 
-  async runFeishuSmoke(): Promise<FeishuSmokeResult> {
+  async runFeishuSmoke(runOptions: RuntimeSmokeRunOptions = {}): Promise<FeishuSmokeResult> {
+    emitSmokeProgress(runOptions, {
+      scope: "feishu",
+      step: "start",
+      message: "飞书 smoke：读取前置诊断快照...",
+    });
     const snapshotEnv: NodeJS.ProcessEnv = {
       FEISHU_APP_ID: this.env.FEISHU_APP_ID,
       FEISHU_APP_SECRET: this.env.FEISHU_APP_SECRET,
@@ -496,6 +592,11 @@ export class RuntimeSmokeService {
     const nextSteps = buildFeishuSmokeNextSteps();
 
     if (!feishuConfigReady) {
+      emitSmokeProgress(runOptions, {
+        scope: "feishu",
+        step: "failed",
+        message: "飞书 smoke：前置检查失败，缺少 FEISHU_APP_ID / FEISHU_APP_SECRET。",
+      });
       return {
         ok: false,
         serviceReachable: snapshot.service.serviceReachable,
@@ -512,6 +613,11 @@ export class RuntimeSmokeService {
     }
 
     if (!snapshot.service.serviceReachable) {
+      emitSmokeProgress(runOptions, {
+        scope: "feishu",
+        step: "failed",
+        message: `飞书 smoke：前置检查失败，${this.baseUrl} 当前不可达。`,
+      });
       return {
         ok: false,
         serviceReachable: snapshot.service.serviceReachable,
@@ -527,6 +633,11 @@ export class RuntimeSmokeService {
       };
     }
 
+    emitSmokeProgress(runOptions, {
+      scope: "feishu",
+      step: "completed",
+      message: "飞书 smoke：前置检查通过。",
+    });
     return {
       ok: true,
       serviceReachable: snapshot.service.serviceReachable,
@@ -542,8 +653,8 @@ export class RuntimeSmokeService {
     };
   }
 
-  async runAllSmoke(): Promise<AllSmokeResult> {
-    const web = await this.runWebSmoke();
+  async runAllSmoke(runOptions: RuntimeSmokeRunOptions = {}): Promise<AllSmokeResult> {
+    const web = await this.runWebSmoke(runOptions);
 
     if (!web.ok) {
       return {
@@ -554,7 +665,7 @@ export class RuntimeSmokeService {
       };
     }
 
-    const feishu = await this.runFeishuSmoke();
+    const feishu = await this.runFeishuSmoke(runOptions);
 
     return {
       ok: feishu.ok,
@@ -620,6 +731,9 @@ export class RuntimeSmokeService {
     requestId: string;
     taskId: string;
     inputEnvelope?: TaskInputEnvelope;
+    progressLabel: string;
+    progressStepPrefix: string;
+    onProgress: ((event: RuntimeSmokeProgressEvent) => void) | undefined;
   }): Promise<WebActionRequiredSmokeTaskResult> {
     let actionId: string | null = null;
     let observedActionRequired = false;
@@ -649,6 +763,12 @@ export class RuntimeSmokeService {
 
     const reader = createNdjsonStreamReader(streamResponse.body);
     let partialLines: SmokeStreamLine[];
+
+    emitSmokeProgressHandler(input.onProgress, {
+      scope: "web",
+      step: `${input.progressStepPrefix}.await_action_required`,
+      message: `${input.progressLabel}：等待 task.action_required...`,
+    });
 
     try {
       partialLines = await withTimeout(
@@ -689,6 +809,11 @@ export class RuntimeSmokeService {
       });
     }
 
+    emitSmokeProgressHandler(input.onProgress, {
+      scope: "web",
+      step: `${input.progressStepPrefix}.action_required`,
+      message: `${input.progressLabel}：已收到 actionId=${actionId}，提交补充输入...`,
+    });
     const actionSubmitResponse = await this.fetchImpl(`${this.baseUrl}/api/tasks/actions`, {
       method: "POST",
       headers: {
@@ -712,6 +837,11 @@ export class RuntimeSmokeService {
       });
     }
 
+    emitSmokeProgressHandler(input.onProgress, {
+      scope: "web",
+      step: `${input.progressStepPrefix}.action_submitted`,
+      message: `${input.progressLabel}：补充输入已提交，等待 stream completed...`,
+    });
     let remainingLines: SmokeStreamLine[];
 
     try {
@@ -742,6 +872,11 @@ export class RuntimeSmokeService {
       });
     }
 
+    emitSmokeProgressHandler(input.onProgress, {
+      scope: "web",
+      step: `${input.progressStepPrefix}.stream_completed`,
+      message: `${input.progressLabel}：stream 已 completed，等待 history/detail completed...`,
+    });
     let historyDetail: {
       turns?: SmokeHistoryTurnDetail[];
     };
@@ -774,6 +909,11 @@ export class RuntimeSmokeService {
       });
     }
 
+    emitSmokeProgressHandler(input.onProgress, {
+      scope: "web",
+      step: `${input.progressStepPrefix}.history_completed`,
+      message: `${input.progressLabel}：history/detail 已 completed。`,
+    });
     return {
       actionId,
       observedActionRequired: true,
@@ -992,6 +1132,20 @@ function normalizeClockMillis(clock: () => number | Date): number {
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function emitSmokeProgress(
+  options: RuntimeSmokeRunOptions,
+  event: RuntimeSmokeProgressEvent,
+): void {
+  options.onProgress?.(event);
+}
+
+function emitSmokeProgressHandler(
+  onProgress: RuntimeSmokeRunOptions["onProgress"],
+  event: RuntimeSmokeProgressEvent,
+): void {
+  onProgress?.(event);
 }
 
 function createWebSmokeInputAssetBundle(

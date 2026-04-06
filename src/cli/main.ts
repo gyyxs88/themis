@@ -17,7 +17,7 @@ import {
   describeFeishuTakeoverGuidance,
   type FeishuDiagnosticsSummary,
 } from "../diagnostics/feishu-diagnostics.js";
-import { RuntimeSmokeService } from "../diagnostics/runtime-smoke.js";
+import { RuntimeSmokeService, type RuntimeSmokeProgressEvent } from "../diagnostics/runtime-smoke.js";
 import { McpInspector } from "../mcp/mcp-inspector.js";
 import { PrincipalSkillsService } from "../core/principal-skills-service.js";
 import { WebAccessService } from "../core/web-access.js";
@@ -427,6 +427,7 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
       return;
     case "mcp":
       console.log("Themis 诊断 - mcp");
+      console.log("说明：这里展示的是当前 Codex app-server 可见的 MCP server，不等于 Themis 原生能力清单。");
       console.log(`serverCount：${summary.mcp.servers.length}`);
       console.log(`healthyCount：${summary.mcp.diagnostics.statusCounts.healthyCount}`);
       console.log(`abnormalCount：${summary.mcp.diagnostics.statusCounts.abnormalCount}`);
@@ -465,7 +466,40 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
         workingDirectory: cwd,
         env: process.env,
       });
-      const smoke = await smokeService.runAllSmoke();
+      const releaseStartedAt = Date.now();
+      console.log("Themis 发布就绪检查 - 进行中");
+      console.log("1/3 运行诊断基线：已读取。");
+      console.log("2/3 真实 Web smoke：开始（会串行验证图片 native 与文档 fallback，可能耗时 1-3 分钟）...");
+      const webSmokeStartedAt = Date.now();
+      const web = await smokeService.runWebSmoke({
+        onProgress: createSmokeProgressPrinter("   - "),
+      });
+      console.log(`2/3 真实 Web smoke：${web.ok ? "完成" : "失败"}（耗时 ${formatElapsedDuration(Date.now() - webSmokeStartedAt)}）`);
+      let feishu = null;
+
+      if (web.ok) {
+        console.log("3/3 飞书 smoke 前置检查：开始...");
+        const feishuSmokeStartedAt = Date.now();
+        feishu = await smokeService.runFeishuSmoke({
+          onProgress: createSmokeProgressPrinter("   - "),
+        });
+        console.log(
+          `3/3 飞书 smoke 前置检查：${feishu.ok ? "完成" : "失败"}（耗时 ${formatElapsedDuration(Date.now() - feishuSmokeStartedAt)}）`,
+        );
+      } else {
+        console.log("3/3 飞书 smoke 前置检查：已跳过（Web smoke 未通过）。");
+      }
+
+      console.log(`阶段执行总耗时：${formatElapsedDuration(Date.now() - releaseStartedAt)}`);
+      console.log("");
+      const smoke = {
+        ok: web.ok && feishu?.ok === true,
+        web,
+        feishu,
+        message: web.ok
+          ? (feishu?.ok ? "Web smoke 与 Feishu smoke 前置检查都已通过。" : (feishu?.message ?? "飞书 smoke 前置检查未通过。"))
+          : web.message,
+      };
       const releaseSummary = summarizeReleaseReadiness({
         workingDirectory: cwd,
         diagnostics: summary,
@@ -498,7 +532,11 @@ async function handleDoctorSmoke(args: string[]): Promise<number> {
 
   switch (target) {
     case "web": {
-      const web = await smokeService.runWebSmoke();
+      console.log("Themis smoke - web - 进行中");
+      const web = await smokeService.runWebSmoke({
+        onProgress: createSmokeProgressPrinter("- "),
+      });
+      console.log("");
       printWebSmokeResult(web);
       return web.ok ? 0 : 1;
     }
@@ -508,7 +546,11 @@ async function handleDoctorSmoke(args: string[]): Promise<number> {
       return feishu.ok ? 0 : 1;
     }
     case "all": {
-      const all = await smokeService.runAllSmoke();
+      console.log("Themis smoke - all - 进行中");
+      const all = await smokeService.runAllSmoke({
+        onProgress: createSmokeProgressPrinter("- "),
+      });
+      console.log("");
       printWebSmokeResult(all.web);
 
       if (all.feishu) {
@@ -822,6 +864,29 @@ function formatNullableBooleanFlag(value: boolean | null): string {
   }
 
   return value ? "yes" : "no";
+}
+
+function formatElapsedDuration(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
+
+  if (totalSeconds < 60) {
+    return `${totalSeconds}秒`;
+  }
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  if (seconds === 0) {
+    return `${minutes}分`;
+  }
+
+  return `${minutes}分${seconds}秒`;
+}
+
+function createSmokeProgressPrinter(prefix: string): (event: RuntimeSmokeProgressEvent) => void {
+  return (event) => {
+    console.log(`${prefix}${event.message}`);
+  };
 }
 
 function printWebSmokeResult(result: Awaited<ReturnType<RuntimeSmokeService["runWebSmoke"]>>): void {

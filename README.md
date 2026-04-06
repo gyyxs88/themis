@@ -143,11 +143,11 @@ npm run themis -- skill install curated python-setup
 
 - `doctor`：默认总览页现在会直接输出 `feishu / service(multimodal) / mcp` 异常热点和建议先看的诊断命令，适合先判断问题更像落在哪一层。
 - `doctor service`：会输出 SQLite 状态，以及最近一批已持久化 `turn input` 的多模态摘要，包括图片/文档资产计数、`native / controlled_fallback / blocked` 分布、source channel / runtime target 分布和最后一条输入的 compile 结果。
-- `doctor mcp`：会输出 MCP server 状态分布、每个 server 的分类/关键细节/建议动作，以及总诊断，先回答“是不是 app-server / MCP 装载层出问题了，具体卡在哪个 server”。
-- `doctor smoke web`：自动验证真实 Web / HTTP 主链路是否能进入 `task.action_required`，并在补充输入后收口为 `completed`；同时会再做一轮真实多模态 compile 事实核验，确认图片输入走 `app-server` native 路径、文档输入保持 `controlled_fallback`，以及这些结果已经写进 `history/detail` 的 `turn.input.compileSummary`。
+- `doctor mcp`：会输出当前 Codex `app-server` 可见的 MCP server 状态分布、每个 server 的分类/关键细节/建议动作，以及总诊断，先回答“是不是 app-server / MCP 装载层出问题了，具体卡在哪个 server”；它展示的是当前运行环境里可见的 MCP，不等于 Themis 原生能力清单。
+- `doctor smoke web`：自动验证真实 Web / HTTP 主链路是否能进入 `task.action_required`，并在补充输入后收口为 `completed`；同时会再做一轮真实多模态 compile 事实核验，确认图片输入走 `app-server` native 路径、文档输入保持 `controlled_fallback`，以及这些结果已经写进 `history/detail` 的 `turn.input.compileSummary`。CLI 现在会按登录、图片 native smoke、文档 fallback smoke、共享边界校验等阶段持续打印进度，避免长时间静默等待。
 - `doctor smoke feishu`：只做飞书前置检查和手工 smoke 接力提示，不会伪装成全自动飞书 E2E。
-- `doctor smoke all`：先跑 `web`，通过后再输出飞书手工 smoke 指引；如果 `web` 没过，会明确提示当前已跳过飞书 smoke。
-- `doctor release`：把 `doctor` 总览热点、`doctor smoke web/feishu` 结果和发布级文档齐备性收口到一次发布就绪判断；返回非 `0` 时不进入灰度。
+- `doctor smoke all`：先跑 `web`，通过后再输出飞书手工 smoke 指引；如果 `web` 没过，会明确提示当前已跳过飞书 smoke。CLI 同样会持续打印 Web smoke 的阶段进度。
+- `doctor release`：把 `doctor` 总览热点、`doctor smoke web/feishu` 结果和发布级文档齐备性收口到一次发布就绪判断；返回非 `0` 时不进入灰度。由于内部会跑真实 smoke，成功场景可能需要数分钟；CLI 现在会按 `1/3 -> 2/3 -> 3/3` 和阶段耗时持续打印进度。
 - `temp/repro-real-web-user-input-http.ts` 仍保留给开发调试使用，但正式入口优先走 `doctor smoke`。
 
 `init` 会优先从仓库根目录的 `.env.example` 生成 `.env.local`。服务启动时会自动加载 `.env` / `.env.local`；真实 shell 环境变量优先级更高。

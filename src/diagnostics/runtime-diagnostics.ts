@@ -407,7 +407,7 @@ function diagnoseMcpServer(server: McpServerSummary): RuntimeMcpServerDiagnosis 
     .join(" ")
     .toLowerCase();
 
-  if (status === "healthy" && !server.error && !matchesAuthIssue(auth) && !matchesAuthIssue(detailText)) {
+  if (matchesHealthyStatus(status) && !server.error && !matchesAuthIssue(auth) && !matchesAuthIssue(detailText)) {
     return {
       server,
       classification: "healthy",
@@ -484,8 +484,15 @@ function diagnoseMcpServer(server: McpServerSummary): RuntimeMcpServerDiagnosis 
 }
 
 function matchesAuthIssue(value: string): boolean {
-  return /(auth|oauth|login|token|credential|unauthor|forbidden|permission|required)/.test(value)
-    && !/(authenticated|authorized)/.test(value);
+  if (!value.trim()) {
+    return false;
+  }
+
+  if (/(authenticated|authorized|unsupported|bearertoken|bearer token|not required|not_required|none)/.test(value)) {
+    return false;
+  }
+
+  return /(auth|oauth|login|token|credential|unauthor|forbidden|permission|required)/.test(value);
 }
 
 function matchesConfigIssue(value: string): boolean {
@@ -494,6 +501,10 @@ function matchesConfigIssue(value: string): boolean {
 
 function matchesLaunchIssue(value: string): boolean {
   return /(spawn|enoent|exit|launch|start failed|boot failed|crash|refused)/.test(value);
+}
+
+function matchesHealthyStatus(value: string): boolean {
+  return /^(healthy|available|enabled|ready|ok)$/.test(value);
 }
 
 function summarizeRuntimeOverview(input: {

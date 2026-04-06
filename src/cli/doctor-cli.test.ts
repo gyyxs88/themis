@@ -183,6 +183,12 @@ test("themis doctor smoke web 会输出真实 Web smoke 结果", async () => {
     });
 
     assert.equal(result.code, 0);
+    assert.match(result.stdout, /Themis smoke - web - 进行中/);
+    assert.match(result.stdout, /- Web 登录：创建临时访问令牌并登录/);
+    assert.match(result.stdout, /- 图片 native smoke：开始真实任务链路验证/);
+    assert.match(result.stdout, /- 图片 native smoke：history\/detail 已 completed/);
+    assert.match(result.stdout, /- 文档 fallback smoke：开始真实任务链路验证/);
+    assert.match(result.stdout, /- 共享边界 smoke：边界校验通过/);
     assert.match(result.stdout, /Web smoke 成功/);
     assert.match(result.stdout, /sessionId：/);
     assert.match(result.stdout, /requestId：/);
@@ -535,6 +541,9 @@ test("themis doctor smoke all 会先输出 web，再输出 feishu 前置检查",
     });
 
     assert.equal(result.code, 0);
+    assert.match(result.stdout, /Themis smoke - all - 进行中/);
+    assert.match(result.stdout, /- 图片 native smoke：开始真实任务链路验证/);
+    assert.match(result.stdout, /- 飞书 smoke：读取前置诊断快照/);
     const webIndex = result.stdout.indexOf("Themis smoke - web");
     const feishuIndex = result.stdout.indexOf("Themis smoke - feishu");
     assert.ok(webIndex >= 0);
@@ -626,6 +635,13 @@ test("themis doctor release 会输出发布就绪摘要，并在 smoke 与文档
     });
 
     assert.equal(result.code, 0);
+    assert.match(result.stdout, /Themis 发布就绪检查 - 进行中/);
+    assert.match(result.stdout, /1\/3 运行诊断基线：已读取。/);
+    assert.match(result.stdout, /2\/3 真实 Web smoke：开始/);
+    assert.match(result.stdout, /2\/3 真实 Web smoke：完成（耗时 /);
+    assert.match(result.stdout, /3\/3 飞书 smoke 前置检查：开始/);
+    assert.match(result.stdout, /3\/3 飞书 smoke 前置检查：完成（耗时 /);
+    assert.match(result.stdout, /阶段执行总耗时：/);
     assert.match(result.stdout, /Themis 发布就绪检查/);
     assert.match(result.stdout, /ok：yes/);
     assert.match(result.stdout, /acceptanceMatrix\.automatedCommandCount：7/);
@@ -708,6 +724,10 @@ test("themis doctor release 会在发布文档缺失时返回非 0", async () =>
     });
 
     assert.notEqual(result.code, 0);
+    assert.match(result.stdout, /Themis 发布就绪检查 - 进行中/);
+    assert.match(result.stdout, /2\/3 真实 Web smoke：开始/);
+    assert.match(result.stdout, /3\/3 飞书 smoke 前置检查：开始/);
+    assert.match(result.stdout, /阶段执行总耗时：/);
     assert.match(result.stdout, /Themis 发布就绪检查/);
     assert.match(result.stdout, /ok：no/);
     assert.match(result.stdout, /docs\/repository\/themis-release-acceptance-matrix\.md：missing/);
@@ -2247,6 +2267,7 @@ test("themis doctor mcp 会输出 mcp server 摘要", () => {
     const result = runCli(["doctor", "mcp"], workspace);
     assert.equal(result.code, 0);
     assert.match(result.stdout, /Themis 诊断 - mcp/);
+    assert.match(result.stdout, /说明：这里展示的是当前 Codex app-server 可见的 MCP server，不等于 Themis 原生能力清单。/);
     assert.match(result.stdout, /serverCount：\d+/);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
@@ -2282,6 +2303,7 @@ test("themis doctor mcp 会输出状态分布和排障建议", () => {
     });
     assert.equal(result.code, 0);
     assert.match(result.stdout, /Themis 诊断 - mcp/);
+    assert.match(result.stdout, /说明：这里展示的是当前 Codex app-server 可见的 MCP server，不等于 Themis 原生能力清单。/);
     assert.match(result.stdout, /serverCount：2/);
     assert.match(result.stdout, /healthyCount：1/);
     assert.match(result.stdout, /abnormalCount：1/);

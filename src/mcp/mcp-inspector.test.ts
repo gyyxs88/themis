@@ -97,3 +97,41 @@ test("McpInspector 在字段缺失时会降级到 unknown", async () => {
     },
   ]);
 });
+
+test("McpInspector 会兼容 authStatus，并在缺少 id/status 时回填 name 和 available", async () => {
+  const inspector = new McpInspector({
+    workingDirectory: "/tmp/demo",
+    createSession: async () => ({
+      initialize: async () => {},
+      request: async () => ({
+        data: [
+          {
+            name: "todoist",
+            authStatus: "unsupported",
+            tools: {},
+            resources: [],
+            resourceTemplates: [],
+          },
+        ],
+      }),
+      close: async () => {},
+    }) as never,
+  });
+
+  const listed = await inspector.list();
+
+  assert.deepEqual(listed.servers, [
+    {
+      id: "todoist",
+      name: "todoist",
+      status: "available",
+      args: [],
+      auth: "unsupported",
+      raw: {
+        tools: {},
+        resources: [],
+        resourceTemplates: [],
+      },
+    },
+  ]);
+});

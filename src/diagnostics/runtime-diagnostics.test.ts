@@ -1325,6 +1325,46 @@ test("RuntimeDiagnosticsService 会接入 mcp inspector 输出", async () => {
   }
 });
 
+test("RuntimeDiagnosticsService 会把 authStatus 驱动的 available MCP 视为健康，不误报 unknown", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-diagnostics-mcp-available-"));
+
+  try {
+    const service = new RuntimeDiagnosticsService({
+      workingDirectory: root,
+      runtimeStore: null,
+      mcpInspector: {
+        list: async () => ({
+          servers: [
+            {
+              id: "codex_apps",
+              name: "codex_apps",
+              status: "available",
+              args: [],
+              auth: "bearerToken",
+            },
+            {
+              id: "todoist",
+              name: "todoist",
+              status: "available",
+              args: [],
+              auth: "unsupported",
+            },
+          ],
+        }),
+      } as never,
+    });
+    const summary = await service.readSummary();
+
+    assert.equal(summary.mcp.diagnostics.statusCounts.healthyCount, 2);
+    assert.equal(summary.mcp.diagnostics.statusCounts.abnormalCount, 0);
+    assert.equal(summary.mcp.diagnostics.primaryDiagnosis?.id, "healthy");
+    assert.equal(summary.mcp.diagnostics.serverDiagnoses[0]?.classification, "healthy");
+    assert.equal(summary.mcp.diagnostics.serverDiagnoses[1]?.classification, "healthy");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("RuntimeDiagnosticsService 在无 SQLite 时也能识别环境变量 provider", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-runtime-diagnostics-env-provider-"));
   const previousEnv = {
