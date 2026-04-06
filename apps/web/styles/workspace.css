@@ -635,6 +635,18 @@
   gap: 10px 12px;
 }
 
+.settings-inline-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.settings-inline-toggle input {
+  margin: 0;
+}
+
 .toolbar-row {
   display: flex;
   flex-wrap: wrap;
@@ -822,6 +834,117 @@
 
 .skill-materialization-error {
   color: #8a3a2d;
+}
+
+.memory-candidate-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(17, 17, 17, 0.025), transparent 34%),
+    #ffffff;
+}
+
+.memory-candidate-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.memory-candidate-heading {
+  display: grid;
+  gap: 10px;
+}
+
+.memory-candidate-heading h4,
+.memory-candidate-summary,
+.memory-candidate-copy,
+.memory-candidate-block-title,
+.memory-candidate-timestamp {
+  margin: 0;
+}
+
+.memory-candidate-heading h4 {
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.memory-candidate-summary,
+.memory-candidate-copy,
+.memory-candidate-timestamp,
+.memory-candidate-meta-list dd,
+.memory-candidate-meta-list dt {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.memory-candidate-timestamp {
+  white-space: nowrap;
+}
+
+.memory-candidate-meta-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.memory-candidate-meta-list div {
+  padding: 10px 12px;
+  border: 1px solid #edf0f4;
+  border-radius: 14px;
+  background: #fbfcfd;
+}
+
+.memory-candidate-meta-list dt,
+.memory-candidate-meta-list dd {
+  margin: 0;
+}
+
+.memory-candidate-meta-list dt {
+  font-size: 12px;
+}
+
+.memory-candidate-meta-list dd {
+  color: #273447;
+}
+
+.memory-candidate-block {
+  display: grid;
+  gap: 8px;
+}
+
+.memory-candidate-block-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #536074;
+}
+
+.memory-candidate-content {
+  margin: 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+  border: 1px solid #edf0f4;
+  border-radius: 14px;
+  background: #fbfcfd;
+  color: #273447;
+  font: inherit;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.memory-candidate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .auth-rate-limits {

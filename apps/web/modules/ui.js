@@ -132,6 +132,7 @@ export function createRenderer(app) {
     renderAssistantStyleNote(effectiveSettings);
     renderRuntimeConfigNote(settings, effectiveSettings);
     renderIdentityState();
+    renderMemoryCandidatesState();
     renderSkillsState();
     renderThirdPartyNotes(settings, effectiveSettings);
     renderThirdPartyEndpointProbeState(settings);
@@ -279,10 +280,51 @@ export function createRenderer(app) {
     dom.settingsAuthSection.setAttribute("aria-hidden", String(activeSection !== "auth"));
     dom.settingsSkillsSection.classList.toggle("hidden", activeSection !== "skills");
     dom.settingsSkillsSection.setAttribute("aria-hidden", String(activeSection !== "skills"));
+    dom.settingsMemoryCandidatesSection.classList.toggle("hidden", activeSection !== "memory-candidates");
+    dom.settingsMemoryCandidatesSection.setAttribute("aria-hidden", String(activeSection !== "memory-candidates"));
     dom.settingsThirdPartySection.classList.toggle("hidden", activeSection !== "third-party");
     dom.settingsThirdPartySection.setAttribute("aria-hidden", String(activeSection !== "third-party"));
     dom.settingsModeSwitchSection.classList.toggle("hidden", activeSection !== "mode-switch");
     dom.settingsModeSwitchSection.setAttribute("aria-hidden", String(activeSection !== "mode-switch"));
+  }
+
+  function renderMemoryCandidatesState() {
+    const candidatesState = app.runtime.memoryCandidates ?? {};
+    const candidates = Array.isArray(candidatesState.candidates) ? candidatesState.candidates : [];
+    const busy = Boolean(candidatesState.loading || candidatesState.extracting || candidatesState.reviewingCandidateId);
+    const statusMessage = resolveMemoryCandidatesStatusMessage(candidatesState, candidates.length);
+
+    dom.memoryCandidatesFilterSelect.value = resolveMemoryCandidatesFilterValue(candidatesState.filterStatus);
+    dom.memoryCandidatesIncludeArchivedInput.checked = Boolean(candidatesState.includeArchived);
+    dom.memoryCandidatesRefreshButton.disabled = busy;
+    dom.memoryCandidatesExtractButton.disabled = busy;
+    dom.memoryCandidatesFilterSelect.disabled = busy;
+    dom.memoryCandidatesIncludeArchivedInput.disabled = busy;
+
+    dom.memoryCandidatesStatusNote.classList.toggle("hidden", !statusMessage);
+    dom.memoryCandidatesStatusNote.textContent = statusMessage;
+    if (statusMessage) {
+      dom.memoryCandidatesStatusNote.dataset.state = candidatesState.errorMessage
+        ? "error"
+        : busy
+          ? "loading"
+          : candidatesState.noticeMessage
+            ? "supported"
+            : "inconclusive";
+    } else {
+      delete dom.memoryCandidatesStatusNote.dataset.state;
+    }
+
+    dom.memoryCandidatesListEmpty.classList.toggle("hidden", candidates.length > 0);
+    dom.memoryCandidatesListEmpty.textContent = resolveEmptyMemoryCandidatesLabel(candidatesState);
+    dom.memoryCandidatesList.innerHTML = candidates
+      .map((candidate) => renderMemoryCandidateCard(candidate, {
+        busy,
+        reviewingCandidateId: candidatesState.reviewingCandidateId,
+        escapeHtml: utils.escapeHtml,
+        formatRelativeTime: utils.formatRelativeTime,
+      }))
+      .join("");
   }
 
   function renderSkillsState() {
@@ -1519,7 +1561,197 @@ function resolveModelFallbackLabel(runtimeConfig) {
 }
 
 function resolveWorkspaceToolsSection(section) {
-  return ["runtime", "auth", "skills", "third-party", "mode-switch"].includes(section) ? section : "runtime";
+  return ["runtime", "auth", "skills", "memory-candidates", "third-party", "mode-switch"].includes(section)
+    ? section
+    : "runtime";
+}
+
+function resolveMemoryCandidatesFilterValue(filterStatus) {
+  return ["suggested", "approved", "rejected", "all"].includes(filterStatus) ? filterStatus : "suggested";
+}
+
+function resolveMemoryCandidatesStatusMessage(candidatesState, candidateCount) {
+  if (candidatesState.errorMessage) {
+    return candidatesState.errorMessage;
+  }
+
+  if (candidatesState.loading) {
+    return "正在读取长期记忆候选列表。";
+  }
+
+  if (candidatesState.extracting) {
+    return "正在从最近完成任务提炼长期记忆候选。";
+  }
+
+  if (candidatesState.noticeMessage) {
+    return candidatesState.noticeMessage;
+  }
+
+  if (candidateCount === 0 && candidatesState.status === "ready") {
+    return "当前筛选条件下没有候选，可稍后刷新或切换查看范围。";
+  }
+
+  return "";
+}
+
+function resolveEmptyMemoryCandidatesLabel(candidatesState) {
+  switch (resolveMemoryCandidatesFilterValue(candidatesState.filterStatus)) {
+    case "approved":
+      return "当前还没有已批准的长期记忆候选。";
+    case "rejected":
+      return "当前还没有已拒绝的长期记忆候选。";
+    case "all":
+      return candidatesState.includeArchived
+        ? "当前还没有长期记忆候选。"
+        : "当前没有未归档的长期记忆候选。";
+    default:
+      return "当前还没有待审核的长期记忆候选。";
+  }
+}
+
+function renderMemoryCandidateCard(candidate, options) {
+  const busy = options.busy;
+  const escapeHtml = options.escapeHtml;
+  const reviewingCandidateId = options.reviewingCandidateId;
+  const formatRelativeTime = options.formatRelativeTime;
+  const updatedAt = candidate.updatedAt ? formatRelativeTime(candidate.updatedAt) : "刚刚";
+  const archived = Boolean(candidate.archivedAt);
+  const candidateBusy = reviewingCandidateId && reviewingCandidateId === candidate.candidateId;
+  const canReview = candidate.status === "suggested" && !archived;
+  const archiveDisabled = busy || archived;
+
+  return `
+    <article class="memory-candidate-card">
+      <div class="memory-candidate-head">
+        <div class="memory-candidate-heading">
+          <div class="skill-pill-row">
+            <span class="skill-pill" data-tone="${escapeHtml(resolveMemoryCandidateTone(candidate.status, archived))}">
+              ${escapeHtml(resolveMemoryCandidateStatusLabel(candidate.status, archived))}
+            </span>
+            <span class="skill-pill">${escapeHtml(resolveMemoryCandidateKindLabel(candidate.kind))}</span>
+            <span class="skill-pill">${escapeHtml(resolveMemoryCandidateSourceTypeLabel(candidate.sourceType))}</span>
+          </div>
+          <h4>${escapeHtml(candidate.title || "未命名候选")}</h4>
+          <p class="memory-candidate-summary">${escapeHtml(candidate.summary || "没有摘要。")}</p>
+        </div>
+        <p class="memory-candidate-timestamp">更新于 ${escapeHtml(updatedAt)}</p>
+      </div>
+
+      <dl class="memory-candidate-meta-list">
+        <div>
+          <dt>来源</dt>
+          <dd>${escapeHtml(candidate.sourceLabel || "未记录")}</dd>
+        </div>
+        <div>
+          <dt>候选 ID</dt>
+          <dd>${escapeHtml(candidate.candidateId)}</dd>
+        </div>
+        ${candidate.sourceTaskId ? `<div><dt>任务</dt><dd>${escapeHtml(candidate.sourceTaskId)}</dd></div>` : ""}
+        ${candidate.sourceConversationId ? `<div><dt>会话</dt><dd>${escapeHtml(candidate.sourceConversationId)}</dd></div>` : ""}
+        ${candidate.approvedMemoryId ? `<div><dt>正式记忆</dt><dd>${escapeHtml(candidate.approvedMemoryId)}</dd></div>` : ""}
+      </dl>
+
+      <div class="memory-candidate-block">
+        <p class="memory-candidate-block-title">建议理由</p>
+        <p class="memory-candidate-copy">${escapeHtml(candidate.rationale || "未提供理由。")}</p>
+      </div>
+
+      <div class="memory-candidate-block">
+        <p class="memory-candidate-block-title">建议写入内容</p>
+        <pre class="memory-candidate-content">${escapeHtml(candidate.suggestedContent || "未提供内容。")}</pre>
+      </div>
+
+      <div class="memory-candidate-actions">
+        ${canReview ? `
+          <button
+            type="button"
+            class="toolbar-button subtle"
+            data-memory-candidate-action="approve"
+            data-memory-candidate-id="${escapeHtml(candidate.candidateId)}"
+            ${busy ? "disabled" : ""}
+          >
+            ${candidateBusy ? "处理中..." : "批准"}
+          </button>
+          <button
+            type="button"
+            class="ghost-button"
+            data-memory-candidate-action="reject"
+            data-memory-candidate-id="${escapeHtml(candidate.candidateId)}"
+            ${busy ? "disabled" : ""}
+          >
+            拒绝
+          </button>
+        ` : ""}
+        <button
+          type="button"
+          class="ghost-button"
+          data-memory-candidate-action="archive"
+          data-memory-candidate-id="${escapeHtml(candidate.candidateId)}"
+          ${archiveDisabled ? "disabled" : ""}
+        >
+          ${archived ? "已归档" : "归档"}
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function resolveMemoryCandidateStatusLabel(status, archived) {
+  if (archived) {
+    return "已归档";
+  }
+
+  switch (status) {
+    case "approved":
+      return "已批准";
+    case "rejected":
+      return "已拒绝";
+    default:
+      return "待审核";
+  }
+}
+
+function resolveMemoryCandidateTone(status, archived) {
+  if (archived) {
+    return "partially_synced";
+  }
+
+  switch (status) {
+    case "approved":
+      return "ready";
+    case "rejected":
+      return "error";
+    default:
+      return "syncing";
+  }
+}
+
+function resolveMemoryCandidateKindLabel(kind) {
+  switch (kind) {
+    case "collaboration-style":
+      return "协作风格";
+    case "behavior":
+      return "行为约束";
+    case "preference":
+      return "偏好";
+    case "task-note":
+      return "任务备注";
+    default:
+      return kind || "未分类";
+  }
+}
+
+function resolveMemoryCandidateSourceTypeLabel(sourceType) {
+  switch (sourceType) {
+    case "manual":
+      return "手工";
+    case "imported":
+      return "导入";
+    case "themis":
+      return "Themis";
+    default:
+      return sourceType || "未知来源";
+  }
 }
 
 function formatSkillSourceLabel(sourceType) {

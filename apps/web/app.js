@@ -6,6 +6,7 @@ import { createHistoryController } from "./modules/history.js";
 import { createIdentityController } from "./modules/identity.js";
 import { createInputAssetsApi } from "./modules/input-assets.js";
 import { createLayoutController } from "./modules/layout.js";
+import { createDefaultMemoryCandidatesState, createMemoryCandidatesController } from "./modules/memory-candidates.js";
 import { createDefaultModeSwitchDraftState, createModeSwitchController } from "./modules/mode-switch.js";
 import { createDefaultRuntimeConfigState, createRuntimeConfigController } from "./modules/runtime-config.js";
 import { createSessionSettingsController } from "./modules/session-settings.js";
@@ -48,6 +49,7 @@ const app = {
     identity: null,
     workspaceToolsOpen: false,
     workspaceToolsSection: "runtime",
+    memoryCandidates: createDefaultMemoryCandidatesState(),
     skills: createDefaultSkillsState(),
     runtimeConfig: createDefaultRuntimeConfigState(),
     modeSwitchDraft: createDefaultModeSwitchDraftState(),
@@ -64,10 +66,12 @@ app.history = createHistoryController(app);
 app.layout = createLayoutController(app);
 app.auth = createAuthController(app);
 app.identity = createIdentityController(app);
+app.memoryCandidates = createMemoryCandidatesController(app);
 app.runtimeConfig = createRuntimeConfigController(app);
 app.sessionSettings = createSessionSettingsController(app);
 app.skills = createSkillsController(app);
 app.skills.bindControls();
+app.memoryCandidates.bindControls();
 app.modeSwitch = createModeSwitchController(app);
 app.thirdPartyEditor = createThirdPartyEditorController(app);
 app.thirdPartyEndpointProbe = createThirdPartyEndpointProbeController(app);

@@ -2113,6 +2113,39 @@ export class SqliteCodexSessionRegistry {
     return rows.map(mapPrincipalMainMemoryRow);
   }
 
+  listPrincipalMainMemory(principalId: string, limit = 100): StoredPrincipalMainMemoryRecord[] {
+    const normalizedPrincipalId = principalId.trim();
+    const normalizedLimit = normalizeLimit(limit);
+
+    if (!normalizedPrincipalId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            memory_id,
+            principal_id,
+            kind,
+            title,
+            summary,
+            body_markdown,
+            source_type,
+            status,
+            created_at,
+            updated_at
+          FROM themis_principal_main_memory
+          WHERE principal_id = ?
+          ORDER BY updated_at DESC, memory_id DESC
+          LIMIT ?
+        `,
+      )
+      .all(normalizedPrincipalId, normalizedLimit) as PrincipalMainMemoryRow[];
+
+    return rows.map(mapPrincipalMainMemoryRow);
+  }
+
   getActorTaskScope(principalId: string, scopeId: string): StoredActorTaskScopeRecord | null {
     const normalizedPrincipalId = principalId.trim();
     const normalizedScopeId = scopeId.trim();

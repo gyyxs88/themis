@@ -10,6 +10,7 @@ import { serveWebAsset } from "./http-assets.js";
 import {
   handleActorCreate,
   handleActorList,
+  handleMainMemoryCandidateExtract,
   handleMainMemoryCandidateList,
   handleMainMemoryCandidateReview,
   handleMainMemoryCandidateSuggest,
@@ -230,6 +231,10 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/actors/memory-candidates/list") {
         return handleMainMemoryCandidateList(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/actors/memory-candidates/extract") {
+        return handleMainMemoryCandidateExtract(request, response, runtime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/actors/memory-candidates/review") {

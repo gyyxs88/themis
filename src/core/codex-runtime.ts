@@ -447,6 +447,44 @@ export class CodexTaskRuntime {
           );
         }
       }
+      if (principalId) {
+        try {
+          const candidateUpdates = this.principalActorsService.suggestMainMemoryCandidatesFromTask({
+            principalId,
+            request,
+            result: finalizedResult,
+            ...(resolvedRequest.conversationId ? { conversationId: resolvedRequest.conversationId } : {}),
+          }).updates;
+
+          if (candidateUpdates.length > 0) {
+            completionMemoryUpdates = [...completionMemoryUpdates, ...candidateUpdates];
+            await emit(
+              createTaskEvent(
+                taskId,
+                request.requestId,
+                "task.memory_updated",
+                "completed",
+                "Memory updated at task completion.",
+                { updates: candidateUpdates },
+              ),
+            );
+          }
+        } catch (error) {
+          await emit(
+            createTaskEvent(
+              taskId,
+              request.requestId,
+              "task.memory_updated",
+              "failed",
+              toErrorMessage(error),
+              {
+                updates: [],
+                errorCode: "MEMORY_UPDATE_FAILED",
+              },
+            ),
+          );
+        }
+      }
 
       return completionMemoryUpdates.length
         ? {

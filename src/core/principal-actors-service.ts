@@ -7,8 +7,14 @@ import type {
   StoredPrincipalActorRecord,
   StoredPrincipalMainMemoryCandidateRecord,
   StoredPrincipalMainMemoryRecord,
+  TaskRequest,
+  TaskResult,
 } from "../types/index.js";
 import type { SqliteCodexSessionRegistry } from "../storage/index.js";
+import {
+  PrincipalMemoryCandidateExperienceService,
+  type SuggestCandidatesFromTaskResult,
+} from "./principal-memory-candidate-experience.js";
 
 export interface PrincipalActorsServiceOptions {
   registry: SqliteCodexSessionRegistry;
@@ -161,9 +167,13 @@ const GOAL_ACTION_PREFIXES = [
 
 export class PrincipalActorsService {
   private readonly registry: SqliteCodexSessionRegistry;
+  private readonly experienceService: PrincipalMemoryCandidateExperienceService;
 
   constructor(options: PrincipalActorsServiceOptions) {
     this.registry = options.registry;
+    this.experienceService = new PrincipalMemoryCandidateExperienceService({
+      principalActorsService: this,
+    });
   }
 
   createActor(input: CreateActorInput): StoredPrincipalActorRecord {
@@ -391,6 +401,23 @@ export class PrincipalActorsService {
       query,
       limit,
     );
+  }
+
+  listMainMemory(principalId: string, limit = 100): StoredPrincipalMainMemoryRecord[] {
+    return this.registry.listPrincipalMainMemory(
+      normalizeRequiredText(principalId, "Principal id is required."),
+      limit,
+    );
+  }
+
+  suggestMainMemoryCandidatesFromTask(input: {
+    principalId: string;
+    request: TaskRequest;
+    result: TaskResult;
+    conversationId?: string;
+    now?: string;
+  }): SuggestCandidatesFromTaskResult {
+    return this.experienceService.suggestFromTask(input);
   }
 
   searchActorRuntimeMemory(input: SearchActorRuntimeMemoryInput): StoredActorRuntimeMemoryRecord[] {

@@ -40,6 +40,7 @@ import {
   finalizeTaskResult,
 } from "./codex-runtime.js";
 import { IdentityLinkService } from "./identity-link-service.js";
+import { PrincipalActorsService } from "./principal-actors-service.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
 import { buildTaskPrompt } from "./prompt.js";
 import { compileTaskInputForRuntime } from "./runtime-input-compiler.js";
@@ -104,6 +105,7 @@ export class AppServerTaskRuntime {
   private readonly runtimeStore: SqliteCodexSessionRegistry;
   private readonly identityLinkService: IdentityLinkService;
   private readonly conversationService: ConversationService;
+  private readonly principalActorsService: PrincipalActorsService;
   private readonly principalSkillsService: PrincipalSkillsService;
   private readonly sessionFactory: () => Promise<AppServerTaskRuntimeSession>;
   private readonly actionBridge: AppServerActionBridge;
@@ -114,6 +116,9 @@ export class AppServerTaskRuntime {
     this.runtimeStore = options.runtimeStore ?? new SqliteCodexSessionRegistry();
     this.identityLinkService = new IdentityLinkService(this.runtimeStore);
     this.conversationService = new ConversationService(this.runtimeStore, this.identityLinkService);
+    this.principalActorsService = new PrincipalActorsService({
+      registry: this.runtimeStore,
+    });
     this.principalSkillsService = options.principalSkillsService ?? new PrincipalSkillsService({
       workingDirectory: this.workingDirectory,
       registry: this.runtimeStore,
@@ -307,7 +312,52 @@ export class AppServerTaskRuntime {
         ...(resolvedThreadId ? { threadId: resolvedThreadId } : {}),
       });
       persistThreadSession(this.runtimeStore, sessionId, resolvedThreadId, result.completedAt);
-      return result;
+
+      let completionMemoryUpdates: TaskResult["memoryUpdates"] = [];
+      if (principalId) {
+        try {
+          completionMemoryUpdates = this.principalActorsService.suggestMainMemoryCandidatesFromTask({
+            principalId,
+            request,
+            result,
+            ...(resolvedRequest.conversationId ? { conversationId: resolvedRequest.conversationId } : {}),
+          }).updates;
+
+          if (completionMemoryUpdates.length > 0) {
+            await emit(
+              createTaskEvent(
+                taskId,
+                request.requestId,
+                "task.memory_updated",
+                "completed",
+                "Memory updated at task completion.",
+                { updates: completionMemoryUpdates },
+              ),
+            );
+          }
+        } catch (error) {
+          await emit(
+            createTaskEvent(
+              taskId,
+              request.requestId,
+              "task.memory_updated",
+              "failed",
+              toErrorMessage(error),
+              {
+                updates: [],
+                errorCode: "MEMORY_UPDATE_FAILED",
+              },
+            ),
+          );
+        }
+      }
+
+      return completionMemoryUpdates.length
+        ? {
+          ...result,
+          memoryUpdates: completionMemoryUpdates,
+        }
+        : result;
     } catch (error) {
       const message = toErrorMessage(error);
 
@@ -384,6 +434,10 @@ export class AppServerTaskRuntime {
 
   getIdentityLinkService(): IdentityLinkService {
     return this.identityLinkService;
+  }
+
+  getPrincipalActorsService(): PrincipalActorsService {
+    return this.principalActorsService;
   }
 
   getPrincipalSkillsService(): PrincipalSkillsService {

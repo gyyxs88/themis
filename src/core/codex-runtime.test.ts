@@ -1048,6 +1048,77 @@ test("memory 写回失败时任务仍 completed，并发 task.memory_updated fai
   }
 });
 
+test("runTask 完成后会自动提炼长期记忆候选，并保留人工确认边界", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-memory-candidate-success-"));
+  const controlDirectory = join(root, "control");
+  mkdirSync(controlDirectory);
+  mkdirSync(join(controlDirectory, "memory", "architecture"), { recursive: true });
+  writeRuntimeFile(controlDirectory, "AGENTS.md", "rule");
+  writeRuntimeFile(controlDirectory, "README.md", "# control");
+  writeRuntimeFile(controlDirectory, "memory/architecture/overview.md", "# architecture");
+
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const capturedThreadOptions: ThreadOptions[] = [];
+  const sessionStore = createSessionStoreDouble(runtimeStore, capturedThreadOptions);
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+    sessionStore,
+    createMemoryService: () => ({
+      recordTaskStart: () => [],
+      recordTaskCompletion: () => [],
+      recordTaskTerminal: () => [],
+    }) as never,
+  });
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity({
+      channel: "web",
+      channelUserId: "user-memory-candidate",
+      displayName: "User",
+    });
+    const events: TaskEvent[] = [];
+    const result = await runtime.runTask(createRequest({
+      requestId: "req-runtime-memory-candidate",
+      taskId: "task-runtime-memory-candidate",
+      user: {
+        userId: "user-memory-candidate",
+        displayName: "User",
+      },
+      goal: "以后默认中文回复。以后先给结论再展开。",
+      channelContext: {
+        sessionId: "session-runtime-memory-candidate",
+      },
+    }), {
+      onEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    assert.equal(result.status, "completed");
+    assert.equal(result.memoryUpdates?.length, 2);
+    const candidates = runtime.getPrincipalActorsService().listMainMemoryCandidates({
+      principalId: identity.principalId,
+      limit: 10,
+    });
+    assert.deepEqual(
+      candidates.map((candidate) => candidate.title),
+      ["回答先给结论", "默认中文沟通"],
+    );
+    const memoryEvent = events.find((event) =>
+      event.type === "task.memory_updated"
+      && event.status === "completed"
+      && Array.isArray(event.payload?.updates)
+      && event.payload.updates.length === 2
+    );
+    assert.ok(memoryEvent);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("start 已写回后任务普通失败，不会残留 running active 与 in-progress", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-runtime-memory-terminal-failed-"));
   const controlDirectory = join(root, "control");

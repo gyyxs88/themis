@@ -297,6 +297,18 @@
                 </button>
 
                 <button
+                  id="settings-memory-candidates-tab"
+                  type="button"
+                  class="settings-nav-button"
+                  data-settings-section="memory-candidates"
+                  role="tab"
+                  aria-controls="settings-memory-candidates-section"
+                  aria-selected="false"
+                >
+                  <span class="settings-nav-title">记忆候选</span>
+                </button>
+
+                <button
                   id="settings-third-party-tab"
                   type="button"
                   class="settings-nav-button"
@@ -874,6 +886,53 @@
                     <div id="skills-curated-list" class="settings-stack"></div>
                   </section>
                 </div>
+              </section>
+
+              <section
+                id="settings-memory-candidates-section"
+                class="settings-panel hidden"
+                role="tabpanel"
+                aria-labelledby="settings-memory-candidates-tab"
+              >
+                <section id="memory-candidates-panel-actions" class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>长期记忆候选</h3>
+                    <span class="meta-label">人工确认流</span>
+                  </div>
+
+                  <p class="settings-section-copy">
+                    这里展示当前 principal 的长期记忆候选池。批准后才会写入正式主记忆；拒绝和归档只影响候选池本身，不会直接改正式主记忆。
+                  </p>
+
+                  <div class="settings-stack">
+                    <div class="settings-inline-actions">
+                      <button id="memory-candidates-refresh-button" type="button" class="toolbar-button subtle">刷新</button>
+                      <button id="memory-candidates-extract-button" type="button" class="toolbar-button subtle">从最近完成任务提炼</button>
+                      <label class="settings-inline-toggle" for="memory-candidates-include-archived-input">
+                        <input id="memory-candidates-include-archived-input" type="checkbox" />
+                        <span>包含已归档</span>
+                      </label>
+                    </div>
+
+                    <label class="settings-field">
+                      <span>查看范围</span>
+                      <select id="memory-candidates-filter-select">
+                        <option value="suggested">待审核</option>
+                        <option value="approved">已批准</option>
+                        <option value="rejected">已拒绝</option>
+                        <option value="all">全部未归档状态</option>
+                      </select>
+                    </label>
+
+                    <p
+                      id="memory-candidates-status-note"
+                      class="settings-section-copy settings-probe-note hidden"
+                      aria-live="polite"
+                    ></p>
+                    <div id="memory-candidates-list-empty" class="settings-section-copy hidden">当前筛选条件下还没有长期记忆候选。</div>
+                    <div id="memory-candidates-list" class="settings-stack"></div>
+                  </div>
+                </section>
               </section>
             </div>
           </div>

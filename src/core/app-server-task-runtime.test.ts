@@ -344,6 +344,57 @@ test("AppServerTaskRuntime 会按真实 Web channelSessionKey 解析 conversatio
   }
 });
 
+test("AppServerTaskRuntime 完成后会自动提炼长期记忆候选，并返回 memoryUpdates", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-memory-candidate",
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    const identity = fixture.runtime.getIdentityLinkService().ensureIdentity({
+      channel: "web",
+      channelUserId: "web-memory-candidate",
+      displayName: "Owner",
+    });
+    const events: Array<{ type?: string; status?: string; payload?: Record<string, unknown> }> = [];
+    const result = await fixture.runtime.runTask({
+      requestId: "req-app-memory-candidate-1",
+      taskId: "task-app-memory-candidate-1",
+      sourceChannel: "web",
+      user: {
+        userId: "web-memory-candidate",
+        displayName: "Owner",
+      },
+      goal: "以后默认中文回复。以后先给结论再展开。",
+      channelContext: { sessionId: "web-session-memory-candidate-1" },
+      createdAt: "2026-04-06T09:00:00.000Z",
+    }, {
+      onEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    assert.equal(state.started.length, 1);
+    assert.equal(result.memoryUpdates?.length, 2);
+    const candidates = fixture.runtime.getPrincipalActorsService().listMainMemoryCandidates({
+      principalId: identity.principalId,
+      limit: 10,
+    });
+    assert.deepEqual(
+      candidates.map((candidate) => candidate.title).sort(),
+      ["回答先给结论", "默认中文沟通"],
+    );
+    assert.ok(events.some((event) =>
+      event.type === "task.memory_updated"
+      && event.status === "completed"
+      && Array.isArray(event.payload?.updates)
+      && event.payload.updates.length === 2
+    ));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("AppServerTaskRuntime 会把图片附件写进 startTurn prompt", async () => {
   const { state, sessionFactory } = createSessionFactory({
     startThreadId: "thread-app-image-1",

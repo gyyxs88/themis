@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { CodexTaskRuntime } from "../core/codex-runtime.js";
+import type { TaskRequest, TaskResult } from "../types/index.js";
 import { createTaskError, resolveErrorStatusCode, toErrorMessage } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
 import { writeJson } from "./http-responses.js";
@@ -46,6 +47,10 @@ interface MainMemoryCandidateListPayload extends IdentityPayload {
 interface MainMemoryCandidateReviewPayload extends IdentityPayload {
   candidateId: string;
   decision: "approve" | "reject" | "archive";
+}
+
+interface MainMemoryCandidateExtractPayload extends IdentityPayload {
+  requestId: string;
 }
 
 async function readAndNormalizePayload<T>(
@@ -284,6 +289,55 @@ export async function handleMainMemoryCandidateReview(
   }
 }
 
+export async function handleMainMemoryCandidateExtract(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeMainMemoryCandidateExtractPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const turn = runtime.getRuntimeStore().getTurn(payload.requestId);
+
+    if (!turn) {
+      throw new Error("长期记忆候选提炼请求指定的任务不存在。");
+    }
+
+    if (turn.status !== "completed") {
+      throw new Error("只能从已完成任务提炼长期记忆候选。");
+    }
+
+    const turnIdentity = runtime.getRuntimeStore().getChannelIdentity(turn.sourceChannel, turn.userId);
+    if (turnIdentity?.principalId !== identity.principalId) {
+      throw new Error("长期记忆候选提炼请求越过了 principal 边界。");
+    }
+
+    const requestRecord = restoreTaskRequestFromTurn(turn);
+    const resultRecord = restoreTaskResultFromTurn(turn);
+    const extracted = runtime.getPrincipalActorsService().suggestMainMemoryCandidatesFromTask({
+      principalId: identity.principalId,
+      request: requestRecord,
+      result: resultRecord,
+      ...(turn.sessionId ? { conversationId: turn.sessionId } : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      requestId: turn.requestId,
+      candidates: extracted.candidates,
+      updates: extracted.updates,
+    });
+  } catch (error) {
+    writeActorBoundaryError(response, error);
+  }
+}
+
 function normalizeIdentityPayload(value: unknown): IdentityPayload {
   if (!isRecord(value)) {
     throw new Error("身份请求缺少必要字段。");
@@ -424,6 +478,104 @@ function normalizeMainMemoryCandidateReviewPayload(value: unknown): MainMemoryCa
   };
 }
 
+function normalizeMainMemoryCandidateExtractPayload(value: unknown): MainMemoryCandidateExtractPayload {
+  if (!isRecord(value)) {
+    throw new Error("长期记忆候选提炼请求缺少必要字段。");
+  }
+
+  const identity = normalizeIdentityPayload(value);
+  const requestId = normalizeText(value.requestId);
+
+  if (!requestId) {
+    throw new Error("长期记忆候选提炼请求缺少必要字段。");
+  }
+
+  return {
+    ...identity,
+    requestId,
+  };
+}
+
+function restoreTaskRequestFromTurn(turn: {
+  requestId: string;
+  taskId: string;
+  sessionId?: string;
+  sourceChannel: string;
+  userId: string;
+  userDisplayName?: string;
+  goal: string;
+  inputText?: string;
+  historyContext?: string;
+  optionsJson?: string;
+  createdAt: string;
+}): TaskRequest {
+  const options = parseOptionalJsonObject(turn.optionsJson) as NonNullable<TaskRequest["options"]> | null;
+  const request: TaskRequest = {
+    requestId: turn.requestId,
+    taskId: turn.taskId,
+    sourceChannel: turn.sourceChannel as TaskRequest["sourceChannel"],
+    user: {
+      userId: turn.userId,
+      ...(turn.userDisplayName ? { displayName: turn.userDisplayName } : {}),
+    },
+    goal: turn.goal,
+    channelContext: {
+      ...(turn.sessionId ? { sessionId: turn.sessionId, channelSessionKey: turn.sessionId } : {}),
+    },
+    createdAt: turn.createdAt,
+  };
+
+  if (turn.inputText) {
+    request.inputText = turn.inputText;
+  }
+
+  if (turn.historyContext) {
+    request.historyContext = turn.historyContext;
+  }
+
+  if (options) {
+    request.options = options;
+  }
+
+  return request;
+}
+
+function restoreTaskResultFromTurn(turn: {
+  taskId: string;
+  requestId: string;
+  status: string;
+  summary?: string;
+  output?: string;
+  structuredOutputJson?: string;
+  completedAt?: string;
+  updatedAt: string;
+}): TaskResult {
+  const structuredOutput = parseOptionalJsonObject(turn.structuredOutputJson);
+
+  return {
+    taskId: turn.taskId,
+    requestId: turn.requestId,
+    status: turn.status as TaskResult["status"],
+    summary: turn.summary ?? "",
+    ...(turn.output ? { output: turn.output } : {}),
+    ...(structuredOutput ? { structuredOutput } : {}),
+    completedAt: turn.completedAt ?? turn.updatedAt,
+  };
+}
+
+function parseOptionalJsonObject(value: string | undefined): Record<string, unknown> | null {
+  if (!value?.trim()) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return typeof parsed === "object" && parsed !== null ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeText(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -444,5 +596,8 @@ function isActorBoundaryError(error: unknown): boolean {
     || message === "Actor task scope does not exist."
     || message === "Principal main memory candidate does not exist."
     || message === "Principal main memory candidate is archived."
-    || message === "Principal main memory candidate is no longer pending review.";
+    || message === "Principal main memory candidate is no longer pending review."
+    || message === "长期记忆候选提炼请求指定的任务不存在。"
+    || message === "只能从已完成任务提炼长期记忆候选。"
+    || message === "长期记忆候选提炼请求越过了 principal 边界。";
 }
