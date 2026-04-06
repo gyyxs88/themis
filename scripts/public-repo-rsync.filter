@@ -1,0 +1,32 @@
+# Themis 公开仓白名单。
+# 只把明确允许公开的项目结构导出到兄弟目录 B。
+
++ /.env.example
++ /.gitignore
++ /README.md
++ /package.json
++ /package-lock.json
++ /tsconfig.json
++ /themis
++ /scripts/
++ /scripts/export-public-repo.sh
++ /scripts/public-repo-rsync.filter
+
++ /apps/***
++ /src/***
+
++ /infra/
++ /infra/systemd/
++ /infra/systemd/themis-dev.service.example
+
++ /docs/
++ /docs/feishu/
++ /docs/feishu/README.md
++ /docs/feishu/themis-feishu-channel.md
++ /docs/product/
++ /docs/product/***
++ /docs/repository/
++ /docs/repository/github-safe-publish.md
++ /docs/repository/themis-systemd-dev-service.md
+
+- *

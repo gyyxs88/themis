@@ -32,10 +32,10 @@ infra/systemd/themis-dev.service.example
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp /home/leyi/projects/themis/infra/systemd/themis-dev.service.example ~/.config/systemd/user/themis-dev.service
+cp /path/to/themis/infra/systemd/themis-dev.service.example ~/.config/systemd/user/themis-dev.service
 ```
 
-如果你的仓库不在 `/home/leyi/projects/themis`，把上面的路径改成你自己的实际目录。
+把 `/path/to/themis` 改成你自己的实际仓库目录。
 
 ### 2. 按本机情况改 unit
 

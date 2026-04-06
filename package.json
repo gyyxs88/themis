@@ -12,7 +12,8 @@
     "build": "tsc",
     "dev:web": "tsx watch --clear-screen=false src/server/main.ts",
     "dev:web:once": "tsx src/server/main.ts",
-    "start:web": "node dist/server/main.js"
+    "start:web": "node dist/server/main.js",
+    "publish:public": "bash scripts/export-public-repo.sh"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
