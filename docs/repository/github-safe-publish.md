@@ -14,6 +14,11 @@ Themis 后续不再建议直接把日常开发目录推到公开 GitHub。
 - `A` 是真实开发现场。
 - `B` 是从 `A` 自动导出的公开镜像，不是手工维护的第二套项目。
 
+当前固定要求再补一条：
+
+- `A` 只保留本地 git 能力，不再配置公开 GitHub remote。
+- `B` 是唯一允许执行 `git push` 到 GitHub 的仓库。
+
 ## 为什么不能继续只靠 `.gitignore`
 
 `.gitignore` 只能挡住“还没被 Git 跟踪的本地文件”，挡不住下面这些风险：
@@ -121,7 +126,8 @@ bash scripts/export-public-repo.sh ../themis-public
 说明：
 
 - `../themis-public` 就是你的公开仓 `B`。
-- 首次使用前，先在 `B` 目录里单独 `git init` 并绑定 GitHub remote。
+- 如果公开 GitHub 仓已经存在，优先先把它 clone 到 `../themis-public`，再做白名单同步。
+- 如果公开 GitHub 仓还不存在，再在 `B` 目录里单独 `git init` 并绑定 GitHub remote。
 - 脚本只会把白名单中的内容同步到 `B`。
 - 脚本会保留 `B/.git/`，不会覆盖公开仓自己的 Git 元数据。
 - 脚本默认会 `--delete` 公开仓里那些“不再属于白名单”的旧文件，避免历史残留继续留在 `B`。
@@ -150,11 +156,12 @@ scripts/public-repo-rsync.filter
 ## 首次迁移建议
 
 1. 停止用开发仓 `A` 直接推 GitHub。
-2. 新建一个兄弟目录作为公开仓 `B`。
-3. 在 `B` 里初始化独立 Git 仓库并绑定 GitHub remote。
-4. 先执行一次 `--dry-run`，确认白名单范围。
-5. 执行正式导出。
-6. 在 `B` 里 review 一次差异后再提交、推送。
+2. 从 `A` 删除公开 GitHub remote，让 `A` 只保留本地 git。
+3. 新建一个兄弟目录作为公开仓 `B`。
+4. 如果公开 GitHub 仓已存在，先 clone 到 `B`；否则在 `B` 里初始化新仓并绑定 remote。
+5. 先执行一次 `--dry-run`，确认白名单范围。
+6. 执行正式导出。
+7. 在 `B` 里 review 一次差异后再提交、推送。
 
 ## 如果敏感内容已经推到 GitHub 过
 
@@ -173,3 +180,26 @@ scripts/public-repo-rsync.filter
 2. 新增文档是否真的适合公开。
 3. 模板文件里是否只有示例值，没有真实值。
 4. Git diff 里是否出现个人路径、账号、token、secret、cookie、内网地址。
+
+## 日常操作约束
+
+后续日常操作统一按下面执行：
+
+1. 只在 `A` 开发。
+2. 需要公开同步时，在 `A` 执行：
+
+```bash
+npm run publish:public -- ../themis-public
+```
+
+3. 然后切到 `B` 检查并推送：
+
+```bash
+cd ../themis-public
+git status
+git add -A
+git commit -m "..."
+git push origin main
+```
+
+不要再从 `A` 直接执行 `git push origin main`。
