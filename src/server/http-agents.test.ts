@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import type { CodexAppServerNotification } from "../core/codex-app-server.js";
 import type { AppServerTaskRuntimeSession } from "../core/app-server-task-runtime.js";
 import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
+import { addOpenAICompatibleProvider } from "../core/openai-compatible-provider.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createThemisHttpServer } from "./http-server.js";
 import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
@@ -17,6 +18,38 @@ interface TestServerContext {
   baseUrl: string;
   runtime: CodexTaskRuntime;
   runtimeStore: SqliteCodexSessionRegistry;
+}
+
+const OPENAI_COMPAT_ENV_KEYS = [
+  "THEMIS_OPENAI_COMPAT_BASE_URL",
+  "THEMIS_OPENAI_COMPAT_API_KEY",
+  "THEMIS_OPENAI_COMPAT_MODEL",
+  "THEMIS_OPENAI_COMPAT_NAME",
+  "THEMIS_OPENAI_COMPAT_ENDPOINT_CANDIDATES",
+  "THEMIS_OPENAI_COMPAT_WIRE_API",
+  "THEMIS_OPENAI_COMPAT_SUPPORTS_WEBSOCKETS",
+  "THEMIS_OPENAI_COMPAT_MODEL_CATALOG_JSON",
+] as const;
+
+function withClearedOpenAICompatEnv<T>(fn: () => T): T {
+  const savedEnv = new Map<string, string | undefined>();
+
+  for (const key of OPENAI_COMPAT_ENV_KEYS) {
+    savedEnv.set(key, process.env[key]);
+    delete process.env[key];
+  }
+
+  try {
+    return fn();
+  } finally {
+    for (const [key, value] of savedEnv) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 }
 
 function buildIdentityPayload(channelUserId: string): {
@@ -217,6 +250,102 @@ test("POST /api/agents/detail 在 agent 不存在时返回错误", async () => {
     };
     assert.equal(payload.error?.code, "INVALID_REQUEST");
     assert.equal(payload.error?.message, "Managed agent does not exist.");
+  });
+});
+
+test("POST /api/agents/detail 和 /execution-boundary/update 会返回并持久化默认执行边界", async () => {
+  await withClearedOpenAICompatEnv(async () => {
+    await withHttpServer(async ({ baseUrl, runtime, runtimeStore }) => {
+      const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+      runtimeStore.saveAuthAccount({
+        accountId: "acct-http",
+        label: "Web 账号",
+        codexHome: join(runtime.getWorkingDirectory(), "infra/local/codex-auth/acct-http"),
+        isActive: true,
+        createdAt: "2026-04-07T12:30:00.000Z",
+        updatedAt: "2026-04-07T12:30:00.000Z",
+      });
+      addOpenAICompatibleProvider(runtime.getWorkingDirectory(), {
+        id: "gateway-http",
+        name: "Gateway HTTP",
+        baseUrl: "https://gateway-http.example.com/v1",
+        apiKey: "sk-gateway-http",
+      }, runtimeStore);
+
+      const created = await createManagedAgent(baseUrl, authHeaders, "owner-managed-agent-boundary", {
+        departmentRole: "后端",
+        displayName: "后端·衡",
+      });
+      const detailResponse = await postJson(baseUrl, "/api/agents/detail", {
+        ...buildIdentityPayload("owner-managed-agent-boundary"),
+        agentId: created.agentId,
+      }, authHeaders);
+
+      assert.equal(detailResponse.status, 200);
+      const detailPayload = await detailResponse.json() as {
+        workspacePolicy?: { workspacePath?: string };
+        runtimeProfile?: { accessMode?: string; authAccountId?: string };
+        authAccounts?: Array<{ accountId?: string }>;
+        thirdPartyProviders?: Array<{ id?: string }>;
+      };
+      assert.equal(detailPayload.workspacePolicy?.workspacePath, runtime.getWorkingDirectory());
+      assert.equal(detailPayload.runtimeProfile?.accessMode, "auth");
+      assert.equal(detailPayload.runtimeProfile?.authAccountId, "acct-http");
+      assert.ok((detailPayload.authAccounts?.length ?? 0) >= 1);
+      assert.ok(detailPayload.authAccounts?.some((account) => account.accountId === "acct-http"));
+      assert.ok(detailPayload.thirdPartyProviders?.some((provider) => provider.id === "gateway-http"));
+
+      const workspacePath = join(runtime.getWorkingDirectory(), "workspace/http-backend");
+      const sharedPath = join(runtime.getWorkingDirectory(), "workspace/http-shared");
+      mkdirSync(workspacePath, { recursive: true });
+      mkdirSync(sharedPath, { recursive: true });
+      const updateResponse = await postJson(baseUrl, "/api/agents/execution-boundary/update", {
+        ...buildIdentityPayload("owner-managed-agent-boundary"),
+        agentId: created.agentId,
+        boundary: {
+          workspacePolicy: {
+            workspacePath,
+            additionalDirectories: [sharedPath],
+            allowNetworkAccess: false,
+          },
+          runtimeProfile: {
+            accessMode: "third-party",
+            thirdPartyProviderId: "gateway-http",
+            model: "gpt-5.4-mini",
+            reasoning: "high",
+            memoryMode: "confirm",
+            sandboxMode: "danger-full-access",
+            approvalPolicy: "on-request",
+            webSearchMode: "disabled",
+            networkAccessEnabled: false,
+          },
+        },
+      }, authHeaders);
+
+      assert.equal(updateResponse.status, 200);
+      const updatePayload = await updateResponse.json() as {
+        workspacePolicy?: { workspacePath?: string; additionalDirectories?: string[]; allowNetworkAccess?: boolean };
+        runtimeProfile?: {
+          accessMode?: string;
+          thirdPartyProviderId?: string;
+          model?: string;
+          sandboxMode?: string;
+          approvalPolicy?: string;
+          webSearchMode?: string;
+          networkAccessEnabled?: boolean;
+        };
+      };
+      assert.equal(updatePayload.workspacePolicy?.workspacePath, workspacePath);
+      assert.deepEqual(updatePayload.workspacePolicy?.additionalDirectories, [sharedPath]);
+      assert.equal(updatePayload.workspacePolicy?.allowNetworkAccess, false);
+      assert.equal(updatePayload.runtimeProfile?.accessMode, "third-party");
+      assert.equal(updatePayload.runtimeProfile?.thirdPartyProviderId, "gateway-http");
+      assert.equal(updatePayload.runtimeProfile?.model, "gpt-5.4-mini");
+      assert.equal(updatePayload.runtimeProfile?.sandboxMode, "danger-full-access");
+      assert.equal(updatePayload.runtimeProfile?.approvalPolicy, "on-request");
+      assert.equal(updatePayload.runtimeProfile?.webSearchMode, "disabled");
+      assert.equal(updatePayload.runtimeProfile?.networkAccessEnabled, false);
+    });
   });
 });
 

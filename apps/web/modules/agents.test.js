@@ -613,6 +613,122 @@ test("saveSpawnPolicy 会提交自动创建护栏并刷新列表", async () => {
   }
 });
 
+test("saveExecutionBoundary 会提交当前 draft 并刷新选中 agent 的执行边界", async () => {
+  const state = createDefaultAgentsState();
+  state.selectedAgentId = "agent-backend";
+  state.availableAuthAccounts = [{ accountId: "acct-1", label: "默认账号" }];
+  state.availableThirdPartyProviders = [{ id: "gateway-a", name: "Gateway A" }];
+  state.executionBoundaryDraft = {
+    workspacePath: " /workspace/backend ",
+    additionalDirectoriesText: "/workspace/shared\n/workspace/cache",
+    allowNetworkAccess: false,
+    accessMode: "third-party",
+    authAccountId: "",
+    thirdPartyProviderId: "gateway-a",
+    model: " gpt-5.4-mini ",
+    reasoning: "high",
+    memoryMode: "confirm",
+    sandboxMode: "danger-full-access",
+    approvalPolicy: "on-request",
+    webSearchMode: "disabled",
+    networkAccessEnabled: false,
+  };
+  const app = createAppStub(state);
+  const controller = createAgentsController(app);
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+
+  try {
+    globalThis.fetch = async (url, init = {}) => {
+      calls.push({
+        url,
+        method: init.method ?? "GET",
+        body: JSON.parse(init.body),
+      });
+
+      if (url === "/api/agents/execution-boundary/update") {
+        return jsonResponse({ ok: true });
+      }
+
+      if (url === "/api/agents/detail") {
+        return jsonResponse({
+          organization: { organizationId: "org-1", displayName: "老板团队" },
+          principal: { principalId: "principal-backend" },
+          agent: {
+            agentId: "agent-backend",
+            principalId: "principal-backend",
+            displayName: "后端·衡",
+            departmentRole: "后端",
+            mission: "负责服务端。",
+            status: "active",
+          },
+          workspacePolicy: {
+            policyId: "policy-1",
+            workspacePath: "/workspace/backend",
+            additionalDirectories: ["/workspace/shared", "/workspace/cache"],
+            allowNetworkAccess: false,
+          },
+          runtimeProfile: {
+            profileId: "profile-1",
+            accessMode: "third-party",
+            thirdPartyProviderId: "gateway-a",
+            model: "gpt-5.4-mini",
+            reasoning: "high",
+            memoryMode: "confirm",
+            sandboxMode: "danger-full-access",
+            approvalPolicy: "on-request",
+            webSearchMode: "disabled",
+            networkAccessEnabled: false,
+          },
+          authAccounts: [{ accountId: "acct-1", label: "默认账号" }],
+          thirdPartyProviders: [{ id: "gateway-a", name: "Gateway A" }],
+        });
+      }
+
+      if (url === "/api/agents/work-items/list") {
+        return jsonResponse({ workItems: [] });
+      }
+
+      if (url === "/api/agents/mailbox/list") {
+        return jsonResponse({ items: [] });
+      }
+
+      if (url === "/api/agents/handoffs/list") {
+        return jsonResponse({ handoffs: [], timeline: [] });
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    };
+
+    await controller.saveExecutionBoundary();
+
+    assert.equal(calls[0].url, "/api/agents/execution-boundary/update");
+    assert.deepEqual(calls[0].body.boundary.workspacePolicy, {
+      workspacePath: "/workspace/backend",
+      additionalDirectories: ["/workspace/shared", "/workspace/cache"],
+      allowNetworkAccess: false,
+    });
+    assert.deepEqual(calls[0].body.boundary.runtimeProfile, {
+      accessMode: "third-party",
+      thirdPartyProviderId: "gateway-a",
+      model: "gpt-5.4-mini",
+      reasoning: "high",
+      memoryMode: "confirm",
+      sandboxMode: "danger-full-access",
+      approvalPolicy: "on-request",
+      webSearchMode: "disabled",
+      networkAccessEnabled: false,
+    });
+    assert.equal(app.runtime.agents.noticeMessage, "已更新当前 agent 的默认执行边界。");
+    assert.equal(app.runtime.agents.selectedWorkspacePolicy.workspacePath, "/workspace/backend");
+    assert.equal(app.runtime.agents.selectedRuntimeProfile.thirdPartyProviderId, "gateway-a");
+    assert.equal(app.runtime.agents.executionBoundaryDraft.workspacePath, "/workspace/backend");
+    assert.equal(app.runtime.agents.executionBoundaryDraft.accessMode, "third-party");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("ignoreSpawnSuggestion 与 restoreSpawnSuggestion 会提交治理动作并刷新建议列表", async () => {
   const state = createDefaultAgentsState();
   state.organizations = [{ organizationId: "org-1", displayName: "老板团队" }];

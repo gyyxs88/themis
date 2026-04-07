@@ -10,6 +10,7 @@ import type {
   CodexRuntimeCatalog,
 } from "./codex-app-server.js";
 import type {
+  AppServerSessionFactoryOptions,
   AppServerTaskRuntimeOptions,
   AppServerTaskRuntimeSession,
 } from "./app-server-task-runtime.js";
@@ -17,6 +18,7 @@ import {
   APP_SERVER_TASK_CONFIG_OVERRIDES,
   AppServerTaskRuntime,
 } from "./app-server-task-runtime.js";
+import { addOpenAICompatibleProvider } from "./openai-compatible-provider.js";
 
 interface SessionDoubleState {
   initialized: number;
@@ -41,6 +43,38 @@ interface SessionDoubleState {
   serverRequestHandler: ((request: { id: string | number; method: string; params?: unknown }) => void) | null;
   respondedServerRequests: Array<{ id: string | number; result: unknown }>;
   rejectedServerRequests: Array<{ id: string | number; message: string }>;
+}
+
+const OPENAI_COMPAT_ENV_KEYS = [
+  "THEMIS_OPENAI_COMPAT_BASE_URL",
+  "THEMIS_OPENAI_COMPAT_API_KEY",
+  "THEMIS_OPENAI_COMPAT_MODEL",
+  "THEMIS_OPENAI_COMPAT_NAME",
+  "THEMIS_OPENAI_COMPAT_ENDPOINT_CANDIDATES",
+  "THEMIS_OPENAI_COMPAT_WIRE_API",
+  "THEMIS_OPENAI_COMPAT_SUPPORTS_WEBSOCKETS",
+  "THEMIS_OPENAI_COMPAT_MODEL_CATALOG_JSON",
+] as const;
+
+function withClearedOpenAICompatEnv<T>(fn: () => T): T {
+  const savedEnv = new Map<string, string | undefined>();
+
+  for (const key of OPENAI_COMPAT_ENV_KEYS) {
+    savedEnv.set(key, process.env[key]);
+    delete process.env[key];
+  }
+
+  try {
+    return fn();
+  } finally {
+    for (const [key, value] of savedEnv) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 }
 
 function createRuntimeFixture(overrides: {
@@ -643,6 +677,113 @@ test("AppServerTaskRuntime 会把模型和关键运行参数透传给 thread/sta
   } finally {
     fixture.cleanup();
   }
+});
+
+test("AppServerTaskRuntime 在 auth 模式下会把账号隔离环境传给 sessionFactory", async () => {
+  const { state, sessionFactory: baseSessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-auth-boundary-1",
+  });
+  const delegateSessionFactory = baseSessionFactory as NonNullable<AppServerTaskRuntimeOptions["sessionFactory"]>;
+  const factoryOptionsHistory: AppServerSessionFactoryOptions[] = [];
+  const fixture = createRuntimeFixture({
+    sessionFactory: async (options) => {
+      factoryOptionsHistory.push(options ?? {});
+      return await delegateSessionFactory();
+    },
+  });
+
+  try {
+    fixture.runtimeStore.saveAuthAccount({
+      accountId: "acct-runtime",
+      label: "运行账号",
+      codexHome: join(fixture.root, "infra/local/codex-auth/acct-runtime"),
+      isActive: true,
+      createdAt: "2026-04-07T12:20:00.000Z",
+      updatedAt: "2026-04-07T12:20:00.000Z",
+    });
+
+    await fixture.runtime.runTask({
+      requestId: "req-app-auth-boundary-1",
+      taskId: "task-app-auth-boundary-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "hello",
+      options: {
+        accessMode: "auth",
+        authAccountId: "acct-runtime",
+      },
+      channelContext: { sessionId: "web-session-auth-boundary-1" },
+      createdAt: "2026-04-07T12:21:00.000Z",
+    });
+
+    assert.equal(state.started.length, 1);
+    assert.equal(factoryOptionsHistory.length, 1);
+    assert.equal(
+      factoryOptionsHistory[0]?.env?.CODEX_HOME,
+      join(fixture.root, "infra/local/codex-auth/acct-runtime"),
+    );
+    assert.equal(factoryOptionsHistory[0]?.configOverrides?.cli_auth_credentials_store, "file");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 在 third-party 模式下会把 provider 隔离配置传给 sessionFactory", async () => {
+  await withClearedOpenAICompatEnv(async () => {
+    const { state, sessionFactory: baseSessionFactory } = createSessionFactory({
+      startThreadId: "thread-app-provider-boundary-1",
+    });
+    const delegateSessionFactory = baseSessionFactory as NonNullable<AppServerTaskRuntimeOptions["sessionFactory"]>;
+    const factoryOptionsHistory: AppServerSessionFactoryOptions[] = [];
+    const fixture = createRuntimeFixture({
+      sessionFactory: async (options) => {
+        factoryOptionsHistory.push(options ?? {});
+        return await delegateSessionFactory();
+      },
+    });
+
+    try {
+      addOpenAICompatibleProvider(fixture.root, {
+        id: "gateway-a",
+        name: "Gateway A",
+        baseUrl: "https://gateway.example.com/v1",
+        apiKey: "sk-gateway-a",
+        wireApi: "responses",
+        supportsWebsockets: true,
+      }, fixture.runtimeStore);
+
+      await fixture.runtime.runTask({
+        requestId: "req-app-provider-boundary-1",
+        taskId: "task-app-provider-boundary-1",
+        sourceChannel: "web",
+        user: { userId: "webui" },
+        goal: "hello",
+        options: {
+          accessMode: "third-party",
+          thirdPartyProviderId: "gateway-a",
+        },
+        channelContext: { sessionId: "web-session-provider-boundary-1" },
+        createdAt: "2026-04-07T12:22:00.000Z",
+      });
+
+      assert.equal(state.started.length, 1);
+      assert.equal(factoryOptionsHistory.length, 1);
+      assert.equal(factoryOptionsHistory[0]?.env?.THEMIS_OPENAI_COMPAT_API_KEY, "sk-gateway-a");
+      assert.equal(factoryOptionsHistory[0]?.env?.CODEX_HOME, undefined);
+      assert.equal(factoryOptionsHistory[0]?.configOverrides?.model_provider, "gateway-a");
+      assert.deepEqual(factoryOptionsHistory[0]?.configOverrides?.model_providers, {
+        "gateway-a": {
+          name: "Gateway A",
+          base_url: "https://gateway.example.com/v1",
+          wire_api: "responses",
+          env_key: "THEMIS_OPENAI_COMPAT_API_KEY",
+          supports_websockets: true,
+        },
+      });
+    } finally {
+      fixture.cleanup();
+    }
+  });
 });
 
 test("AppServerTaskRuntime 会把 document envelope 的路径 fallback 持久化到 turn input", async () => {

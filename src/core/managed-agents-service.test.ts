@@ -5,15 +5,48 @@ import { join } from "node:path";
 import test from "node:test";
 import Database from "better-sqlite3";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
+import { addOpenAICompatibleProvider } from "./openai-compatible-provider.js";
 import { ManagedAgentsService } from "./managed-agents-service.js";
 
 function createServiceContext() {
   const root = mkdtempSync(join(tmpdir(), "themis-managed-agents-service-"));
   const databaseFile = join(root, "infra/local/themis.db");
   const registry = new SqliteCodexSessionRegistry({ databaseFile });
-  const service = new ManagedAgentsService({ registry });
+  const service = new ManagedAgentsService({ registry, workingDirectory: root });
 
   return { root, databaseFile, registry, service };
+}
+
+const OPENAI_COMPAT_ENV_KEYS = [
+  "THEMIS_OPENAI_COMPAT_BASE_URL",
+  "THEMIS_OPENAI_COMPAT_API_KEY",
+  "THEMIS_OPENAI_COMPAT_MODEL",
+  "THEMIS_OPENAI_COMPAT_NAME",
+  "THEMIS_OPENAI_COMPAT_ENDPOINT_CANDIDATES",
+  "THEMIS_OPENAI_COMPAT_WIRE_API",
+  "THEMIS_OPENAI_COMPAT_SUPPORTS_WEBSOCKETS",
+  "THEMIS_OPENAI_COMPAT_MODEL_CATALOG_JSON",
+] as const;
+
+function withClearedOpenAICompatEnv<T>(fn: () => T): T {
+  const savedEnv = new Map<string, string | undefined>();
+
+  for (const key of OPENAI_COMPAT_ENV_KEYS) {
+    savedEnv.set(key, process.env[key]);
+    delete process.env[key];
+  }
+
+  try {
+    return fn();
+  } finally {
+    for (const [key, value] of savedEnv) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 }
 
 test("ManagedAgentsService 会为 principal 自动补默认 organization，并创建 managed principal", () => {
@@ -130,6 +163,131 @@ test("ManagedAgentsService 支持 pause、resume、archive 三类 lifecycle 治�
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("ManagedAgentsService 会为 agent 自动补齐默认执行边界，并绑定当前活跃 auth account", () => {
+  const { root, registry, service } = createServiceContext();
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "Owner",
+      createdAt: "2026-04-07T11:00:00.000Z",
+      updatedAt: "2026-04-07T11:00:00.000Z",
+    });
+    registry.saveAuthAccount({
+      accountId: "acct-default",
+      label: "默认账号",
+      codexHome: join(root, "infra/local/codex-auth/acct-default"),
+      isActive: true,
+      createdAt: "2026-04-07T11:00:30.000Z",
+      updatedAt: "2026-04-07T11:00:30.000Z",
+    });
+
+    const created = service.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "后端·衡",
+      departmentRole: "后端",
+      now: "2026-04-07T11:01:00.000Z",
+    });
+    const boundary = service.getManagedAgentExecutionBoundary("principal-owner", created.agent.agentId);
+
+    assert.ok(boundary);
+    assert.equal(boundary?.agent.defaultWorkspacePolicyId, boundary?.workspacePolicy.policyId);
+    assert.equal(boundary?.agent.defaultRuntimeProfileId, boundary?.runtimeProfile.profileId);
+    assert.equal(boundary?.workspacePolicy.workspacePath, root);
+    assert.deepEqual(boundary?.workspacePolicy.additionalDirectories, []);
+    assert.equal(boundary?.workspacePolicy.allowNetworkAccess, true);
+    assert.equal(boundary?.runtimeProfile.accessMode, "auth");
+    assert.equal(boundary?.runtimeProfile.authAccountId, "acct-default");
+    assert.equal(boundary?.runtimeProfile.sandboxMode, "workspace-write");
+    assert.equal(boundary?.runtimeProfile.approvalPolicy, "never");
+    assert.equal(boundary?.runtimeProfile.webSearchMode, "live");
+    assert.equal(boundary?.runtimeProfile.networkAccessEnabled, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ManagedAgentsService 支持持久化更新默认执行边界", () => {
+  withClearedOpenAICompatEnv(() => {
+    const { root, registry, service } = createServiceContext();
+
+    try {
+      registry.savePrincipal({
+        principalId: "principal-owner",
+        displayName: "Owner",
+        createdAt: "2026-04-07T11:10:00.000Z",
+        updatedAt: "2026-04-07T11:10:00.000Z",
+      });
+      registry.saveAuthAccount({
+        accountId: "acct-backup",
+        label: "备用账号",
+        codexHome: join(root, "infra/local/codex-auth/acct-backup"),
+        isActive: true,
+        createdAt: "2026-04-07T11:10:10.000Z",
+        updatedAt: "2026-04-07T11:10:10.000Z",
+      });
+      addOpenAICompatibleProvider(root, {
+        id: "gateway-a",
+        name: "Gateway A",
+        baseUrl: "https://gateway.example.com/v1",
+        apiKey: "sk-gateway",
+      }, registry);
+
+      const created = service.createManagedAgent({
+        ownerPrincipalId: "principal-owner",
+        displayName: "运维·曜",
+        departmentRole: "运维",
+        now: "2026-04-07T11:11:00.000Z",
+      });
+      const workspacePath = join(root, "workspace/ops");
+      const sharedPath = join(root, "workspace/shared");
+      mkdirSync(workspacePath, { recursive: true });
+      mkdirSync(sharedPath, { recursive: true });
+
+      const updated = service.updateManagedAgentExecutionBoundary({
+        ownerPrincipalId: "principal-owner",
+        agentId: created.agent.agentId,
+        workspacePolicy: {
+          workspacePath,
+          additionalDirectories: [sharedPath, workspacePath, sharedPath],
+          allowNetworkAccess: false,
+        },
+        runtimeProfile: {
+          accessMode: "third-party",
+          thirdPartyProviderId: "gateway-a",
+          model: "gpt-5.4-mini",
+          reasoning: "high",
+          memoryMode: "confirm",
+          sandboxMode: "danger-full-access",
+          approvalPolicy: "on-request",
+          webSearchMode: "disabled",
+          networkAccessEnabled: false,
+        },
+        now: "2026-04-07T11:12:00.000Z",
+      });
+      const reloaded = service.getManagedAgentExecutionBoundary("principal-owner", created.agent.agentId);
+
+      assert.equal(updated.workspacePolicy.workspacePath, workspacePath);
+      assert.deepEqual(updated.workspacePolicy.additionalDirectories, [sharedPath]);
+      assert.equal(updated.workspacePolicy.allowNetworkAccess, false);
+      assert.equal(updated.runtimeProfile.accessMode, "third-party");
+      assert.equal(updated.runtimeProfile.thirdPartyProviderId, "gateway-a");
+      assert.equal(updated.runtimeProfile.authAccountId, undefined);
+      assert.equal(updated.runtimeProfile.model, "gpt-5.4-mini");
+      assert.equal(updated.runtimeProfile.reasoning, "high");
+      assert.equal(updated.runtimeProfile.memoryMode, "confirm");
+      assert.equal(updated.runtimeProfile.sandboxMode, "danger-full-access");
+      assert.equal(updated.runtimeProfile.approvalPolicy, "on-request");
+      assert.equal(updated.runtimeProfile.webSearchMode, "disabled");
+      assert.equal(updated.runtimeProfile.networkAccessEnabled, false);
+      assert.equal(reloaded?.workspacePolicy.workspacePath, workspacePath);
+      assert.equal(reloaded?.runtimeProfile.thirdPartyProviderId, "gateway-a");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 test("ManagedAgentsService 会基于当前负载给出自动创建建议，并预生成默认命名", () => {

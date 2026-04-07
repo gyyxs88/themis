@@ -24,9 +24,11 @@ import {
   AGENT_MAILBOX_STATUSES,
   AGENT_MESSAGE_TYPES,
   AGENT_SPAWN_SUGGESTION_STATES,
+  APPROVAL_POLICIES,
   ACTOR_RUNTIME_MEMORY_KINDS,
   ACTOR_RUNTIME_MEMORY_STATUSES,
   ACTOR_TASK_SCOPE_STATUSES,
+  MEMORY_MODES,
   MANAGED_AGENT_AUTONOMY_LEVELS,
   MANAGED_AGENT_CREATION_MODES,
   MANAGED_AGENT_EXPOSURE_POLICIES,
@@ -41,6 +43,10 @@ import {
   PRINCIPAL_MAIN_MEMORY_KINDS,
   PRINCIPAL_MAIN_MEMORY_SOURCE_TYPES,
   PRINCIPAL_MAIN_MEMORY_STATUSES,
+  REASONING_LEVELS,
+  SANDBOX_MODES,
+  TASK_ACCESS_MODES,
+  WEB_SEARCH_MODES,
 } from "../types/index.js";
 import type {
   AgentRunStatus,
@@ -48,17 +54,21 @@ import type {
   AgentMailboxStatus,
   AgentMessageType,
   AgentSpawnSuggestionState,
+  ApprovalPolicy,
   ManagedAgentBootstrapProfile,
   ActorRuntimeMemoryKind,
   ActorRuntimeMemoryStatus,
   ActorTaskScopeStatus,
+  MemoryMode,
   ManagedAgentAutonomyLevel,
   ManagedAgentCreationMode,
   ManagedAgentExposurePolicy,
   ManagedAgentPriority,
+  ManagedAgentRuntimeProfileSnapshot,
   ManagedAgentStatus,
   ManagedAgentWorkItemSourceType,
   ManagedAgentWorkItemStatus,
+  ManagedAgentWorkspacePolicySnapshot,
   PrincipalTaskSettings,
   PrincipalKind,
   PrincipalPersonaOnboardingState,
@@ -68,6 +78,8 @@ import type {
   PrincipalMainMemoryKind,
   PrincipalMainMemorySourceType,
   PrincipalMainMemoryStatus,
+  ReasoningLevel,
+  SandboxMode,
   SessionTaskSettings,
   StoredAgentMailboxEntryRecord,
   StoredAgentHandoffRecord,
@@ -77,13 +89,17 @@ import type {
   StoredAgentMessageRecord,
   StoredAgentRunRecord,
   StoredAgentWorkItemRecord,
+  StoredAgentRuntimeProfileRecord,
+  StoredAgentWorkspacePolicyRecord,
   StoredManagedAgentRecord,
   StoredOrganizationRecord,
+  TaskAccessMode,
   TaskEvent,
   TaskInputAsset,
   TaskInputEnvelope,
   TaskRequest,
   TaskResult,
+  WebSearchMode,
   StoredActorRuntimeMemoryRecord,
   StoredActorTaskScopeRecord,
   StoredPrincipalActorRecord,
@@ -91,7 +107,7 @@ import type {
   StoredPrincipalMainMemoryRecord,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 25;
+const DATABASE_SCHEMA_VERSION = 26;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -613,8 +629,32 @@ interface ManagedAgentRow {
   autonomy_level: string;
   creation_mode: string;
   exposure_policy: string;
+  default_workspace_policy_id: string | null;
+  default_runtime_profile_id: string | null;
   bootstrap_profile_json: string | null;
   bootstrapped_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface AgentWorkspacePolicyRow {
+  policy_id: string;
+  organization_id: string;
+  owner_agent_id: string;
+  display_name: string;
+  workspace_path: string;
+  additional_directories_json: string | null;
+  allow_network_access: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface AgentRuntimeProfileRow {
+  profile_id: string;
+  organization_id: string;
+  owner_agent_id: string;
+  display_name: string;
+  snapshot_json: string;
   created_at: string;
   updated_at: string;
 }
@@ -2132,11 +2172,13 @@ export class SqliteCodexSessionRegistry {
             display_name,
             slug,
             department_role,
-            mission,
+          mission,
           status,
           autonomy_level,
           creation_mode,
           exposure_policy,
+          default_workspace_policy_id,
+          default_runtime_profile_id,
           bootstrap_profile_json,
           bootstrapped_at,
           created_at,
@@ -2170,14 +2212,16 @@ export class SqliteCodexSessionRegistry {
             slug,
             department_role,
             mission,
-            status,
-            autonomy_level,
-            creation_mode,
-            exposure_policy,
-            bootstrap_profile_json,
-            bootstrapped_at,
-            created_at,
-            updated_at
+          status,
+          autonomy_level,
+          creation_mode,
+          exposure_policy,
+          default_workspace_policy_id,
+          default_runtime_profile_id,
+          bootstrap_profile_json,
+          bootstrapped_at,
+          created_at,
+          updated_at
           FROM themis_managed_agents
           WHERE principal_id = ?
         `,
@@ -2211,6 +2255,8 @@ export class SqliteCodexSessionRegistry {
             autonomy_level,
             creation_mode,
             exposure_policy,
+            default_workspace_policy_id,
+            default_runtime_profile_id,
             bootstrap_profile_json,
             bootstrapped_at,
             created_at,
@@ -2249,6 +2295,8 @@ export class SqliteCodexSessionRegistry {
             agent.autonomy_level,
             agent.creation_mode,
             agent.exposure_policy,
+            agent.default_workspace_policy_id,
+            agent.default_runtime_profile_id,
             agent.bootstrap_profile_json,
             agent.bootstrapped_at,
             agent.created_at,
@@ -2279,6 +2327,8 @@ export class SqliteCodexSessionRegistry {
     const autonomyLevel = normalizeText(record.autonomyLevel);
     const creationMode = normalizeText(record.creationMode);
     const exposurePolicy = normalizeText(record.exposurePolicy);
+    const defaultWorkspacePolicyId = normalizeText(record.defaultWorkspacePolicyId);
+    const defaultRuntimeProfileId = normalizeText(record.defaultRuntimeProfileId);
     const bootstrapProfile = normalizeManagedAgentBootstrapProfile(record.bootstrapProfile);
     const bootstrappedAt = normalizeText(record.bootstrappedAt);
 
@@ -2334,6 +2384,8 @@ export class SqliteCodexSessionRegistry {
             autonomy_level,
             creation_mode,
             exposure_policy,
+            default_workspace_policy_id,
+            default_runtime_profile_id,
             bootstrap_profile_json,
             bootstrapped_at,
             created_at,
@@ -2352,6 +2404,8 @@ export class SqliteCodexSessionRegistry {
             @autonomy_level,
             @creation_mode,
             @exposure_policy,
+            @default_workspace_policy_id,
+            @default_runtime_profile_id,
             @bootstrap_profile_json,
             @bootstrapped_at,
             @created_at,
@@ -2367,6 +2421,8 @@ export class SqliteCodexSessionRegistry {
             autonomy_level = excluded.autonomy_level,
             creation_mode = excluded.creation_mode,
             exposure_policy = excluded.exposure_policy,
+            default_workspace_policy_id = excluded.default_workspace_policy_id,
+            default_runtime_profile_id = excluded.default_runtime_profile_id,
             bootstrap_profile_json = excluded.bootstrap_profile_json,
             bootstrapped_at = excluded.bootstrapped_at,
             updated_at = excluded.updated_at
@@ -2387,6 +2443,8 @@ export class SqliteCodexSessionRegistry {
         autonomy_level: autonomyLevel,
         creation_mode: creationMode,
         exposure_policy: exposurePolicy,
+        default_workspace_policy_id: defaultWorkspacePolicyId ?? null,
+        default_runtime_profile_id: defaultRuntimeProfileId ?? null,
         bootstrap_profile_json: bootstrapProfile ? JSON.stringify(bootstrapProfile) : null,
         bootstrapped_at: bootstrappedAt ?? null,
         created_at: record.createdAt,
@@ -2395,6 +2453,235 @@ export class SqliteCodexSessionRegistry {
 
     if (writeResult.changes === 0) {
       throw new Error("Managed agent write did not apply.");
+    }
+  }
+
+  getAgentWorkspacePolicy(policyId: string): StoredAgentWorkspacePolicyRecord | null {
+    const normalizedPolicyId = policyId.trim();
+
+    if (!normalizedPolicyId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            policy_id,
+            organization_id,
+            owner_agent_id,
+            display_name,
+            workspace_path,
+            additional_directories_json,
+            allow_network_access,
+            created_at,
+            updated_at
+          FROM themis_agent_workspace_policies
+          WHERE policy_id = ?
+        `,
+      )
+      .get(normalizedPolicyId) as AgentWorkspacePolicyRow | undefined;
+
+    return row ? mapAgentWorkspacePolicyRow(row) : null;
+  }
+
+  getAgentWorkspacePolicyByOwnerAgent(ownerAgentId: string): StoredAgentWorkspacePolicyRecord | null {
+    const normalizedOwnerAgentId = ownerAgentId.trim();
+
+    if (!normalizedOwnerAgentId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            policy_id,
+            organization_id,
+            owner_agent_id,
+            display_name,
+            workspace_path,
+            additional_directories_json,
+            allow_network_access,
+            created_at,
+            updated_at
+          FROM themis_agent_workspace_policies
+          WHERE owner_agent_id = ?
+        `,
+      )
+      .get(normalizedOwnerAgentId) as AgentWorkspacePolicyRow | undefined;
+
+    return row ? mapAgentWorkspacePolicyRow(row) : null;
+  }
+
+  saveAgentWorkspacePolicy(record: StoredAgentWorkspacePolicyRecord): void {
+    const policyId = record.policyId.trim();
+    const organizationId = record.organizationId.trim();
+    const ownerAgentId = record.ownerAgentId.trim();
+    const displayName = record.displayName.trim();
+    const workspacePath = record.workspacePath.trim();
+    const additionalDirectories = normalizeStringArray(record.additionalDirectories);
+
+    if (!policyId || !organizationId || !ownerAgentId || !displayName || !workspacePath) {
+      throw new Error("Agent workspace policy record is incomplete.");
+    }
+
+    const writeResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_agent_workspace_policies (
+            policy_id,
+            organization_id,
+            owner_agent_id,
+            display_name,
+            workspace_path,
+            additional_directories_json,
+            allow_network_access,
+            created_at,
+            updated_at
+          ) VALUES (
+            @policy_id,
+            @organization_id,
+            @owner_agent_id,
+            @display_name,
+            @workspace_path,
+            @additional_directories_json,
+            @allow_network_access,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(policy_id) DO UPDATE SET
+            organization_id = excluded.organization_id,
+            owner_agent_id = excluded.owner_agent_id,
+            display_name = excluded.display_name,
+            workspace_path = excluded.workspace_path,
+            additional_directories_json = excluded.additional_directories_json,
+            allow_network_access = excluded.allow_network_access,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        policy_id: policyId,
+        organization_id: organizationId,
+        owner_agent_id: ownerAgentId,
+        display_name: displayName,
+        workspace_path: workspacePath,
+        additional_directories_json: JSON.stringify(additionalDirectories),
+        allow_network_access: record.allowNetworkAccess ? 1 : 0,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+
+    if (writeResult.changes === 0) {
+      throw new Error("Agent workspace policy write did not apply.");
+    }
+  }
+
+  getAgentRuntimeProfile(profileId: string): StoredAgentRuntimeProfileRecord | null {
+    const normalizedProfileId = profileId.trim();
+
+    if (!normalizedProfileId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            profile_id,
+            organization_id,
+            owner_agent_id,
+            display_name,
+            snapshot_json,
+            created_at,
+            updated_at
+          FROM themis_agent_runtime_profiles
+          WHERE profile_id = ?
+        `,
+      )
+      .get(normalizedProfileId) as AgentRuntimeProfileRow | undefined;
+
+    return row ? mapAgentRuntimeProfileRow(row) : null;
+  }
+
+  getAgentRuntimeProfileByOwnerAgent(ownerAgentId: string): StoredAgentRuntimeProfileRecord | null {
+    const normalizedOwnerAgentId = ownerAgentId.trim();
+
+    if (!normalizedOwnerAgentId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            profile_id,
+            organization_id,
+            owner_agent_id,
+            display_name,
+            snapshot_json,
+            created_at,
+            updated_at
+          FROM themis_agent_runtime_profiles
+          WHERE owner_agent_id = ?
+        `,
+      )
+      .get(normalizedOwnerAgentId) as AgentRuntimeProfileRow | undefined;
+
+    return row ? mapAgentRuntimeProfileRow(row) : null;
+  }
+
+  saveAgentRuntimeProfile(record: StoredAgentRuntimeProfileRecord): void {
+    const profileId = record.profileId.trim();
+    const organizationId = record.organizationId.trim();
+    const ownerAgentId = record.ownerAgentId.trim();
+    const displayName = record.displayName.trim();
+    const snapshot = normalizeManagedAgentRuntimeProfileSnapshot(record) ?? {};
+
+    if (!profileId || !organizationId || !ownerAgentId || !displayName) {
+      throw new Error("Agent runtime profile record is incomplete.");
+    }
+
+    const writeResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_agent_runtime_profiles (
+            profile_id,
+            organization_id,
+            owner_agent_id,
+            display_name,
+            snapshot_json,
+            created_at,
+            updated_at
+          ) VALUES (
+            @profile_id,
+            @organization_id,
+            @owner_agent_id,
+            @display_name,
+            @snapshot_json,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(profile_id) DO UPDATE SET
+            organization_id = excluded.organization_id,
+            owner_agent_id = excluded.owner_agent_id,
+            display_name = excluded.display_name,
+            snapshot_json = excluded.snapshot_json,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        profile_id: profileId,
+        organization_id: organizationId,
+        owner_agent_id: ownerAgentId,
+        display_name: displayName,
+        snapshot_json: JSON.stringify(snapshot),
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+
+    if (writeResult.changes === 0) {
+      throw new Error("Agent runtime profile write did not apply.");
     }
   }
 
@@ -7700,6 +7987,8 @@ export class SqliteCodexSessionRegistry {
         autonomy_level TEXT NOT NULL,
         creation_mode TEXT NOT NULL,
         exposure_policy TEXT NOT NULL,
+        default_workspace_policy_id TEXT,
+        default_runtime_profile_id TEXT,
         bootstrap_profile_json TEXT,
         bootstrapped_at TEXT,
         created_at TEXT NOT NULL,
@@ -7719,6 +8008,44 @@ export class SqliteCodexSessionRegistry {
 
       CREATE INDEX IF NOT EXISTS themis_managed_agents_status_idx
       ON themis_managed_agents(organization_id, status, updated_at DESC, agent_id ASC);
+
+      CREATE TABLE IF NOT EXISTS themis_agent_workspace_policies (
+        policy_id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        owner_agent_id TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL,
+        workspace_path TEXT NOT NULL,
+        additional_directories_json TEXT NOT NULL DEFAULT '[]',
+        allow_network_access INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (organization_id) REFERENCES themis_organizations(organization_id) ON DELETE CASCADE,
+        FOREIGN KEY (owner_agent_id) REFERENCES themis_managed_agents(agent_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_agent_workspace_policies_org_idx
+      ON themis_agent_workspace_policies(organization_id, updated_at DESC, policy_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_agent_workspace_policies_owner_idx
+      ON themis_agent_workspace_policies(owner_agent_id, updated_at DESC, policy_id ASC);
+
+      CREATE TABLE IF NOT EXISTS themis_agent_runtime_profiles (
+        profile_id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        owner_agent_id TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (organization_id) REFERENCES themis_organizations(organization_id) ON DELETE CASCADE,
+        FOREIGN KEY (owner_agent_id) REFERENCES themis_managed_agents(agent_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_agent_runtime_profiles_org_idx
+      ON themis_agent_runtime_profiles(organization_id, updated_at DESC, profile_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_agent_runtime_profiles_owner_idx
+      ON themis_agent_runtime_profiles(owner_agent_id, updated_at DESC, profile_id ASC);
 
       CREATE TABLE IF NOT EXISTS themis_agent_work_items (
         work_item_id TEXT PRIMARY KEY,
@@ -8216,6 +8543,20 @@ export class SqliteCodexSessionRegistry {
       database.exec(`
         ALTER TABLE themis_managed_agents
         ADD COLUMN bootstrapped_at TEXT;
+      `);
+    }
+
+    if (!managedAgentColumnNames.has("default_workspace_policy_id")) {
+      database.exec(`
+        ALTER TABLE themis_managed_agents
+        ADD COLUMN default_workspace_policy_id TEXT;
+      `);
+    }
+
+    if (!managedAgentColumnNames.has("default_runtime_profile_id")) {
+      database.exec(`
+        ALTER TABLE themis_managed_agents
+        ADD COLUMN default_runtime_profile_id TEXT;
       `);
     }
 
@@ -8717,6 +9058,8 @@ function mapManagedAgentRow(row: ManagedAgentRow): StoredManagedAgentRecord {
     autonomyLevel: row.autonomy_level as ManagedAgentAutonomyLevel,
     creationMode: row.creation_mode as ManagedAgentCreationMode,
     exposurePolicy: row.exposure_policy as ManagedAgentExposurePolicy,
+    ...(row.default_workspace_policy_id ? { defaultWorkspacePolicyId: row.default_workspace_policy_id } : {}),
+    ...(row.default_runtime_profile_id ? { defaultRuntimeProfileId: row.default_runtime_profile_id } : {}),
     ...(bootstrapProfile ? { bootstrapProfile } : {}),
     ...(row.bootstrapped_at ? { bootstrappedAt: row.bootstrapped_at } : {}),
     createdAt: row.created_at,
@@ -8724,7 +9067,44 @@ function mapManagedAgentRow(row: ManagedAgentRow): StoredManagedAgentRecord {
   };
 }
 
+function mapAgentWorkspacePolicyRow(row: AgentWorkspacePolicyRow): StoredAgentWorkspacePolicyRecord {
+  return {
+    policyId: row.policy_id,
+    organizationId: row.organization_id,
+    ownerAgentId: row.owner_agent_id,
+    displayName: row.display_name,
+    workspacePath: row.workspace_path,
+    additionalDirectories: normalizeStringArray(
+      row.additional_directories_json ? safeParseJson(row.additional_directories_json) : [],
+    ),
+    allowNetworkAccess: row.allow_network_access === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapAgentRuntimeProfileRow(row: AgentRuntimeProfileRow): StoredAgentRuntimeProfileRecord {
+  const snapshot = normalizeManagedAgentRuntimeProfileSnapshot(safeParseJson(row.snapshot_json)) ?? {};
+
+  return {
+    profileId: row.profile_id,
+    organizationId: row.organization_id,
+    ownerAgentId: row.owner_agent_id,
+    displayName: row.display_name,
+    ...snapshot,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function mapAgentWorkItemRow(row: AgentWorkItemRow): StoredAgentWorkItemRecord {
+  const workspacePolicySnapshot = row.workspace_policy_snapshot_json
+    ? normalizeManagedAgentWorkspacePolicySnapshot(safeParseJson(row.workspace_policy_snapshot_json))
+    : undefined;
+  const runtimeProfileSnapshot = row.runtime_profile_snapshot_json
+    ? normalizeManagedAgentRuntimeProfileSnapshot(safeParseJson(row.runtime_profile_snapshot_json))
+    : undefined;
+
   return {
     workItemId: row.work_item_id,
     organizationId: row.organization_id,
@@ -8744,12 +9124,8 @@ function mapAgentWorkItemRow(row: AgentWorkItemRow): StoredAgentWorkItemRecord {
       : {}),
     priority: row.priority as ManagedAgentPriority,
     status: row.status as ManagedAgentWorkItemStatus,
-    ...(row.workspace_policy_snapshot_json
-      ? { workspacePolicySnapshot: safeParseJson(row.workspace_policy_snapshot_json) }
-      : {}),
-    ...(row.runtime_profile_snapshot_json
-      ? { runtimeProfileSnapshot: safeParseJson(row.runtime_profile_snapshot_json) }
-      : {}),
+    ...(workspacePolicySnapshot ? { workspacePolicySnapshot } : {}),
+    ...(runtimeProfileSnapshot ? { runtimeProfileSnapshot } : {}),
     createdAt: row.created_at,
     ...(row.scheduled_at ? { scheduledAt: row.scheduled_at } : {}),
     ...(row.started_at ? { startedAt: row.started_at } : {}),
@@ -9723,6 +10099,74 @@ function normalizeManagedAgentBootstrapProfile(value: unknown): ManagedAgentBoot
   return value as ManagedAgentBootstrapProfile;
 }
 
+function normalizeManagedAgentWorkspacePolicySnapshot(
+  value: unknown,
+): ManagedAgentWorkspacePolicySnapshot | undefined {
+  const record = asRecord(value);
+
+  if (!record) {
+    return undefined;
+  }
+
+  const workspacePath = normalizeText(asString(record.workspacePath));
+  const additionalDirectories = normalizeStringArray(record.additionalDirectories);
+  const displayName = normalizeText(asString(record.displayName));
+
+  if (!workspacePath) {
+    return undefined;
+  }
+
+  return {
+    ...(displayName ? { displayName } : {}),
+    workspacePath,
+    ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
+    ...(typeof record.allowNetworkAccess === "boolean" ? { allowNetworkAccess: record.allowNetworkAccess } : {}),
+  };
+}
+
+function normalizeManagedAgentRuntimeProfileSnapshot(
+  value: unknown,
+): Partial<StoredAgentRuntimeProfileRecord> | undefined {
+  const record = asRecord(value);
+
+  if (!record) {
+    return undefined;
+  }
+
+  const profileId = normalizeText(asString(record.profileId));
+  const organizationId = normalizeText(asString(record.organizationId));
+  const ownerAgentId = normalizeText(asString(record.ownerAgentId));
+  const displayName = normalizeText(asString(record.displayName));
+  const model = normalizeText(asString(record.model));
+  const reasoning = normalizeEnum<ReasoningLevel>(asString(record.reasoning), REASONING_LEVELS);
+  const memoryMode = normalizeEnum<MemoryMode>(asString(record.memoryMode), MEMORY_MODES);
+  const sandboxMode = normalizeEnum<SandboxMode>(asString(record.sandboxMode), SANDBOX_MODES);
+  const webSearchMode = normalizeEnum<WebSearchMode>(asString(record.webSearchMode), WEB_SEARCH_MODES);
+  const approvalPolicy = normalizeEnum<ApprovalPolicy>(asString(record.approvalPolicy), APPROVAL_POLICIES);
+  const accessMode = normalizeEnum<TaskAccessMode>(asString(record.accessMode), TASK_ACCESS_MODES);
+  const authAccountId = normalizeText(asString(record.authAccountId));
+  const thirdPartyProviderId = normalizeText(asString(record.thirdPartyProviderId));
+
+  return {
+    ...(profileId ? { profileId } : {}),
+    ...(organizationId ? { organizationId } : {}),
+    ...(ownerAgentId ? { ownerAgentId } : {}),
+    ...(displayName ? { displayName } : {}),
+    ...(model ? { model } : {}),
+    ...(reasoning ? { reasoning } : {}),
+    ...(memoryMode ? { memoryMode } : {}),
+    ...(sandboxMode ? { sandboxMode } : {}),
+    ...(webSearchMode ? { webSearchMode } : {}),
+    ...(typeof record.networkAccessEnabled === "boolean"
+      ? { networkAccessEnabled: record.networkAccessEnabled }
+      : {}),
+    ...(approvalPolicy ? { approvalPolicy } : {}),
+    ...(accessMode ? { accessMode } : {}),
+    ...(authAccountId ? { authAccountId } : {}),
+    ...(thirdPartyProviderId ? { thirdPartyProviderId } : {}),
+  };
+}
+
 function normalizeText(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
@@ -9738,4 +10182,12 @@ function normalizeLimit(value: number | undefined, fallback = 20): number {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function normalizeEnum<T extends string>(value: string | undefined, allowed: readonly T[]): T | undefined {
+  return value && allowed.includes(value as T) ? value as T : undefined;
 }

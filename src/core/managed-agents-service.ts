@@ -1,5 +1,7 @@
+import { resolve } from "node:path";
 import type { SqliteCodexSessionRegistry, StoredPrincipalRecord } from "../storage/index.js";
 import type {
+  ApprovalPolicy,
   AgentAuditLogEventType,
   ManagedAgentBootstrapProfile,
   ManagedAgentIdleRecoveryAction,
@@ -8,20 +10,39 @@ import type {
   ManagedAgentExposurePolicy,
   ManagedAgentStatus,
   AgentSpawnSuggestionState,
+  MemoryMode,
+  ReasoningLevel,
+  SandboxMode,
   StoredAgentHandoffRecord,
   StoredAgentMailboxEntryRecord,
   StoredAgentMessageRecord,
   StoredAgentWorkItemRecord,
   StoredAgentAuditLogRecord,
+  StoredAgentRuntimeProfileRecord,
   StoredAgentSpawnSuggestionStateRecord,
   StoredAgentSpawnPolicyRecord,
+  StoredAgentWorkspacePolicyRecord,
   StoredManagedAgentRecord,
   StoredOrganizationRecord,
+  TaskAccessMode,
+  WebSearchMode,
 } from "../types/index.js";
-import { MANAGED_AGENT_BOOTSTRAP_MODE_AUTO_SPAWN } from "../types/index.js";
+import {
+  APPROVAL_POLICIES,
+  MANAGED_AGENT_BOOTSTRAP_MODE_AUTO_SPAWN,
+  MEMORY_MODES,
+  REASONING_LEVELS,
+  SANDBOX_MODES,
+  TASK_ACCESS_MODES,
+  WEB_SEARCH_MODES,
+} from "../types/index.js";
+import { THEMIS_GLOBAL_TASK_DEFAULTS } from "./task-defaults.js";
+import { readOpenAICompatibleProviderConfigs } from "./openai-compatible-provider.js";
+import { validateWorkspacePath } from "./session-workspace.js";
 
 export interface ManagedAgentsServiceOptions {
   registry: SqliteCodexSessionRegistry;
+  workingDirectory?: string;
 }
 
 export interface CreateManagedAgentInput {
@@ -46,6 +67,41 @@ export interface CreateManagedAgentResult {
   organization: StoredOrganizationRecord;
   principal: StoredPrincipalRecord;
   agent: StoredManagedAgentRecord;
+}
+
+export interface ManagedAgentExecutionBoundaryView {
+  agent: StoredManagedAgentRecord;
+  workspacePolicy: StoredAgentWorkspacePolicyRecord;
+  runtimeProfile: StoredAgentRuntimeProfileRecord;
+}
+
+export interface ManagedAgentExecutionBoundaryWorkspacePolicyInput {
+  displayName?: string;
+  workspacePath: string;
+  additionalDirectories?: string[];
+  allowNetworkAccess?: boolean;
+}
+
+export interface ManagedAgentExecutionBoundaryRuntimeProfileInput {
+  displayName?: string;
+  model?: string;
+  reasoning?: ReasoningLevel;
+  memoryMode?: MemoryMode;
+  sandboxMode?: SandboxMode;
+  webSearchMode?: WebSearchMode;
+  networkAccessEnabled?: boolean;
+  approvalPolicy?: ApprovalPolicy;
+  accessMode?: TaskAccessMode;
+  authAccountId?: string;
+  thirdPartyProviderId?: string;
+}
+
+export interface UpdateManagedAgentExecutionBoundaryInput {
+  ownerPrincipalId: string;
+  agentId: string;
+  workspacePolicy?: ManagedAgentExecutionBoundaryWorkspacePolicyInput;
+  runtimeProfile?: ManagedAgentExecutionBoundaryRuntimeProfileInput;
+  now?: string;
 }
 
 export interface PreviewManagedAgentIdentityInput {
@@ -269,9 +325,11 @@ const RECENT_IDLE_ACTIVITY_WINDOW_HOURS = 30 * 24;
 
 export class ManagedAgentsService {
   private readonly registry: SqliteCodexSessionRegistry;
+  private readonly workingDirectory: string;
 
   constructor(options: ManagedAgentsServiceOptions) {
     this.registry = options.registry;
+    this.workingDirectory = resolve(options.workingDirectory ?? process.cwd());
   }
 
   ensureDefaultOrganization(ownerPrincipalId: string, now = new Date().toISOString()): StoredOrganizationRecord {
@@ -423,11 +481,12 @@ export class ManagedAgentsService {
 
     this.registry.savePrincipal(principal);
     this.registry.saveManagedAgent(agent);
+    const boundary = this.ensureManagedAgentExecutionBoundary(agent, now);
 
     return {
       organization,
       principal: this.registry.getPrincipal(principalId) ?? principal,
-      agent,
+      agent: boundary.agent,
     };
   }
 
@@ -822,7 +881,7 @@ export class ManagedAgentsService {
   listManagedAgents(ownerPrincipalId: string): StoredManagedAgentRecord[] {
     return this.registry.listManagedAgentsByOwnerPrincipal(
       normalizeRequiredText(ownerPrincipalId, "Principal id is required."),
-    );
+    ).map((agent) => this.ensureManagedAgentExecutionBoundary(agent).agent);
   }
 
   getManagedAgent(ownerPrincipalId: string, agentId: string): StoredManagedAgentRecord | null {
@@ -841,7 +900,61 @@ export class ManagedAgentsService {
       return null;
     }
 
-    return agent;
+    return this.ensureManagedAgentExecutionBoundary(agent).agent;
+  }
+
+  getManagedAgentExecutionBoundary(
+    ownerPrincipalId: string,
+    agentId: string,
+  ): ManagedAgentExecutionBoundaryView | null {
+    const agent = this.getManagedAgent(ownerPrincipalId, agentId);
+
+    if (!agent) {
+      return null;
+    }
+
+    return this.ensureManagedAgentExecutionBoundary(agent);
+  }
+
+  updateManagedAgentExecutionBoundary(
+    input: UpdateManagedAgentExecutionBoundaryInput,
+  ): ManagedAgentExecutionBoundaryView {
+    const now = normalizeNow(input.now);
+    const agent = this.requireOwnedAgent(input.ownerPrincipalId, input.agentId);
+    const current = this.ensureManagedAgentExecutionBoundary(agent, now);
+    const workspacePolicy = input.workspacePolicy
+      ? this.buildWorkspacePolicyRecord({
+        agent: current.agent,
+        currentPolicy: current.workspacePolicy,
+        input: input.workspacePolicy,
+        now,
+      })
+      : current.workspacePolicy;
+    const runtimeProfile = input.runtimeProfile
+      ? this.buildRuntimeProfileRecord({
+        agent: current.agent,
+        currentProfile: current.runtimeProfile,
+        input: input.runtimeProfile,
+        now,
+      })
+      : current.runtimeProfile;
+
+    this.registry.saveAgentWorkspacePolicy(workspacePolicy);
+    this.registry.saveAgentRuntimeProfile(runtimeProfile);
+
+    const updatedAgent: StoredManagedAgentRecord = {
+      ...current.agent,
+      defaultWorkspacePolicyId: workspacePolicy.policyId,
+      defaultRuntimeProfileId: runtimeProfile.profileId,
+      updatedAt: now,
+    };
+    this.registry.saveManagedAgent(updatedAgent);
+
+    return {
+      agent: this.registry.getManagedAgent(updatedAgent.agentId) ?? updatedAgent,
+      workspacePolicy,
+      runtimeProfile,
+    };
   }
 
   pauseManagedAgent(ownerPrincipalId: string, agentId: string, now?: string): StoredManagedAgentRecord {
@@ -1431,6 +1544,211 @@ export class ManagedAgentsService {
       .listOrganizationsByOwnerPrincipal(ownerPrincipalId)
       .some((organization) => organization.organizationId === organizationId);
   }
+
+  private ensureManagedAgentExecutionBoundary(
+    agent: StoredManagedAgentRecord,
+    now = new Date().toISOString(),
+  ): ManagedAgentExecutionBoundaryView {
+    const workspacePolicy = this.resolveOrCreateAgentWorkspacePolicy(agent, now);
+    const runtimeProfile = this.resolveOrCreateAgentRuntimeProfile(agent, now);
+
+    if (
+      agent.defaultWorkspacePolicyId !== workspacePolicy.policyId
+      || agent.defaultRuntimeProfileId !== runtimeProfile.profileId
+    ) {
+      const updatedAgent: StoredManagedAgentRecord = {
+        ...agent,
+        defaultWorkspacePolicyId: workspacePolicy.policyId,
+        defaultRuntimeProfileId: runtimeProfile.profileId,
+        updatedAt: now,
+      };
+      this.registry.saveManagedAgent(updatedAgent);
+
+      return {
+        agent: this.registry.getManagedAgent(updatedAgent.agentId) ?? updatedAgent,
+        workspacePolicy,
+        runtimeProfile,
+      };
+    }
+
+    return {
+      agent,
+      workspacePolicy,
+      runtimeProfile,
+    };
+  }
+
+  private resolveOrCreateAgentWorkspacePolicy(
+    agent: StoredManagedAgentRecord,
+    now: string,
+  ): StoredAgentWorkspacePolicyRecord {
+    const existing = normalizeOptionalText(agent.defaultWorkspacePolicyId)
+      ? this.registry.getAgentWorkspacePolicy(agent.defaultWorkspacePolicyId as string)
+      : this.registry.getAgentWorkspacePolicyByOwnerAgent(agent.agentId);
+
+    if (existing) {
+      return existing;
+    }
+
+    const created = this.buildWorkspacePolicyRecord({
+      agent,
+      currentPolicy: null,
+      input: {
+        displayName: "默认工作区边界",
+        workspacePath: this.workingDirectory,
+        additionalDirectories: [],
+        allowNetworkAccess: true,
+      },
+      now,
+    });
+    this.registry.saveAgentWorkspacePolicy(created);
+    return created;
+  }
+
+  private resolveOrCreateAgentRuntimeProfile(
+    agent: StoredManagedAgentRecord,
+    now: string,
+  ): StoredAgentRuntimeProfileRecord {
+    const existing = (
+      normalizeOptionalText(agent.defaultRuntimeProfileId)
+        ? this.registry.getAgentRuntimeProfile(agent.defaultRuntimeProfileId as string)
+        : null
+    ) ?? this.registry.getAgentRuntimeProfileByOwnerAgent(agent.agentId);
+
+    if (existing) {
+      return existing;
+    }
+
+    const activeAuthAccountId = this.registry.getActiveAuthAccount()?.accountId;
+    const created = this.buildRuntimeProfileRecord({
+      agent,
+      currentProfile: null,
+      input: {
+        displayName: "默认运行配置",
+        sandboxMode: THEMIS_GLOBAL_TASK_DEFAULTS.sandboxMode,
+        webSearchMode: THEMIS_GLOBAL_TASK_DEFAULTS.webSearchMode,
+        networkAccessEnabled: THEMIS_GLOBAL_TASK_DEFAULTS.networkAccessEnabled,
+        approvalPolicy: THEMIS_GLOBAL_TASK_DEFAULTS.approvalPolicy,
+        accessMode: "auth",
+        ...(activeAuthAccountId
+          ? { authAccountId: activeAuthAccountId }
+          : {}),
+      },
+      now,
+    });
+    this.registry.saveAgentRuntimeProfile(created);
+    return created;
+  }
+
+  private buildWorkspacePolicyRecord(input: {
+    agent: StoredManagedAgentRecord;
+    currentPolicy: StoredAgentWorkspacePolicyRecord | null;
+    input: ManagedAgentExecutionBoundaryWorkspacePolicyInput;
+    now: string;
+  }): StoredAgentWorkspacePolicyRecord {
+    const workspacePath = validateWorkspacePath(
+      normalizeRequiredText(input.input.workspacePath, "工作区不能为空。"),
+    );
+    const additionalDirectories = normalizePathArray(input.input.additionalDirectories);
+    const validatedAdditionalDirectories = additionalDirectories
+      .map((directory) => validateWorkspacePath(directory))
+      .filter((directory) => directory !== workspacePath);
+
+    return {
+      policyId: input.currentPolicy?.policyId ?? createId("agent-workspace-policy"),
+      organizationId: input.agent.organizationId,
+      ownerAgentId: input.agent.agentId,
+      displayName: normalizeOptionalText(input.input.displayName)
+        ?? input.currentPolicy?.displayName
+        ?? "默认工作区边界",
+      workspacePath,
+      additionalDirectories: dedupeStrings(validatedAdditionalDirectories),
+      allowNetworkAccess: typeof input.input.allowNetworkAccess === "boolean"
+        ? input.input.allowNetworkAccess
+        : input.currentPolicy?.allowNetworkAccess
+          ?? true,
+      createdAt: input.currentPolicy?.createdAt ?? input.now,
+      updatedAt: input.now,
+    };
+  }
+
+  private buildRuntimeProfileRecord(input: {
+    agent: StoredManagedAgentRecord;
+    currentProfile: StoredAgentRuntimeProfileRecord | null;
+    input: ManagedAgentExecutionBoundaryRuntimeProfileInput;
+    now: string;
+  }): StoredAgentRuntimeProfileRecord {
+    const profileInput = input.input;
+    const accessMode = normalizeTaskAccessMode(
+      normalizeOptionalText(profileInput.accessMode)
+        ?? input.currentProfile?.accessMode
+        ?? "auth",
+    );
+    const activeAuthAccount = this.registry.getActiveAuthAccount();
+    const authAccountId = accessMode === "auth"
+      ? normalizeOptionalText(profileInput.authAccountId)
+        ?? input.currentProfile?.authAccountId
+        ?? activeAuthAccount?.accountId
+        ?? undefined
+      : undefined;
+    const thirdPartyProviderId = accessMode === "third-party"
+      ? this.resolveThirdPartyProviderId(
+        normalizeOptionalText(profileInput.thirdPartyProviderId)
+          ?? input.currentProfile?.thirdPartyProviderId
+          ?? null,
+      )
+      : undefined;
+
+    if (accessMode === "auth" && authAccountId && !this.registry.getAuthAccount(authAccountId)) {
+      throw new Error("Auth account does not exist.");
+    }
+
+    const model = normalizeOptionalText(profileInput.model) ?? input.currentProfile?.model ?? undefined;
+    const reasoning = normalizeReasoningLevel(profileInput.reasoning ?? input.currentProfile?.reasoning);
+    const memoryMode = normalizeMemoryMode(profileInput.memoryMode ?? input.currentProfile?.memoryMode);
+    const sandboxMode = normalizeSandboxMode(profileInput.sandboxMode ?? input.currentProfile?.sandboxMode);
+    const webSearchMode = normalizeWebSearchMode(profileInput.webSearchMode ?? input.currentProfile?.webSearchMode);
+    const approvalPolicy = normalizeApprovalPolicy(profileInput.approvalPolicy ?? input.currentProfile?.approvalPolicy);
+
+    return {
+      profileId: input.currentProfile?.profileId ?? createId("agent-runtime-profile"),
+      organizationId: input.agent.organizationId,
+      ownerAgentId: input.agent.agentId,
+      displayName: normalizeOptionalText(profileInput.displayName)
+        ?? input.currentProfile?.displayName
+        ?? "默认运行配置",
+      ...(model ? { model } : {}),
+      ...(reasoning ? { reasoning: reasoning as ReasoningLevel } : {}),
+      ...(memoryMode ? { memoryMode: memoryMode as MemoryMode } : {}),
+      ...(sandboxMode ? { sandboxMode: sandboxMode as SandboxMode } : {}),
+      ...(webSearchMode ? { webSearchMode: webSearchMode as WebSearchMode } : {}),
+      networkAccessEnabled: typeof profileInput.networkAccessEnabled === "boolean"
+        ? profileInput.networkAccessEnabled
+        : input.currentProfile?.networkAccessEnabled
+          ?? THEMIS_GLOBAL_TASK_DEFAULTS.networkAccessEnabled,
+      ...(approvalPolicy ? { approvalPolicy: approvalPolicy as ApprovalPolicy } : {}),
+      accessMode,
+      ...(authAccountId ? { authAccountId } : {}),
+      ...(thirdPartyProviderId ? { thirdPartyProviderId } : {}),
+      createdAt: input.currentProfile?.createdAt ?? input.now,
+      updatedAt: input.now,
+    };
+  }
+
+  private resolveThirdPartyProviderId(providerId: string | null): string {
+    const providers = readOpenAICompatibleProviderConfigs(this.workingDirectory, this.registry);
+    const resolvedProviderId = providerId ?? providers[0]?.id ?? null;
+
+    if (!resolvedProviderId) {
+      throw new Error("Third-party provider does not exist.");
+    }
+
+    if (!providers.some((provider) => provider.id === resolvedProviderId)) {
+      throw new Error("Third-party provider does not exist.");
+    }
+
+    return resolvedProviderId;
+  }
 }
 
 function normalizeNow(value?: string): string {
@@ -1441,6 +1759,19 @@ function normalizeNow(value?: string): string {
 function normalizeOptionalText(value?: string | null): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+function normalizePathArray(value?: string[] | null): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return dedupeStrings(
+    value
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+  );
 }
 
 function normalizeRequiredText(value: string | undefined | null, message: string): string {
@@ -1537,6 +1868,38 @@ function slugify(value: string): string {
 
 function createId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function dedupeStrings(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function normalizeTaskAccessMode(value?: string | null): TaskAccessMode {
+  if (value && TASK_ACCESS_MODES.includes(value as TaskAccessMode)) {
+    return value as TaskAccessMode;
+  }
+
+  throw new Error("运行配置 accessMode 不合法。");
+}
+
+function normalizeReasoningLevel(value?: string | null): ReasoningLevel | null {
+  return value && REASONING_LEVELS.includes(value as ReasoningLevel) ? value as ReasoningLevel : null;
+}
+
+function normalizeMemoryMode(value?: string | null): MemoryMode | null {
+  return value && MEMORY_MODES.includes(value as MemoryMode) ? value as MemoryMode : null;
+}
+
+function normalizeSandboxMode(value?: string | null): SandboxMode | null {
+  return value && SANDBOX_MODES.includes(value as SandboxMode) ? value as SandboxMode : null;
+}
+
+function normalizeWebSearchMode(value?: string | null): WebSearchMode | null {
+  return value && WEB_SEARCH_MODES.includes(value as WebSearchMode) ? value as WebSearchMode : null;
+}
+
+function normalizeApprovalPolicy(value?: string | null): ApprovalPolicy | null {
+  return value && APPROVAL_POLICIES.includes(value as ApprovalPolicy) ? value as ApprovalPolicy : null;
 }
 
 function buildSpawnSuggestionRationale(

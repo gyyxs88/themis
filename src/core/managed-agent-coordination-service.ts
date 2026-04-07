@@ -2,7 +2,9 @@ import type { SqliteCodexSessionRegistry, StoredPrincipalRecord } from "../stora
 import type {
   AgentMessageType,
   ManagedAgentPriority,
+  ManagedAgentRuntimeProfileSnapshot,
   ManagedAgentWorkItemSourceType,
+  ManagedAgentWorkspacePolicySnapshot,
   StoredAgentHandoffRecord,
   StoredAgentMailboxEntryRecord,
   StoredAgentMessageRecord,
@@ -11,6 +13,7 @@ import type {
   StoredManagedAgentRecord,
   StoredOrganizationRecord,
 } from "../types/index.js";
+import { THEMIS_GLOBAL_TASK_DEFAULTS } from "./task-defaults.js";
 
 const DEFAULT_MAILBOX_LEASE_TTL_MS = 5 * 60 * 1000;
 const ACTIVE_AGENT_RUN_STATUSES = new Set<string>(["created", "starting", "running", "waiting_action"]);
@@ -269,6 +272,16 @@ export class ManagedAgentCoordinationService {
     const parentWorkItem = normalizeOptionalText(input.parentWorkItemId)
       ? this.requireWorkItemInOrganization(input.parentWorkItemId as string, organization.organizationId)
       : null;
+    const workspacePolicySnapshot = input.workspacePolicySnapshot === null
+      ? undefined
+      : input.workspacePolicySnapshot !== undefined
+        ? input.workspacePolicySnapshot as ManagedAgentWorkspacePolicySnapshot
+        : this.resolveWorkspacePolicySnapshot(targetAgent);
+    const runtimeProfileSnapshot = input.runtimeProfileSnapshot === null
+      ? undefined
+      : input.runtimeProfileSnapshot !== undefined
+        ? input.runtimeProfileSnapshot as ManagedAgentRuntimeProfileSnapshot
+        : this.resolveRuntimeProfileSnapshot(targetAgent);
     const workItemId = createId("work-item");
     const workItem: StoredAgentWorkItemRecord = {
       workItemId,
@@ -283,11 +296,11 @@ export class ManagedAgentCoordinationService {
       ...(input.contextPacket !== undefined ? { contextPacket: input.contextPacket } : {}),
       priority: input.priority ?? "normal",
       status: "queued",
-      ...(input.workspacePolicySnapshot !== undefined
-        ? { workspacePolicySnapshot: input.workspacePolicySnapshot }
+      ...(workspacePolicySnapshot !== undefined
+        ? { workspacePolicySnapshot }
         : {}),
-      ...(input.runtimeProfileSnapshot !== undefined
-        ? { runtimeProfileSnapshot: input.runtimeProfileSnapshot }
+      ...(runtimeProfileSnapshot !== undefined
+        ? { runtimeProfileSnapshot }
         : {}),
       createdAt: now,
       ...(normalizeOptionalText(input.scheduledAt) ? { scheduledAt: input.scheduledAt } : {}),
@@ -1176,6 +1189,50 @@ export class ManagedAgentCoordinationService {
   private isOrganizationOwnedBy(organizationId: string, ownerPrincipalId: string): boolean {
     const organization = this.registry.getOrganization(organizationId);
     return organization?.ownerPrincipalId === ownerPrincipalId;
+  }
+
+  private resolveWorkspacePolicySnapshot(
+    targetAgent: StoredManagedAgentRecord,
+  ): ManagedAgentWorkspacePolicySnapshot {
+    const storedPolicy = (
+      normalizeOptionalText(targetAgent.defaultWorkspacePolicyId)
+        ? this.registry.getAgentWorkspacePolicy(targetAgent.defaultWorkspacePolicyId as string)
+        : null
+    ) ?? this.registry.getAgentWorkspacePolicyByOwnerAgent(targetAgent.agentId);
+
+    if (storedPolicy) {
+      return storedPolicy;
+    }
+
+    return {
+      displayName: "默认工作区边界",
+      workspacePath: process.cwd(),
+      additionalDirectories: [],
+      allowNetworkAccess: true,
+    };
+  }
+
+  private resolveRuntimeProfileSnapshot(
+    targetAgent: StoredManagedAgentRecord,
+  ): ManagedAgentRuntimeProfileSnapshot {
+    const storedProfile = (
+      normalizeOptionalText(targetAgent.defaultRuntimeProfileId)
+        ? this.registry.getAgentRuntimeProfile(targetAgent.defaultRuntimeProfileId as string)
+        : null
+    ) ?? this.registry.getAgentRuntimeProfileByOwnerAgent(targetAgent.agentId);
+
+    if (storedProfile) {
+      return storedProfile;
+    }
+
+    return {
+      displayName: "默认运行配置",
+      sandboxMode: THEMIS_GLOBAL_TASK_DEFAULTS.sandboxMode,
+      webSearchMode: THEMIS_GLOBAL_TASK_DEFAULTS.webSearchMode,
+      networkAccessEnabled: THEMIS_GLOBAL_TASK_DEFAULTS.networkAccessEnabled,
+      approvalPolicy: THEMIS_GLOBAL_TASK_DEFAULTS.approvalPolicy,
+      accessMode: "auth",
+    };
   }
 
   private requireMailboxEntryForAgent(agent: StoredManagedAgentRecord, mailboxEntryId: string): StoredAgentMailboxEntryRecord {

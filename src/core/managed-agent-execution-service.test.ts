@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -46,7 +46,7 @@ function createServiceContext(overrides: {
   const registry = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const managedAgentsService = new ManagedAgentsService({ registry });
+  const managedAgentsService = new ManagedAgentsService({ registry, workingDirectory: root });
   const coordinationService = new ManagedAgentCoordinationService({ registry });
   const schedulerService = new ManagedAgentSchedulerService({
     registry,
@@ -301,6 +301,203 @@ test("ManagedAgentExecutionService 会把 claimed run 接到 app-server 内部�
     assert.equal(handoffs.length, 1);
     assert.equal(handoffs[0]?.summary, "后端执行已完成");
     assert.equal(handoffs[0]?.sourceMessageId, frontendMailbox[0]?.message.messageId);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ManagedAgentExecutionService 会把 work item 执行边界写入 runtime request 与 session 工作区", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startThreadId: "thread-agent-exec-boundary-1",
+  });
+  const {
+    root,
+    registry,
+    managedAgentsService,
+    coordinationService,
+    executionService,
+  } = createServiceContext({ sessionFactory });
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "老板",
+      createdAt: "2026-04-07T12:00:00.000Z",
+      updatedAt: "2026-04-07T12:00:00.000Z",
+    });
+    registry.saveAuthAccount({
+      accountId: "acct-boundary",
+      label: "执行账号",
+      codexHome: join(root, "infra/local/codex-auth/acct-boundary"),
+      isActive: true,
+      createdAt: "2026-04-07T12:00:10.000Z",
+      updatedAt: "2026-04-07T12:00:10.000Z",
+    });
+
+    const frontend = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "前端·岚",
+      departmentRole: "前端",
+      now: "2026-04-07T12:01:00.000Z",
+    });
+    const backend = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "后端·衡",
+      departmentRole: "后端",
+      now: "2026-04-07T12:02:00.000Z",
+    });
+    const workspacePath = join(root, "workspace/backend");
+    const sharedPath = join(root, "workspace/shared");
+    mkdirSync(workspacePath, { recursive: true });
+    mkdirSync(sharedPath, { recursive: true });
+
+    coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: backend.agent.agentId,
+      sourceType: "agent",
+      sourceAgentId: frontend.agent.agentId,
+      sourcePrincipalId: frontend.principal.principalId,
+      dispatchReason: "验证执行边界已生效",
+      goal: "把 runtime request 和 session 工作区都切到指定边界",
+      priority: "high",
+      workspacePolicySnapshot: {
+        policyId: "policy-boundary-1",
+        organizationId: backend.organization.organizationId,
+        ownerAgentId: backend.agent.agentId,
+        displayName: "后端默认边界",
+        workspacePath,
+        additionalDirectories: [sharedPath, sharedPath],
+        allowNetworkAccess: false,
+        createdAt: "2026-04-07T12:03:00.000Z",
+        updatedAt: "2026-04-07T12:03:00.000Z",
+      },
+      runtimeProfileSnapshot: {
+        profileId: "profile-boundary-1",
+        organizationId: backend.organization.organizationId,
+        ownerAgentId: backend.agent.agentId,
+        displayName: "后端默认运行配置",
+        accessMode: "auth",
+        authAccountId: "acct-boundary",
+        model: "gpt-5.4-mini",
+        reasoning: "high",
+        memoryMode: "confirm",
+        sandboxMode: "danger-full-access",
+        approvalPolicy: "on-request",
+        webSearchMode: "disabled",
+        networkAccessEnabled: true,
+        createdAt: "2026-04-07T12:03:00.000Z",
+        updatedAt: "2026-04-07T12:03:00.000Z",
+      },
+      now: "2026-04-07T12:03:00.000Z",
+    });
+
+    const result = await executionService.runNext({
+      schedulerId: "scheduler-exec-boundary",
+      now: "2026-04-07T12:04:00.000Z",
+    });
+    const runId = result.execution?.run.runId ?? "";
+    const storedTurn = registry.getTurn(`agent-run-request:${runId}`);
+    const sessionId = buildManagedAgentWorkItemSessionId(result.execution?.workItem.workItemId ?? "");
+    const options = storedTurn?.optionsJson ? JSON.parse(storedTurn.optionsJson) as Record<string, unknown> : null;
+
+    assert.equal(result.execution?.result, "completed");
+    assert.equal(state.started[0]?.cwd, workspacePath);
+    assert.equal(state.started[0]?.model, "gpt-5.4-mini");
+    assert.equal(state.started[0]?.approvalPolicy, "on-request");
+    assert.equal(state.started[0]?.sandbox, "danger-full-access");
+    assert.equal(state.started[0]?.webSearchMode, "disabled");
+    assert.ok(options);
+    assert.equal(options?.accessMode, "auth");
+    assert.equal(options?.authAccountId, "acct-boundary");
+    assert.equal(options?.reasoning, "high");
+    assert.equal(options?.memoryMode, "confirm");
+    assert.equal(options?.networkAccessEnabled, false);
+    assert.deepEqual(options?.additionalDirectories, [sharedPath]);
+    assert.equal(registry.getSessionTaskSettings(sessionId)?.settings.workspacePath, workspacePath);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ManagedAgentExecutionService 在执行边界无效时会让 run 失败并降级目标 agent", async () => {
+  const { sessionFactory } = createSessionFactory();
+  const {
+    root,
+    registry,
+    managedAgentsService,
+    coordinationService,
+    executionService,
+  } = createServiceContext({ sessionFactory });
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "老板",
+      createdAt: "2026-04-07T12:10:00.000Z",
+      updatedAt: "2026-04-07T12:10:00.000Z",
+    });
+
+    const frontend = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "前端·岚",
+      departmentRole: "前端",
+      now: "2026-04-07T12:11:00.000Z",
+    });
+    const backend = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "后端·衡",
+      departmentRole: "后端",
+      now: "2026-04-07T12:12:00.000Z",
+    });
+
+    coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: backend.agent.agentId,
+      sourceType: "agent",
+      sourceAgentId: frontend.agent.agentId,
+      sourcePrincipalId: frontend.principal.principalId,
+      dispatchReason: "验证异常边界收口",
+      goal: "边界非法时不要真的启动执行",
+      workspacePolicySnapshot: {
+        policyId: "policy-invalid-1",
+        organizationId: backend.organization.organizationId,
+        ownerAgentId: backend.agent.agentId,
+        displayName: "非法工作区",
+        workspacePath: join(root, "workspace/missing"),
+        additionalDirectories: [],
+        allowNetworkAccess: true,
+        createdAt: "2026-04-07T12:13:00.000Z",
+        updatedAt: "2026-04-07T12:13:00.000Z",
+      },
+      runtimeProfileSnapshot: {
+        profileId: "profile-invalid-1",
+        organizationId: backend.organization.organizationId,
+        ownerAgentId: backend.agent.agentId,
+        displayName: "默认运行配置",
+        accessMode: "auth",
+        createdAt: "2026-04-07T12:13:00.000Z",
+        updatedAt: "2026-04-07T12:13:00.000Z",
+      },
+      now: "2026-04-07T12:13:00.000Z",
+    });
+
+    const result = await executionService.runNext({
+      schedulerId: "scheduler-exec-invalid-boundary",
+      now: "2026-04-07T12:14:00.000Z",
+    });
+    const reloadedBackend = managedAgentsService.getManagedAgent("principal-owner", backend.agent.agentId);
+    const frontendMailbox = coordinationService.listMailbox("principal-owner", frontend.agent.agentId);
+
+    assert.equal(result.execution?.result, "failed");
+    assert.equal(result.execution?.run.failureCode, "MANAGED_AGENT_EXECUTION_BOUNDARY_INVALID");
+    assert.equal(result.execution?.workItem.status, "failed");
+    assert.equal(reloadedBackend?.status, "degraded");
+    assert.equal(frontendMailbox.length, 1);
+    assert.equal(frontendMailbox[0]?.message.messageType, "status_update");
+    assert.equal(
+      (frontendMailbox[0]?.message.payload as { failureCode?: string } | undefined)?.failureCode,
+      "MANAGED_AGENT_EXECUTION_BOUNDARY_INVALID",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

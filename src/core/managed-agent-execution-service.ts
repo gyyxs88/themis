@@ -33,6 +33,7 @@ import {
   type ManagedAgentSchedulerClaim,
   type ManagedAgentSchedulerTickResult,
 } from "./managed-agent-scheduler-service.js";
+import { validateWorkspacePath } from "./session-workspace.js";
 
 const DEFAULT_EXECUTION_SCHEDULER_ID = "scheduler-main";
 
@@ -70,6 +71,13 @@ interface ManagedAgentActiveExecution {
   executionController: AppServerTaskExecutionController | null;
   settled: Promise<ManagedAgentExecutionOutcome | null>;
   settle: (outcome: ManagedAgentExecutionOutcome | null) => void;
+}
+
+class ManagedAgentExecutionBoundaryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ManagedAgentExecutionBoundaryError";
+  }
 }
 
 export class ManagedAgentExecutionService {
@@ -168,11 +176,12 @@ export class ManagedAgentExecutionService {
     let run = this.schedulerService.markRunStarting(claim.run.runId, leaseToken, now);
     let waitingNotification: SendAgentMessageResult | null = null;
     const controller = new AbortController();
-    const request = this.buildTaskRequest(claim, now);
-    const activeExecution = this.registerActiveExecution(run.runId, claim.workItem.workItemId, controller);
+    let activeExecution: ManagedAgentActiveExecution | null = null;
     let outcome: ManagedAgentExecutionOutcome | null = null;
 
     try {
+      const request = this.buildTaskRequest(claim, now);
+      activeExecution = this.registerActiveExecution(run.runId, claim.workItem.workItemId, controller);
       const taskContext = request.channelContext.sessionId
         ? {
             principalId: claim.targetAgent.principalId,
@@ -184,7 +193,9 @@ export class ManagedAgentExecutionService {
       const taskResult = await this.runtime.runTaskAsPrincipal(request, taskContext, {
         signal: controller.signal,
         onExecutionReady: (executionController) => {
-          activeExecution.executionController = executionController;
+          if (activeExecution) {
+            activeExecution.executionController = executionController;
+          }
         },
         onEvent: async (event) => {
           run = await this.handleTaskEvent({
@@ -242,13 +253,19 @@ export class ManagedAgentExecutionService {
       }
 
       const failureMessage = toErrorMessage(error);
+      const failureCode = isManagedAgentExecutionBoundaryError(error)
+        ? "MANAGED_AGENT_EXECUTION_BOUNDARY_INVALID"
+        : "APP_SERVER_INTERNAL_EXECUTION_FAILED";
       run = this.schedulerService.failRun(
         run.runId,
         leaseToken,
-        "APP_SERVER_INTERNAL_EXECUTION_FAILED",
+        failureCode,
         failureMessage,
         new Date().toISOString(),
       );
+      if (isManagedAgentExecutionBoundaryError(error)) {
+        this.degradeManagedAgentForBoundaryFailure(claim, run.completedAt ?? new Date().toISOString());
+      }
       this.updateBootstrapLifecycleAfterFailure(claim, failureMessage, run.completedAt ?? new Date().toISOString());
       const failureNotification = this.sendFailureNotification(claim, run, failureMessage);
 
@@ -261,7 +278,7 @@ export class ManagedAgentExecutionService {
       };
       return outcome;
     } finally {
-      activeExecution.settle(outcome);
+      activeExecution?.settle(outcome);
       this.activeExecutionsByRunId.delete(run.runId);
     }
   }
@@ -334,13 +351,29 @@ export class ManagedAgentExecutionService {
 
   private buildTaskRequest(claim: ManagedAgentSchedulerClaim, now: string): TaskRequest {
     const sessionId = buildManagedAgentWorkItemSessionId(claim.workItem.workItemId);
-    const workspacePath = resolveWorkspacePath(claim.workItem.workspacePolicySnapshot);
+    const workspacePath = resolveWorkspacePath(claim.workItem.workspacePolicySnapshot)
+      ?? this.runtime.getWorkingDirectory();
     const inputText = buildExecutionInputText(this.registry, claim);
-    const options = resolveTaskOptions(claim.workItem.runtimeProfileSnapshot);
+    const additionalDirectories = resolveAdditionalDirectories(claim.workItem.workspacePolicySnapshot);
+    const allowNetworkAccess = resolveAllowNetworkAccess(claim.workItem.workspacePolicySnapshot);
+    const options = resolveTaskOptions(claim.workItem.runtimeProfileSnapshot) ?? {};
+    const validatedWorkspacePath = this.validateExecutionWorkspacePath(workspacePath);
+    const validatedAdditionalDirectories = additionalDirectories
+      .map((directory) => this.validateExecutionWorkspacePath(directory))
+      .filter((directory) => directory !== validatedWorkspacePath);
 
-    if (workspacePath) {
-      this.saveSessionWorkspace(sessionId, workspacePath, now);
+    if (validatedAdditionalDirectories.length > 0) {
+      options.additionalDirectories = dedupeStrings([
+        ...(Array.isArray(options.additionalDirectories) ? options.additionalDirectories : []),
+        ...validatedAdditionalDirectories,
+      ]);
     }
+
+    if (allowNetworkAccess === false) {
+      options.networkAccessEnabled = false;
+    }
+
+    this.saveSessionWorkspace(sessionId, validatedWorkspacePath, now);
 
     return {
       requestId: `agent-run-request:${claim.run.runId}`,
@@ -352,13 +385,21 @@ export class ManagedAgentExecutionService {
       },
       goal: claim.workItem.goal,
       ...(inputText ? { inputText } : {}),
-      ...(options ? { options } : {}),
+      ...(Object.keys(options).length > 0 ? { options } : {}),
       channelContext: {
         sessionId,
         channelSessionKey: sessionId,
       },
       createdAt: now,
     };
+  }
+
+  private validateExecutionWorkspacePath(path: string): string {
+    try {
+      return validateWorkspacePath(path);
+    } catch (error) {
+      throw new ManagedAgentExecutionBoundaryError(toErrorMessage(error));
+    }
   }
 
   private saveSessionWorkspace(sessionId: string, workspacePath: string, now: string): void {
@@ -686,6 +727,27 @@ export class ManagedAgentExecutionService {
       updatedAt: patch.updatedAt,
     });
   }
+
+  private degradeManagedAgentForBoundaryFailure(
+    claim: ManagedAgentSchedulerClaim,
+    now: string,
+  ): void {
+    if (resolveBootstrapContextPacket(claim.workItem.contextPacket)) {
+      return;
+    }
+
+    const agent = this.registry.getManagedAgent(claim.targetAgent.agentId);
+
+    if (!agent || agent.status === "archived" || agent.status === "degraded") {
+      return;
+    }
+
+    this.registry.saveManagedAgent({
+      ...agent,
+      status: "degraded",
+      updatedAt: now,
+    });
+  }
 }
 
 export function buildManagedAgentWorkItemSessionId(workItemId: string): string {
@@ -912,6 +974,24 @@ function resolveWorkspacePath(snapshot: unknown): string | null {
   return normalizeOptionalText(record?.workspacePath);
 }
 
+function resolveAdditionalDirectories(snapshot: unknown): string[] {
+  const record = asRecord(snapshot);
+
+  if (!Array.isArray(record?.additionalDirectories)) {
+    return [];
+  }
+
+  return record.additionalDirectories
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+}
+
+function resolveAllowNetworkAccess(snapshot: unknown): boolean | null {
+  const record = asRecord(snapshot);
+  return typeof record?.allowNetworkAccess === "boolean" ? record.allowNetworkAccess : null;
+}
+
 function assignOptionalTaskOptionString(
   target: TaskOptions,
   key: keyof TaskOptions,
@@ -922,6 +1002,10 @@ function assignOptionalTaskOptionString(
   if (normalized) {
     (target as Record<string, unknown>)[key] = normalized;
   }
+}
+
+function dedupeStrings(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 function serializeJson(value: unknown): string {
@@ -947,6 +1031,16 @@ function normalizeOptionalText(value: unknown): string | null {
 
   const normalized = value.trim();
   return normalized ? normalized : null;
+}
+
+function isManagedAgentExecutionBoundaryError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return error instanceof ManagedAgentExecutionBoundaryError
+    || error.message === "Auth account does not exist."
+    || error.message === "Third-party provider does not exist.";
 }
 
 function isActiveRunCancellationError(error: unknown): boolean {

@@ -1,13 +1,20 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { CodexTaskRuntime } from "../core/codex-runtime.js";
 import type { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
+import { readOpenAICompatibleProviderSummaries } from "../core/openai-compatible-provider.js";
 import {
   MANAGED_AGENT_IDLE_RECOVERY_ACTIONS,
   MANAGED_AGENT_PRIORITIES,
   MANAGED_AGENT_WORK_ITEM_SOURCE_TYPES,
+  type ApprovalPolicy,
   type ManagedAgentIdleRecoveryAction,
+  type MemoryMode,
   type ManagedAgentPriority,
   type ManagedAgentWorkItemSourceType,
+  type ReasoningLevel,
+  type SandboxMode,
+  type TaskAccessMode,
+  type WebSearchMode,
 } from "../types/index.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
@@ -31,6 +38,31 @@ interface AgentCreatePayload extends IdentityPayload {
 
 interface AgentDetailPayload extends IdentityPayload {
   agentId: string;
+}
+
+interface AgentExecutionBoundaryUpdatePayload extends IdentityPayload {
+  agentId: string;
+  boundary: {
+    workspacePolicy?: {
+      displayName?: string;
+      workspacePath: string;
+      additionalDirectories?: string[];
+      allowNetworkAccess?: boolean;
+    };
+    runtimeProfile?: {
+      displayName?: string;
+      model?: string;
+      reasoning?: ReasoningLevel;
+      memoryMode?: MemoryMode;
+      sandboxMode?: SandboxMode;
+      webSearchMode?: WebSearchMode;
+      networkAccessEnabled?: boolean;
+      approvalPolicy?: ApprovalPolicy;
+      accessMode?: TaskAccessMode;
+      authAccountId?: string;
+      thirdPartyProviderId?: string;
+    };
+  };
 }
 
 interface AgentSpawnSuggestionsPayload extends IdentityPayload {}
@@ -239,6 +271,14 @@ function writeManagedAgentBoundaryError(response: ServerResponse, error: unknown
       || error.message === "Display name is required."
       || error.message === "Suppressed spawn suggestion does not exist."
       || error.message === "Idle recovery suggestion no longer applies."
+      || error.message === "工作区不能为空。"
+      || error.message === "只支持服务端本机绝对路径。"
+      || error.message === "工作区不存在。"
+      || error.message === "工作区不是目录。"
+      || error.message === "工作区不可访问。"
+      || error.message === "运行配置 accessMode 不合法。"
+      || error.message === "Auth account does not exist."
+      || error.message === "Third-party provider does not exist."
     )
   ) {
     writeJson(response, 400, {
@@ -332,12 +372,55 @@ export async function handleAgentDetail(
 
     const principal = runtime.getRuntimeStore().getPrincipal(agent.principalId);
     const organization = runtime.getRuntimeStore().getOrganization(agent.organizationId);
+    const boundary = runtime.getManagedAgentsService().getManagedAgentExecutionBoundary(
+      identity.principalId,
+      agent.agentId,
+    );
 
     writeJson(response, 200, {
       identity,
       organization,
       principal,
       agent,
+      workspacePolicy: boundary?.workspacePolicy ?? null,
+      runtimeProfile: boundary?.runtimeProfile ?? null,
+      authAccounts: runtime.getRuntimeStore().listAuthAccounts(),
+      thirdPartyProviders: readOpenAICompatibleProviderSummaries(
+        runtime.getWorkingDirectory(),
+        runtime.getRuntimeStore(),
+      ),
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentExecutionBoundaryUpdate(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeAgentExecutionBoundaryUpdatePayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = runtime.getManagedAgentsService().updateManagedAgentExecutionBoundary({
+      ownerPrincipalId: identity.principalId,
+      agentId: payload.agentId,
+      ...(payload.boundary.workspacePolicy ? { workspacePolicy: payload.boundary.workspacePolicy } : {}),
+      ...(payload.boundary.runtimeProfile ? { runtimeProfile: payload.boundary.runtimeProfile } : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      agent: result.agent,
+      workspacePolicy: result.workspacePolicy,
+      runtimeProfile: result.runtimeProfile,
     });
   } catch (error) {
     writeManagedAgentBoundaryError(response, error);
@@ -1172,6 +1255,82 @@ function normalizeAgentDetailPayload(value: unknown): AgentDetailPayload {
   return {
     ...normalizeIdentityPayload(value),
     agentId: readRequiredString(value.agentId, "agentId"),
+  };
+}
+
+function normalizeAgentExecutionBoundaryUpdatePayload(value: unknown): AgentExecutionBoundaryUpdatePayload {
+  if (!isRecord(value) || !isRecord(value.boundary)) {
+    throw new Error("Request body.boundary must be an object.");
+  }
+
+  const workspacePolicy = isRecord(value.boundary.workspacePolicy)
+    ? {
+        ...(readOptionalString(value.boundary.workspacePolicy.displayName)
+          ? { displayName: readOptionalString(value.boundary.workspacePolicy.displayName) as string }
+          : {}),
+        workspacePath: readRequiredString(value.boundary.workspacePolicy.workspacePath, "boundary.workspacePolicy.workspacePath"),
+        ...(Array.isArray(value.boundary.workspacePolicy.additionalDirectories)
+          ? {
+              additionalDirectories: value.boundary.workspacePolicy.additionalDirectories
+                .filter((entry): entry is string => typeof entry === "string")
+                .map((entry) => entry.trim())
+                .filter((entry) => entry.length > 0),
+            }
+          : {}),
+        ...(typeof value.boundary.workspacePolicy.allowNetworkAccess === "boolean"
+          ? { allowNetworkAccess: value.boundary.workspacePolicy.allowNetworkAccess }
+          : {}),
+      }
+    : undefined;
+  const runtimeProfile = isRecord(value.boundary.runtimeProfile)
+    ? {
+        ...(readOptionalString(value.boundary.runtimeProfile.displayName)
+          ? { displayName: readOptionalString(value.boundary.runtimeProfile.displayName) as string }
+          : {}),
+        ...(readOptionalString(value.boundary.runtimeProfile.model)
+          ? { model: readOptionalString(value.boundary.runtimeProfile.model) as string }
+          : {}),
+        ...(readOptionalString(value.boundary.runtimeProfile.reasoning)
+          ? { reasoning: readOptionalString(value.boundary.runtimeProfile.reasoning) as ReasoningLevel }
+          : {}),
+        ...(readOptionalString(value.boundary.runtimeProfile.memoryMode)
+          ? { memoryMode: readOptionalString(value.boundary.runtimeProfile.memoryMode) as MemoryMode }
+          : {}),
+        ...(readOptionalString(value.boundary.runtimeProfile.sandboxMode)
+          ? { sandboxMode: readOptionalString(value.boundary.runtimeProfile.sandboxMode) as SandboxMode }
+          : {}),
+        ...(readOptionalString(value.boundary.runtimeProfile.webSearchMode)
+          ? { webSearchMode: readOptionalString(value.boundary.runtimeProfile.webSearchMode) as WebSearchMode }
+          : {}),
+        ...(typeof value.boundary.runtimeProfile.networkAccessEnabled === "boolean"
+          ? { networkAccessEnabled: value.boundary.runtimeProfile.networkAccessEnabled }
+          : {}),
+        ...(readOptionalString(value.boundary.runtimeProfile.approvalPolicy)
+          ? { approvalPolicy: readOptionalString(value.boundary.runtimeProfile.approvalPolicy) as ApprovalPolicy }
+          : {}),
+        ...(readOptionalString(value.boundary.runtimeProfile.accessMode)
+          ? { accessMode: readOptionalString(value.boundary.runtimeProfile.accessMode) as TaskAccessMode }
+          : {}),
+        ...(readOptionalString(value.boundary.runtimeProfile.authAccountId)
+          ? { authAccountId: readOptionalString(value.boundary.runtimeProfile.authAccountId) as string }
+          : {}),
+        ...(readOptionalString(value.boundary.runtimeProfile.thirdPartyProviderId)
+          ? { thirdPartyProviderId: readOptionalString(value.boundary.runtimeProfile.thirdPartyProviderId) as string }
+          : {}),
+      }
+    : undefined;
+
+  if (!workspacePolicy && !runtimeProfile) {
+    throw new Error("Request body.boundary must contain workspacePolicy or runtimeProfile.");
+  }
+
+  return {
+    ...normalizeIdentityPayload(value),
+    agentId: readRequiredString(value.agentId, "agentId"),
+    boundary: {
+      ...(workspacePolicy ? { workspacePolicy } : {}),
+      ...(runtimeProfile ? { runtimeProfile } : {}),
+    },
   };
 }
 

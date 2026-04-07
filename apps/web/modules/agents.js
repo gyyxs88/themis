@@ -44,6 +44,24 @@ function createDefaultSpawnPolicyDraft() {
   };
 }
 
+function createDefaultExecutionBoundaryDraft() {
+  return {
+    workspacePath: "",
+    additionalDirectoriesText: "",
+    allowNetworkAccess: true,
+    accessMode: "auth",
+    authAccountId: "",
+    thirdPartyProviderId: "",
+    model: "",
+    reasoning: "",
+    memoryMode: "",
+    sandboxMode: "workspace-write",
+    approvalPolicy: "never",
+    webSearchMode: "live",
+    networkAccessEnabled: true,
+  };
+}
+
 export function createDefaultAgentsState() {
   return {
     status: "idle",
@@ -55,6 +73,7 @@ export function createDefaultAgentsState() {
     creating: false,
     dispatching: false,
     updatingSpawnPolicy: false,
+    savingExecutionBoundary: false,
     approvingSpawnSuggestionId: "",
     approvingIdleRecoverySuggestionId: "",
     ignoringSpawnSuggestionId: "",
@@ -81,6 +100,10 @@ export function createDefaultAgentsState() {
     selectedAgent: null,
     selectedAgentPrincipal: null,
     selectedOrganization: null,
+    selectedWorkspacePolicy: null,
+    selectedRuntimeProfile: null,
+    availableAuthAccounts: [],
+    availableThirdPartyProviders: [],
     handoffs: [],
     handoffTimeline: [],
     workItems: [],
@@ -89,6 +112,7 @@ export function createDefaultAgentsState() {
     selectedWorkItemDetail: null,
     humanResponseDraft: createDefaultHumanResponseDraft(),
     spawnPolicyDraft: createDefaultSpawnPolicyDraft(),
+    executionBoundaryDraft: createDefaultExecutionBoundaryDraft(),
     createDraft: createDefaultCreateDraft(),
     dispatchDraft: createDefaultDispatchDraft(),
   };
@@ -220,6 +244,90 @@ export function createAgentsController(app) {
       }
 
       void runSafely(() => updateManagedAgentLifecycle(agentId, action));
+    });
+
+    dom?.agentsExecutionBoundaryWorkspaceInput?.addEventListener("input", () => {
+      updateExecutionBoundaryDraft({
+        workspacePath: dom.agentsExecutionBoundaryWorkspaceInput?.value ?? "",
+      });
+    });
+
+    dom?.agentsExecutionBoundaryAdditionalDirsInput?.addEventListener("input", () => {
+      updateExecutionBoundaryDraft({
+        additionalDirectoriesText: dom.agentsExecutionBoundaryAdditionalDirsInput?.value ?? "",
+      });
+    });
+
+    dom?.agentsExecutionBoundaryPolicyNetworkSelect?.addEventListener("change", () => {
+      updateExecutionBoundaryDraft({
+        allowNetworkAccess: dom.agentsExecutionBoundaryPolicyNetworkSelect?.value !== "false",
+      });
+    });
+
+    dom?.agentsExecutionBoundaryAccessModeSelect?.addEventListener("change", () => {
+      updateExecutionBoundaryDraft({
+        accessMode: normalizeText(dom.agentsExecutionBoundaryAccessModeSelect?.value) === "third-party"
+          ? "third-party"
+          : "auth",
+      });
+    });
+
+    dom?.agentsExecutionBoundaryAuthAccountSelect?.addEventListener("change", () => {
+      updateExecutionBoundaryDraft({
+        authAccountId: dom.agentsExecutionBoundaryAuthAccountSelect?.value ?? "",
+      });
+    });
+
+    dom?.agentsExecutionBoundaryProviderSelect?.addEventListener("change", () => {
+      updateExecutionBoundaryDraft({
+        thirdPartyProviderId: dom.agentsExecutionBoundaryProviderSelect?.value ?? "",
+      });
+    });
+
+    dom?.agentsExecutionBoundaryModelInput?.addEventListener("input", () => {
+      updateExecutionBoundaryDraft({
+        model: dom.agentsExecutionBoundaryModelInput?.value ?? "",
+      });
+    });
+
+    dom?.agentsExecutionBoundaryReasoningSelect?.addEventListener("change", () => {
+      updateExecutionBoundaryDraft({
+        reasoning: dom.agentsExecutionBoundaryReasoningSelect?.value ?? "",
+      });
+    });
+
+    dom?.agentsExecutionBoundaryMemoryModeSelect?.addEventListener("change", () => {
+      updateExecutionBoundaryDraft({
+        memoryMode: dom.agentsExecutionBoundaryMemoryModeSelect?.value ?? "",
+      });
+    });
+
+    dom?.agentsExecutionBoundarySandboxSelect?.addEventListener("change", () => {
+      updateExecutionBoundaryDraft({
+        sandboxMode: dom.agentsExecutionBoundarySandboxSelect?.value ?? "",
+      });
+    });
+
+    dom?.agentsExecutionBoundaryApprovalSelect?.addEventListener("change", () => {
+      updateExecutionBoundaryDraft({
+        approvalPolicy: dom.agentsExecutionBoundaryApprovalSelect?.value ?? "",
+      });
+    });
+
+    dom?.agentsExecutionBoundaryWebSearchSelect?.addEventListener("change", () => {
+      updateExecutionBoundaryDraft({
+        webSearchMode: dom.agentsExecutionBoundaryWebSearchSelect?.value ?? "",
+      });
+    });
+
+    dom?.agentsExecutionBoundaryRuntimeNetworkSelect?.addEventListener("change", () => {
+      updateExecutionBoundaryDraft({
+        networkAccessEnabled: dom.agentsExecutionBoundaryRuntimeNetworkSelect?.value !== "false",
+      });
+    });
+
+    dom?.agentsExecutionBoundarySaveButton?.addEventListener("click", () => {
+      void runSafely(saveExecutionBoundary);
     });
 
     dom?.agentsWaitingList?.addEventListener("click", (event) => {
@@ -518,6 +626,20 @@ export function createAgentsController(app) {
     render();
   }
 
+  function updateExecutionBoundaryDraft(patch) {
+    const state = app.runtime.agents ?? createDefaultAgentsState();
+
+    setState({
+      executionBoundaryDraft: {
+        ...(isRecord(state.executionBoundaryDraft)
+          ? state.executionBoundaryDraft
+          : createDefaultExecutionBoundaryDraft()),
+        ...patch,
+      },
+    });
+    render();
+  }
+
   async function load(options = {}) {
     const requestId = ++loadRequestId;
     const state = app.runtime.agents ?? createDefaultAgentsState();
@@ -618,12 +740,17 @@ export function createAgentsController(app) {
         selectedAgent: null,
         selectedAgentPrincipal: null,
         selectedOrganization: null,
+        selectedWorkspacePolicy: null,
+        selectedRuntimeProfile: null,
+        availableAuthAccounts: [],
+        availableThirdPartyProviders: [],
         handoffs: [],
         handoffTimeline: [],
         workItems: [],
         mailboxItems: [],
         selectedWorkItemId: "",
         selectedWorkItemDetail: null,
+        executionBoundaryDraft: createDefaultExecutionBoundaryDraft(),
         humanResponseDraft: createDefaultHumanResponseDraft(),
       });
       render();
@@ -667,6 +794,10 @@ export function createAgentsController(app) {
       const mailboxItems = normalizeMailboxItems(mailboxData.items);
       const handoffs = normalizeHandoffs(handoffData.handoffs);
       const handoffTimeline = normalizeHandoffTimeline(handoffData.timeline);
+      const workspacePolicy = normalizeExecutionWorkspacePolicy(detailData.workspacePolicy);
+      const runtimeProfile = normalizeExecutionRuntimeProfile(detailData.runtimeProfile);
+      const availableAuthAccounts = normalizeAuthAccounts(detailData.authAccounts);
+      const availableThirdPartyProviders = normalizeThirdPartyProviders(detailData.thirdPartyProviders);
       const state = app.runtime.agents ?? createDefaultAgentsState();
       const selectedWorkItemId = resolveWorkItemId(options.selectWorkItemId || state.selectedWorkItemId, workItems);
       const spawnPolicyDraft = syncSpawnPolicyDraft(
@@ -685,12 +816,21 @@ export function createAgentsController(app) {
         selectedAgent: isRecord(detailData.agent) ? detailData.agent : null,
         selectedAgentPrincipal: isRecord(detailData.principal) ? detailData.principal : null,
         selectedOrganization: isRecord(detailData.organization) ? detailData.organization : null,
+        selectedWorkspacePolicy: workspacePolicy,
+        selectedRuntimeProfile: runtimeProfile,
+        availableAuthAccounts,
+        availableThirdPartyProviders,
         handoffs,
         handoffTimeline,
         workItems,
         mailboxItems,
         selectedWorkItemId,
         spawnPolicyDraft,
+        executionBoundaryDraft: syncExecutionBoundaryDraft(
+          state.executionBoundaryDraft,
+          workspacePolicy,
+          runtimeProfile,
+        ),
         ...(selectedWorkItemId ? {} : { selectedWorkItemDetail: null }),
       });
       render();
@@ -1169,6 +1309,88 @@ export function createAgentsController(app) {
     }
   }
 
+  async function saveExecutionBoundary() {
+    const state = app.runtime.agents ?? createDefaultAgentsState();
+    const agentId = normalizeText(state.selectedAgentId);
+    const draft = isRecord(state.executionBoundaryDraft)
+      ? state.executionBoundaryDraft
+      : createDefaultExecutionBoundaryDraft();
+
+    if (!agentId) {
+      return handleDispatchValidationError("先选中一个 agent，才能保存执行边界。");
+    }
+
+    if (!normalizeText(draft.workspacePath)) {
+      return handleDispatchValidationError("默认工作区不能为空。");
+    }
+
+    if (draft.accessMode === "auth" && !normalizeText(draft.authAccountId) && state.availableAuthAccounts.length === 0) {
+      return handleDispatchValidationError("当前没有可用 auth account。");
+    }
+
+    if (
+      draft.accessMode === "third-party"
+      && !normalizeText(draft.thirdPartyProviderId)
+      && state.availableThirdPartyProviders.length === 0
+    ) {
+      return handleDispatchValidationError("当前没有可用 third-party provider。");
+    }
+
+    setState({
+      savingExecutionBoundary: true,
+      errorMessage: "",
+      noticeMessage: "",
+    });
+    render();
+
+    try {
+      await postAgents("/api/agents/execution-boundary/update", {
+        ...buildIdentityPayload(app),
+        agentId,
+        boundary: {
+          workspacePolicy: {
+            workspacePath: draft.workspacePath.trim(),
+            additionalDirectories: parseAdditionalDirectoriesText(draft.additionalDirectoriesText),
+            allowNetworkAccess: draft.allowNetworkAccess === true,
+          },
+          runtimeProfile: {
+            accessMode: draft.accessMode === "third-party" ? "third-party" : "auth",
+            ...(normalizeText(draft.authAccountId) ? { authAccountId: draft.authAccountId.trim() } : {}),
+            ...(normalizeText(draft.thirdPartyProviderId)
+              ? { thirdPartyProviderId: draft.thirdPartyProviderId.trim() }
+              : {}),
+            ...(normalizeText(draft.model) ? { model: draft.model.trim() } : {}),
+            ...(normalizeText(draft.reasoning) ? { reasoning: draft.reasoning.trim() } : {}),
+            ...(normalizeText(draft.memoryMode) ? { memoryMode: draft.memoryMode.trim() } : {}),
+            ...(normalizeText(draft.sandboxMode) ? { sandboxMode: draft.sandboxMode.trim() } : {}),
+            ...(normalizeText(draft.approvalPolicy) ? { approvalPolicy: draft.approvalPolicy.trim() } : {}),
+            ...(normalizeText(draft.webSearchMode) ? { webSearchMode: draft.webSearchMode.trim() } : {}),
+            networkAccessEnabled: draft.networkAccessEnabled === true,
+          },
+        },
+      });
+
+      setState({
+        savingExecutionBoundary: false,
+        noticeMessage: "已更新当前 agent 的默认执行边界。",
+      });
+      render();
+
+      await loadSelectedAgentData(agentId, {
+        preserveNoticeMessage: true,
+        selectWorkItemId: state.selectedWorkItemId,
+      });
+      return app.runtime.agents;
+    } catch (error) {
+      setState({
+        savingExecutionBoundary: false,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+      render();
+      throw error;
+    }
+  }
+
   async function dispatchWorkItem() {
     const state = app.runtime.agents ?? createDefaultAgentsState();
     const targetAgentId = normalizeText(state.dispatchDraft.targetAgentId);
@@ -1614,6 +1836,7 @@ export function createAgentsController(app) {
     loadWorkItemDetail,
     ackMailboxEntry,
     saveSpawnPolicy,
+    saveExecutionBoundary,
     cancelWorkItem,
     respondHumanWaitingWorkItem,
     respondOrganizationWaitingWorkItem,
@@ -1624,6 +1847,7 @@ export function createAgentsController(app) {
     updateCreateDraft,
     updateDispatchDraft,
     updateSpawnPolicyDraft,
+    updateExecutionBoundaryDraft,
     updateHumanResponseDraft,
     updateOrganizationWaitingResponseDraft,
   };
@@ -1771,6 +1995,26 @@ function normalizeSuppressedSpawnSuggestions(value) {
     : [];
 }
 
+function normalizeAuthAccounts(value) {
+  return Array.isArray(value)
+    ? value.filter((item) => isRecord(item) && normalizeText(item.accountId))
+    : [];
+}
+
+function normalizeThirdPartyProviders(value) {
+  return Array.isArray(value)
+    ? value.filter((item) => isRecord(item) && normalizeText(item.id))
+    : [];
+}
+
+function normalizeExecutionWorkspacePolicy(value) {
+  return isRecord(value) && normalizeText(value.workspacePath) ? value : null;
+}
+
+function normalizeExecutionRuntimeProfile(value) {
+  return isRecord(value) && normalizeText(value.profileId || "runtime-profile") ? value : null;
+}
+
 function normalizeWorkItemDetail(value) {
   return isRecord(value) ? value : null;
 }
@@ -1874,6 +2118,32 @@ function syncSpawnPolicyDraft(currentDraft, spawnPolicies, organizationId) {
       && normalizeText(baseDraft.organizationId) === normalizeText(matchingPolicy.organizationId)
       ? Number(baseDraft.maxActiveAgentsPerRole)
       : normalizePositiveIntegerInput(matchingPolicy.maxActiveAgentsPerRole, 3),
+  };
+}
+
+function syncExecutionBoundaryDraft(currentDraft, workspacePolicy, runtimeProfile) {
+  const baseDraft = isRecord(currentDraft) ? currentDraft : createDefaultExecutionBoundaryDraft();
+
+  return {
+    ...createDefaultExecutionBoundaryDraft(),
+    ...baseDraft,
+    workspacePath: normalizeText(workspacePolicy?.workspacePath) || "",
+    additionalDirectoriesText: Array.isArray(workspacePolicy?.additionalDirectories)
+      ? workspacePolicy.additionalDirectories
+        .filter((entry) => typeof entry === "string")
+        .join("\n")
+      : "",
+    allowNetworkAccess: workspacePolicy?.allowNetworkAccess !== false,
+    accessMode: normalizeText(runtimeProfile?.accessMode) === "third-party" ? "third-party" : "auth",
+    authAccountId: normalizeText(runtimeProfile?.authAccountId) || "",
+    thirdPartyProviderId: normalizeText(runtimeProfile?.thirdPartyProviderId) || "",
+    model: normalizeText(runtimeProfile?.model) || "",
+    reasoning: normalizeText(runtimeProfile?.reasoning) || "",
+    memoryMode: normalizeText(runtimeProfile?.memoryMode) || "",
+    sandboxMode: normalizeText(runtimeProfile?.sandboxMode) || "workspace-write",
+    approvalPolicy: normalizeText(runtimeProfile?.approvalPolicy) || "never",
+    webSearchMode: normalizeText(runtimeProfile?.webSearchMode) || "live",
+    networkAccessEnabled: runtimeProfile?.networkAccessEnabled !== false,
   };
 }
 
@@ -1995,6 +2265,19 @@ function parseContextPacketText(value) {
   }
 
   return normalized;
+}
+
+function parseAdditionalDirectoriesText(value) {
+  if (typeof value !== "string") {
+    return [];
+  }
+
+  return [...new Set(
+    value
+      .split(/\r?\n/g)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+  )];
 }
 
 function normalizeText(value) {

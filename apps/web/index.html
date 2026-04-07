@@ -1207,6 +1207,152 @@
 
                 <section class="workspace-tool-group">
                   <div class="tool-group-head">
+                    <h3>Execution Boundary</h3>
+                    <span class="meta-label">默认执行边界</span>
+                  </div>
+
+                  <p id="agents-execution-boundary-copy" class="settings-section-copy">
+                    选中 agent 后，这里可以查看并更新它的默认工作区和运行边界。
+                  </p>
+
+                  <div class="settings-stack">
+                    <div class="settings-grid">
+                      <label class="settings-field">
+                        <span>默认工作区</span>
+                        <input
+                          id="agents-execution-boundary-workspace-input"
+                          type="text"
+                          placeholder="/absolute/path/to/workspace"
+                          autocomplete="off"
+                        />
+                      </label>
+
+                      <label class="settings-field">
+                        <span>工作区网络上限</span>
+                        <select id="agents-execution-boundary-policy-network-select">
+                          <option value="true">允许</option>
+                          <option value="false">禁止</option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <label class="settings-field">
+                      <span>额外白名单目录</span>
+                      <textarea
+                        id="agents-execution-boundary-additional-dirs-input"
+                        rows="3"
+                        placeholder="/path/a&#10;/path/b"
+                      ></textarea>
+                    </label>
+
+                    <div class="settings-inline-grid">
+                      <label class="settings-field">
+                        <span>Access Mode</span>
+                        <select id="agents-execution-boundary-access-mode-select">
+                          <option value="auth">auth</option>
+                          <option value="third-party">third-party</option>
+                        </select>
+                      </label>
+
+                      <label class="settings-field">
+                        <span>Auth Account</span>
+                        <select id="agents-execution-boundary-auth-account-select">
+                          <option value="">默认活跃账号</option>
+                        </select>
+                      </label>
+
+                      <label class="settings-field">
+                        <span>Third-party Provider</span>
+                        <select id="agents-execution-boundary-provider-select">
+                          <option value="">默认 provider</option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <div class="settings-inline-grid">
+                      <label class="settings-field">
+                        <span>Model</span>
+                        <input
+                          id="agents-execution-boundary-model-input"
+                          type="text"
+                          placeholder="留空则跟随默认模型"
+                          autocomplete="off"
+                        />
+                      </label>
+
+                      <label class="settings-field">
+                        <span>Reasoning</span>
+                        <select id="agents-execution-boundary-reasoning-select">
+                          <option value="">默认</option>
+                          <option value="minimal">minimal</option>
+                          <option value="low">low</option>
+                          <option value="medium">medium</option>
+                          <option value="high">high</option>
+                          <option value="xhigh">xhigh</option>
+                        </select>
+                      </label>
+
+                      <label class="settings-field">
+                        <span>Memory</span>
+                        <select id="agents-execution-boundary-memory-mode-select">
+                          <option value="">默认</option>
+                          <option value="auto">auto</option>
+                          <option value="off">off</option>
+                          <option value="confirm">confirm</option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <div class="settings-inline-grid">
+                      <label class="settings-field">
+                        <span>Sandbox</span>
+                        <select id="agents-execution-boundary-sandbox-select">
+                          <option value="">默认</option>
+                          <option value="read-only">read-only</option>
+                          <option value="workspace-write">workspace-write</option>
+                          <option value="danger-full-access">danger-full-access</option>
+                        </select>
+                      </label>
+
+                      <label class="settings-field">
+                        <span>Approval</span>
+                        <select id="agents-execution-boundary-approval-select">
+                          <option value="">默认</option>
+                          <option value="never">never</option>
+                          <option value="on-request">on-request</option>
+                          <option value="on-failure">on-failure</option>
+                          <option value="untrusted">untrusted</option>
+                        </select>
+                      </label>
+
+                      <label class="settings-field">
+                        <span>Web Search</span>
+                        <select id="agents-execution-boundary-web-search-select">
+                          <option value="">默认</option>
+                          <option value="disabled">disabled</option>
+                          <option value="cached">cached</option>
+                          <option value="live">live</option>
+                        </select>
+                      </label>
+
+                      <label class="settings-field">
+                        <span>默认网络</span>
+                        <select id="agents-execution-boundary-runtime-network-select">
+                          <option value="true">默认打开</option>
+                          <option value="false">默认关闭</option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <div class="settings-inline-actions">
+                      <button id="agents-execution-boundary-save-button" type="button" class="toolbar-button subtle">保存执行边界</button>
+                      <p class="settings-inline-copy">后续派给这个 agent 的新 work item 会自动继承这里的默认边界。</p>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
                     <h3>Handoffs & Timeline</h3>
                     <span class="meta-label">当前 agent</span>
                   </div>

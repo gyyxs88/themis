@@ -141,6 +141,7 @@ export class CodexTaskRuntime {
     });
     this.managedAgentsService = new ManagedAgentsService({
       registry: this.runtimeStore,
+      workingDirectory: this.workingDirectory,
     });
     this.managedAgentSchedulerService = new ManagedAgentSchedulerService({
       registry: this.runtimeStore,

@@ -1,3 +1,12 @@
+import type {
+  ApprovalPolicy,
+  MemoryMode,
+  ReasoningLevel,
+  SandboxMode,
+  TaskAccessMode,
+  WebSearchMode,
+} from "./task.js";
+
 export const PRINCIPAL_KINDS = ["human_user", "managed_agent", "system"] as const;
 
 export type PrincipalKind = (typeof PRINCIPAL_KINDS)[number];
@@ -176,6 +185,50 @@ export interface StoredAgentSpawnSuggestionStateRecord {
   updatedAt: string;
 }
 
+export interface ManagedAgentWorkspacePolicySnapshot {
+  policyId?: string;
+  displayName?: string;
+  workspacePath: string;
+  additionalDirectories?: string[];
+  allowNetworkAccess?: boolean;
+}
+
+export interface ManagedAgentRuntimeProfileSnapshot {
+  profileId?: string;
+  displayName?: string;
+  model?: string;
+  reasoning?: ReasoningLevel;
+  memoryMode?: MemoryMode;
+  sandboxMode?: SandboxMode;
+  webSearchMode?: WebSearchMode;
+  networkAccessEnabled?: boolean;
+  approvalPolicy?: ApprovalPolicy;
+  accessMode?: TaskAccessMode;
+  authAccountId?: string;
+  thirdPartyProviderId?: string;
+}
+
+export interface StoredAgentWorkspacePolicyRecord extends ManagedAgentWorkspacePolicySnapshot {
+  policyId: string;
+  organizationId: string;
+  ownerAgentId: string;
+  displayName: string;
+  workspacePath: string;
+  additionalDirectories: string[];
+  allowNetworkAccess: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoredAgentRuntimeProfileRecord extends ManagedAgentRuntimeProfileSnapshot {
+  profileId: string;
+  organizationId: string;
+  ownerAgentId: string;
+  displayName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface StoredManagedAgentRecord {
   agentId: string;
   principalId: string;
@@ -190,6 +243,8 @@ export interface StoredManagedAgentRecord {
   autonomyLevel: ManagedAgentAutonomyLevel;
   creationMode: ManagedAgentCreationMode;
   exposurePolicy: ManagedAgentExposurePolicy;
+  defaultWorkspacePolicyId?: string;
+  defaultRuntimeProfileId?: string;
   bootstrapProfile?: ManagedAgentBootstrapProfile;
   bootstrappedAt?: string;
   createdAt: string;
@@ -211,8 +266,8 @@ export interface StoredAgentWorkItemRecord {
   latestHumanResponse?: unknown;
   priority: ManagedAgentPriority;
   status: ManagedAgentWorkItemStatus;
-  workspacePolicySnapshot?: unknown;
-  runtimeProfileSnapshot?: unknown;
+  workspacePolicySnapshot?: ManagedAgentWorkspacePolicySnapshot;
+  runtimeProfileSnapshot?: ManagedAgentRuntimeProfileSnapshot;
   createdAt: string;
   scheduledAt?: string;
   startedAt?: string;

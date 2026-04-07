@@ -1,6 +1,11 @@
 import { AppServerActionBridge } from "./app-server-action-bridge.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
-import type { CodexCliConfigOverrides } from "./auth-accounts.js";
+import {
+  buildCodexProcessEnv,
+  createCodexAuthStorageConfigOverrides,
+  ensureAuthAccountCodexHome,
+  type CodexCliConfigOverrides,
+} from "./auth-accounts.js";
 import type {
   RuntimeEngine,
   RuntimeInputCapabilities,
@@ -43,6 +48,10 @@ import {
   finalizeTaskResult,
 } from "./codex-runtime.js";
 import { IdentityLinkService } from "./identity-link-service.js";
+import {
+  readOpenAICompatibleProviderConfigs,
+  type OpenAICompatibleProviderConfig,
+} from "./openai-compatible-provider.js";
 import { PrincipalActorsService } from "./principal-actors-service.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
 import { buildTaskPrompt } from "./prompt.js";
@@ -95,11 +104,18 @@ export interface AppServerTaskRuntimeSession {
   rejectServerRequest?(id: string | number, error: Error): Promise<void>;
 }
 
+export interface AppServerSessionFactoryOptions {
+  env?: Record<string, string>;
+  configOverrides?: CodexCliConfigOverrides;
+}
+
 export interface AppServerTaskRuntimeOptions {
   workingDirectory?: string;
   runtimeStore?: SqliteCodexSessionRegistry;
   principalSkillsService?: PrincipalSkillsService;
-  sessionFactory?: () => Promise<AppServerTaskRuntimeSession> | AppServerTaskRuntimeSession;
+  sessionFactory?: (
+    options?: AppServerSessionFactoryOptions,
+  ) => Promise<AppServerTaskRuntimeSession> | AppServerTaskRuntimeSession;
   actionBridge?: AppServerActionBridge;
   runtimeCatalogReader?: () => Promise<CodexRuntimeCatalog>;
 }
@@ -162,7 +178,9 @@ export class AppServerTaskRuntime {
   private readonly managedAgentSchedulerService: ManagedAgentSchedulerService;
   private readonly principalActorsService: PrincipalActorsService;
   private readonly principalSkillsService: PrincipalSkillsService;
-  private readonly sessionFactory: () => Promise<AppServerTaskRuntimeSession>;
+  private readonly sessionFactory: (
+    options?: AppServerSessionFactoryOptions,
+  ) => Promise<AppServerTaskRuntimeSession>;
   private readonly actionBridge: AppServerActionBridge;
   private readonly runtimeCatalogReader: (() => Promise<CodexRuntimeCatalog>) | null;
 
@@ -176,6 +194,7 @@ export class AppServerTaskRuntime {
     });
     this.managedAgentsService = new ManagedAgentsService({
       registry: this.runtimeStore,
+      workingDirectory: this.workingDirectory,
     });
     this.managedAgentSchedulerService = new ManagedAgentSchedulerService({
       registry: this.runtimeStore,
@@ -187,9 +206,15 @@ export class AppServerTaskRuntime {
       workingDirectory: this.workingDirectory,
       registry: this.runtimeStore,
     });
-    this.sessionFactory = async () => await options.sessionFactory?.() ?? new CodexAppServerSession(this.workingDirectory, {
-      configOverrides: APP_SERVER_TASK_CONFIG_OVERRIDES,
-    });
+    this.sessionFactory = async (factoryOptions = {}) =>
+      await options.sessionFactory?.(factoryOptions)
+      ?? new CodexAppServerSession(this.workingDirectory, {
+        ...(factoryOptions.env ? { env: factoryOptions.env } : {}),
+        configOverrides: {
+          ...APP_SERVER_TASK_CONFIG_OVERRIDES,
+          ...(factoryOptions.configOverrides ?? {}),
+        },
+      });
     this.actionBridge = options.actionBridge ?? new AppServerActionBridge();
     this.runtimeCatalogReader = options.runtimeCatalogReader
       ?? (options.sessionFactory
@@ -235,6 +260,47 @@ export class AppServerTaskRuntime {
       principalId,
       ...(conversationId ? { conversationId } : {}),
     }, hooks);
+  }
+
+  private resolveSessionFactoryOptions(request: TaskRequest): AppServerSessionFactoryOptions {
+    const accessMode = normalizeTextValue(request.options?.accessMode) === "third-party" ? "third-party" : "auth";
+
+    if (accessMode === "third-party") {
+      const providerConfigs = readOpenAICompatibleProviderConfigs(this.workingDirectory, this.runtimeStore);
+      const requestedProviderId = normalizeTextValue(request.options?.thirdPartyProviderId);
+      const providerConfig = requestedProviderId
+        ? providerConfigs.find((entry) => entry.id === requestedProviderId) ?? null
+        : providerConfigs[0] ?? null;
+
+      if (!providerConfig) {
+        throw new Error("Third-party provider does not exist.");
+      }
+
+      return {
+        env: createCodexProviderEnv(providerConfig),
+        configOverrides: createCodexProviderOverrides(providerConfig),
+      };
+    }
+
+    const requestedAuthAccountId = normalizeTextValue(request.options?.authAccountId);
+    const account = requestedAuthAccountId
+      ? this.runtimeStore.getAuthAccount(requestedAuthAccountId)
+      : this.runtimeStore.getActiveAuthAccount();
+
+    if (requestedAuthAccountId && !account) {
+      throw new Error("Auth account does not exist.");
+    }
+
+    if (!account) {
+      return {};
+    }
+
+    ensureAuthAccountCodexHome(this.workingDirectory, account.codexHome);
+
+    return {
+      env: buildCodexProcessEnv(account.codexHome),
+      configOverrides: createCodexAuthStorageConfigOverrides(),
+    };
   }
 
   private async executeTask(
@@ -304,7 +370,7 @@ export class AppServerTaskRuntime {
         throw new Error(compiledInput.compileWarnings[0]?.message ?? "当前输入无法发送到 app-server。");
       }
 
-      session = await abortable(() => this.sessionFactory(), signal);
+      session = await abortable(() => this.sessionFactory(this.resolveSessionFactoryOptions(request)), signal);
       const activeSession = session;
       throwIfAborted(signal);
       await abortable(() => activeSession.initialize(), signal);
@@ -587,6 +653,10 @@ export class AppServerTaskRuntime {
 
   getRuntimeStore(): SqliteCodexSessionRegistry {
     return this.runtimeStore;
+  }
+
+  getWorkingDirectory(): string {
+    return this.workingDirectory;
   }
 
   getIdentityLinkService(): IdentityLinkService {
@@ -1516,6 +1586,32 @@ function createAppServerThreadStartParams(
     ...(approvalPolicy ? { approvalPolicy } : {}),
     ...(sandboxMode ? { sandbox: sandboxMode } : {}),
     ...(webSearchMode ? { webSearchMode } : {}),
+  };
+}
+
+function createCodexProviderEnv(providerConfig: OpenAICompatibleProviderConfig): Record<string, string> {
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
+
+  env.THEMIS_OPENAI_COMPAT_API_KEY = providerConfig.apiKey;
+
+  return env;
+}
+
+function createCodexProviderOverrides(providerConfig: OpenAICompatibleProviderConfig): CodexCliConfigOverrides {
+  return {
+    model_provider: providerConfig.id,
+    model_providers: {
+      [providerConfig.id]: {
+        name: providerConfig.name,
+        base_url: providerConfig.baseUrl,
+        wire_api: providerConfig.wireApi,
+        env_key: "THEMIS_OPENAI_COMPAT_API_KEY",
+        supports_websockets: providerConfig.supportsWebsockets,
+      },
+    },
+    ...(providerConfig.modelCatalogPath ? { model_catalog_json: providerConfig.modelCatalogPath } : {}),
   };
 }
 

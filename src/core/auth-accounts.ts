@@ -13,7 +13,14 @@ export interface CodexAuthAccountSummary {
   updatedAt: string;
 }
 
-export type CodexCliConfigOverrides = Record<string, string | number | boolean>;
+export type CodexCliTomlLiteral =
+  | string
+  | number
+  | boolean
+  | CodexCliTomlLiteral[]
+  | { [key: string]: CodexCliTomlLiteral };
+
+export type CodexCliConfigOverrides = Record<string, CodexCliTomlLiteral>;
 
 const CODEX_AUTH_CREDENTIALS_STORE_KEY = "cli_auth_credentials_store";
 const CODEX_AUTH_CREDENTIALS_STORE_FILE = "file";
@@ -226,13 +233,25 @@ function isManagedCodexHome(workingDirectory: string, codexHome: string): boolea
   return isManagedAuthAccountCodexHome(workingDirectory, codexHome);
 }
 
-function formatCodexTomlLiteral(value: string | number | boolean): string {
+function formatCodexTomlLiteral(value: CodexCliTomlLiteral): string {
   if (typeof value === "string") {
     return JSON.stringify(value);
   }
 
   if (typeof value === "boolean") {
     return value ? "true" : "false";
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => formatCodexTomlLiteral(entry)).join(", ")}]`;
+  }
+
+  if (typeof value === "object") {
+    return `{ ${
+      Object.entries(value)
+        .map(([key, entry]) => `${key} = ${formatCodexTomlLiteral(entry)}`)
+        .join(", ")
+    } }`;
   }
 
   return String(value);

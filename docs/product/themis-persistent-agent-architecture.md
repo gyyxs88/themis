@@ -1,6 +1,6 @@
 # Themis 持久化合伙人 / 数字员工架构设计
 
-更新时间：2026-04-07 15:49 CST
+更新时间：2026-04-07 19:10 CST
 
 ## 0. 当前实现快照
 
@@ -13,7 +13,16 @@
   - `work item detail` 已新增 `parentWorkItem / parentTargetAgent / childSummary / childWorkItems`
   - 当前父任务下派 agent 子任务时会自动补上 `parentWorkItemId`
   - Web `Agents` 详情面板已能直接渲染“父任务”和“下游协作汇总”
-- 当前下一步优先项：`P5 / 持久化 agent / 运行边界与执行`，把 `workspacePolicySnapshot / runtimeProfileSnapshot` 从存档字段推进成真正生效的 agent 执行边界。
+- `P5 / 持久化 agent / 运行边界与执行` 现已完成：
+  - 每个长期 agent 都会持久化自己的默认 `workspace policy` 与 `runtime profile`
+  - legacy agent 在 `create / list / detail` 链路也会自动补齐默认执行边界
+  - 新派工默认继承 `workspacePolicySnapshot / runtimeProfileSnapshot`
+  - 执行时会校验工作区、写入 session workspace、合并附加目录、收紧网络开关
+  - `AppServerTaskRuntime` 已按 `auth / third-party provider` 隔离 session env 与 CLI config
+  - 边界非法时，run 会以 `MANAGED_AGENT_EXECUTION_BOUNDARY_INVALID` 失败收口，并降级非 bootstrap agent
+  - HTTP 已新增 `POST /api/agents/execution-boundary/update`
+  - Web `Agents` 面板已新增默认执行边界治理区
+- 当前下一步优先项：如果继续推进，转入 `P6 / 后续路线图`，优先评估更强的物理隔离、远端 websocket `app-server` 节点或更重的 manager 治理面，而不是回头重复补第一版执行边界。
 
 ## 1. 设计目标
 

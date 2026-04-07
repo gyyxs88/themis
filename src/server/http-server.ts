@@ -13,6 +13,7 @@ import {
   handleAgentCreate,
   handleAgentDetail,
   handleAgentDispatch,
+  handleAgentExecutionBoundaryUpdate,
   handleAgentIdleRecoveryApprove,
   handleAgentIdleRecoverySuggestions,
   handleAgentHandoffList,
@@ -261,6 +262,10 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/agents/detail") {
         return handleAgentDetail(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/execution-boundary/update") {
+        return handleAgentExecutionBoundaryUpdate(request, response, runtime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/agents/spawn-suggestions") {

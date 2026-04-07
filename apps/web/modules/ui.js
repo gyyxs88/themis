@@ -384,6 +384,13 @@ export function createRenderer(app) {
     const waitingResponseDrafts = normalizeOrganizationWaitingResponseDrafts(agentsState.organizationWaitingResponseDrafts);
     const activeSpawnPolicy = resolveActiveSpawnPolicy(spawnPolicies, selectedAgent, agentsState.selectedOrganization);
     const spawnPolicyDraft = normalizeSpawnPolicyDraft(agentsState.spawnPolicyDraft, activeSpawnPolicy);
+    const executionBoundaryDraft = normalizeExecutionBoundaryDraft(agentsState.executionBoundaryDraft);
+    const availableAuthAccounts = Array.isArray(agentsState.availableAuthAccounts)
+      ? agentsState.availableAuthAccounts.filter(isRecord)
+      : [];
+    const availableThirdPartyProviders = Array.isArray(agentsState.availableThirdPartyProviders)
+      ? agentsState.availableThirdPartyProviders.filter(isRecord)
+      : [];
 
     dom.agentsSummaryOrganizations.textContent = String(organizations.length);
     dom.agentsSummaryAgents.textContent = String(agents.length);
@@ -583,6 +590,62 @@ export function createRenderer(app) {
       dom.agentsSelectedAgentCopy.textContent = "先从上方选择一个 agent，才能查看它的任务和内部信箱。";
       dom.agentsSelectedAgentMeta.classList.add("hidden");
       dom.agentsSelectedAgentMeta.innerHTML = "";
+      if (dom.agentsExecutionBoundaryCopy) {
+        dom.agentsExecutionBoundaryCopy.textContent = "选中 agent 后，这里可以查看并更新它的默认工作区和运行边界。";
+        if (dom.agentsExecutionBoundaryWorkspaceInput) {
+          dom.agentsExecutionBoundaryWorkspaceInput.value = "";
+        }
+        if (dom.agentsExecutionBoundaryAdditionalDirsInput) {
+          dom.agentsExecutionBoundaryAdditionalDirsInput.value = "";
+        }
+        if (dom.agentsExecutionBoundaryPolicyNetworkSelect) {
+          dom.agentsExecutionBoundaryPolicyNetworkSelect.value = "true";
+        }
+        if (dom.agentsExecutionBoundaryAccessModeSelect) {
+          dom.agentsExecutionBoundaryAccessModeSelect.value = "auth";
+        }
+        renderSimpleSelect(
+          dom.agentsExecutionBoundaryAuthAccountSelect,
+          [],
+          "",
+          "默认活跃账号",
+          (item) => ({ value: item.accountId || "", label: item.label || item.accountId || "未知账号" }),
+          utils.escapeHtml,
+        );
+        renderSimpleSelect(
+          dom.agentsExecutionBoundaryProviderSelect,
+          [],
+          "",
+          "默认 provider",
+          (item) => ({ value: item.id || "", label: item.name || item.id || "未知 provider" }),
+          utils.escapeHtml,
+        );
+        if (dom.agentsExecutionBoundaryModelInput) {
+          dom.agentsExecutionBoundaryModelInput.value = "";
+        }
+        if (dom.agentsExecutionBoundaryReasoningSelect) {
+          dom.agentsExecutionBoundaryReasoningSelect.value = "";
+        }
+        if (dom.agentsExecutionBoundaryMemoryModeSelect) {
+          dom.agentsExecutionBoundaryMemoryModeSelect.value = "";
+        }
+        if (dom.agentsExecutionBoundarySandboxSelect) {
+          dom.agentsExecutionBoundarySandboxSelect.value = "workspace-write";
+        }
+        if (dom.agentsExecutionBoundaryApprovalSelect) {
+          dom.agentsExecutionBoundaryApprovalSelect.value = "never";
+        }
+        if (dom.agentsExecutionBoundaryWebSearchSelect) {
+          dom.agentsExecutionBoundaryWebSearchSelect.value = "live";
+        }
+        if (dom.agentsExecutionBoundaryRuntimeNetworkSelect) {
+          dom.agentsExecutionBoundaryRuntimeNetworkSelect.value = "true";
+        }
+        setExecutionBoundaryDisabled(dom, true);
+        if (dom.agentsExecutionBoundarySaveButton) {
+          dom.agentsExecutionBoundarySaveButton.textContent = "保存执行边界";
+        }
+      }
       dom.agentsHandoffsSummary.textContent = "先选择一个 agent，才能查看它最近的交接与时间线。";
       dom.agentsHandoffsEmpty.classList.remove("hidden");
       dom.agentsHandoffsEmpty.textContent = "当前还没有选中 agent。";
@@ -620,6 +683,74 @@ export function createRenderer(app) {
       busy,
       escapeHtml: utils.escapeHtml,
     });
+    if (dom.agentsExecutionBoundaryCopy) {
+      dom.agentsExecutionBoundaryCopy.textContent = agentsState.detailLoading
+        ? "正在读取当前 agent 的默认执行边界。"
+        : "这里控制该 agent 之后新派工默认继承的工作区、网络和运行配置。";
+      if (dom.agentsExecutionBoundaryWorkspaceInput) {
+        dom.agentsExecutionBoundaryWorkspaceInput.value = executionBoundaryDraft.workspacePath;
+      }
+      if (dom.agentsExecutionBoundaryAdditionalDirsInput) {
+        dom.agentsExecutionBoundaryAdditionalDirsInput.value = executionBoundaryDraft.additionalDirectoriesText;
+      }
+      if (dom.agentsExecutionBoundaryPolicyNetworkSelect) {
+        dom.agentsExecutionBoundaryPolicyNetworkSelect.value = executionBoundaryDraft.allowNetworkAccess ? "true" : "false";
+      }
+      if (dom.agentsExecutionBoundaryAccessModeSelect) {
+        dom.agentsExecutionBoundaryAccessModeSelect.value = executionBoundaryDraft.accessMode;
+      }
+      renderSimpleSelect(
+        dom.agentsExecutionBoundaryAuthAccountSelect,
+        availableAuthAccounts,
+        executionBoundaryDraft.authAccountId,
+        "默认活跃账号",
+        (item) => ({ value: item.accountId || "", label: item.label || item.accountId || "未知账号" }),
+        utils.escapeHtml,
+      );
+      renderSimpleSelect(
+        dom.agentsExecutionBoundaryProviderSelect,
+        availableThirdPartyProviders,
+        executionBoundaryDraft.thirdPartyProviderId,
+        "默认 provider",
+        (item) => ({ value: item.id || "", label: item.name || item.id || "未知 provider" }),
+        utils.escapeHtml,
+      );
+      if (dom.agentsExecutionBoundaryModelInput) {
+        dom.agentsExecutionBoundaryModelInput.value = executionBoundaryDraft.model;
+      }
+      if (dom.agentsExecutionBoundaryReasoningSelect) {
+        dom.agentsExecutionBoundaryReasoningSelect.value = executionBoundaryDraft.reasoning;
+      }
+      if (dom.agentsExecutionBoundaryMemoryModeSelect) {
+        dom.agentsExecutionBoundaryMemoryModeSelect.value = executionBoundaryDraft.memoryMode;
+      }
+      if (dom.agentsExecutionBoundarySandboxSelect) {
+        dom.agentsExecutionBoundarySandboxSelect.value = executionBoundaryDraft.sandboxMode;
+      }
+      if (dom.agentsExecutionBoundaryApprovalSelect) {
+        dom.agentsExecutionBoundaryApprovalSelect.value = executionBoundaryDraft.approvalPolicy;
+      }
+      if (dom.agentsExecutionBoundaryWebSearchSelect) {
+        dom.agentsExecutionBoundaryWebSearchSelect.value = executionBoundaryDraft.webSearchMode;
+      }
+      if (dom.agentsExecutionBoundaryRuntimeNetworkSelect) {
+        dom.agentsExecutionBoundaryRuntimeNetworkSelect.value = executionBoundaryDraft.networkAccessEnabled ? "true" : "false";
+      }
+      setExecutionBoundaryDisabled(dom, busy || !selectedAgent);
+      if (dom.agentsExecutionBoundaryAuthAccountSelect) {
+        dom.agentsExecutionBoundaryAuthAccountSelect.disabled = busy
+          || executionBoundaryDraft.accessMode !== "auth";
+      }
+      if (dom.agentsExecutionBoundaryProviderSelect) {
+        dom.agentsExecutionBoundaryProviderSelect.disabled = busy
+          || executionBoundaryDraft.accessMode !== "third-party";
+      }
+      if (dom.agentsExecutionBoundarySaveButton) {
+        dom.agentsExecutionBoundarySaveButton.textContent = agentsState.savingExecutionBoundary
+          ? "保存中..."
+          : "保存执行边界";
+      }
+    }
 
     dom.agentsHandoffsSummary.textContent = agentsState.detailLoading
       ? "正在读取当前 agent 的交接记录。"
@@ -2056,6 +2187,30 @@ function normalizeSpawnPolicyDraft(draft, activeSpawnPolicy) {
   };
 }
 
+function normalizeExecutionBoundaryDraft(draft) {
+  return {
+    workspacePath: typeof draft?.workspacePath === "string" ? draft.workspacePath : "",
+    additionalDirectoriesText: typeof draft?.additionalDirectoriesText === "string" ? draft.additionalDirectoriesText : "",
+    allowNetworkAccess: draft?.allowNetworkAccess !== false,
+    accessMode: draft?.accessMode === "third-party" ? "third-party" : "auth",
+    authAccountId: typeof draft?.authAccountId === "string" ? draft.authAccountId : "",
+    thirdPartyProviderId: typeof draft?.thirdPartyProviderId === "string" ? draft.thirdPartyProviderId : "",
+    model: typeof draft?.model === "string" ? draft.model : "",
+    reasoning: typeof draft?.reasoning === "string" ? draft.reasoning : "",
+    memoryMode: typeof draft?.memoryMode === "string" ? draft.memoryMode : "",
+    sandboxMode: typeof draft?.sandboxMode === "string" && draft.sandboxMode
+      ? draft.sandboxMode
+      : "workspace-write",
+    approvalPolicy: typeof draft?.approvalPolicy === "string" && draft.approvalPolicy
+      ? draft.approvalPolicy
+      : "never",
+    webSearchMode: typeof draft?.webSearchMode === "string" && draft.webSearchMode
+      ? draft.webSearchMode
+      : "live",
+    networkAccessEnabled: draft?.networkAccessEnabled !== false,
+  };
+}
+
 function resolveActiveSpawnPolicy(spawnPolicies, selectedAgent, selectedOrganization) {
   const organizationId = typeof selectedAgent?.organizationId === "string" && selectedAgent.organizationId.trim()
     ? selectedAgent.organizationId.trim()
@@ -2160,6 +2315,69 @@ function renderAgentSelect(select, agents, currentAgentId, emptyLabel, escapeHtm
   select.value = options.some((agent) => agent?.agentId === currentAgentId)
     ? currentAgentId
     : options[0]?.agentId || "";
+}
+
+function renderSimpleSelect(select, items, currentValue, emptyLabel, mapper, escapeHtml) {
+  if (!select) {
+    return;
+  }
+
+  const options = Array.isArray(items) ? items : [];
+  select.innerHTML = [
+    `<option value="">${escapeHtml(emptyLabel)}</option>`,
+    ...options.map((item) => {
+      const mapped = mapper(item);
+      return `<option value="${escapeHtml(mapped.value)}">${escapeHtml(mapped.label)}</option>`;
+    }),
+  ].join("");
+  select.value = options.some((item) => mapper(item).value === currentValue)
+    ? currentValue
+    : "";
+}
+
+function setExecutionBoundaryDisabled(dom, disabled) {
+  if (dom.agentsExecutionBoundaryWorkspaceInput) {
+    dom.agentsExecutionBoundaryWorkspaceInput.disabled = disabled;
+  }
+  if (dom.agentsExecutionBoundaryAdditionalDirsInput) {
+    dom.agentsExecutionBoundaryAdditionalDirsInput.disabled = disabled;
+  }
+  if (dom.agentsExecutionBoundaryPolicyNetworkSelect) {
+    dom.agentsExecutionBoundaryPolicyNetworkSelect.disabled = disabled;
+  }
+  if (dom.agentsExecutionBoundaryAccessModeSelect) {
+    dom.agentsExecutionBoundaryAccessModeSelect.disabled = disabled;
+  }
+  if (dom.agentsExecutionBoundaryAuthAccountSelect) {
+    dom.agentsExecutionBoundaryAuthAccountSelect.disabled = disabled;
+  }
+  if (dom.agentsExecutionBoundaryProviderSelect) {
+    dom.agentsExecutionBoundaryProviderSelect.disabled = disabled;
+  }
+  if (dom.agentsExecutionBoundaryModelInput) {
+    dom.agentsExecutionBoundaryModelInput.disabled = disabled;
+  }
+  if (dom.agentsExecutionBoundaryReasoningSelect) {
+    dom.agentsExecutionBoundaryReasoningSelect.disabled = disabled;
+  }
+  if (dom.agentsExecutionBoundaryMemoryModeSelect) {
+    dom.agentsExecutionBoundaryMemoryModeSelect.disabled = disabled;
+  }
+  if (dom.agentsExecutionBoundarySandboxSelect) {
+    dom.agentsExecutionBoundarySandboxSelect.disabled = disabled;
+  }
+  if (dom.agentsExecutionBoundaryApprovalSelect) {
+    dom.agentsExecutionBoundaryApprovalSelect.disabled = disabled;
+  }
+  if (dom.agentsExecutionBoundaryWebSearchSelect) {
+    dom.agentsExecutionBoundaryWebSearchSelect.disabled = disabled;
+  }
+  if (dom.agentsExecutionBoundaryRuntimeNetworkSelect) {
+    dom.agentsExecutionBoundaryRuntimeNetworkSelect.disabled = disabled;
+  }
+  if (dom.agentsExecutionBoundarySaveButton) {
+    dom.agentsExecutionBoundarySaveButton.disabled = disabled;
+  }
 }
 
 function renderOrganizationWaitingCard(item, {
