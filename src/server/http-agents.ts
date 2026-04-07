@@ -152,6 +152,12 @@ interface AgentRunDetailPayload extends IdentityPayload {
   runId: string;
 }
 
+interface AgentHandoffListPayload extends IdentityPayload {
+  agentId: string;
+  workItemId?: string;
+  limit?: number;
+}
+
 interface MailboxListPayload extends IdentityPayload {
   agentId: string;
 }
@@ -746,7 +752,8 @@ export async function handleAgentWorkItemDetail(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const workItem = runtime.getManagedAgentCoordinationService().getWorkItem(identity.principalId, payload.workItemId);
+    const coordinationService = runtime.getManagedAgentCoordinationService();
+    const workItem = coordinationService.getWorkItem(identity.principalId, payload.workItemId);
 
     if (!workItem) {
       throw new Error("Work item does not exist.");
@@ -758,10 +765,8 @@ export async function handleAgentWorkItemDetail(
       : null;
     const sourcePrincipal = runtime.getRuntimeStore().getPrincipal(workItem.sourcePrincipalId);
     const organization = runtime.getRuntimeStore().getOrganization(workItem.organizationId);
-    const messages = runtime.getManagedAgentCoordinationService().listMessagesForWorkItem(
-      identity.principalId,
-      workItem.workItemId,
-    );
+    const messages = coordinationService.listMessagesForWorkItem(identity.principalId, workItem.workItemId);
+    const collaboration = coordinationService.getWorkItemCollaboration(identity.principalId, workItem.workItemId);
 
     writeJson(response, 200, {
       identity,
@@ -770,6 +775,10 @@ export async function handleAgentWorkItemDetail(
       targetAgent,
       sourcePrincipal,
       ...(sourceAgent ? { sourceAgent } : {}),
+      parentWorkItem: collaboration.parentWorkItem,
+      parentTargetAgent: collaboration.parentTargetAgent,
+      childSummary: collaboration.childSummary,
+      childWorkItems: collaboration.childWorkItems,
       messages,
     });
   } catch (error) {
@@ -936,6 +945,55 @@ export async function handleAgentRunDetail(
       run,
       workItem,
       targetAgent,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentHandoffList(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeAgentHandoffListPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const coordinationService = runtime.getManagedAgentCoordinationService();
+    const runtimeStore = runtime.getRuntimeStore();
+    const handoffs = coordinationService.listHandoffs(identity.principalId, {
+      agentId: payload.agentId,
+      ...(payload.workItemId ? { workItemId: payload.workItemId } : {}),
+      ...(payload.limit ? { limit: payload.limit } : {}),
+    });
+    const timeline = coordinationService.listTimeline(identity.principalId, {
+      agentId: payload.agentId,
+      ...(payload.workItemId ? { workItemId: payload.workItemId } : {}),
+      ...(payload.limit ? { limit: payload.limit } : {}),
+    });
+    const agent = runtimeStore.getManagedAgent(payload.agentId);
+
+    writeJson(response, 200, {
+      identity,
+      agent,
+      handoffs: handoffs.map((handoff) => {
+        const fromAgent = runtimeStore.getManagedAgent(handoff.fromAgentId);
+        const toAgent = runtimeStore.getManagedAgent(handoff.toAgentId);
+        const counterpartyAgent = handoff.fromAgentId === payload.agentId ? toAgent : fromAgent;
+
+        return {
+          ...handoff,
+          ...(fromAgent ? { fromAgentDisplayName: fromAgent.displayName } : {}),
+          ...(toAgent ? { toAgentDisplayName: toAgent.displayName } : {}),
+          ...(counterpartyAgent ? { counterpartyDisplayName: counterpartyAgent.displayName } : {}),
+        };
+      }),
+      timeline,
     });
   } catch (error) {
     writeManagedAgentBoundaryError(response, error);
@@ -1431,6 +1489,22 @@ function normalizeAgentRunDetailPayload(value: unknown): AgentRunDetailPayload {
   };
 }
 
+function normalizeAgentHandoffListPayload(value: unknown): AgentHandoffListPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  const workItemId = readOptionalString(value.workItemId);
+  const limit = readOptionalPositiveInteger(value.limit);
+
+  return {
+    ...normalizeIdentityPayload(value),
+    agentId: readRequiredString(value.agentId, "agentId"),
+    ...(workItemId ? { workItemId } : {}),
+    ...(limit ? { limit } : {}),
+  };
+}
+
 function normalizeMailboxAckPayload(value: unknown): MailboxAckPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
@@ -1497,6 +1571,15 @@ function readOptionalString(value: unknown): string | undefined {
 
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function readOptionalPositiveInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : undefined;
 }
 
 function readOptionalEnum<T extends readonly string[]>(

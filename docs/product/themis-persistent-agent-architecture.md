@@ -1,6 +1,19 @@
 # Themis 持久化合伙人 / 数字员工架构设计
 
-更新时间：2026-04-06
+更新时间：2026-04-07 15:49 CST
+
+## 0. 当前实现快照
+
+- `P3 / 持久化 agent / 自动创建与治理` 已整体收口，自动创建、护栏、审计、bootstrap onboarding、idle recovery 都已接进主链路。
+- `P4 / 持久化 agent / 协作与交接` 的前两刀已完成：
+  - `handoff` 已从单纯的 `messageType` 升级成独立持久化实体，SQLite 已落表 `themis_agent_handoffs`
+  - `ManagedAgentCoordinationService` / `ManagedAgentExecutionService` 已生成并查询 handoff 记录与最小时间线
+  - HTTP 已新增 `POST /api/agents/handoffs/list`
+  - Web `Agents` 面板已新增 `Handoffs & Timeline` 视图
+  - `work item detail` 已新增 `parentWorkItem / parentTargetAgent / childSummary / childWorkItems`
+  - 当前父任务下派 agent 子任务时会自动补上 `parentWorkItemId`
+  - Web `Agents` 详情面板已能直接渲染“父任务”和“下游协作汇总”
+- 当前下一步优先项：`P5 / 持久化 agent / 运行边界与执行`，把 `workspacePolicySnapshot / runtimeProfileSnapshot` 从存档字段推进成真正生效的 agent 执行边界。
 
 ## 1. 设计目标
 
@@ -1108,6 +1121,10 @@ Web 需要新增一个正式的 `Agents` 面，而不是只在设置里塞零散
 - handoff 一等对象
 - 父子 WorkItem
 - 汇总视图
+
+当前状态：
+
+- 已完成。`handoff`、父子 `workItem`、manager 汇总视图都已接进现有 SQLite / service / HTTP / Web 治理链路。
 
 ### 阶段 F：远端执行节点
 

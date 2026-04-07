@@ -297,6 +297,10 @@ test("ManagedAgentExecutionService 会把 claimed run 接到 app-server 内部�
       (frontendMailbox[0]?.message.payload as { status?: string; summary?: string } | undefined)?.summary,
       "后端执行已完成",
     );
+    const handoffs = registry.listAgentHandoffsByWorkItem(result.execution?.workItem.workItemId ?? "");
+    assert.equal(handoffs.length, 1);
+    assert.equal(handoffs[0]?.summary, "后端执行已完成");
+    assert.equal(handoffs[0]?.sourceMessageId, frontendMailbox[0]?.message.messageId);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -371,6 +375,9 @@ test("ManagedAgentExecutionService 会完成 auto-created agent 的首次职责�
     const supervisorMailbox = coordinationService.listMailbox("principal-owner", ops.agent.agentId);
     assert.equal(supervisorMailbox.length, 1);
     assert.equal(supervisorMailbox[0]?.message.messageType, "answer");
+    const bootstrapHandoffs = registry.listAgentHandoffsByWorkItem(approved.bootstrapWorkItem.workItemId);
+    assert.equal(bootstrapHandoffs.length, 1);
+    assert.match(bootstrapHandoffs[0]?.summary ?? "", /后端执行已完成|负责/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

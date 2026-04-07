@@ -884,6 +884,19 @@
   gap: 10px;
 }
 
+.agent-timeline-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.agent-timeline-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: linear-gradient(180deg, #f2c66d 0%, #d9923b 100%);
+}
+
 .agent-card-head {
   display: flex;
   flex-wrap: wrap;

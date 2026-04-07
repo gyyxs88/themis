@@ -3,6 +3,7 @@ import type {
   AgentMessageType,
   ManagedAgentPriority,
   ManagedAgentWorkItemSourceType,
+  StoredAgentHandoffRecord,
   StoredAgentMailboxEntryRecord,
   StoredAgentMessageRecord,
   StoredAgentRunRecord,
@@ -63,6 +64,61 @@ export interface SendAgentMessageResult {
   organization: StoredOrganizationRecord;
   message: StoredAgentMessageRecord;
   mailboxEntry: StoredAgentMailboxEntryRecord;
+}
+
+export interface CreateAgentHandoffInput {
+  ownerPrincipalId: string;
+  fromAgentId: string;
+  toAgentId: string;
+  workItemId: string;
+  sourceMessageId?: string;
+  sourceRunId?: string;
+  summary: string;
+  blockers?: string[];
+  recommendedNextActions?: string[];
+  attachedArtifacts?: string[];
+  payload?: unknown;
+  now?: string;
+}
+
+export interface CreateAgentHandoffResult {
+  organization: StoredOrganizationRecord;
+  handoff: StoredAgentHandoffRecord;
+}
+
+export interface ManagedAgentTimelineEntry {
+  entryId: string;
+  kind: "handoff" | "dispatch" | "waiting" | "response" | "governance" | "delivery" | "cancellation";
+  title: string;
+  summary: string;
+  at: string;
+  workItemId?: string;
+  handoffId?: string;
+  messageId?: string;
+  counterpartyAgentId?: string;
+  counterpartyDisplayName?: string;
+}
+
+export interface ManagedAgentChildWorkItemSummary {
+  totalCount: number;
+  openCount: number;
+  waitingCount: number;
+  completedCount: number;
+  failedCount: number;
+  cancelledCount: number;
+}
+
+export interface ManagedAgentChildWorkItemView {
+  workItem: StoredAgentWorkItemRecord;
+  targetAgent: StoredManagedAgentRecord | null;
+  latestHandoff: StoredAgentHandoffRecord | null;
+}
+
+export interface ManagedAgentWorkItemCollaborationView {
+  parentWorkItem: StoredAgentWorkItemRecord | null;
+  parentTargetAgent: StoredManagedAgentRecord | null;
+  childSummary: ManagedAgentChildWorkItemSummary;
+  childWorkItems: ManagedAgentChildWorkItemView[];
 }
 
 export interface ManagedAgentMailboxItem {
@@ -294,9 +350,185 @@ export class ManagedAgentCoordinationService {
     return this.isOrganizationOwnedBy(workItem.organizationId, owner.principalId) ? workItem : null;
   }
 
+  getWorkItemCollaboration(
+    ownerPrincipalId: string,
+    workItemId: string,
+  ): ManagedAgentWorkItemCollaborationView {
+    const workItem = this.requireOwnedWorkItem(ownerPrincipalId, workItemId);
+    const parentWorkItem = normalizeOptionalText(workItem.parentWorkItemId)
+      ? this.requireWorkItemInOrganization(workItem.parentWorkItemId as string, workItem.organizationId)
+      : null;
+    const parentTargetAgent = parentWorkItem
+      ? this.registry.getManagedAgent(parentWorkItem.targetAgentId)
+      : null;
+    const childWorkItems = this.registry
+      .listAgentWorkItemsByParentWorkItem(workItem.workItemId)
+      .map((childWorkItem) => {
+        const handoffs = this.registry.listAgentHandoffsByWorkItem(childWorkItem.workItemId);
+        const latestHandoff = handoffs.find((handoff) => handoff.toAgentId === workItem.targetAgentId)
+          ?? handoffs[0]
+          ?? null;
+
+        return {
+          workItem: childWorkItem,
+          targetAgent: this.registry.getManagedAgent(childWorkItem.targetAgentId),
+          latestHandoff,
+        };
+      });
+
+    return {
+      parentWorkItem,
+      parentTargetAgent,
+      childSummary: summarizeChildWorkItems(childWorkItems.map((entry) => entry.workItem)),
+      childWorkItems,
+    };
+  }
+
   listMessagesForWorkItem(ownerPrincipalId: string, workItemId: string): StoredAgentMessageRecord[] {
     const workItem = this.requireOwnedWorkItem(ownerPrincipalId, workItemId);
     return this.registry.listAgentMessagesByWorkItem(workItem.workItemId);
+  }
+
+  createAgentHandoff(input: CreateAgentHandoffInput): CreateAgentHandoffResult {
+    const owner = this.requirePrincipal(input.ownerPrincipalId);
+    const now = normalizeNow(input.now);
+    const fromAgent = this.requireOwnedAgent(owner.principalId, input.fromAgentId);
+    const organization = this.requireOwnedOrganization(owner.principalId, fromAgent.organizationId);
+    const toAgent = this.requireAgentInOrganization(input.toAgentId, organization.organizationId);
+    const workItem = this.requireWorkItemInOrganization(input.workItemId, organization.organizationId);
+    const sourceMessageId = normalizeOptionalText(input.sourceMessageId);
+    const sourceRunId = normalizeOptionalText(input.sourceRunId);
+
+    if (sourceMessageId) {
+      this.requireMessageInOrganization(sourceMessageId, organization.organizationId);
+    }
+
+    const handoff: StoredAgentHandoffRecord = {
+      handoffId: buildHandoffId(sourceMessageId, fromAgent.agentId, toAgent.agentId, workItem.workItemId),
+      organizationId: organization.organizationId,
+      fromAgentId: fromAgent.agentId,
+      toAgentId: toAgent.agentId,
+      workItemId: workItem.workItemId,
+      ...(sourceMessageId ? { sourceMessageId } : {}),
+      ...(sourceRunId ? { sourceRunId } : {}),
+      summary: normalizeRequiredText(input.summary, "Handoff summary is required."),
+      blockers: dedupeStrings(input.blockers ?? []),
+      recommendedNextActions: dedupeStrings(input.recommendedNextActions ?? []),
+      attachedArtifacts: dedupeStrings(input.attachedArtifacts ?? []),
+      ...(input.payload !== undefined ? { payload: input.payload } : {}),
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.registry.saveAgentHandoff(handoff);
+
+    return {
+      organization,
+      handoff: this.registry.getAgentHandoff(handoff.handoffId) ?? handoff,
+    };
+  }
+
+  listHandoffs(
+    ownerPrincipalId: string,
+    input: {
+      agentId: string;
+      workItemId?: string;
+      limit?: number;
+    },
+  ): StoredAgentHandoffRecord[] {
+    const agent = this.requireOwnedAgent(ownerPrincipalId, input.agentId);
+    const workItemId = normalizeOptionalText(input.workItemId);
+    const limit = normalizePositiveLimit(input.limit, 20);
+    const handoffs = workItemId
+      ? this.registry.listAgentHandoffsByWorkItem(workItemId)
+        .filter((handoff) => handoff.fromAgentId === agent.agentId || handoff.toAgentId === agent.agentId)
+      : this.registry.listAgentHandoffsByAgent(agent.agentId);
+
+    return handoffs.slice(0, limit);
+  }
+
+  listTimeline(
+    ownerPrincipalId: string,
+    input: {
+      agentId: string;
+      workItemId?: string;
+      limit?: number;
+    },
+  ): ManagedAgentTimelineEntry[] {
+    const agent = this.requireOwnedAgent(ownerPrincipalId, input.agentId);
+    const limit = normalizePositiveLimit(input.limit, 30);
+    const workItemId = normalizeOptionalText(input.workItemId);
+    const allWorkItems = this.registry.listAgentWorkItemsByTargetAgent(agent.agentId);
+    const workItems = workItemId
+      ? allWorkItems.filter((workItem) => workItem.workItemId === workItemId)
+      : allWorkItems;
+    const relevantWorkItemIds = new Set(workItems.map((entry) => entry.workItemId));
+    const handoffList = this.listHandoffs(ownerPrincipalId, input);
+    const handoffMessageIds = new Set(
+      handoffList
+        .map((handoff) => normalizeOptionalText(handoff.sourceMessageId))
+        .filter((value): value is string => Boolean(value)),
+    );
+    const entries: ManagedAgentTimelineEntry[] = handoffList.map((handoff) =>
+      this.buildHandoffTimelineEntry(agent.agentId, handoff)
+    );
+
+    for (const workItem of workItems) {
+      entries.push(this.buildWorkItemDispatchEntry(agent.agentId, workItem));
+
+      const latestHumanResponse = asRecord(workItem.latestHumanResponse);
+      const respondedAt = normalizeOptionalText(asString(latestHumanResponse?.respondedAt));
+
+      if (respondedAt) {
+        entries.push({
+          entryId: `timeline-governance:${workItem.workItemId}:${respondedAt}`,
+          kind: "governance",
+          title: "收到顶层治理回复",
+          summary: buildHumanGovernanceSummary(latestHumanResponse),
+          at: respondedAt,
+          workItemId: workItem.workItemId,
+        });
+      }
+
+      if (workItem.status === "completed" || workItem.status === "failed" || workItem.status === "cancelled") {
+        const at = normalizeOptionalText(workItem.completedAt) ?? workItem.updatedAt;
+        entries.push({
+          entryId: `timeline-delivery:${workItem.workItemId}:${at}`,
+          kind: workItem.status === "cancelled" ? "cancellation" : "delivery",
+          title: workItem.status === "completed"
+            ? "work item 已收口"
+            : workItem.status === "failed"
+              ? "work item 执行失败"
+              : "work item 已取消",
+          summary: workItem.goal || workItem.dispatchReason,
+          at,
+          workItemId: workItem.workItemId,
+        });
+      }
+    }
+
+    for (const message of this.registry.listAgentMessagesByAgent(agent.agentId)) {
+      if (handoffMessageIds.has(message.messageId)) {
+        continue;
+      }
+
+      if (workItemId && message.workItemId !== workItemId) {
+        continue;
+      }
+
+      if (!workItemId && message.workItemId && !relevantWorkItemIds.has(message.workItemId)) {
+        continue;
+      }
+
+      const entry = this.buildMessageTimelineEntry(agent.agentId, message);
+
+      if (entry) {
+        entries.push(entry);
+      }
+    }
+
+    return dedupeTimelineEntries(entries)
+      .sort((left, right) => right.at.localeCompare(left.at) || left.entryId.localeCompare(right.entryId))
+      .slice(0, limit);
   }
 
   listOrganizationWaitingQueue(ownerPrincipalId: string): OrganizationWaitingQueueResult {
@@ -341,7 +573,7 @@ export class ManagedAgentCoordinationService {
       this.requireMessageInOrganization(input.parentMessageId as string, organization.organizationId);
     }
 
-    return this.createMessageEnvelope({
+    const result = this.createMessageEnvelope({
       organization,
       fromAgent,
       toAgent,
@@ -355,6 +587,30 @@ export class ManagedAgentCoordinationService {
       ...(normalizeOptionalText(input.runId) ? { runId: input.runId } : {}),
       now,
     });
+
+    if (input.messageType === "handoff" && workItem) {
+      const payload = asRecord(input.payload);
+      this.createAgentHandoff({
+        ownerPrincipalId: owner.principalId,
+        fromAgentId: fromAgent.agentId,
+        toAgentId: toAgent.agentId,
+        workItemId: workItem.workItemId,
+        sourceMessageId: result.message.messageId,
+        ...(normalizeOptionalText(input.runId) ? { sourceRunId: input.runId } : {}),
+        summary: normalizeOptionalText(asString(payload?.summary))
+          ?? renderMessageSummary(result.message),
+        blockers: normalizeStringList(payload?.blockers),
+        recommendedNextActions: normalizeStringList(payload?.recommendedNextActions),
+        attachedArtifacts: dedupeStrings([
+          ...normalizeStringList(payload?.attachedArtifacts),
+          ...result.message.artifactRefs,
+        ]),
+        ...(input.payload !== undefined ? { payload: input.payload } : {}),
+        now,
+      });
+    }
+
+    return result;
   }
 
   listMailbox(ownerPrincipalId: string, agentId: string): ManagedAgentMailboxItem[] {
@@ -726,6 +982,127 @@ export class ManagedAgentCoordinationService {
     };
   }
 
+  private buildHandoffTimelineEntry(
+    selectedAgentId: string,
+    handoff: StoredAgentHandoffRecord,
+  ): ManagedAgentTimelineEntry {
+    const outgoing = handoff.fromAgentId === selectedAgentId;
+    const counterpartyAgentId = outgoing ? handoff.toAgentId : handoff.fromAgentId;
+    const counterparty = this.registry.getManagedAgent(counterpartyAgentId);
+
+    return {
+      entryId: `timeline-handoff:${handoff.handoffId}`,
+      kind: "handoff",
+      title: outgoing ? "发起交接" : "收到交接",
+      summary: buildHandoffSummaryText(handoff),
+      at: handoff.createdAt,
+      workItemId: handoff.workItemId,
+      handoffId: handoff.handoffId,
+      ...(handoff.sourceMessageId ? { messageId: handoff.sourceMessageId } : {}),
+      counterpartyAgentId,
+      counterpartyDisplayName: counterparty?.displayName ?? counterpartyAgentId,
+    };
+  }
+
+  private buildWorkItemDispatchEntry(
+    selectedAgentId: string,
+    workItem: StoredAgentWorkItemRecord,
+  ): ManagedAgentTimelineEntry {
+    const sourceAgentId = normalizeOptionalText(workItem.sourceAgentId);
+    const sourceAgent = sourceAgentId ? this.registry.getManagedAgent(sourceAgentId) : null;
+
+    return {
+      entryId: `timeline-dispatch:${workItem.workItemId}`,
+      kind: "dispatch",
+      title: "收到派工",
+      summary: buildDispatchTimelineSummary(workItem, sourceAgent?.displayName),
+      at: workItem.createdAt,
+      workItemId: workItem.workItemId,
+      ...(sourceAgentId ? { counterpartyAgentId: sourceAgentId } : {}),
+      ...(sourceAgent?.displayName ? { counterpartyDisplayName: sourceAgent.displayName } : {}),
+    };
+  }
+
+  private buildMessageTimelineEntry(
+    selectedAgentId: string,
+    message: StoredAgentMessageRecord,
+  ): ManagedAgentTimelineEntry | null {
+    const outgoing = message.fromAgentId === selectedAgentId;
+    const counterpartyAgentId = outgoing ? message.toAgentId : message.fromAgentId;
+    const counterparty = this.registry.getManagedAgent(counterpartyAgentId);
+    const counterpartyDisplayName = counterparty?.displayName ?? counterpartyAgentId;
+    const summary = renderMessageSummary(message);
+
+    switch (message.messageType) {
+      case "dispatch":
+        return null;
+      case "question":
+        return {
+          entryId: `timeline-message:${message.messageId}`,
+          kind: "waiting",
+          title: outgoing ? "向上游提问" : "收到问题",
+          summary,
+          at: message.createdAt,
+          ...(message.workItemId ? { workItemId: message.workItemId } : {}),
+          messageId: message.messageId,
+          counterpartyAgentId,
+          counterpartyDisplayName,
+        };
+      case "approval_request":
+        return {
+          entryId: `timeline-message:${message.messageId}`,
+          kind: "waiting",
+          title: outgoing ? "发起审批请求" : "收到审批请求",
+          summary,
+          at: message.createdAt,
+          ...(message.workItemId ? { workItemId: message.workItemId } : {}),
+          messageId: message.messageId,
+          counterpartyAgentId,
+          counterpartyDisplayName,
+        };
+      case "escalation":
+        return {
+          entryId: `timeline-message:${message.messageId}`,
+          kind: "governance",
+          title: outgoing ? "升级阻塞" : "收到升级阻塞",
+          summary,
+          at: message.createdAt,
+          ...(message.workItemId ? { workItemId: message.workItemId } : {}),
+          messageId: message.messageId,
+          counterpartyAgentId,
+          counterpartyDisplayName,
+        };
+      case "approval_result":
+      case "answer":
+      case "status_update":
+        return {
+          entryId: `timeline-message:${message.messageId}`,
+          kind: "response",
+          title: outgoing ? "发出回复" : "收到回复",
+          summary,
+          at: message.createdAt,
+          ...(message.workItemId ? { workItemId: message.workItemId } : {}),
+          messageId: message.messageId,
+          counterpartyAgentId,
+          counterpartyDisplayName,
+        };
+      case "cancel":
+        return {
+          entryId: `timeline-message:${message.messageId}`,
+          kind: "cancellation",
+          title: outgoing ? "通知取消" : "收到取消通知",
+          summary,
+          at: message.createdAt,
+          ...(message.workItemId ? { workItemId: message.workItemId } : {}),
+          messageId: message.messageId,
+          counterpartyAgentId,
+          counterpartyDisplayName,
+        };
+      default:
+        return null;
+    }
+  }
+
   private requirePrincipal(principalId: string): StoredPrincipalRecord {
     const principal = this.registry.getPrincipal(normalizeRequiredText(principalId, "Principal id is required."));
 
@@ -946,6 +1323,56 @@ function compareOrganizationWaitingQueueItems(
   return left.workItem.updatedAt.localeCompare(right.workItem.updatedAt);
 }
 
+function dedupeTimelineEntries(entries: ManagedAgentTimelineEntry[]): ManagedAgentTimelineEntry[] {
+  const seen = new Set<string>();
+  const deduped: ManagedAgentTimelineEntry[] = [];
+
+  for (const entry of entries) {
+    if (seen.has(entry.entryId)) {
+      continue;
+    }
+
+    seen.add(entry.entryId);
+    deduped.push(entry);
+  }
+
+  return deduped;
+}
+
+function summarizeChildWorkItems(workItems: StoredAgentWorkItemRecord[]): ManagedAgentChildWorkItemSummary {
+  const summary: ManagedAgentChildWorkItemSummary = {
+    totalCount: workItems.length,
+    openCount: 0,
+    waitingCount: 0,
+    completedCount: 0,
+    failedCount: 0,
+    cancelledCount: 0,
+  };
+
+  for (const workItem of workItems) {
+    switch (workItem.status) {
+      case "completed":
+        summary.completedCount += 1;
+        break;
+      case "failed":
+        summary.failedCount += 1;
+        break;
+      case "cancelled":
+        summary.cancelledCount += 1;
+        break;
+      default:
+        summary.openCount += 1;
+
+        if (workItem.status === "waiting_human" || workItem.status === "waiting_agent") {
+          summary.waitingCount += 1;
+        }
+        break;
+    }
+  }
+
+  return summary;
+}
+
 function computeMailboxLeaseStaleBefore(now: string, mailboxLeaseTtlMs: number): string {
   const base = Date.parse(now);
   const timestamp = Number.isNaN(base) ? Date.now() : base;
@@ -991,6 +1418,81 @@ function buildMailboxResponsePayload(input: {
     ...(inputText ? { inputText } : {}),
     ...(input.payload !== undefined ? { payload: input.payload } : {}),
   };
+}
+
+function buildDispatchTimelineSummary(
+  workItem: StoredAgentWorkItemRecord,
+  sourceAgentDisplayName?: string,
+): string {
+  const parts = [
+    sourceAgentDisplayName ? `来源 ${sourceAgentDisplayName}` : null,
+    normalizeOptionalText(workItem.dispatchReason),
+    normalizeOptionalText(workItem.goal),
+  ].filter((value): value is string => Boolean(value));
+
+  return parts.join(" · ") || "收到新的 work item。";
+}
+
+function buildHumanGovernanceSummary(response: Record<string, unknown> | null): string {
+  if (!response) {
+    return "顶层治理已提交回复。";
+  }
+
+  const decision = normalizeOptionalText(asString(response.decision));
+  const inputText = normalizeOptionalText(asString(response.inputText));
+
+  if (decision && inputText) {
+    return `治理结论：${decision} · ${inputText}`;
+  }
+
+  if (decision) {
+    return `治理结论：${decision}`;
+  }
+
+  if (inputText) {
+    return inputText;
+  }
+
+  return "顶层治理已提交回复。";
+}
+
+function buildHandoffSummaryText(handoff: StoredAgentHandoffRecord): string {
+  const parts = [handoff.summary];
+
+  if (handoff.blockers.length > 0) {
+    parts.push(`阻塞：${handoff.blockers.join("；")}`);
+  }
+
+  if (handoff.recommendedNextActions.length > 0) {
+    parts.push(`下一步：${handoff.recommendedNextActions.join("；")}`);
+  }
+
+  return parts.join(" · ");
+}
+
+function buildHandoffId(
+  sourceMessageId: string | null,
+  _fromAgentId: string,
+  _toAgentId: string,
+  _workItemId: string,
+): string {
+  if (sourceMessageId) {
+    return `handoff-${sourceMessageId}`;
+  }
+
+  return createId("handoff");
+}
+
+function normalizePositiveLimit(value: number | undefined, fallback: number): number {
+  return Number.isFinite(value) && (value as number) > 0 ? Math.floor(value as number) : fallback;
+}
+
+function normalizeStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0)
+    : [];
 }
 
 function buildHumanResumePayload(input: {
@@ -1239,6 +1741,37 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+function renderMessageSummary(message: StoredAgentMessageRecord): string {
+  const payload = asRecord(message.payload);
+
+  if (typeof message.payload === "string" && message.payload.trim()) {
+    return message.payload.trim();
+  }
+
+  if (!payload) {
+    return "没有额外摘要。";
+  }
+
+  const summaryCandidates = [
+    asString(payload.summary),
+    asString(payload.prompt),
+    asString(payload.question),
+    asString(payload.dispatchReason),
+    asString(payload.inputText),
+    asString(payload.failureMessage),
+  ];
+
+  for (const candidate of summaryCandidates) {
+    const normalized = normalizeOptionalText(candidate);
+
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "没有额外摘要。";
 }
 
 function resolveLatestWaitingMessage(

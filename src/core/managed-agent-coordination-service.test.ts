@@ -155,6 +155,205 @@ test("ManagedAgentCoordinationService 支持 agent 派工、结构化消息与 m
   }
 });
 
+test("ManagedAgentCoordinationService 会把 handoff 落成一等对象，并汇总到 agent 时间线", () => {
+  const { root, registry, managedAgentsService, coordinationService } = createServiceContext();
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "老板",
+      createdAt: "2026-04-07T09:00:00.000Z",
+      updatedAt: "2026-04-07T09:00:00.000Z",
+    });
+
+    const frontend = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "前端·岚",
+      departmentRole: "前端",
+      mission: "负责 Web 工作台。",
+      now: "2026-04-07T09:01:00.000Z",
+    });
+    const backend = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "后端·衡",
+      departmentRole: "后端",
+      mission: "负责接口与存储。",
+      now: "2026-04-07T09:02:00.000Z",
+    });
+
+    const dispatched = coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: backend.agent.agentId,
+      sourceAgentId: frontend.agent.agentId,
+      dispatchReason: "前端等待新的 handoff 记录",
+      goal: "补 handoff 一等对象与时间线",
+      priority: "high",
+      now: "2026-04-07T09:03:00.000Z",
+    });
+
+    const handoffMessage = coordinationService.sendAgentMessage({
+      ownerPrincipalId: "principal-owner",
+      fromAgentId: backend.agent.agentId,
+      toAgentId: frontend.agent.agentId,
+      workItemId: dispatched.workItem.workItemId,
+      messageType: "handoff",
+      payload: {
+        summary: "handoff 闭环已补齐。",
+        blockers: ["还差 Web 展示"],
+        recommendedNextActions: ["把时间线面板接到 Agents 页"],
+        attachedArtifacts: ["src/server/http-agents.ts"],
+      },
+      artifactRefs: ["apps/web/modules/ui.js"],
+      priority: "high",
+      now: "2026-04-07T09:04:00.000Z",
+    });
+
+    const handoffs = coordinationService.listHandoffs("principal-owner", {
+      agentId: frontend.agent.agentId,
+    });
+    assert.equal(handoffs.length, 1);
+    assert.equal(handoffs[0]?.sourceMessageId, handoffMessage.message.messageId);
+    assert.equal(handoffs[0]?.summary, "handoff 闭环已补齐。");
+    assert.deepEqual(handoffs[0]?.blockers, ["还差 Web 展示"]);
+    assert.deepEqual(handoffs[0]?.recommendedNextActions, ["把时间线面板接到 Agents 页"]);
+    assert.deepEqual(
+      handoffs[0]?.attachedArtifacts,
+      ["src/server/http-agents.ts", "apps/web/modules/ui.js"],
+    );
+
+    const timeline = coordinationService.listTimeline("principal-owner", {
+      agentId: frontend.agent.agentId,
+    });
+    assert.equal(timeline[0]?.kind, "handoff");
+    assert.equal(timeline[0]?.handoffId, handoffs[0]?.handoffId);
+    assert.equal(timeline[0]?.workItemId, dispatched.workItem.workItemId);
+    assert.match(timeline[0]?.summary ?? "", /还差 Web 展示/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ManagedAgentCoordinationService 会汇总父子 work item、下游状态与最近 handoff", () => {
+  const { root, registry, managedAgentsService, coordinationService } = createServiceContext();
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "老板",
+      createdAt: "2026-04-07T10:00:00.000Z",
+      updatedAt: "2026-04-07T10:00:00.000Z",
+    });
+
+    const manager = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "经理·曜",
+      departmentRole: "经理",
+      mission: "负责拆解任务与汇总结果。",
+      now: "2026-04-07T10:01:00.000Z",
+    });
+    const backend = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "后端·衡",
+      departmentRole: "后端",
+      mission: "负责接口与存储。",
+      now: "2026-04-07T10:02:00.000Z",
+    });
+    const frontend = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "前端·岚",
+      departmentRole: "前端",
+      mission: "负责页面联调。",
+      now: "2026-04-07T10:03:00.000Z",
+    });
+
+    const parent = coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: manager.agent.agentId,
+      dispatchReason: "汇总 P4 协作进展",
+      goal: "把下游协作结果整理成可治理视图",
+      priority: "high",
+      now: "2026-04-07T10:04:00.000Z",
+    });
+    const completedChild = coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: backend.agent.agentId,
+      sourceType: "agent",
+      sourceAgentId: manager.agent.agentId,
+      parentWorkItemId: parent.workItem.workItemId,
+      dispatchReason: "补 parent-child 汇总接口",
+      goal: "补 work item detail 的协作摘要",
+      priority: "high",
+      now: "2026-04-07T10:05:00.000Z",
+    });
+    const waitingChild = coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: frontend.agent.agentId,
+      sourceType: "agent",
+      sourceAgentId: manager.agent.agentId,
+      parentWorkItemId: parent.workItem.workItemId,
+      dispatchReason: "补 manager 汇总视图",
+      goal: "把 child work item 摘要挂到 Web detail 面板",
+      priority: "normal",
+      now: "2026-04-07T10:06:00.000Z",
+    });
+
+    registry.saveAgentWorkItem({
+      ...completedChild.workItem,
+      status: "completed",
+      completedAt: "2026-04-07T10:30:00.000Z",
+      updatedAt: "2026-04-07T10:30:00.000Z",
+    });
+    registry.saveAgentWorkItem({
+      ...waitingChild.workItem,
+      status: "waiting_agent",
+      waitingActionRequest: {
+        actionType: "review",
+        prompt: "等待经理确认 UI 文案",
+      },
+      updatedAt: "2026-04-07T10:20:00.000Z",
+    });
+
+    coordinationService.createAgentHandoff({
+      ownerPrincipalId: "principal-owner",
+      fromAgentId: backend.agent.agentId,
+      toAgentId: manager.agent.agentId,
+      workItemId: completedChild.workItem.workItemId,
+      summary: "detail 协作摘要接口已可用。",
+      blockers: [],
+      recommendedNextActions: ["接 Web detail 视图"],
+      attachedArtifacts: ["src/server/http-agents.ts"],
+      now: "2026-04-07T10:31:00.000Z",
+    });
+
+    const parentCollaboration = coordinationService.getWorkItemCollaboration(
+      "principal-owner",
+      parent.workItem.workItemId,
+    );
+    assert.equal(parentCollaboration.parentWorkItem, null);
+    assert.equal(parentCollaboration.childSummary.totalCount, 2);
+    assert.equal(parentCollaboration.childSummary.openCount, 1);
+    assert.equal(parentCollaboration.childSummary.waitingCount, 1);
+    assert.equal(parentCollaboration.childSummary.completedCount, 1);
+    assert.equal(parentCollaboration.childSummary.failedCount, 0);
+    assert.equal(parentCollaboration.childSummary.cancelledCount, 0);
+
+    const completedChildView = parentCollaboration.childWorkItems.find((entry) =>
+      entry.workItem.workItemId === completedChild.workItem.workItemId
+    );
+    assert.equal(completedChildView?.targetAgent?.displayName, "后端·衡");
+    assert.equal(completedChildView?.latestHandoff?.summary, "detail 协作摘要接口已可用。");
+
+    const childCollaboration = coordinationService.getWorkItemCollaboration(
+      "principal-owner",
+      completedChild.workItem.workItemId,
+    );
+    assert.equal(childCollaboration.parentWorkItem?.workItemId, parent.workItem.workItemId);
+    assert.equal(childCollaboration.parentTargetAgent?.displayName, "经理·曜");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("ManagedAgentCoordinationService 支持 mailbox pull / respond，并在 waiting_agent 时重新排队 work item", () => {
   const { root, registry, managedAgentsService, coordinationService } = createServiceContext();
 
@@ -626,7 +825,7 @@ test("ManagedAgentCoordinationService 会汇总组织级等待队列与升级摘
   }
 });
 
-test("schema 20 迁移会创建 work item、message 与 mailbox 表", () => {
+test("schema 25 迁移会创建 work item、message、mailbox 与 handoff 表", () => {
   const root = mkdtempSync(join(tmpdir(), "themis-managed-agent-coordination-schema-"));
   const databaseFile = join(root, "infra/local/themis.db");
   mkdirSync(join(root, "infra/local"), { recursive: true });
@@ -679,6 +878,14 @@ test("schema 20 迁移会创建 work item、message 与 mailbox 表", () => {
           AND name = 'themis_agent_mailboxes'
       `)
       .get() as { name: string } | undefined;
+    const handoffsTable = verify
+      .prepare(`
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name = 'themis_agent_handoffs'
+      `)
+      .get() as { name: string } | undefined;
     const workItemColumns = verify
       .prepare(`PRAGMA table_info(themis_agent_work_items)`)
       .all() as Array<{ name: string }>;
@@ -687,6 +894,7 @@ test("schema 20 迁移会创建 work item、message 与 mailbox 表", () => {
     assert.equal(workItemsTable?.name, "themis_agent_work_items");
     assert.equal(messagesTable?.name, "themis_agent_messages");
     assert.equal(mailboxesTable?.name, "themis_agent_mailboxes");
+    assert.equal(handoffsTable?.name, "themis_agent_handoffs");
     assert.equal(workItemColumnNames.has("waiting_action_request_json"), true);
     assert.equal(workItemColumnNames.has("latest_human_response_json"), true);
   } finally {

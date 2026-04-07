@@ -8,6 +8,7 @@ import type {
   ManagedAgentExposurePolicy,
   ManagedAgentStatus,
   AgentSpawnSuggestionState,
+  StoredAgentHandoffRecord,
   StoredAgentMailboxEntryRecord,
   StoredAgentMessageRecord,
   StoredAgentWorkItemRecord,
@@ -976,6 +977,7 @@ export class ManagedAgentsService {
     const workItems = this.registry.listAgentWorkItemsByTargetAgent(agent.agentId);
     const mailboxEntries = this.registry.listAgentMailboxEntriesByAgent(agent.agentId);
     const messages = this.registry.listAgentMessagesByAgent(agent.agentId);
+    const handoffs = this.registry.listAgentHandoffsByAgent(agent.agentId);
     const openWorkItemCount = workItems.filter((workItem) => OPEN_WORK_ITEM_STATUSES.has(workItem.status)).length;
     const pendingMailboxCount = mailboxEntries
       .filter((entry) => entry.status === "pending" || entry.status === "leased")
@@ -989,11 +991,8 @@ export class ManagedAgentsService {
       ["completed", "failed", "cancelled"].includes(workItem.status)
       && compareIsoTimestamp(resolveWorkItemActivityAt(workItem), recentCutoff) >= 0
     ).length;
-    const recentHandoffCount = messages.filter((message) =>
-      message.messageType === "handoff"
-      && compareIsoTimestamp(message.createdAt, recentCutoff) >= 0
-    ).length;
-    const lastActivity = resolveAgentLastActivity(agent, workItems, messages, mailboxEntries);
+    const recentHandoffCount = countRecentHandoffs(handoffs, messages, recentCutoff);
+    const lastActivity = resolveAgentLastActivity(agent, workItems, messages, mailboxEntries, handoffs);
     const idleHours = diffHours(now, lastActivity.at);
     const thresholdHours = recommendedAction === "archive"
       ? PAUSED_IDLE_RECOVERY_THRESHOLD_HOURS
@@ -1858,6 +1857,7 @@ function resolveAgentLastActivity(
   workItems: StoredAgentWorkItemRecord[],
   messages: StoredAgentMessageRecord[],
   mailboxEntries: StoredAgentMailboxEntryRecord[],
+  handoffs: StoredAgentHandoffRecord[],
 ): { at: string; summary: string } {
   const candidates: Array<{ at: string; summary: string }> = [
     {
@@ -1877,6 +1877,13 @@ function resolveAgentLastActivity(
       ? `最近一次 completed work item：${workItem.dispatchReason || workItem.goal}`
       : `最近一次 work item 更新：${workItem.dispatchReason || workItem.goal}`;
     candidates.push({ at: activityAt, summary });
+  }
+
+  for (const handoff of handoffs) {
+    candidates.push({
+      at: handoff.createdAt,
+      summary: `最近一次 handoff：${handoff.summary}`,
+    });
   }
 
   for (const message of messages) {
@@ -1903,6 +1910,25 @@ function resolveAgentLastActivity(
       at: agent.updatedAt ?? agent.createdAt,
       summary: `${agent.displayName} 最近一次生命周期更新时间。`,
     };
+}
+
+function countRecentHandoffs(
+  handoffs: StoredAgentHandoffRecord[],
+  messages: StoredAgentMessageRecord[],
+  recentCutoff: string,
+): number {
+  const handoffCount = handoffs.filter((handoff) =>
+    compareIsoTimestamp(handoff.createdAt, recentCutoff) >= 0
+  ).length;
+
+  if (handoffCount > 0) {
+    return handoffCount;
+  }
+
+  return messages.filter((message) =>
+    message.messageType === "handoff"
+    && compareIsoTimestamp(message.createdAt, recentCutoff) >= 0
+  ).length;
 }
 
 function resolveWorkItemActivityAt(workItem: StoredAgentWorkItemRecord): string {

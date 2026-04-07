@@ -472,6 +472,25 @@ export class ManagedAgentExecutionService {
       priority: claim.workItem.priority,
       now: result.completedAt,
     });
+    this.coordinationService.createAgentHandoff({
+      ownerPrincipalId: claim.organization.ownerPrincipalId,
+      fromAgentId: claim.targetAgent.agentId,
+      toAgentId: sourceAgentId,
+      workItemId: claim.workItem.workItemId,
+      sourceMessageId: notification.message.messageId,
+      sourceRunId: run.runId,
+      summary: normalizeOptionalText(result.summary) ?? claim.workItem.goal,
+      attachedArtifacts: Array.isArray(result.touchedFiles) ? result.touchedFiles : [],
+      payload: {
+        status: "completed",
+        summary: result.summary,
+        output: result.output ?? null,
+        structuredOutput: result.structuredOutput ?? null,
+        touchedFiles: result.touchedFiles ?? [],
+        completedAt: result.completedAt,
+      },
+      now: result.completedAt,
+    });
 
     return {
       message: notification.message,

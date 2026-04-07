@@ -70,6 +70,7 @@ import type {
   PrincipalMainMemoryStatus,
   SessionTaskSettings,
   StoredAgentMailboxEntryRecord,
+  StoredAgentHandoffRecord,
   StoredAgentAuditLogRecord,
   StoredAgentSpawnSuggestionStateRecord,
   StoredAgentSpawnPolicyRecord,
@@ -90,7 +91,7 @@ import type {
   StoredPrincipalMainMemoryRecord,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 24;
+const DATABASE_SCHEMA_VERSION = 25;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -656,6 +657,23 @@ interface AgentMessageRow {
   priority: string;
   requires_ack: number;
   created_at: string;
+}
+
+interface AgentHandoffRow {
+  handoff_id: string;
+  organization_id: string;
+  from_agent_id: string;
+  to_agent_id: string;
+  work_item_id: string;
+  source_message_id: string | null;
+  source_run_id: string | null;
+  summary: string;
+  blockers_json: string | null;
+  recommended_next_actions_json: string | null;
+  attached_artifacts_json: string | null;
+  payload_json: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 interface AgentRunRow {
@@ -2507,6 +2525,48 @@ export class SqliteCodexSessionRegistry {
     return rows.map(mapAgentWorkItemRow);
   }
 
+  listAgentWorkItemsByParentWorkItem(parentWorkItemId: string): StoredAgentWorkItemRecord[] {
+    const normalizedParentWorkItemId = parentWorkItemId.trim();
+
+    if (!normalizedParentWorkItemId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            work_item_id,
+            organization_id,
+            target_agent_id,
+            source_type,
+            source_principal_id,
+            source_agent_id,
+            parent_work_item_id,
+            dispatch_reason,
+            goal,
+            context_packet_json,
+            waiting_action_request_json,
+            latest_human_response_json,
+            priority,
+            status,
+            workspace_policy_snapshot_json,
+            runtime_profile_snapshot_json,
+            created_at,
+            scheduled_at,
+            started_at,
+            completed_at,
+            updated_at
+          FROM themis_agent_work_items
+          WHERE parent_work_item_id = ?
+          ORDER BY updated_at DESC, work_item_id ASC
+        `,
+      )
+      .all(normalizedParentWorkItemId) as AgentWorkItemRow[];
+
+    return rows.map(mapAgentWorkItemRow);
+  }
+
   saveAgentWorkItem(record: StoredAgentWorkItemRecord): void {
     const workItemId = record.workItemId.trim();
     const organizationId = record.organizationId.trim();
@@ -3457,6 +3517,248 @@ export class SqliteCodexSessionRegistry {
 
     if (writeResult.changes === 0) {
       throw new Error("Agent message write did not apply.");
+    }
+  }
+
+  getAgentHandoff(handoffId: string): StoredAgentHandoffRecord | null {
+    const normalizedHandoffId = handoffId.trim();
+
+    if (!normalizedHandoffId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            handoff_id,
+            organization_id,
+            from_agent_id,
+            to_agent_id,
+            work_item_id,
+            source_message_id,
+            source_run_id,
+            summary,
+            blockers_json,
+            recommended_next_actions_json,
+            attached_artifacts_json,
+            payload_json,
+            created_at,
+            updated_at
+          FROM themis_agent_handoffs
+          WHERE handoff_id = ?
+        `,
+      )
+      .get(normalizedHandoffId) as AgentHandoffRow | undefined;
+
+    return row ? mapAgentHandoffRow(row) : null;
+  }
+
+  listAgentHandoffsByWorkItem(workItemId: string): StoredAgentHandoffRecord[] {
+    const normalizedWorkItemId = workItemId.trim();
+
+    if (!normalizedWorkItemId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            handoff_id,
+            organization_id,
+            from_agent_id,
+            to_agent_id,
+            work_item_id,
+            source_message_id,
+            source_run_id,
+            summary,
+            blockers_json,
+            recommended_next_actions_json,
+            attached_artifacts_json,
+            payload_json,
+            created_at,
+            updated_at
+          FROM themis_agent_handoffs
+          WHERE work_item_id = ?
+          ORDER BY created_at DESC, handoff_id DESC
+        `,
+      )
+      .all(normalizedWorkItemId) as AgentHandoffRow[];
+
+    return rows.map(mapAgentHandoffRow);
+  }
+
+  listAgentHandoffsByAgent(agentId: string): StoredAgentHandoffRecord[] {
+    const normalizedAgentId = agentId.trim();
+
+    if (!normalizedAgentId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            handoff_id,
+            organization_id,
+            from_agent_id,
+            to_agent_id,
+            work_item_id,
+            source_message_id,
+            source_run_id,
+            summary,
+            blockers_json,
+            recommended_next_actions_json,
+            attached_artifacts_json,
+            payload_json,
+            created_at,
+            updated_at
+          FROM themis_agent_handoffs
+          WHERE from_agent_id = ?
+             OR to_agent_id = ?
+          ORDER BY created_at DESC, handoff_id DESC
+        `,
+      )
+      .all(normalizedAgentId, normalizedAgentId) as AgentHandoffRow[];
+
+    return rows.map(mapAgentHandoffRow);
+  }
+
+  listAgentHandoffsByOwnerPrincipal(ownerPrincipalId: string): StoredAgentHandoffRecord[] {
+    const normalizedOwnerPrincipalId = ownerPrincipalId.trim();
+
+    if (!normalizedOwnerPrincipalId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            handoff.handoff_id,
+            handoff.organization_id,
+            handoff.from_agent_id,
+            handoff.to_agent_id,
+            handoff.work_item_id,
+            handoff.source_message_id,
+            handoff.source_run_id,
+            handoff.summary,
+            handoff.blockers_json,
+            handoff.recommended_next_actions_json,
+            handoff.attached_artifacts_json,
+            handoff.payload_json,
+            handoff.created_at,
+            handoff.updated_at
+          FROM themis_agent_handoffs handoff
+          INNER JOIN themis_organizations organization
+            ON organization.organization_id = handoff.organization_id
+          WHERE organization.owner_principal_id = ?
+          ORDER BY handoff.created_at DESC, handoff.handoff_id DESC
+        `,
+      )
+      .all(normalizedOwnerPrincipalId) as AgentHandoffRow[];
+
+    return rows.map(mapAgentHandoffRow);
+  }
+
+  saveAgentHandoff(record: StoredAgentHandoffRecord): void {
+    const handoffId = record.handoffId.trim();
+    const organizationId = record.organizationId.trim();
+    const fromAgentId = record.fromAgentId.trim();
+    const toAgentId = record.toAgentId.trim();
+    const workItemId = record.workItemId.trim();
+    const sourceMessageId = normalizeText(record.sourceMessageId);
+    const sourceRunId = normalizeText(record.sourceRunId);
+    const summary = record.summary.trim();
+    const blockers = dedupeStrings(record.blockers);
+    const recommendedNextActions = dedupeStrings(record.recommendedNextActions);
+    const attachedArtifacts = dedupeStrings(record.attachedArtifacts);
+
+    if (!handoffId || !organizationId || !fromAgentId || !toAgentId || !workItemId || !summary) {
+      throw new Error("Agent handoff record is incomplete.");
+    }
+
+    const existing = this.db
+      .prepare(
+        `
+          SELECT organization_id, work_item_id
+          FROM themis_agent_handoffs
+          WHERE handoff_id = ?
+        `,
+      )
+      .get(handoffId) as { organization_id: string; work_item_id: string } | undefined;
+
+    if (existing && (existing.organization_id !== organizationId || existing.work_item_id !== workItemId)) {
+      throw new Error("Agent handoff belongs to another organization or work item.");
+    }
+
+    const writeResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_agent_handoffs (
+            handoff_id,
+            organization_id,
+            from_agent_id,
+            to_agent_id,
+            work_item_id,
+            source_message_id,
+            source_run_id,
+            summary,
+            blockers_json,
+            recommended_next_actions_json,
+            attached_artifacts_json,
+            payload_json,
+            created_at,
+            updated_at
+          ) VALUES (
+            @handoff_id,
+            @organization_id,
+            @from_agent_id,
+            @to_agent_id,
+            @work_item_id,
+            @source_message_id,
+            @source_run_id,
+            @summary,
+            @blockers_json,
+            @recommended_next_actions_json,
+            @attached_artifacts_json,
+            @payload_json,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(handoff_id) DO UPDATE SET
+            source_message_id = excluded.source_message_id,
+            source_run_id = excluded.source_run_id,
+            summary = excluded.summary,
+            blockers_json = excluded.blockers_json,
+            recommended_next_actions_json = excluded.recommended_next_actions_json,
+            attached_artifacts_json = excluded.attached_artifacts_json,
+            payload_json = excluded.payload_json,
+            updated_at = excluded.updated_at
+          WHERE themis_agent_handoffs.organization_id = excluded.organization_id
+            AND themis_agent_handoffs.work_item_id = excluded.work_item_id
+        `,
+      )
+      .run({
+        handoff_id: handoffId,
+        organization_id: organizationId,
+        from_agent_id: fromAgentId,
+        to_agent_id: toAgentId,
+        work_item_id: workItemId,
+        source_message_id: sourceMessageId ?? null,
+        source_run_id: sourceRunId ?? null,
+        summary,
+        blockers_json: JSON.stringify(blockers),
+        recommended_next_actions_json: JSON.stringify(recommendedNextActions),
+        attached_artifacts_json: JSON.stringify(attachedArtifacts),
+        payload_json: stringifyJson(record.payload),
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+
+    if (writeResult.changes === 0) {
+      throw new Error("Agent handoff write did not apply.");
     }
   }
 
@@ -7519,6 +7821,37 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_agent_messages_org_idx
       ON themis_agent_messages(organization_id, created_at DESC, message_id ASC);
 
+      CREATE TABLE IF NOT EXISTS themis_agent_handoffs (
+        handoff_id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        from_agent_id TEXT NOT NULL,
+        to_agent_id TEXT NOT NULL,
+        work_item_id TEXT NOT NULL,
+        source_message_id TEXT,
+        source_run_id TEXT,
+        summary TEXT NOT NULL,
+        blockers_json TEXT NOT NULL DEFAULT '[]',
+        recommended_next_actions_json TEXT NOT NULL DEFAULT '[]',
+        attached_artifacts_json TEXT NOT NULL DEFAULT '[]',
+        payload_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (organization_id) REFERENCES themis_organizations(organization_id) ON DELETE CASCADE,
+        FOREIGN KEY (from_agent_id) REFERENCES themis_managed_agents(agent_id) ON DELETE CASCADE,
+        FOREIGN KEY (to_agent_id) REFERENCES themis_managed_agents(agent_id) ON DELETE CASCADE,
+        FOREIGN KEY (work_item_id) REFERENCES themis_agent_work_items(work_item_id) ON DELETE CASCADE,
+        FOREIGN KEY (source_message_id) REFERENCES themis_agent_messages(message_id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_agent_handoffs_work_item_idx
+      ON themis_agent_handoffs(work_item_id, created_at DESC, handoff_id DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_agent_handoffs_to_agent_idx
+      ON themis_agent_handoffs(to_agent_id, created_at DESC, handoff_id DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_agent_handoffs_from_agent_idx
+      ON themis_agent_handoffs(from_agent_id, created_at DESC, handoff_id DESC);
+
       CREATE TABLE IF NOT EXISTS themis_agent_mailboxes (
         mailbox_entry_id TEXT PRIMARY KEY,
         organization_id TEXT NOT NULL,
@@ -8474,6 +8807,25 @@ function mapAgentMessageRow(row: AgentMessageRow): StoredAgentMessageRecord {
     priority: row.priority as ManagedAgentPriority,
     requiresAck: row.requires_ack === 1,
     createdAt: row.created_at,
+  };
+}
+
+function mapAgentHandoffRow(row: AgentHandoffRow): StoredAgentHandoffRecord {
+  return {
+    handoffId: row.handoff_id,
+    organizationId: row.organization_id,
+    fromAgentId: row.from_agent_id,
+    toAgentId: row.to_agent_id,
+    workItemId: row.work_item_id,
+    ...(row.source_message_id ? { sourceMessageId: row.source_message_id } : {}),
+    ...(row.source_run_id ? { sourceRunId: row.source_run_id } : {}),
+    summary: row.summary,
+    blockers: normalizeStringArray(safeParseJson(row.blockers_json ?? "[]")),
+    recommendedNextActions: normalizeStringArray(safeParseJson(row.recommended_next_actions_json ?? "[]")),
+    attachedArtifacts: normalizeStringArray(safeParseJson(row.attached_artifacts_json ?? "[]")),
+    ...(row.payload_json ? { payload: safeParseJson(row.payload_json) } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 

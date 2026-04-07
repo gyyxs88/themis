@@ -105,6 +105,10 @@ test("load 会读取 agent 列表并补齐当前选中 agent 的任务与 mailbo
         });
       }
 
+      if (url === "/api/agents/handoffs/list") {
+        return jsonResponse({ handoffs: [], timeline: [] });
+      }
+
       if (url === "/api/agents/work-items/detail") {
         return jsonResponse({
           workItem: {
@@ -137,6 +141,7 @@ test("load 会读取 agent 列表并补齐当前选中 agent 的任务与 mailbo
         "/api/agents/detail",
         "/api/agents/work-items/list",
         "/api/agents/mailbox/list",
+        "/api/agents/handoffs/list",
         "/api/agents/work-items/detail",
       ],
     );
@@ -238,6 +243,10 @@ test("createAgent 会调用创建接口并刷新列表，把焦点切到新 agen
 
       if (url === "/api/agents/mailbox/list") {
         return jsonResponse({ items: [] });
+      }
+
+      if (url === "/api/agents/handoffs/list") {
+        return jsonResponse({ handoffs: [], timeline: [] });
       }
 
       throw new Error(`Unexpected fetch url: ${url}`);
@@ -455,6 +464,10 @@ test("approveSpawnSuggestion 会创建 bootstrapping agent，并定位到首次�
         return jsonResponse({ items: [] });
       }
 
+      if (url === "/api/agents/handoffs/list") {
+        return jsonResponse({ handoffs: [], timeline: [] });
+      }
+
       throw new Error(`Unexpected fetch url: ${url}`);
     };
 
@@ -575,6 +588,10 @@ test("saveSpawnPolicy 会提交自动创建护栏并刷新列表", async () => {
 
       if (url === "/api/agents/mailbox/list") {
         return jsonResponse({ items: [] });
+      }
+
+      if (url === "/api/agents/handoffs/list") {
+        return jsonResponse({ handoffs: [], timeline: [] });
       }
 
       throw new Error(`Unexpected fetch url: ${url}`);
@@ -754,6 +771,10 @@ test("ignoreSpawnSuggestion 与 restoreSpawnSuggestion 会提交治理动作并�
         return jsonResponse({ items: [] });
       }
 
+      if (url === "/api/agents/handoffs/list") {
+        return jsonResponse({ handoffs: [], timeline: [] });
+      }
+
       throw new Error(`Unexpected fetch url: ${url}`);
     };
 
@@ -912,6 +933,10 @@ test("approveIdleRecoverySuggestion 会提交空闲回收治理并刷新列表",
         return jsonResponse({ items: [] });
       }
 
+      if (url === "/api/agents/handoffs/list") {
+        return jsonResponse({ handoffs: [], timeline: [] });
+      }
+
       throw new Error(`Unexpected fetch url: ${url}`);
     };
 
@@ -1035,6 +1060,10 @@ test("dispatchWorkItem 会发送结构化派工并刷新目标 agent 详情", as
         return jsonResponse({ items: [] });
       }
 
+      if (url === "/api/agents/handoffs/list") {
+        return jsonResponse({ handoffs: [], timeline: [] });
+      }
+
       if (url === "/api/agents/work-items/detail") {
         return jsonResponse({
           workItem: {
@@ -1066,6 +1095,193 @@ test("dispatchWorkItem 会发送结构化派工并刷新目标 agent 详情", as
     assert.equal(app.runtime.agents.noticeMessage, "已把任务派给目标 agent。");
     assert.equal(app.runtime.agents.dispatchDraft.dispatchReason, "");
     assert.equal(app.runtime.agents.selectedWorkItemId, "work-item-2");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("dispatchWorkItem 在当前父任务下派 agent 子任务时会自动挂上 parentWorkItemId，并留在父任务详情页", async () => {
+  const state = createDefaultAgentsState();
+  state.agents = [
+    {
+      agentId: "agent-manager",
+      principalId: "principal-manager",
+      displayName: "经理·曜",
+      departmentRole: "经理",
+      mission: "负责拆解任务与汇总结果。",
+      status: "active",
+    },
+    {
+      agentId: "agent-backend",
+      principalId: "principal-backend",
+      displayName: "后端·衡",
+      departmentRole: "后端",
+      mission: "负责服务端。",
+      status: "active",
+    },
+  ];
+  state.selectedAgentId = "agent-manager";
+  state.selectedWorkItemId = "work-item-parent-1";
+  state.selectedWorkItemDetail = {
+    workItem: {
+      workItemId: "work-item-parent-1",
+      targetAgentId: "agent-manager",
+      status: "running",
+      goal: "汇总当前协作进展",
+    },
+    targetAgent: {
+      agentId: "agent-manager",
+      displayName: "经理·曜",
+    },
+    messages: [],
+  };
+  state.dispatchDraft = {
+    targetAgentId: "agent-backend",
+    sourceType: "agent",
+    sourceAgentId: "agent-manager",
+    dispatchReason: "把接口汇总交给后端",
+    goal: "补 child summary 接口",
+    contextPacketText: "",
+    priority: "high",
+  };
+  const app = createAppStub(state);
+  const controller = createAgentsController(app);
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+
+  try {
+    globalThis.fetch = async (url, init = {}) => {
+      calls.push({
+        url,
+        method: init.method ?? "GET",
+        body: JSON.parse(init.body),
+      });
+
+      if (url === "/api/agents/spawn-suggestions") {
+        return jsonResponse({ suggestions: [] });
+      }
+
+      if (url === "/api/agents/idle-suggestions") {
+        return jsonResponse({ suggestions: [], recentAuditLogs: [] });
+      }
+
+      if (url === "/api/agents/dispatch") {
+        return jsonResponse({
+          targetAgent: {
+            agentId: "agent-backend",
+          },
+          workItem: {
+            workItemId: "work-item-child-1",
+          },
+        });
+      }
+
+      if (url === "/api/agents/list") {
+        return jsonResponse({
+          organizations: [{ organizationId: "org-1", displayName: "老板团队" }],
+          agents: state.agents,
+        });
+      }
+
+      if (url === "/api/agents/waiting/list") {
+        return jsonResponse({
+          summary: {
+            totalCount: 0,
+            waitingHumanCount: 0,
+            waitingAgentCount: 0,
+            escalationCount: 0,
+          },
+          items: [],
+        });
+      }
+
+      if (url === "/api/agents/detail") {
+        return jsonResponse({
+          organization: { organizationId: "org-1", displayName: "老板团队" },
+          principal: { principalId: "principal-manager" },
+          agent: state.agents[0],
+        });
+      }
+
+      if (url === "/api/agents/work-items/list") {
+        return jsonResponse({
+          workItems: [
+            {
+              workItemId: "work-item-parent-1",
+              targetAgentId: "agent-manager",
+              status: "running",
+              sourceType: "human",
+              goal: "汇总当前协作进展",
+            },
+            {
+              workItemId: "work-item-child-1",
+              targetAgentId: "agent-backend",
+              parentWorkItemId: "work-item-parent-1",
+              status: "queued",
+              sourceType: "agent",
+              goal: "补 child summary 接口",
+            },
+          ],
+        });
+      }
+
+      if (url === "/api/agents/mailbox/list") {
+        return jsonResponse({ items: [] });
+      }
+
+      if (url === "/api/agents/handoffs/list") {
+        return jsonResponse({ handoffs: [], timeline: [] });
+      }
+
+      if (url === "/api/agents/work-items/detail") {
+        return jsonResponse({
+          workItem: {
+            workItemId: "work-item-parent-1",
+            targetAgentId: "agent-manager",
+            status: "running",
+            goal: "汇总当前协作进展",
+          },
+          targetAgent: {
+            agentId: "agent-manager",
+            displayName: "经理·曜",
+          },
+          childSummary: {
+            totalCount: 1,
+            openCount: 1,
+            waitingCount: 0,
+            completedCount: 0,
+            failedCount: 0,
+            cancelledCount: 0,
+          },
+          childWorkItems: [
+            {
+              workItem: {
+                workItemId: "work-item-child-1",
+                targetAgentId: "agent-backend",
+                status: "queued",
+                goal: "补 child summary 接口",
+              },
+              targetAgent: {
+                agentId: "agent-backend",
+                displayName: "后端·衡",
+              },
+              latestHandoff: null,
+            },
+          ],
+          messages: [],
+        });
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    };
+
+    await controller.dispatchWorkItem();
+
+    assert.equal(calls[0].url, "/api/agents/dispatch");
+    assert.equal(calls[0].body.workItem.parentWorkItemId, "work-item-parent-1");
+    assert.equal(app.runtime.agents.noticeMessage, "已为当前 work item 派出下游子任务。");
+    assert.equal(app.runtime.agents.selectedAgentId, "agent-manager");
+    assert.equal(app.runtime.agents.selectedWorkItemId, "work-item-parent-1");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1197,6 +1413,10 @@ test("respondHumanWaitingWorkItem 会提交治理回复并刷新当前 work item
 
       if (url === "/api/agents/mailbox/list") {
         return jsonResponse({ items: [] });
+      }
+
+      if (url === "/api/agents/handoffs/list") {
+        return jsonResponse({ handoffs: [], timeline: [] });
       }
 
       if (url === "/api/agents/work-items/detail") {
@@ -1364,6 +1584,10 @@ test("respondOrganizationWaitingWorkItem 会在组织级等待队列直接提交
 
       if (url === "/api/agents/mailbox/list") {
         return jsonResponse({ items: [] });
+      }
+
+      if (url === "/api/agents/handoffs/list") {
+        return jsonResponse({ handoffs: [], timeline: [] });
       }
 
       if (url === "/api/agents/work-items/detail") {
@@ -1553,6 +1777,10 @@ test("escalateOrganizationWaitingWorkItem 会把 waiting_agent 升级到顶层�
         return jsonResponse({ items: [] });
       }
 
+      if (url === "/api/agents/handoffs/list") {
+        return jsonResponse({ handoffs: [], timeline: [] });
+      }
+
       if (url === "/api/agents/work-items/detail") {
         return jsonResponse({
           workItem: {
@@ -1695,6 +1923,10 @@ test("cancelWorkItem 会调用取消接口并刷新当前 work item 详情", asy
         return jsonResponse({ items: [] });
       }
 
+      if (url === "/api/agents/handoffs/list") {
+        return jsonResponse({ handoffs: [], timeline: [] });
+      }
+
       if (url === "/api/agents/work-items/detail") {
         return jsonResponse({
           workItem: {
@@ -1819,6 +2051,10 @@ test("pauseManagedAgent 会调用 lifecycle 接口并刷新当前 agent 详情",
         return jsonResponse({ items: [] });
       }
 
+      if (url === "/api/agents/handoffs/list") {
+        return jsonResponse({ handoffs: [], timeline: [] });
+      }
+
       throw new Error(`Unexpected fetch url: ${url}`);
     };
 
@@ -1879,6 +2115,10 @@ test("ackMailboxEntry 会确认消息并刷新当前 agent 的 mailbox", async (
 
       if (url === "/api/agents/mailbox/list") {
         return jsonResponse({ items: [] });
+      }
+
+      if (url === "/api/agents/handoffs/list") {
+        return jsonResponse({ handoffs: [], timeline: [] });
       }
 
       throw new Error(`Unexpected fetch url: ${url}`);

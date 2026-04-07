@@ -236,6 +236,23 @@ export interface StoredAgentMessageRecord {
   createdAt: string;
 }
 
+export interface StoredAgentHandoffRecord {
+  handoffId: string;
+  organizationId: string;
+  fromAgentId: string;
+  toAgentId: string;
+  workItemId: string;
+  sourceMessageId?: string;
+  sourceRunId?: string;
+  summary: string;
+  blockers: string[];
+  recommendedNextActions: string[];
+  attachedArtifacts: string[];
+  payload?: unknown;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface StoredAgentRunRecord {
   runId: string;
   organizationId: string;

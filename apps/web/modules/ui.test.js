@@ -981,6 +981,178 @@ test("renderAgentsState 会在可安全取消的 work item 详情里渲染取消
   assert.ok(harness.dom.agentsWorkItemDetail.innerHTML.includes("取消该 work item"));
 });
 
+test("renderAgentsState 会在 work item 详情里渲染父任务与下游协作汇总", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      agents: {
+        status: "ready",
+        errorMessage: "",
+        noticeMessage: "",
+        loading: false,
+        detailLoading: false,
+        workItemDetailLoading: false,
+        creating: false,
+        dispatching: false,
+        ackingMailboxEntryId: "",
+        cancelingWorkItemId: "",
+        escalatingWorkItemId: "",
+        respondingWorkItemId: "",
+        lifecycleUpdatingAgentId: "",
+        lifecycleUpdatingAction: "",
+        organizations: [{ organizationId: "org-1", displayName: "老板团队" }],
+        agents: [
+          {
+            agentId: "agent-manager",
+            principalId: "principal-manager",
+            displayName: "经理·曜",
+            departmentRole: "经理",
+            mission: "负责拆解任务与汇总结果。",
+            status: "active",
+          },
+        ],
+        organizationWaitingSummary: {
+          totalCount: 0,
+          waitingHumanCount: 0,
+          waitingAgentCount: 0,
+          escalationCount: 0,
+        },
+        organizationWaitingItems: [],
+        organizationWaitingResponseDrafts: {},
+        selectedAgentId: "agent-manager",
+        selectedAgent: {
+          agentId: "agent-manager",
+          principalId: "principal-manager",
+          displayName: "经理·曜",
+          departmentRole: "经理",
+          mission: "负责拆解任务与汇总结果。",
+          status: "active",
+        },
+        selectedAgentPrincipal: {
+          principalId: "principal-manager",
+        },
+        selectedOrganization: {
+          organizationId: "org-1",
+          displayName: "老板团队",
+        },
+        handoffs: [],
+        handoffTimeline: [],
+        workItems: [
+          {
+            workItemId: "work-item-child-1",
+            parentWorkItemId: "work-item-parent-1",
+            targetAgentId: "agent-manager",
+            status: "completed",
+            goal: "汇总当前协作进展",
+          },
+        ],
+        mailboxItems: [],
+        selectedWorkItemId: "work-item-child-1",
+        selectedWorkItemDetail: {
+          workItem: {
+            workItemId: "work-item-child-1",
+            parentWorkItemId: "work-item-parent-1",
+            targetAgentId: "agent-manager",
+            status: "completed",
+            goal: "汇总当前协作进展",
+          },
+          targetAgent: {
+            agentId: "agent-manager",
+            displayName: "经理·曜",
+          },
+          sourcePrincipal: {
+            principalId: "principal-owner",
+          },
+          parentWorkItem: {
+            workItemId: "work-item-root-1",
+            targetAgentId: "agent-lead",
+            status: "running",
+            goal: "完成 P4 第二刀",
+          },
+          parentTargetAgent: {
+            agentId: "agent-lead",
+            displayName: "负责人·青",
+          },
+          childSummary: {
+            totalCount: 2,
+            openCount: 1,
+            waitingCount: 1,
+            completedCount: 1,
+            failedCount: 0,
+            cancelledCount: 0,
+          },
+          childWorkItems: [
+            {
+              workItem: {
+                workItemId: "work-item-sub-1",
+                targetAgentId: "agent-backend",
+                status: "completed",
+                goal: "补 work item summary 接口",
+                priority: "high",
+              },
+              targetAgent: {
+                agentId: "agent-backend",
+                displayName: "后端·衡",
+              },
+              latestHandoff: {
+                handoffId: "handoff-1",
+                summary: "接口已完成并回交给经理。",
+              },
+            },
+            {
+              workItem: {
+                workItemId: "work-item-sub-2",
+                targetAgentId: "agent-frontend",
+                status: "waiting_agent",
+                goal: "补 detail 面板",
+                priority: "normal",
+              },
+              targetAgent: {
+                agentId: "agent-frontend",
+                displayName: "前端·岚",
+              },
+              latestHandoff: null,
+            },
+          ],
+          messages: [],
+        },
+        humanResponseDraft: {
+          workItemId: "",
+          decision: "",
+          inputText: "",
+        },
+        createDraft: {
+          departmentRole: "",
+          displayName: "",
+          mission: "",
+        },
+        dispatchDraft: {
+          targetAgentId: "agent-manager",
+          sourceType: "human",
+          sourceAgentId: "",
+          dispatchReason: "",
+          goal: "",
+          contextPacketText: "",
+          priority: "normal",
+        },
+      },
+    },
+  });
+
+  harness.renderer.renderAgentsState();
+
+  assert.ok(harness.dom.agentsWorkItemDetail.innerHTML.includes("父任务"));
+  assert.ok(harness.dom.agentsWorkItemDetail.innerHTML.includes("负责人·青"));
+  assert.ok(harness.dom.agentsWorkItemDetail.innerHTML.includes("下游协作汇总"));
+  assert.ok(harness.dom.agentsWorkItemDetail.innerHTML.includes("后端·衡"));
+  assert.ok(harness.dom.agentsWorkItemDetail.innerHTML.includes("接口已完成并回交给经理。"));
+  assert.ok(harness.dom.agentsWorkItemDetail.innerHTML.includes("等待中"));
+});
+
 test("renderAgentsState 会在当前 agent 面板渲染 lifecycle 治理动作", () => {
   const harness = createHarness({
     actionBarState: {
@@ -1071,6 +1243,129 @@ test("renderAgentsState 会在当前 agent 面板渲染 lifecycle 治理动作",
   assert.ok(harness.dom.agentsSelectedAgentMeta.innerHTML.includes("治理动作"));
   assert.ok(harness.dom.agentsSelectedAgentMeta.innerHTML.includes('data-agent-lifecycle-action="pause"'));
   assert.ok(harness.dom.agentsSelectedAgentMeta.innerHTML.includes('data-agent-lifecycle-action="archive"'));
+});
+
+test("renderAgentsState 会渲染 handoff 卡片与交接时间线", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      agents: {
+        status: "ready",
+        errorMessage: "",
+        noticeMessage: "",
+        loading: false,
+        detailLoading: false,
+        workItemDetailLoading: false,
+        creating: false,
+        dispatching: false,
+        ackingMailboxEntryId: "",
+        escalatingWorkItemId: "",
+        respondingWorkItemId: "",
+        lifecycleUpdatingAgentId: "",
+        lifecycleUpdatingAction: "",
+        organizations: [{ organizationId: "org-1", displayName: "老板团队" }],
+        agents: [
+          {
+            agentId: "agent-backend",
+            principalId: "principal-backend",
+            displayName: "后端·衡",
+            departmentRole: "后端",
+            mission: "负责接口与存储。",
+            status: "active",
+          },
+        ],
+        organizationWaitingSummary: {
+          totalCount: 0,
+          waitingHumanCount: 0,
+          waitingAgentCount: 0,
+          escalationCount: 0,
+        },
+        organizationWaitingItems: [],
+        organizationWaitingResponseDrafts: {},
+        selectedAgentId: "agent-backend",
+        selectedAgent: {
+          agentId: "agent-backend",
+          principalId: "principal-backend",
+          displayName: "后端·衡",
+          departmentRole: "后端",
+          mission: "负责接口与存储。",
+          status: "active",
+        },
+        selectedAgentPrincipal: {
+          principalId: "principal-backend",
+        },
+        selectedOrganization: {
+          organizationId: "org-1",
+          displayName: "老板团队",
+        },
+        handoffs: [
+          {
+            handoffId: "handoff-1",
+            fromAgentId: "agent-backend",
+            toAgentId: "agent-frontend",
+            toAgentDisplayName: "前端·岚",
+            counterpartyDisplayName: "前端·岚",
+            workItemId: "work-item-2",
+            summary: "detail 接口已交接给前端验证。",
+            blockers: ["等页面联调"],
+            recommendedNextActions: ["补时间线面板"],
+            attachedArtifacts: ["src/server/http-agents.ts"],
+            createdAt: "2026-04-07T10:10:00.000Z",
+          },
+        ],
+        handoffTimeline: [
+          {
+            kind: "handoff",
+            title: "交接给前端·岚",
+            summary: "detail 接口已交接给前端验证。",
+            counterpartyDisplayName: "前端·岚",
+            workItemId: "work-item-2",
+            at: "2026-04-07T10:10:00.000Z",
+            handoffId: "handoff-1",
+          },
+        ],
+        workItems: [],
+        mailboxItems: [],
+        selectedWorkItemId: "",
+        selectedWorkItemDetail: null,
+        humanResponseDraft: {
+          workItemId: "",
+          decision: "",
+          inputText: "",
+        },
+        createDraft: {
+          departmentRole: "",
+          displayName: "",
+          mission: "",
+        },
+        dispatchDraft: {
+          targetAgentId: "agent-backend",
+          sourceType: "human",
+          sourceAgentId: "",
+          dispatchReason: "",
+          goal: "",
+          contextPacketText: "",
+          priority: "normal",
+        },
+      },
+    },
+  });
+
+  harness.renderer.renderAgentsState();
+
+  assert.ok(harness.dom.agentsHandoffsSummary.textContent.includes("1 条 handoff"));
+  assert.ok(harness.dom.agentsHandoffsList.innerHTML.includes("发起交接"));
+  assert.ok(harness.dom.agentsHandoffsList.innerHTML.includes("前端·岚"));
+  assert.ok(harness.dom.agentsHandoffsList.innerHTML.includes("detail 接口已交接给前端验证。"));
+  assert.ok(harness.dom.agentsHandoffsList.innerHTML.includes("等页面联调"));
+  assert.ok(harness.dom.agentsTimelineSummary.textContent.includes("1 条记录"));
+  assert.ok(harness.dom.agentsTimelineList.innerHTML.includes("交接给前端·岚"));
+  assert.ok(harness.dom.agentsTimelineList.innerHTML.includes("detail 接口已交接给前端验证。"));
+  assert.ok(harness.dom.agentsTimelineList.innerHTML.includes("交接"));
 });
 
 function createHarness({ actionBarState, threadControlState = null, runtime = {}, threadOverrides = {} }) {
@@ -1197,6 +1492,12 @@ function createHarness({ actionBarState, threadControlState = null, runtime = {}
     agentsSelectedAgentHeading: createTextStub(),
     agentsSelectedAgentCopy: createTextStub(),
     agentsSelectedAgentMeta: createTextStub(),
+    agentsHandoffsSummary: createTextStub(),
+    agentsHandoffsEmpty: createTextStub(),
+    agentsHandoffsList: createTextStub(),
+    agentsTimelineSummary: createTextStub(),
+    agentsTimelineEmpty: createTextStub(),
+    agentsTimelineList: createTextStub(),
     agentsWorkItemsEmpty: createTextStub(),
     agentsWorkItemsList: createTextStub(),
     agentsWorkItemDetail: createTextStub(),

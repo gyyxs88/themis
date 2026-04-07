@@ -758,7 +758,7 @@ test("ManagedAgentsService 会基于空闲时长、近期 work item 与 handoff 
   }
 });
 
-test("schema 24 迁移会为 principals 补 kind/org 列，并补齐 managed agent bootstrap 列与相关表", () => {
+test("schema 25 迁移会为 principals 补 kind/org 列，并补齐 managed agent bootstrap、handoff 表与相关表", () => {
   const root = mkdtempSync(join(tmpdir(), "themis-managed-agents-schema-"));
   const databaseFile = join(root, "infra/local/themis.db");
   mkdirSync(join(root, "infra/local"), { recursive: true });
@@ -836,6 +836,14 @@ test("schema 24 迁移会为 principals 补 kind/org 列，并补齐 managed age
           AND name = 'themis_agent_audit_logs'
       `)
       .get() as { name: string } | undefined;
+    const handoffTable = verify
+      .prepare(`
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name = 'themis_agent_handoffs'
+      `)
+      .get() as { name: string } | undefined;
 
     assert.equal(organizationTable?.name, "themis_organizations");
     assert.equal(spawnPolicyTable?.name, "themis_agent_spawn_policies");
@@ -844,6 +852,7 @@ test("schema 24 迁移会为 principals 补 kind/org 列，并补齐 managed age
     assert.equal(spawnSuggestionStateTable?.name, "themis_agent_spawn_suggestion_states");
     assert.equal(managedAgentsTable?.name, "themis_managed_agents");
     assert.equal(agentAuditTable?.name, "themis_agent_audit_logs");
+    assert.equal(handoffTable?.name, "themis_agent_handoffs");
   } finally {
     verify.close();
     rmSync(root, { recursive: true, force: true });

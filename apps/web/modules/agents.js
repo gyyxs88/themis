@@ -81,6 +81,8 @@ export function createDefaultAgentsState() {
     selectedAgent: null,
     selectedAgentPrincipal: null,
     selectedOrganization: null,
+    handoffs: [],
+    handoffTimeline: [],
     workItems: [],
     mailboxItems: [],
     selectedWorkItemId: "",
@@ -616,6 +618,8 @@ export function createAgentsController(app) {
         selectedAgent: null,
         selectedAgentPrincipal: null,
         selectedOrganization: null,
+        handoffs: [],
+        handoffTimeline: [],
         workItems: [],
         mailboxItems: [],
         selectedWorkItemId: "",
@@ -636,7 +640,7 @@ export function createAgentsController(app) {
 
     try {
       const identity = buildIdentityPayload(app);
-      const [detailData, workItemsData, mailboxData] = await Promise.all([
+      const [detailData, workItemsData, mailboxData, handoffData] = await Promise.all([
         postAgents("/api/agents/detail", {
           ...identity,
           agentId: normalizedAgentId,
@@ -649,6 +653,10 @@ export function createAgentsController(app) {
           ...identity,
           agentId: normalizedAgentId,
         }),
+        postAgents("/api/agents/handoffs/list", {
+          ...identity,
+          agentId: normalizedAgentId,
+        }),
       ]);
 
       if (requestId !== detailRequestId) {
@@ -657,6 +665,8 @@ export function createAgentsController(app) {
 
       const workItems = normalizeWorkItems(workItemsData.workItems);
       const mailboxItems = normalizeMailboxItems(mailboxData.items);
+      const handoffs = normalizeHandoffs(handoffData.handoffs);
+      const handoffTimeline = normalizeHandoffTimeline(handoffData.timeline);
       const state = app.runtime.agents ?? createDefaultAgentsState();
       const selectedWorkItemId = resolveWorkItemId(options.selectWorkItemId || state.selectedWorkItemId, workItems);
       const spawnPolicyDraft = syncSpawnPolicyDraft(
@@ -675,6 +685,8 @@ export function createAgentsController(app) {
         selectedAgent: isRecord(detailData.agent) ? detailData.agent : null,
         selectedAgentPrincipal: isRecord(detailData.principal) ? detailData.principal : null,
         selectedOrganization: isRecord(detailData.organization) ? detailData.organization : null,
+        handoffs,
+        handoffTimeline,
         workItems,
         mailboxItems,
         selectedWorkItemId,
@@ -1166,6 +1178,7 @@ export function createAgentsController(app) {
     const sourceAgentId = sourceType === "agent"
       ? normalizeText(state.dispatchDraft.sourceAgentId)
       : "";
+    const parentWorkItemId = resolveDispatchParentWorkItemId(state, sourceType, sourceAgentId, targetAgentId);
 
     if (!targetAgentId) {
       return handleDispatchValidationError("目标 agent 不能为空。");
@@ -1210,6 +1223,7 @@ export function createAgentsController(app) {
           targetAgentId,
           sourceType,
           ...(sourceAgentId ? { sourceAgentId } : {}),
+          ...(parentWorkItemId ? { parentWorkItemId } : {}),
           dispatchReason,
           goal,
           ...(contextPacket !== undefined ? { contextPacket } : {}),
@@ -1217,14 +1231,21 @@ export function createAgentsController(app) {
         },
       });
       const responseTargetAgentId = normalizeText(response?.targetAgent?.agentId) || targetAgentId;
-      const responseWorkItemId = normalizeText(response?.workItem?.workItemId) || "";
+      const nextSelectedAgentId = parentWorkItemId
+        ? normalizeText(state.selectedAgentId) || sourceAgentId || responseTargetAgentId
+        : responseTargetAgentId;
+      const nextSelectedWorkItemId = parentWorkItemId
+        ? parentWorkItemId
+        : normalizeText(response?.workItem?.workItemId) || "";
 
       setState({
         dispatching: false,
-        noticeMessage: "已把任务派给目标 agent。",
+        noticeMessage: parentWorkItemId
+          ? "已为当前 work item 派出下游子任务。"
+          : "已把任务派给目标 agent。",
         dispatchDraft: {
           ...state.dispatchDraft,
-          targetAgentId: responseTargetAgentId,
+          targetAgentId,
           sourceType,
           sourceAgentId: sourceType === "agent" ? sourceAgentId : "",
           dispatchReason: "",
@@ -1237,8 +1258,8 @@ export function createAgentsController(app) {
 
       await load({
         preserveNoticeMessage: true,
-        selectAgentId: responseTargetAgentId,
-        selectWorkItemId: responseWorkItemId,
+        selectAgentId: nextSelectedAgentId,
+        selectWorkItemId: nextSelectedWorkItemId,
       });
       return app.runtime.agents;
     } catch (error) {
@@ -1680,6 +1701,18 @@ function normalizeMailboxItems(value) {
     : [];
 }
 
+function normalizeHandoffs(value) {
+  return Array.isArray(value)
+    ? value.filter((item) => isRecord(item) && normalizeText(item.handoffId) && normalizeText(item.summary))
+    : [];
+}
+
+function normalizeHandoffTimeline(value) {
+  return Array.isArray(value)
+    ? value.filter((item) => isRecord(item) && normalizeText(item.entryId) && normalizeText(item.kind))
+    : [];
+}
+
 function normalizeWaitingSummary(value) {
   return isRecord(value)
     ? {
@@ -1781,6 +1814,32 @@ function resolveSourceAgentId(candidateId, agents, targetAgentId) {
 
   const firstAlternative = agents.find((agent) => normalizeText(agent.agentId) !== normalizeText(targetAgentId));
   return normalizeText(firstAlternative?.agentId) || normalizeText(agents[0]?.agentId) || "";
+}
+
+function resolveDispatchParentWorkItemId(state, sourceType, sourceAgentId, targetAgentId) {
+  if (sourceType !== "agent") {
+    return "";
+  }
+
+  const selectedWorkItem = isRecord(state?.selectedWorkItemDetail?.workItem)
+    ? state.selectedWorkItemDetail.workItem
+    : null;
+  const selectedWorkItemId = normalizeText(selectedWorkItem?.workItemId);
+  const selectedTargetAgentId = normalizeText(selectedWorkItem?.targetAgentId);
+
+  if (!selectedWorkItemId || !selectedTargetAgentId) {
+    return "";
+  }
+
+  if (selectedTargetAgentId !== normalizeText(sourceAgentId)) {
+    return "";
+  }
+
+  if (normalizeText(targetAgentId) === selectedTargetAgentId) {
+    return "";
+  }
+
+  return selectedWorkItemId;
 }
 
 function resolveWorkItemId(candidateId, workItems) {

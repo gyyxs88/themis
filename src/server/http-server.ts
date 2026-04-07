@@ -15,6 +15,7 @@ import {
   handleAgentDispatch,
   handleAgentIdleRecoveryApprove,
   handleAgentIdleRecoverySuggestions,
+  handleAgentHandoffList,
   handleAgentList,
   handleAgentMailboxAck,
   handleAgentMailboxList,
@@ -340,6 +341,10 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/agents/runs/detail") {
         return handleAgentRunDetail(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/handoffs/list") {
+        return handleAgentHandoffList(request, response, runtime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/agents/mailbox/list") {

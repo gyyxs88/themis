@@ -374,6 +374,8 @@ export function createRenderer(app) {
     const selectedWorkItemDetail = agentsState.selectedWorkItemDetail && typeof agentsState.selectedWorkItemDetail === "object"
       ? agentsState.selectedWorkItemDetail
       : null;
+    const handoffs = Array.isArray(agentsState.handoffs) ? agentsState.handoffs : [];
+    const handoffTimeline = Array.isArray(agentsState.handoffTimeline) ? agentsState.handoffTimeline : [];
     const statusMessage = resolveAgentsStatusMessage(agentsState);
     const pendingMailboxCount = mailboxItems.filter((item) => item?.entry?.status !== "acked").length;
     const createDraft = normalizeAgentCreateDraft(agentsState.createDraft);
@@ -581,6 +583,14 @@ export function createRenderer(app) {
       dom.agentsSelectedAgentCopy.textContent = "先从上方选择一个 agent，才能查看它的任务和内部信箱。";
       dom.agentsSelectedAgentMeta.classList.add("hidden");
       dom.agentsSelectedAgentMeta.innerHTML = "";
+      dom.agentsHandoffsSummary.textContent = "先选择一个 agent，才能查看它最近的交接与时间线。";
+      dom.agentsHandoffsEmpty.classList.remove("hidden");
+      dom.agentsHandoffsEmpty.textContent = "当前还没有选中 agent。";
+      dom.agentsHandoffsList.innerHTML = "";
+      dom.agentsTimelineSummary.textContent = "选中 agent 后，这里会展示派工、等待、治理回复和交接轨迹。";
+      dom.agentsTimelineEmpty.classList.remove("hidden");
+      dom.agentsTimelineEmpty.textContent = "当前还没有选中 agent。";
+      dom.agentsTimelineList.innerHTML = "";
       dom.agentsWorkItemsEmpty.classList.remove("hidden");
       dom.agentsWorkItemsEmpty.textContent = "当前还没有选中 agent。";
       dom.agentsWorkItemsList.innerHTML = "";
@@ -598,6 +608,7 @@ export function createRenderer(app) {
       selectedAgent,
       principal: agentsState.selectedAgentPrincipal,
       organization: agentsState.selectedOrganization,
+      handoffCount: handoffs.length,
       workItemCount: workItems.length,
       mailboxCount: mailboxItems.length,
       lifecycleUpdatingAgentId: typeof agentsState.lifecycleUpdatingAgentId === "string"
@@ -609,6 +620,39 @@ export function createRenderer(app) {
       busy,
       escapeHtml: utils.escapeHtml,
     });
+
+    dom.agentsHandoffsSummary.textContent = agentsState.detailLoading
+      ? "正在读取当前 agent 的交接记录。"
+      : handoffs.length > 0
+        ? `最近有 ${handoffs.length} 条 handoff 记录，优先展示最新交接。`
+        : "当前 agent 还没有 handoff 记录。";
+    dom.agentsHandoffsEmpty.classList.toggle("hidden", handoffs.length > 0);
+    dom.agentsHandoffsEmpty.textContent = agentsState.detailLoading
+      ? "正在读取 handoff 记录。"
+      : "当前 agent 还没有 handoff 记录。";
+    dom.agentsHandoffsList.innerHTML = handoffs
+      .map((handoff) => renderAgentHandoffCard(handoff, {
+        selectedAgentId,
+        escapeHtml: utils.escapeHtml,
+        formatRelativeTime: utils.formatRelativeTime,
+      }))
+      .join("");
+
+    dom.agentsTimelineSummary.textContent = agentsState.detailLoading
+      ? "正在汇总当前 agent 的交接时间线。"
+      : handoffTimeline.length > 0
+        ? `当前时间线共 ${handoffTimeline.length} 条记录，已按最近更新时间排序。`
+        : "当前 agent 还没有时间线记录。";
+    dom.agentsTimelineEmpty.classList.toggle("hidden", handoffTimeline.length > 0);
+    dom.agentsTimelineEmpty.textContent = agentsState.detailLoading
+      ? "正在汇总时间线。"
+      : "当前 agent 还没有时间线记录。";
+    dom.agentsTimelineList.innerHTML = handoffTimeline
+      .map((entry) => renderAgentTimelineEntryCard(entry, {
+        escapeHtml: utils.escapeHtml,
+        formatRelativeTime: utils.formatRelativeTime,
+      }))
+      .join("");
 
     dom.agentsWorkItemsEmpty.classList.toggle("hidden", workItems.length > 0);
     dom.agentsWorkItemsEmpty.textContent = agentsState.detailLoading
@@ -2531,10 +2575,76 @@ function renderAgentCard(agent, { selected, escapeHtml, formatRelativeTime }) {
   `;
 }
 
+function renderAgentHandoffCard(handoff, { selectedAgentId, escapeHtml, formatRelativeTime }) {
+  const outgoing = handoff?.fromAgentId === selectedAgentId;
+  const blockers = Array.isArray(handoff?.blockers) ? handoff.blockers : [];
+  const recommendedNextActions = Array.isArray(handoff?.recommendedNextActions) ? handoff.recommendedNextActions : [];
+  const attachedArtifacts = Array.isArray(handoff?.attachedArtifacts) ? handoff.attachedArtifacts : [];
+  const counterpartyLabel = typeof handoff?.counterpartyDisplayName === "string" && handoff.counterpartyDisplayName.trim()
+    ? handoff.counterpartyDisplayName
+    : outgoing
+      ? typeof handoff?.toAgentDisplayName === "string" && handoff.toAgentDisplayName.trim()
+        ? handoff.toAgentDisplayName
+        : typeof handoff?.toAgentId === "string"
+          ? handoff.toAgentId
+          : "未知 agent"
+      : typeof handoff?.fromAgentDisplayName === "string" && handoff.fromAgentDisplayName.trim()
+        ? handoff.fromAgentDisplayName
+        : typeof handoff?.fromAgentId === "string"
+          ? handoff.fromAgentId
+        : "未知 agent";
+
+  return `
+    <article class="agent-card">
+      <div class="agent-card-head">
+        <div>
+          <h4>${escapeHtml(outgoing ? "发起交接" : "收到交接")}</h4>
+          <p class="agent-card-copy">${escapeHtml(outgoing ? `交给 ${counterpartyLabel}` : `来自 ${counterpartyLabel}`)}</p>
+        </div>
+        <span class="agent-status-pill warning">${escapeHtml("handoff")}</span>
+      </div>
+      <p class="agent-card-copy">${escapeHtml(handoff?.summary || "当前没有 handoff 摘要。")}</p>
+      ${blockers.length ? `<p class="agent-card-copy">阻塞：${escapeHtml(blockers.join("；"))}</p>` : ""}
+      ${recommendedNextActions.length ? `<p class="agent-card-copy">下一步：${escapeHtml(recommendedNextActions.join("；"))}</p>` : ""}
+      ${attachedArtifacts.length ? `<p class="agent-card-copy">附件：${escapeHtml(attachedArtifacts.join("，"))}</p>` : ""}
+      <div class="agent-meta-grid">
+        ${renderAgentMetaItem("workItem", handoff?.workItemId || "未知", escapeHtml)}
+        ${renderAgentMetaItem("时间", formatRelativeTime(handoff?.createdAt), escapeHtml)}
+      </div>
+    </article>
+  `;
+}
+
+function renderAgentTimelineEntryCard(entry, { escapeHtml, formatRelativeTime }) {
+  const kind = typeof entry?.kind === "string" ? entry.kind : "response";
+  const counterparty = typeof entry?.counterpartyDisplayName === "string" && entry.counterpartyDisplayName.trim()
+    ? ` · ${entry.counterpartyDisplayName}`
+    : "";
+
+  return `
+    <article class="agent-card agent-card-compact agent-timeline-card">
+      <div class="agent-card-head">
+        <div class="agent-card-heading">
+          <h4>${escapeHtml(entry?.title || "时间线事件")}</h4>
+          <p class="agent-card-copy">${escapeHtml(entry?.summary || "当前没有事件摘要。")}</p>
+        </div>
+        <div class="agent-pill-row">
+          <span class="badge ${escapeHtml(resolveTimelineTone(kind))}">${escapeHtml(resolveTimelineKindLabel(kind))}</span>
+        </div>
+      </div>
+      <div class="agent-meta-grid">
+        ${renderAgentMetaItem("时间", formatRelativeTime(entry?.at), escapeHtml)}
+        ${renderAgentMetaItem("workItem", `${entry?.workItemId || "无"}${counterparty}`, escapeHtml)}
+      </div>
+    </article>
+  `;
+}
+
 function renderAgentMetaGrid({
   selectedAgent,
   principal,
   organization,
+  handoffCount,
   workItemCount,
   mailboxCount,
   lifecycleUpdatingAgentId,
@@ -2552,6 +2662,7 @@ function renderAgentMetaGrid({
     renderAgentMetaItem("建档", resolveAgentBootstrapLabel(selectedAgent?.bootstrapProfile), escapeHtml),
     renderAgentMetaItem("Organization", organization?.displayName || organization?.organizationId || "未绑定", escapeHtml),
     renderAgentMetaItem("Principal", principal?.principalId || selectedAgent?.principalId || "未知", escapeHtml),
+    renderAgentMetaItem("Handoffs", String(handoffCount ?? 0), escapeHtml),
     renderAgentMetaItem("Work Items", String(workItemCount ?? 0), escapeHtml),
     renderAgentMetaItem("Mailbox", String(mailboxCount ?? 0), escapeHtml),
     renderAgentLifecycleActions({
@@ -2572,6 +2683,41 @@ function renderAgentMetaItem(label, value, escapeHtml) {
       <dd>${escapeHtml(value)}</dd>
     </div>
   `;
+}
+
+function resolveTimelineKindLabel(kind) {
+  switch (kind) {
+    case "handoff":
+      return "交接";
+    case "dispatch":
+      return "派工";
+    case "waiting":
+      return "等待";
+    case "governance":
+      return "治理";
+    case "delivery":
+      return "收口";
+    case "cancellation":
+      return "取消";
+    default:
+      return "回复";
+  }
+}
+
+function resolveTimelineTone(kind) {
+  switch (kind) {
+    case "handoff":
+      return "warning";
+    case "waiting":
+    case "governance":
+      return "caution";
+    case "delivery":
+      return "ok";
+    case "cancellation":
+      return "danger";
+    default:
+      return "neutral";
+  }
 }
 
 function renderAgentLifecycleActions({
@@ -2685,6 +2831,8 @@ function renderAgentWorkItemDetail(detail, {
   const cancellable = canCancelWorkItem(detail.workItem);
   const cancelDisabled = busy || detail.workItem.workItemId === cancelingWorkItemId;
   const submitDisabled = busy || detail.workItem.workItemId === respondingWorkItemId;
+  const parentWorkItemBlock = renderParentWorkItemBlock(detail.parentWorkItem, detail.parentTargetAgent, escapeHtml);
+  const childWorkItemsBlock = renderChildWorkItemSummaryBlock(detail.childSummary, detail.childWorkItems, escapeHtml);
 
   return `
     <article class="agent-detail-shell">
@@ -2700,6 +2848,8 @@ function renderAgentWorkItemDetail(detail, {
           ${renderAgentMetaItem("来源 agent", detail.sourceAgent?.displayName || detail.sourceAgent?.agentId || "human / system", escapeHtml)}
           ${renderAgentMetaItem("状态", resolveWorkItemStatusLabel(resolveWorkItemStatus(detail.workItem.status)), escapeHtml)}
         </div>
+        ${parentWorkItemBlock}
+        ${childWorkItemsBlock}
         ${contextPacket ? `
           <div class="agent-block">
             <p class="agent-block-title">上下文包</p>
@@ -2784,6 +2934,104 @@ function renderAgentWorkItemDetail(detail, {
       </div>
     </article>
   `;
+}
+
+function renderParentWorkItemBlock(parentWorkItem, parentTargetAgent, escapeHtml) {
+  if (!isRecord(parentWorkItem)) {
+    return "";
+  }
+
+  return `
+    <div class="agent-block">
+      <p class="agent-block-title">父任务</p>
+      <div class="settings-stack">
+        <p class="settings-section-copy">${escapeHtml(parentWorkItem.goal || parentWorkItem.dispatchReason || "当前父任务没有额外说明。")}</p>
+        <div class="agent-meta-grid">
+          ${renderAgentMetaItem("父 workItem", parentWorkItem.workItemId || "未知", escapeHtml)}
+          ${renderAgentMetaItem("负责人", parentTargetAgent?.displayName || parentTargetAgent?.agentId || "未知", escapeHtml)}
+          ${renderAgentMetaItem("状态", resolveWorkItemStatusLabel(resolveWorkItemStatus(parentWorkItem.status)), escapeHtml)}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderChildWorkItemSummaryBlock(summaryValue, childItemsValue, escapeHtml) {
+  const summary = normalizeChildWorkItemSummary(summaryValue);
+  const childItems = Array.isArray(childItemsValue)
+    ? childItemsValue.filter((item) => isRecord(item) && isRecord(item.workItem))
+    : [];
+
+  if (summary.totalCount <= 0 && childItems.length === 0) {
+    return "";
+  }
+
+  return `
+    <div class="agent-block">
+      <p class="agent-block-title">下游协作汇总</p>
+      <div class="settings-stack">
+        <p class="settings-section-copy">当前 work item 已派出 ${escapeHtml(String(summary.totalCount))} 条下游子任务，这里汇总它们的收口进展。</p>
+        <div class="agent-meta-grid">
+          ${renderAgentMetaItem("总数", String(summary.totalCount), escapeHtml)}
+          ${renderAgentMetaItem("进行中", String(summary.openCount), escapeHtml)}
+          ${renderAgentMetaItem("等待中", String(summary.waitingCount), escapeHtml)}
+          ${renderAgentMetaItem("已完成", String(summary.completedCount), escapeHtml)}
+          ${renderAgentMetaItem("失败", String(summary.failedCount), escapeHtml)}
+          ${renderAgentMetaItem("已取消", String(summary.cancelledCount), escapeHtml)}
+        </div>
+        <div class="agent-message-list">
+          ${childItems.length
+            ? childItems.map((item) => {
+              const childWorkItem = item.workItem;
+              const childTargetAgent = isRecord(item.targetAgent) ? item.targetAgent : null;
+              const latestHandoff = isRecord(item.latestHandoff) ? item.latestHandoff : null;
+
+              return `
+                <article class="agent-message-card">
+                  <div class="agent-card-head">
+                    <div class="agent-card-heading">
+                      <h4>${escapeHtml(childTargetAgent?.displayName || childTargetAgent?.agentId || childWorkItem.targetAgentId || "未知 agent")}</h4>
+                      <p class="agent-card-copy">${escapeHtml(childWorkItem.goal || childWorkItem.dispatchReason || "当前子任务没有额外说明。")}</p>
+                    </div>
+                    <span class="badge ${escapeHtml(resolveStatusTone(resolveWorkItemStatus(childWorkItem.status)))}">${escapeHtml(resolveWorkItemStatusLabel(resolveWorkItemStatus(childWorkItem.status)))}</span>
+                  </div>
+                  <div class="agent-meta-grid">
+                    ${renderAgentMetaItem("子 workItem", childWorkItem.workItemId || "未知", escapeHtml)}
+                    ${renderAgentMetaItem("优先级", resolvePriorityLabel(resolvePriority(childWorkItem.priority)), escapeHtml)}
+                  </div>
+                  ${latestHandoff?.summary
+                    ? `<p class="agent-card-copy">最新 handoff：${escapeHtml(latestHandoff.summary)}</p>`
+                    : ""}
+                </article>
+              `;
+            }).join("")
+            : '<p class="settings-section-copy">当前还没有下游子任务。</p>'}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function normalizeChildWorkItemSummary(value) {
+  if (!isRecord(value)) {
+    return {
+      totalCount: 0,
+      openCount: 0,
+      waitingCount: 0,
+      completedCount: 0,
+      failedCount: 0,
+      cancelledCount: 0,
+    };
+  }
+
+  return {
+    totalCount: Number.isFinite(value.totalCount) ? Number(value.totalCount) : 0,
+    openCount: Number.isFinite(value.openCount) ? Number(value.openCount) : 0,
+    waitingCount: Number.isFinite(value.waitingCount) ? Number(value.waitingCount) : 0,
+    completedCount: Number.isFinite(value.completedCount) ? Number(value.completedCount) : 0,
+    failedCount: Number.isFinite(value.failedCount) ? Number(value.failedCount) : 0,
+    cancelledCount: Number.isFinite(value.cancelledCount) ? Number(value.cancelledCount) : 0,
+  };
 }
 
 function renderWaitingActionBlock(waitingAction, escapeHtml) {
