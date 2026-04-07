@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { TaskRequest, TaskResult } from "../types/index.js";
+import { MANAGED_AGENT_INTERNAL_SOURCE_CHANNEL, type TaskRequest, type TaskResult } from "../types/index.js";
 import { SqliteCodexSessionRegistry } from "./codex-session-registry.js";
 
 test("SqliteCodexSessionRegistry 会保存历史元数据，并支持 query/origin/archive 过滤", () => {
@@ -104,6 +104,40 @@ test("SqliteCodexSessionRegistry 会把 archive / unarchive 持久化到历史�
   }
 });
 
+test("SqliteCodexSessionRegistry 默认不会把 agent-internal 会话暴露到 history 列表", () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-registry-history-internal-"));
+  const registry = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+
+  try {
+    upsertCompletedTurn(registry, {
+      sessionId: "session-human-1",
+      requestId: "request-human-1",
+      taskId: "task-human-1",
+      goal: "普通对外会话",
+      createdAt: "2026-04-06T11:20:00.000Z",
+      completedAt: "2026-04-06T11:20:30.000Z",
+    });
+    upsertCompletedTurn(registry, {
+      sessionId: "agent-work-item:work-item-1",
+      requestId: "request-agent-1",
+      taskId: "task-agent-1",
+      goal: "内部 agent 会话",
+      sourceChannel: MANAGED_AGENT_INTERNAL_SOURCE_CHANNEL,
+      userId: "principal-agent-1",
+      userDisplayName: "后端·衡",
+      createdAt: "2026-04-06T11:21:00.000Z",
+      completedAt: "2026-04-06T11:21:30.000Z",
+    });
+
+    assert.deepEqual(registry.listRecentSessionsByFilter({}, 10).map((item) => item.sessionId), ["session-human-1"]);
+    assert.equal(registry.getSessionHistorySummary("agent-work-item:work-item-1")?.sessionId, "agent-work-item:work-item-1");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function upsertCompletedTurn(
   registry: SqliteCodexSessionRegistry,
   input: {
@@ -111,6 +145,9 @@ function upsertCompletedTurn(
     requestId: string;
     taskId: string;
     goal: string;
+    sourceChannel?: string;
+    userId?: string;
+    userDisplayName?: string;
     createdAt: string;
     completedAt: string;
   },
@@ -118,10 +155,10 @@ function upsertCompletedTurn(
   const request: TaskRequest = {
     requestId: input.requestId,
     taskId: input.taskId,
-    sourceChannel: "web",
+    sourceChannel: input.sourceChannel ?? "web",
     user: {
-      userId: "user-history-registry",
-      displayName: "History Registry",
+      userId: input.userId ?? "user-history-registry",
+      displayName: input.userDisplayName ?? "History Registry",
     },
     goal: input.goal,
     channelContext: {

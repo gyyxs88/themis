@@ -22,3 +22,4 @@
 - [Themis Communication Protocol](./themis-communication-protocol.md)
 - [Themis MVP Technical Architecture](./themis-mvp-technical-architecture.md)
 - [Themis Operator CLI Design](./themis-command-design.md)
+- [Themis 持久化合伙人 / 数字员工架构设计](./themis-persistent-agent-architecture.md)

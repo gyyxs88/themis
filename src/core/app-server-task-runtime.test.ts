@@ -1533,7 +1533,9 @@ test("AppServerTaskRuntime 在 waiting action 所在任务 abort 后会清理 pe
     await actionRequiredSeen.promise;
     controller.abort(new Error("ACTION_ABORT"));
 
-    await assert.rejects(async () => await runTaskPromise, /ACTION_ABORT/);
+    const result = await runTaskPromise;
+    assert.equal(result.status, "cancelled");
+    assert.equal(result.summary, "任务已被取消。");
     assert.equal(actionBridge.find("approval-abort-1"), null);
   } finally {
     fixture.cleanup();
@@ -1820,7 +1822,7 @@ test("AppServerTaskRuntime 在 onEvent 阻塞时也会响应外部 abort", { tim
       controller.abort(new Error("EVENT_QUEUE_ABORT"));
     }, 20);
 
-    await assert.rejects(async () => await fixture.runtime.runTask({
+    const result = await fixture.runtime.runTask({
       requestId: "req-app-5",
       taskId: "task-app-5",
       sourceChannel: "web",
@@ -1835,8 +1837,10 @@ test("AppServerTaskRuntime 在 onEvent 阻塞时也会响应外部 abort", { tim
           await new Promise<void>(() => {});
         }
       },
-    }), /EVENT_QUEUE_ABORT/);
+    });
 
+    assert.equal(result.status, "cancelled");
+    assert.equal(result.summary, "任务已被取消。");
     assert.equal(state.closed, 1);
   } finally {
     fixture.cleanup();
@@ -1850,7 +1854,7 @@ test("AppServerTaskRuntime 的 timeoutMs 会打断 event queue 阻塞", { timeou
   const fixture = createRuntimeFixture({ sessionFactory });
 
   try {
-    await assert.rejects(async () => await fixture.runtime.runTask({
+    const result = await fixture.runtime.runTask({
       requestId: "req-app-timeout-event-1",
       taskId: "task-app-timeout-event-1",
       sourceChannel: "web",
@@ -1865,8 +1869,10 @@ test("AppServerTaskRuntime 的 timeoutMs 会打断 event queue 阻塞", { timeou
           await new Promise<void>(() => {});
         }
       },
-    }), /TASK_TIMEOUT:/);
+    });
 
+    assert.equal(result.status, "cancelled");
+    assert.match(result.summary, /任务因超时被取消/);
     assert.equal(state.closed, 1);
   } finally {
     fixture.cleanup();
@@ -1890,7 +1896,7 @@ test("AppServerTaskRuntime 的 timeoutMs 会打断 notification event queue 阻�
   const fixture = createRuntimeFixture({ sessionFactory });
 
   try {
-    await assert.rejects(async () => await fixture.runtime.runTask({
+    const result = await fixture.runtime.runTask({
       requestId: "req-app-timeout-notification-1",
       taskId: "task-app-timeout-notification-1",
       sourceChannel: "web",
@@ -1905,8 +1911,10 @@ test("AppServerTaskRuntime 的 timeoutMs 会打断 notification event queue 阻�
           await new Promise<void>(() => {});
         }
       },
-    }), /TASK_TIMEOUT:/);
+    });
 
+    assert.equal(result.status, "cancelled");
+    assert.match(result.summary, /任务因超时被取消/);
     assert.equal(state.closed, 1);
   } finally {
     fixture.cleanup();

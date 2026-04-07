@@ -24,6 +24,9 @@ import {
 import { buildAssistantStyleSessionPayload } from "./assistant-style.js";
 import { ConversationService } from "./conversation-service.js";
 import { IdentityLinkService } from "./identity-link-service.js";
+import { ManagedAgentCoordinationService } from "./managed-agent-coordination-service.js";
+import { ManagedAgentsService } from "./managed-agents-service.js";
+import { ManagedAgentSchedulerService } from "./managed-agent-scheduler-service.js";
 import { PrincipalActorsService } from "./principal-actors-service.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
 import { buildBootstrapPrompt, buildTaskPrompt } from "./prompt.js";
@@ -109,6 +112,9 @@ export class CodexTaskRuntime {
   private readonly identityLinkService: IdentityLinkService;
   private readonly conversationService: ConversationService;
   private readonly principalPersonaService: PrincipalPersonaService;
+  private readonly managedAgentCoordinationService: ManagedAgentCoordinationService;
+  private readonly managedAgentsService: ManagedAgentsService;
+  private readonly managedAgentSchedulerService: ManagedAgentSchedulerService;
   private readonly principalActorsService: PrincipalActorsService;
   private readonly principalSkillsService: PrincipalSkillsService;
   private readonly createContextBuilder: (workingDirectory: string) => ContextBuilder;
@@ -130,6 +136,15 @@ export class CodexTaskRuntime {
     this.identityLinkService = new IdentityLinkService(this.runtimeStore);
     this.conversationService = new ConversationService(this.runtimeStore, this.identityLinkService);
     this.principalPersonaService = new PrincipalPersonaService(this.runtimeStore);
+    this.managedAgentCoordinationService = new ManagedAgentCoordinationService({
+      registry: this.runtimeStore,
+    });
+    this.managedAgentsService = new ManagedAgentsService({
+      registry: this.runtimeStore,
+    });
+    this.managedAgentSchedulerService = new ManagedAgentSchedulerService({
+      registry: this.runtimeStore,
+    });
     this.principalActorsService = new PrincipalActorsService({
       registry: this.runtimeStore,
     });
@@ -645,6 +660,18 @@ export class CodexTaskRuntime {
 
   getPrincipalActorsService(): PrincipalActorsService {
     return this.principalActorsService;
+  }
+
+  getManagedAgentsService(): ManagedAgentsService {
+    return this.managedAgentsService;
+  }
+
+  getManagedAgentCoordinationService(): ManagedAgentCoordinationService {
+    return this.managedAgentCoordinationService;
+  }
+
+  getManagedAgentSchedulerService(): ManagedAgentSchedulerService {
+    return this.managedAgentSchedulerService;
   }
 
   getPrincipalSkillsService(): PrincipalSkillsService {

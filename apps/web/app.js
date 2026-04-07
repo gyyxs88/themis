@@ -1,5 +1,6 @@
 import { LAYOUT_STORAGE_KEY, MAX_THREAD_COUNT, STORAGE_KEY, WEB_IDENTITY_STORAGE_KEY } from "./modules/constants.js";
 import { createActions } from "./modules/actions.js";
+import { createAgentsController, createDefaultAgentsState } from "./modules/agents.js";
 import { createAuthController, createDefaultAuthState } from "./modules/auth.js";
 import { createDom } from "./modules/dom.js";
 import { createHistoryController } from "./modules/history.js";
@@ -49,6 +50,7 @@ const app = {
     identity: null,
     workspaceToolsOpen: false,
     workspaceToolsSection: "runtime",
+    agents: createDefaultAgentsState(),
     memoryCandidates: createDefaultMemoryCandidatesState(),
     skills: createDefaultSkillsState(),
     runtimeConfig: createDefaultRuntimeConfigState(),
@@ -66,11 +68,13 @@ app.history = createHistoryController(app);
 app.layout = createLayoutController(app);
 app.auth = createAuthController(app);
 app.identity = createIdentityController(app);
+app.agents = createAgentsController(app);
 app.memoryCandidates = createMemoryCandidatesController(app);
 app.runtimeConfig = createRuntimeConfigController(app);
 app.sessionSettings = createSessionSettingsController(app);
 app.skills = createSkillsController(app);
 app.skills.bindControls();
+app.agents.bindControls();
 app.memoryCandidates.bindControls();
 app.modeSwitch = createModeSwitchController(app);
 app.thirdPartyEditor = createThirdPartyEditorController(app);

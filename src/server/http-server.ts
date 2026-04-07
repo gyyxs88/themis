@@ -1,12 +1,42 @@
 import { createServer, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
 import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
+import { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
 import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import type { RuntimeEngine, TaskRuntimeFacade } from "../types/index.js";
 import { WebAccessService } from "../core/web-access.js";
 import { serveWebAsset } from "./http-assets.js";
+import {
+  handleAgentArchive,
+  handleAgentCreate,
+  handleAgentDetail,
+  handleAgentDispatch,
+  handleAgentIdleRecoveryApprove,
+  handleAgentIdleRecoverySuggestions,
+  handleAgentList,
+  handleAgentMailboxAck,
+  handleAgentMailboxList,
+  handleAgentMailboxPull,
+  handleAgentMailboxRespond,
+  handleAgentPause,
+  handleAgentResume,
+  handleAgentSpawnApprove,
+  handleAgentSpawnIgnore,
+  handleAgentSpawnPolicyUpdate,
+  handleAgentSpawnReject,
+  handleAgentSpawnRestore,
+  handleAgentSpawnSuggestions,
+  handleAgentRunDetail,
+  handleAgentRunList,
+  handleAgentWorkItemCancel,
+  handleAgentWorkItemEscalate,
+  handleAgentWaitingQueueList,
+  handleAgentWorkItemDetail,
+  handleAgentWorkItemList,
+  handleAgentWorkItemRespond,
+} from "./http-agents.js";
 import {
   handleActorCreate,
   handleActorList,
@@ -84,6 +114,7 @@ export interface ThemisHttpServerOptions {
   taskTimeoutMs?: number;
   createMcpInspector?: CreateMcpInspector;
   actionBridge?: AppServerActionBridge;
+  managedAgentExecutionService?: ManagedAgentExecutionService;
 }
 
 export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): Server {
@@ -99,6 +130,12 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
     actionBridge,
   });
   const runtimeRegistry = normalizeRuntimeRegistry(runtime, defaultAppServerRuntime, options.runtimeRegistry);
+  const managedAgentExecutionService = options.managedAgentExecutionService ?? new ManagedAgentExecutionService({
+    registry: runtime.getRuntimeStore(),
+    runtime: defaultAppServerRuntime,
+    schedulerService: defaultAppServerRuntime.getManagedAgentSchedulerService(),
+    coordinationService: defaultAppServerRuntime.getManagedAgentCoordinationService(),
+  });
   const authRuntime = options.authRuntime ?? new CodexAuthRuntime({
     workingDirectory: runtime.getWorkingDirectory(),
     registry: runtime.getRuntimeStore(),
@@ -211,6 +248,114 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/actors/create") {
         return handleActorCreate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/create") {
+        return handleAgentCreate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/list") {
+        return handleAgentList(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/detail") {
+        return handleAgentDetail(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/spawn-suggestions") {
+        return handleAgentSpawnSuggestions(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/idle-suggestions") {
+        return handleAgentIdleRecoverySuggestions(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/spawn-policy/update") {
+        return handleAgentSpawnPolicyUpdate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/spawn-approve") {
+        return handleAgentSpawnApprove(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/spawn-ignore") {
+        return handleAgentSpawnIgnore(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/spawn-reject") {
+        return handleAgentSpawnReject(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/spawn-restore") {
+        return handleAgentSpawnRestore(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/idle-approve") {
+        return handleAgentIdleRecoveryApprove(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/pause") {
+        return handleAgentPause(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/resume") {
+        return handleAgentResume(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/archive") {
+        return handleAgentArchive(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/dispatch") {
+        return handleAgentDispatch(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/work-items/list") {
+        return handleAgentWorkItemList(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/waiting/list") {
+        return handleAgentWaitingQueueList(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/work-items/detail") {
+        return handleAgentWorkItemDetail(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/work-items/cancel") {
+        return handleAgentWorkItemCancel(request, response, runtime, managedAgentExecutionService);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/work-items/respond") {
+        return handleAgentWorkItemRespond(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/work-items/escalate") {
+        return handleAgentWorkItemEscalate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/runs/list") {
+        return handleAgentRunList(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/runs/detail") {
+        return handleAgentRunDetail(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/mailbox/list") {
+        return handleAgentMailboxList(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/mailbox/pull") {
+        return handleAgentMailboxPull(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/mailbox/ack") {
+        return handleAgentMailboxAck(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/mailbox/respond") {
+        return handleAgentMailboxRespond(request, response, runtime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/actors/list") {

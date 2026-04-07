@@ -132,6 +132,7 @@ export function createRenderer(app) {
     renderAssistantStyleNote(effectiveSettings);
     renderRuntimeConfigNote(settings, effectiveSettings);
     renderIdentityState();
+    renderAgentsState();
     renderMemoryCandidatesState();
     renderSkillsState();
     renderThirdPartyNotes(settings, effectiveSettings);
@@ -280,6 +281,8 @@ export function createRenderer(app) {
     dom.settingsAuthSection.setAttribute("aria-hidden", String(activeSection !== "auth"));
     dom.settingsSkillsSection.classList.toggle("hidden", activeSection !== "skills");
     dom.settingsSkillsSection.setAttribute("aria-hidden", String(activeSection !== "skills"));
+    dom.settingsAgentsSection.classList.toggle("hidden", activeSection !== "agents");
+    dom.settingsAgentsSection.setAttribute("aria-hidden", String(activeSection !== "agents"));
     dom.settingsMemoryCandidatesSection.classList.toggle("hidden", activeSection !== "memory-candidates");
     dom.settingsMemoryCandidatesSection.setAttribute("aria-hidden", String(activeSection !== "memory-candidates"));
     dom.settingsThirdPartySection.classList.toggle("hidden", activeSection !== "third-party");
@@ -321,6 +324,320 @@ export function createRenderer(app) {
       .map((candidate) => renderMemoryCandidateCard(candidate, {
         busy,
         reviewingCandidateId: candidatesState.reviewingCandidateId,
+        escapeHtml: utils.escapeHtml,
+        formatRelativeTime: utils.formatRelativeTime,
+      }))
+      .join("");
+  }
+
+  function renderAgentsState() {
+    const agentsState = app.runtime.agents ?? {};
+    const agents = Array.isArray(agentsState.agents) ? agentsState.agents : [];
+    const organizations = Array.isArray(agentsState.organizations) ? agentsState.organizations : [];
+    const workItems = Array.isArray(agentsState.workItems) ? agentsState.workItems : [];
+    const mailboxItems = Array.isArray(agentsState.mailboxItems) ? agentsState.mailboxItems : [];
+    const waitingItems = Array.isArray(agentsState.organizationWaitingItems) ? agentsState.organizationWaitingItems : [];
+    const spawnPolicies = Array.isArray(agentsState.spawnPolicies) ? agentsState.spawnPolicies : [];
+    const spawnSuggestions = Array.isArray(agentsState.spawnSuggestions) ? agentsState.spawnSuggestions : [];
+    const suppressedSpawnSuggestions = Array.isArray(agentsState.suppressedSpawnSuggestions)
+      ? agentsState.suppressedSpawnSuggestions
+      : [];
+    const spawnAuditLogs = Array.isArray(agentsState.spawnAuditLogs) ? agentsState.spawnAuditLogs : [];
+    const idleRecoverySuggestions = Array.isArray(agentsState.idleRecoverySuggestions)
+      ? agentsState.idleRecoverySuggestions
+      : [];
+    const idleRecoveryAuditLogs = Array.isArray(agentsState.idleRecoveryAuditLogs)
+      ? agentsState.idleRecoveryAuditLogs
+      : [];
+    const waitingSummary = normalizeWaitingQueueSummary(agentsState.organizationWaitingSummary, waitingItems.length);
+    const busy = Boolean(
+      agentsState.loading
+      || agentsState.detailLoading
+      || agentsState.creating
+      || agentsState.dispatching
+      || agentsState.updatingSpawnPolicy
+      || agentsState.approvingSpawnSuggestionId
+      || agentsState.approvingIdleRecoverySuggestionId
+      || agentsState.ignoringSpawnSuggestionId
+      || agentsState.rejectingSpawnSuggestionId
+      || agentsState.restoringSpawnSuggestionId
+      || agentsState.workItemDetailLoading
+      || agentsState.lifecycleUpdatingAgentId
+      || agentsState.cancelingWorkItemId
+      || agentsState.escalatingWorkItemId
+      || agentsState.respondingWorkItemId
+      || agentsState.ackingMailboxEntryId,
+    );
+    const selectedAgentId = typeof agentsState.selectedAgentId === "string" ? agentsState.selectedAgentId : "";
+    const selectedAgent = agents.find((agent) => agent?.agentId === selectedAgentId)
+      || (agentsState.selectedAgent && typeof agentsState.selectedAgent === "object" ? agentsState.selectedAgent : null);
+    const selectedWorkItemDetail = agentsState.selectedWorkItemDetail && typeof agentsState.selectedWorkItemDetail === "object"
+      ? agentsState.selectedWorkItemDetail
+      : null;
+    const statusMessage = resolveAgentsStatusMessage(agentsState);
+    const pendingMailboxCount = mailboxItems.filter((item) => item?.entry?.status !== "acked").length;
+    const createDraft = normalizeAgentCreateDraft(agentsState.createDraft);
+    const dispatchDraft = normalizeAgentDispatchDraft(agentsState.dispatchDraft, selectedAgentId);
+    const humanResponseDraft = normalizeHumanResponseDraft(agentsState.humanResponseDraft, selectedWorkItemDetail);
+    const waitingResponseDrafts = normalizeOrganizationWaitingResponseDrafts(agentsState.organizationWaitingResponseDrafts);
+    const activeSpawnPolicy = resolveActiveSpawnPolicy(spawnPolicies, selectedAgent, agentsState.selectedOrganization);
+    const spawnPolicyDraft = normalizeSpawnPolicyDraft(agentsState.spawnPolicyDraft, activeSpawnPolicy);
+
+    dom.agentsSummaryOrganizations.textContent = String(organizations.length);
+    dom.agentsSummaryAgents.textContent = String(agents.length);
+    dom.agentsSummaryWorkItems.textContent = String(workItems.length);
+    dom.agentsSummaryMailbox.textContent = String(pendingMailboxCount);
+    dom.agentsWaitingSummary.textContent = resolveWaitingQueueSummaryText({
+      loading: Boolean(agentsState.loading),
+      waitingSummary,
+      waitingCount: waitingItems.length,
+    });
+    dom.agentsWaitingEmpty.classList.toggle("hidden", waitingItems.length > 0);
+    dom.agentsWaitingEmpty.textContent = agentsState.loading
+      ? "正在汇总组织级等待队列。"
+      : "当前没有待治理阻塞。";
+    dom.agentsWaitingList.innerHTML = waitingItems
+      .map((item) => renderOrganizationWaitingCard(item, {
+        selectedWorkItemId: typeof agentsState.selectedWorkItemId === "string" ? agentsState.selectedWorkItemId : "",
+        waitingResponseDraft: waitingResponseDrafts[item?.workItem?.workItemId] ?? null,
+        escalatingWorkItemId: typeof agentsState.escalatingWorkItemId === "string" ? agentsState.escalatingWorkItemId : "",
+        respondingWorkItemId: typeof agentsState.respondingWorkItemId === "string" ? agentsState.respondingWorkItemId : "",
+        busy,
+        escapeHtml: utils.escapeHtml,
+        formatRelativeTime: utils.formatRelativeTime,
+      }))
+      .join("");
+    dom.agentsSpawnPolicySummary.textContent = agentsState.loading
+      ? "正在读取当前组织的自动创建护栏。"
+      : activeSpawnPolicy
+        ? `当前组织护栏：活跃 agent 上限 ${spawnPolicyDraft.maxActiveAgents}，同角色上限 ${spawnPolicyDraft.maxActiveAgentsPerRole}。`
+        : "当前还没有可配置的组织级自动创建护栏。";
+    dom.agentsSpawnPolicyMaxActiveInput.value = String(spawnPolicyDraft.maxActiveAgents);
+    dom.agentsSpawnPolicyMaxRoleInput.value = String(spawnPolicyDraft.maxActiveAgentsPerRole);
+    dom.agentsSpawnPolicyMaxActiveInput.disabled = busy || !activeSpawnPolicy;
+    dom.agentsSpawnPolicyMaxRoleInput.disabled = busy || !activeSpawnPolicy;
+    dom.agentsSpawnPolicySaveButton.disabled = busy || !activeSpawnPolicy;
+    dom.agentsSpawnPolicySaveButton.textContent = agentsState.updatingSpawnPolicy ? "保存中..." : "保存护栏";
+
+    dom.agentsSpawnSuggestionsSummary.textContent = agentsState.loading
+      ? "正在评估当前组织的自动创建建议。"
+      : spawnSuggestions.length > 0
+        ? `当前有 ${spawnSuggestions.length} 条值得考虑的新 agent 建议，其中 ${spawnSuggestions.filter((suggestion) => suggestion?.guardrail?.blocked).length} 条正被护栏拦住，另有 ${suppressedSpawnSuggestions.length} 条已被忽略或拒绝。`
+        : "当前没有新的自动创建建议。";
+    dom.agentsSpawnSuggestionsEmpty.classList.toggle("hidden", spawnSuggestions.length > 0);
+    dom.agentsSpawnSuggestionsEmpty.textContent = agentsState.loading
+      ? "正在评估自动创建建议。"
+      : "当前没有新的自动创建建议。";
+    dom.agentsSpawnSuggestionsList.innerHTML = spawnSuggestions
+      .map((suggestion) => renderAgentSpawnSuggestionCard(suggestion, {
+        busy,
+        approvingSpawnSuggestionId: typeof agentsState.approvingSpawnSuggestionId === "string"
+          ? agentsState.approvingSpawnSuggestionId
+          : "",
+        ignoringSpawnSuggestionId: typeof agentsState.ignoringSpawnSuggestionId === "string"
+          ? agentsState.ignoringSpawnSuggestionId
+          : "",
+        rejectingSpawnSuggestionId: typeof agentsState.rejectingSpawnSuggestionId === "string"
+          ? agentsState.rejectingSpawnSuggestionId
+          : "",
+        escapeHtml: utils.escapeHtml,
+      }))
+      .join("");
+    dom.agentsSuppressedSpawnSuggestionsSummary.textContent = agentsState.loading
+      ? "正在读取已忽略或拒绝的自动创建建议。"
+      : suppressedSpawnSuggestions.length > 0
+        ? `当前有 ${suppressedSpawnSuggestions.length} 条已被忽略或拒绝的自动创建建议，可以按需恢复。`
+        : "当前没有被忽略或拒绝的自动创建建议。";
+    dom.agentsSuppressedSpawnSuggestionsEmpty.classList.toggle("hidden", suppressedSpawnSuggestions.length > 0);
+    dom.agentsSuppressedSpawnSuggestionsEmpty.textContent = agentsState.loading
+      ? "正在读取被忽略或拒绝的自动创建建议。"
+      : "当前没有被忽略或拒绝的自动创建建议。";
+    dom.agentsSuppressedSpawnSuggestionsList.innerHTML = suppressedSpawnSuggestions
+      .map((suggestion) => renderSuppressedAgentSpawnSuggestionCard(suggestion, {
+        busy,
+        restoringSpawnSuggestionId: typeof agentsState.restoringSpawnSuggestionId === "string"
+          ? agentsState.restoringSpawnSuggestionId
+          : "",
+        escapeHtml: utils.escapeHtml,
+        formatRelativeTime: utils.formatRelativeTime,
+      }))
+      .join("");
+    dom.agentsSpawnAuditSummary.textContent = agentsState.loading
+      ? "正在读取最近的自动创建审计记录。"
+      : spawnAuditLogs.length > 0
+        ? `最近有 ${spawnAuditLogs.length} 条自动创建审计记录。`
+        : "当前还没有自动创建审计记录。";
+    dom.agentsSpawnAuditEmpty.classList.toggle("hidden", spawnAuditLogs.length > 0);
+    dom.agentsSpawnAuditEmpty.textContent = agentsState.loading
+      ? "正在读取自动创建审计记录。"
+      : "当前还没有自动创建审计记录。";
+    dom.agentsSpawnAuditList.innerHTML = spawnAuditLogs
+      .map((auditLog) => renderAgentSpawnAuditLogCard(auditLog, {
+        escapeHtml: utils.escapeHtml,
+        formatRelativeTime: utils.formatRelativeTime,
+      }))
+      .join("");
+    dom.agentsIdleRecoverySuggestionsSummary.textContent = agentsState.loading
+      ? "正在评估当前组织的空闲回收建议。"
+      : idleRecoverySuggestions.length > 0
+        ? `当前有 ${idleRecoverySuggestions.length} 条空闲回收建议。`
+        : "当前没有空闲回收建议。";
+    dom.agentsIdleRecoverySuggestionsEmpty.classList.toggle("hidden", idleRecoverySuggestions.length > 0);
+    dom.agentsIdleRecoverySuggestionsEmpty.textContent = agentsState.loading
+      ? "正在评估空闲回收建议。"
+      : "当前没有空闲回收建议。";
+    dom.agentsIdleRecoverySuggestionsList.innerHTML = idleRecoverySuggestions
+      .map((suggestion) => renderAgentIdleRecoverySuggestionCard(suggestion, {
+        busy,
+        approvingIdleRecoverySuggestionId: typeof agentsState.approvingIdleRecoverySuggestionId === "string"
+          ? agentsState.approvingIdleRecoverySuggestionId
+          : "",
+        escapeHtml: utils.escapeHtml,
+      }))
+      .join("");
+    dom.agentsIdleRecoveryAuditSummary.textContent = agentsState.loading
+      ? "正在读取最近的空闲回收审计记录。"
+      : idleRecoveryAuditLogs.length > 0
+        ? `最近有 ${idleRecoveryAuditLogs.length} 条空闲回收审计记录。`
+        : "当前还没有空闲回收审计记录。";
+    dom.agentsIdleRecoveryAuditEmpty.classList.toggle("hidden", idleRecoveryAuditLogs.length > 0);
+    dom.agentsIdleRecoveryAuditEmpty.textContent = agentsState.loading
+      ? "正在读取空闲回收审计记录。"
+      : "当前还没有空闲回收审计记录。";
+    dom.agentsIdleRecoveryAuditList.innerHTML = idleRecoveryAuditLogs
+      .map((auditLog) => renderAgentIdleRecoveryAuditLogCard(auditLog, {
+        escapeHtml: utils.escapeHtml,
+        formatRelativeTime: utils.formatRelativeTime,
+      }))
+      .join("");
+
+    dom.agentsStatusNote.classList.toggle("hidden", !statusMessage);
+    dom.agentsStatusNote.textContent = statusMessage;
+    if (statusMessage) {
+      dom.agentsStatusNote.dataset.state = agentsState.errorMessage
+        ? "error"
+        : busy
+          ? "loading"
+          : agentsState.noticeMessage
+            ? "supported"
+            : "inconclusive";
+    } else {
+      delete dom.agentsStatusNote.dataset.state;
+    }
+
+    dom.agentsCreateRoleInput.value = createDraft.departmentRole;
+    dom.agentsCreateNameInput.value = createDraft.displayName;
+    dom.agentsCreateMissionInput.value = createDraft.mission;
+    dom.agentsCreateRoleInput.disabled = busy;
+    dom.agentsCreateNameInput.disabled = busy;
+    dom.agentsCreateMissionInput.disabled = busy;
+    dom.agentsCreateButton.disabled = busy;
+
+    renderAgentSelect(dom.agentsSelect, agents, selectedAgentId, "当前还没有 agent", utils.escapeHtml);
+    dom.agentsSelect.disabled = busy || !agents.length;
+
+    renderAgentSelect(
+      dom.agentsDispatchTargetSelect,
+      agents,
+      dispatchDraft.targetAgentId,
+      "当前还没有 agent",
+      utils.escapeHtml,
+    );
+    dom.agentsDispatchTargetSelect.disabled = busy || !agents.length;
+
+    dom.agentsDispatchSourceTypeSelect.value = dispatchDraft.sourceType;
+    dom.agentsDispatchSourceTypeSelect.disabled = busy || !agents.length;
+
+    renderAgentSelect(
+      dom.agentsDispatchSourceAgentSelect,
+      agents,
+      dispatchDraft.sourceAgentId,
+      dispatchDraft.sourceType === "agent" ? "请选择来源 agent" : "human / system 不需要来源 agent",
+      utils.escapeHtml,
+    );
+    dom.agentsDispatchSourceAgentSelect.disabled = busy || dispatchDraft.sourceType !== "agent" || !agents.length;
+
+    dom.agentsDispatchReasonInput.value = dispatchDraft.dispatchReason;
+    dom.agentsDispatchGoalInput.value = dispatchDraft.goal;
+    dom.agentsDispatchContextInput.value = dispatchDraft.contextPacketText;
+    dom.agentsDispatchPrioritySelect.value = dispatchDraft.priority;
+    dom.agentsDispatchReasonInput.disabled = busy || !agents.length;
+    dom.agentsDispatchGoalInput.disabled = busy || !agents.length;
+    dom.agentsDispatchContextInput.disabled = busy || !agents.length;
+    dom.agentsDispatchPrioritySelect.disabled = busy || !agents.length;
+    dom.agentsDispatchButton.disabled = busy || !agents.length;
+
+    dom.agentsListEmpty.classList.toggle("hidden", agents.length > 0);
+    dom.agentsList.innerHTML = agents
+      .map((agent) => renderAgentCard(agent, {
+        selected: agent?.agentId === selectedAgentId,
+        escapeHtml: utils.escapeHtml,
+        formatRelativeTime: utils.formatRelativeTime,
+      }))
+      .join("");
+
+    if (!selectedAgent) {
+      dom.agentsSelectedAgentHeading.textContent = "当前 agent";
+      dom.agentsSelectedAgentCopy.textContent = "先从上方选择一个 agent，才能查看它的任务和内部信箱。";
+      dom.agentsSelectedAgentMeta.classList.add("hidden");
+      dom.agentsSelectedAgentMeta.innerHTML = "";
+      dom.agentsWorkItemsEmpty.classList.remove("hidden");
+      dom.agentsWorkItemsEmpty.textContent = "当前还没有选中 agent。";
+      dom.agentsWorkItemsList.innerHTML = "";
+      dom.agentsWorkItemDetail.innerHTML = "";
+      dom.agentsMailboxEmpty.classList.remove("hidden");
+      dom.agentsMailboxEmpty.textContent = "当前还没有选中 agent。";
+      dom.agentsMailboxList.innerHTML = "";
+      return;
+    }
+
+    dom.agentsSelectedAgentHeading.textContent = selectedAgent.displayName || selectedAgent.departmentRole || "当前 agent";
+    dom.agentsSelectedAgentCopy.textContent = resolveSelectedAgentCopy(selectedAgent);
+    dom.agentsSelectedAgentMeta.classList.remove("hidden");
+    dom.agentsSelectedAgentMeta.innerHTML = renderAgentMetaGrid({
+      selectedAgent,
+      principal: agentsState.selectedAgentPrincipal,
+      organization: agentsState.selectedOrganization,
+      workItemCount: workItems.length,
+      mailboxCount: mailboxItems.length,
+      lifecycleUpdatingAgentId: typeof agentsState.lifecycleUpdatingAgentId === "string"
+        ? agentsState.lifecycleUpdatingAgentId
+        : "",
+      lifecycleUpdatingAction: typeof agentsState.lifecycleUpdatingAction === "string"
+        ? agentsState.lifecycleUpdatingAction
+        : "",
+      busy,
+      escapeHtml: utils.escapeHtml,
+    });
+
+    dom.agentsWorkItemsEmpty.classList.toggle("hidden", workItems.length > 0);
+    dom.agentsWorkItemsEmpty.textContent = agentsState.detailLoading
+      ? "正在读取当前 agent 的 work item。"
+      : "当前 agent 暂时没有 work item。";
+    dom.agentsWorkItemsList.innerHTML = workItems
+      .map((workItem) => renderAgentWorkItemCard(workItem, {
+        selected: workItem?.workItemId === agentsState.selectedWorkItemId,
+        escapeHtml: utils.escapeHtml,
+        formatRelativeTime: utils.formatRelativeTime,
+      }))
+      .join("");
+    dom.agentsWorkItemDetail.innerHTML = renderAgentWorkItemDetail(selectedWorkItemDetail, {
+      loading: Boolean(agentsState.workItemDetailLoading),
+      busy,
+      cancelingWorkItemId: typeof agentsState.cancelingWorkItemId === "string" ? agentsState.cancelingWorkItemId : "",
+      respondingWorkItemId: typeof agentsState.respondingWorkItemId === "string" ? agentsState.respondingWorkItemId : "",
+      humanResponseDraft,
+      escapeHtml: utils.escapeHtml,
+    });
+
+    dom.agentsMailboxEmpty.classList.toggle("hidden", mailboxItems.length > 0);
+    dom.agentsMailboxEmpty.textContent = agentsState.detailLoading
+      ? "正在读取当前 agent 的 mailbox。"
+      : "当前 agent 的 mailbox 还是空的。";
+    dom.agentsMailboxList.innerHTML = mailboxItems
+      .map((item) => renderAgentMailboxCard(item, {
+        busy,
+        ackingMailboxEntryId: agentsState.ackingMailboxEntryId,
         escapeHtml: utils.escapeHtml,
         formatRelativeTime: utils.formatRelativeTime,
       }))
@@ -1411,6 +1728,7 @@ export function createRenderer(app) {
     renderThreadList,
     renderThreadControlPanel,
     renderWorkspaceTools,
+    renderAgentsState,
     setToolsPanelOpen,
     setToolsPanelSection,
   };
@@ -1561,7 +1879,7 @@ function resolveModelFallbackLabel(runtimeConfig) {
 }
 
 function resolveWorkspaceToolsSection(section) {
-  return ["runtime", "auth", "skills", "memory-candidates", "third-party", "mode-switch"].includes(section)
+  return ["runtime", "auth", "skills", "agents", "memory-candidates", "third-party", "mode-switch"].includes(section)
     ? section
     : "runtime";
 }
@@ -1592,6 +1910,1224 @@ function resolveMemoryCandidatesStatusMessage(candidatesState, candidateCount) {
   }
 
   return "";
+}
+
+function resolveAgentsStatusMessage(agentsState) {
+  if (agentsState.errorMessage) {
+    return agentsState.errorMessage;
+  }
+
+  if (agentsState.loading) {
+    return "正在读取组织下的 agent 列表。";
+  }
+
+  if (agentsState.creating) {
+    return "正在创建新的持久化 agent。";
+  }
+
+  if (agentsState.detailLoading) {
+    return "正在读取当前 agent 的任务和内部信箱。";
+  }
+
+  if (agentsState.dispatching) {
+    return "正在提交派工。";
+  }
+
+  if (agentsState.updatingSpawnPolicy) {
+    return "正在更新当前组织的自动创建护栏。";
+  }
+
+  if (agentsState.approvingSpawnSuggestionId) {
+    return "正在按建议创建新的长期 agent。";
+  }
+
+  if (agentsState.approvingIdleRecoverySuggestionId) {
+    return "正在批准当前空闲回收建议。";
+  }
+
+  if (agentsState.ignoringSpawnSuggestionId) {
+    return "正在忽略当前自动创建建议。";
+  }
+
+  if (agentsState.rejectingSpawnSuggestionId) {
+    return "正在拒绝当前自动创建建议。";
+  }
+
+  if (agentsState.restoringSpawnSuggestionId) {
+    return "正在恢复被忽略或拒绝的自动创建建议。";
+  }
+
+  if (agentsState.workItemDetailLoading) {
+    return "正在读取 work item 详情。";
+  }
+
+  if (agentsState.cancelingWorkItemId) {
+    return "正在取消当前 work item。";
+  }
+
+  if (agentsState.lifecycleUpdatingAgentId) {
+    return resolveAgentLifecycleStatusMessage(agentsState.lifecycleUpdatingAction);
+  }
+
+  if (agentsState.escalatingWorkItemId) {
+    return "正在把等待中的 agent 阻塞升级到顶层治理。";
+  }
+
+  if (agentsState.ackingMailboxEntryId) {
+    return "正在确认内部消息。";
+  }
+
+  if (agentsState.noticeMessage) {
+    return agentsState.noticeMessage;
+  }
+
+  return "";
+}
+
+function normalizeAgentCreateDraft(draft) {
+  return {
+    departmentRole: typeof draft?.departmentRole === "string" ? draft.departmentRole : "",
+    displayName: typeof draft?.displayName === "string" ? draft.displayName : "",
+    mission: typeof draft?.mission === "string" ? draft.mission : "",
+  };
+}
+
+function normalizeSpawnPolicyDraft(draft, activeSpawnPolicy) {
+  return {
+    organizationId: typeof draft?.organizationId === "string"
+      ? draft.organizationId
+      : typeof activeSpawnPolicy?.organizationId === "string"
+        ? activeSpawnPolicy.organizationId
+        : "",
+    maxActiveAgents: Number.isFinite(draft?.maxActiveAgents)
+      ? Number(draft.maxActiveAgents)
+      : Number.isFinite(activeSpawnPolicy?.maxActiveAgents)
+        ? Number(activeSpawnPolicy.maxActiveAgents)
+        : 12,
+    maxActiveAgentsPerRole: Number.isFinite(draft?.maxActiveAgentsPerRole)
+      ? Number(draft.maxActiveAgentsPerRole)
+      : Number.isFinite(activeSpawnPolicy?.maxActiveAgentsPerRole)
+        ? Number(activeSpawnPolicy.maxActiveAgentsPerRole)
+        : 3,
+  };
+}
+
+function resolveActiveSpawnPolicy(spawnPolicies, selectedAgent, selectedOrganization) {
+  const organizationId = typeof selectedAgent?.organizationId === "string" && selectedAgent.organizationId.trim()
+    ? selectedAgent.organizationId.trim()
+    : typeof selectedOrganization?.organizationId === "string" && selectedOrganization.organizationId.trim()
+      ? selectedOrganization.organizationId.trim()
+      : "";
+
+  if (organizationId) {
+    return spawnPolicies.find((policy) => policy?.organizationId === organizationId) ?? spawnPolicies[0] ?? null;
+  }
+
+  return spawnPolicies[0] ?? null;
+}
+
+function normalizeAgentDispatchDraft(draft, selectedAgentId) {
+  const fallbackTarget = typeof selectedAgentId === "string" ? selectedAgentId : "";
+
+  return {
+    targetAgentId: typeof draft?.targetAgentId === "string" ? draft.targetAgentId : fallbackTarget,
+    sourceType: ["human", "agent", "system"].includes(draft?.sourceType) ? draft.sourceType : "human",
+    sourceAgentId: typeof draft?.sourceAgentId === "string" ? draft.sourceAgentId : "",
+    dispatchReason: typeof draft?.dispatchReason === "string" ? draft.dispatchReason : "",
+    goal: typeof draft?.goal === "string" ? draft.goal : "",
+    contextPacketText: typeof draft?.contextPacketText === "string" ? draft.contextPacketText : "",
+    priority: ["low", "normal", "high", "urgent"].includes(draft?.priority) ? draft.priority : "normal",
+  };
+}
+
+function normalizeHumanResponseDraft(draft, detail) {
+  const workItemId = typeof detail?.workItem?.workItemId === "string" ? detail.workItem.workItemId : "";
+  const status = typeof detail?.workItem?.status === "string" ? detail.workItem.status : "";
+
+  if (!workItemId || status !== "waiting_human") {
+    return {
+      workItemId: "",
+      decision: "",
+      inputText: "",
+    };
+  }
+
+  return {
+    workItemId,
+    decision: ["approve", "deny"].includes(draft?.decision) ? draft.decision : "",
+    inputText: typeof draft?.inputText === "string" ? draft.inputText : "",
+  };
+}
+
+function normalizeOrganizationWaitingResponseDrafts(drafts) {
+  if (!drafts || typeof drafts !== "object") {
+    return {};
+  }
+
+  return Object.entries(drafts).reduce((result, [workItemId, value]) => {
+    if (typeof workItemId !== "string" || !workItemId.trim()) {
+      return result;
+    }
+
+    result[workItemId] = {
+      decision: ["approve", "deny"].includes(value?.decision) ? value.decision : "",
+      inputText: typeof value?.inputText === "string" ? value.inputText : "",
+    };
+    return result;
+  }, {});
+}
+
+function normalizeWaitingQueueSummary(summary, fallbackTotalCount) {
+  return {
+    totalCount: Number.isFinite(summary?.totalCount) ? Number(summary.totalCount) : Number(fallbackTotalCount || 0),
+    waitingHumanCount: Number.isFinite(summary?.waitingHumanCount) ? Number(summary.waitingHumanCount) : 0,
+    waitingAgentCount: Number.isFinite(summary?.waitingAgentCount) ? Number(summary.waitingAgentCount) : 0,
+    escalationCount: Number.isFinite(summary?.escalationCount) ? Number(summary.escalationCount) : 0,
+  };
+}
+
+function resolveWaitingQueueSummaryText({ loading, waitingSummary, waitingCount }) {
+  if (loading) {
+    return "正在汇总当前组织下的等待项与升级摘要。";
+  }
+
+  if (!waitingCount) {
+    return "当前没有需要顶层治理的等待项。";
+  }
+
+  return `当前共有 ${waitingSummary.totalCount} 条待治理项：等人 ${waitingSummary.waitingHumanCount} 条，等 agent ${waitingSummary.waitingAgentCount} 条，升级摘要 ${waitingSummary.escalationCount} 条。`;
+}
+
+function renderAgentSelect(select, agents, currentAgentId, emptyLabel, escapeHtml) {
+  if (!select) {
+    return;
+  }
+
+  const options = Array.isArray(agents) ? agents : [];
+  select.innerHTML = options.length
+    ? options
+      .map((agent) => `
+        <option value="${escapeHtml(agent?.agentId || "")}">
+          ${escapeHtml(`${agent?.displayName || agent?.departmentRole || agent?.agentId || "未知 agent"} · ${agent?.departmentRole || "未分类"}`)}
+        </option>
+      `)
+      .join("")
+    : `<option value="">${escapeHtml(emptyLabel)}</option>`;
+  select.value = options.some((agent) => agent?.agentId === currentAgentId)
+    ? currentAgentId
+    : options[0]?.agentId || "";
+}
+
+function renderOrganizationWaitingCard(item, {
+  selectedWorkItemId,
+  waitingResponseDraft,
+  escalatingWorkItemId,
+  respondingWorkItemId,
+  busy,
+  escapeHtml,
+  formatRelativeTime,
+}) {
+  const workItem = item?.workItem ?? {};
+  const targetAgent = item?.targetAgent ?? {};
+  const sourceAgent = item?.sourceAgent ?? null;
+  const sourcePrincipal = item?.sourcePrincipal ?? null;
+  const latestWaitingMessage = item?.latestWaitingMessage ?? null;
+  const status = resolveWorkItemStatus(workItem.status);
+  const selected = workItem?.workItemId === selectedWorkItemId;
+  const waitingHuman = workItem?.status === "waiting_human";
+  const attentionLabel = resolveWaitingAttentionLabel(workItem, latestWaitingMessage);
+  const summary = resolveWaitingQueueItemSummary(workItem, latestWaitingMessage);
+  const decisionChoices = Array.isArray(workItem?.waitingActionRequest?.choices)
+    ? workItem.waitingActionRequest.choices.filter((choice) => choice === "approve" || choice === "deny")
+    : [];
+  const showDecisionSelect = waitingHuman && decisionChoices.length > 0;
+  const currentDraft = {
+    decision: ["approve", "deny"].includes(waitingResponseDraft?.decision) ? waitingResponseDraft.decision : "",
+    inputText: typeof waitingResponseDraft?.inputText === "string" ? waitingResponseDraft.inputText : "",
+  };
+  const escalateDisabled = busy || workItem?.workItemId === escalatingWorkItemId;
+  const submitDisabled = busy || workItem?.workItemId === respondingWorkItemId;
+
+  return `
+    <article class="agent-card">
+      <div class="agent-card-head">
+        <div class="agent-card-heading">
+          <h4>${escapeHtml(targetAgent?.displayName || targetAgent?.departmentRole || targetAgent?.agentId || "未知 agent")}</h4>
+          <p class="agent-card-copy">${escapeHtml(summary)}</p>
+        </div>
+        <div class="agent-pill-row">
+          <span class="badge ${escapeHtml(resolveStatusTone(status))}">${escapeHtml(resolveWorkItemStatusLabel(status))}</span>
+          <span class="agent-pill">${escapeHtml(attentionLabel)}</span>
+        </div>
+      </div>
+      <div class="agent-meta-grid">
+        ${renderAgentMetaItem("workItem", workItem?.workItemId || "未知", escapeHtml)}
+        ${renderAgentMetaItem("来源", sourceAgent?.displayName || sourcePrincipal?.displayName || sourcePrincipal?.principalId || "未知", escapeHtml)}
+        ${renderAgentMetaItem("优先级", resolvePriorityLabel(resolvePriority(workItem?.priority)), escapeHtml)}
+        ${renderAgentMetaItem("最近更新", formatRelativeTime(workItem?.updatedAt), escapeHtml)}
+      </div>
+      ${waitingHuman ? `
+        <div class="agent-block">
+          <p class="agent-block-title">直接治理</p>
+          <div class="settings-stack">
+            <p class="settings-section-copy">这是给顶层 Themis 的治理入口。提交后会把当前 work item 重新排回队列继续执行，不需要先跳到详情页。</p>
+            ${showDecisionSelect ? `
+              <label class="settings-field">
+                <span>审批结果</span>
+                <select
+                  data-agent-waiting-decision="${escapeHtml(workItem?.workItemId || "")}"
+                  ${submitDisabled ? "disabled" : ""}
+                >
+                  <option value="">请选择</option>
+                  <option value="approve" ${currentDraft.decision === "approve" ? "selected" : ""}>approve</option>
+                  <option value="deny" ${currentDraft.decision === "deny" ? "selected" : ""}>deny</option>
+                </select>
+              </label>
+            ` : ""}
+            <label class="settings-field">
+              <span>补充说明</span>
+              <textarea
+                rows="3"
+                data-agent-waiting-input="${escapeHtml(workItem?.workItemId || "")}"
+                placeholder="例如：可以继续，但先确认监控和回滚准备。"
+                ${submitDisabled ? "disabled" : ""}
+              >${escapeHtml(currentDraft.inputText || "")}</textarea>
+            </label>
+          </div>
+        </div>
+      ` : ""}
+      ${workItem?.status === "waiting_agent" ? `
+        <div class="agent-block">
+          <p class="agent-block-title">升级处理</p>
+          <div class="settings-stack">
+            <p class="settings-section-copy">当前阻塞卡在 agent 间答复上。升级后会把它转成顶层治理项，并关闭原来的待回复 mailbox，之后可以直接在这里提交治理回复。</p>
+          </div>
+        </div>
+      ` : ""}
+      <div class="agent-card-actions">
+        ${workItem?.status === "waiting_agent" ? `
+          <button
+            type="button"
+            class="toolbar-button subtle"
+            data-agent-waiting-escalate="${escapeHtml(workItem?.workItemId || "")}"
+            ${escalateDisabled ? "disabled" : ""}
+          >
+            ${workItem?.workItemId === escalatingWorkItemId ? "升级中..." : "升级到顶层治理"}
+          </button>
+        ` : ""}
+        ${waitingHuman ? `
+          <button
+            type="button"
+            class="toolbar-button subtle"
+            data-agent-waiting-respond="${escapeHtml(workItem?.workItemId || "")}"
+            ${submitDisabled ? "disabled" : ""}
+          >
+            ${workItem?.workItemId === respondingWorkItemId ? "提交中..." : "直接提交治理回复"}
+          </button>
+        ` : ""}
+        <button
+          type="button"
+          class="toolbar-button subtle"
+          data-agent-waiting-open="${escapeHtml(workItem?.workItemId || "")}"
+          data-agent-waiting-agent-id="${escapeHtml(targetAgent?.agentId || "")}"
+        >
+          ${selected ? "正在查看中" : "定位并处理"}
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function renderAgentSpawnSuggestionCard(suggestion, {
+  busy,
+  approvingSpawnSuggestionId,
+  ignoringSpawnSuggestionId,
+  rejectingSpawnSuggestionId,
+  escapeHtml,
+}) {
+  const suggestionId = typeof suggestion?.suggestionId === "string" ? suggestion.suggestionId : "";
+  const displayName = typeof suggestion?.displayName === "string" ? suggestion.displayName : "待命名 agent";
+  const departmentRole = typeof suggestion?.departmentRole === "string" ? suggestion.departmentRole : "未知职责";
+  const rationale = typeof suggestion?.rationale === "string" ? suggestion.rationale : "当前没有附加理由。";
+  const supportingAgent = typeof suggestion?.supportingAgentDisplayName === "string"
+    ? suggestion.supportingAgentDisplayName
+    : "当前团队";
+  const openWorkItemCount = Number.isFinite(suggestion?.openWorkItemCount) ? Number(suggestion.openWorkItemCount) : 0;
+  const waitingWorkItemCount = Number.isFinite(suggestion?.waitingWorkItemCount) ? Number(suggestion.waitingWorkItemCount) : 0;
+  const highPriorityWorkItemCount = Number.isFinite(suggestion?.highPriorityWorkItemCount)
+    ? Number(suggestion.highPriorityWorkItemCount)
+    : 0;
+  const guardrail = isRecord(suggestion?.guardrail) ? suggestion.guardrail : null;
+  const guardrailBlocked = guardrail?.blocked === true;
+  const guardrailBlockedReason = typeof guardrail?.blockedReason === "string"
+    ? guardrail.blockedReason
+    : "";
+  const organizationActiveAgentCount = Number.isFinite(guardrail?.organizationActiveAgentCount)
+    ? Number(guardrail.organizationActiveAgentCount)
+    : 0;
+  const organizationActiveAgentLimit = Number.isFinite(guardrail?.organizationActiveAgentLimit)
+    ? Number(guardrail.organizationActiveAgentLimit)
+    : 0;
+  const roleActiveAgentCount = Number.isFinite(guardrail?.roleActiveAgentCount)
+    ? Number(guardrail.roleActiveAgentCount)
+    : 0;
+  const roleActiveAgentLimit = Number.isFinite(guardrail?.roleActiveAgentLimit)
+    ? Number(guardrail.roleActiveAgentLimit)
+    : 0;
+  const auditFacts = isRecord(suggestion?.auditFacts) ? suggestion.auditFacts : null;
+  const creationReason = typeof auditFacts?.creationReason === "string"
+    ? auditFacts.creationReason
+    : rationale;
+  const namingBasis = typeof auditFacts?.namingBasis === "string"
+    ? auditFacts.namingBasis
+    : "";
+  const approving = suggestionId && approvingSpawnSuggestionId === suggestionId;
+  const ignoring = suggestionId && ignoringSpawnSuggestionId === suggestionId;
+  const rejecting = suggestionId && rejectingSpawnSuggestionId === suggestionId;
+  const approveDisabled = !suggestionId || busy || guardrailBlocked;
+  const governanceDisabled = !suggestionId || busy;
+
+  return `
+    <article class="agent-card">
+      <div class="agent-card-head">
+        <div>
+          <h4>${escapeHtml(displayName)}</h4>
+          <p class="agent-card-copy">${escapeHtml(departmentRole)} · 建议由 ${escapeHtml(supportingAgent)} 负责带教</p>
+        </div>
+        <span class="agent-status-pill ${guardrailBlocked ? "warning" : "active"}">${guardrailBlocked ? "护栏阻止" : "建议创建"}</span>
+      </div>
+      <p class="agent-card-copy">${escapeHtml(creationReason)}</p>
+      <p class="agent-card-copy">未完成任务 ${openWorkItemCount} · 等待治理 ${waitingWorkItemCount} · 高优 ${highPriorityWorkItemCount}</p>
+      <p class="agent-card-copy">组织活跃 agent ${organizationActiveAgentCount}/${organizationActiveAgentLimit} · 同角色 ${roleActiveAgentCount}/${roleActiveAgentLimit}</p>
+      ${guardrailBlockedReason ? `<p class="agent-card-copy">${escapeHtml(guardrailBlockedReason)}</p>` : ""}
+      ${namingBasis ? `<p class="agent-card-copy">${escapeHtml(namingBasis)}</p>` : ""}
+      <div class="agent-mailbox-actions">
+        <button
+          type="button"
+          class="toolbar-button subtle"
+          data-agent-spawn-approve="${escapeHtml(suggestionId)}"
+          ${approveDisabled ? "disabled" : ""}
+        >${approving ? "创建中..." : guardrailBlocked ? "当前不能创建" : "按建议创建"}</button>
+        <button
+          type="button"
+          class="toolbar-button subtle"
+          data-agent-spawn-ignore="${escapeHtml(suggestionId)}"
+          ${governanceDisabled ? "disabled" : ""}
+        >${ignoring ? "忽略中..." : "先忽略"}</button>
+        <button
+          type="button"
+          class="toolbar-button subtle"
+          data-agent-spawn-reject="${escapeHtml(suggestionId)}"
+          ${governanceDisabled ? "disabled" : ""}
+        >${rejecting ? "拒绝中..." : "拒绝"}</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderSuppressedAgentSpawnSuggestionCard(suggestion, {
+  busy,
+  restoringSpawnSuggestionId,
+  escapeHtml,
+  formatRelativeTime,
+}) {
+  const suggestionId = typeof suggestion?.suggestionId === "string" ? suggestion.suggestionId : "";
+  const displayName = typeof suggestion?.displayName === "string" ? suggestion.displayName : "待命名 agent";
+  const departmentRole = typeof suggestion?.departmentRole === "string" ? suggestion.departmentRole : "未知职责";
+  const supportingAgent = typeof suggestion?.supportingAgentDisplayName === "string"
+    ? suggestion.supportingAgentDisplayName
+    : "当前团队";
+  const suppressionState = typeof suggestion?.suppressionState === "string" ? suggestion.suppressionState : "ignored";
+  const badgeLabel = suppressionState === "rejected" ? "已拒绝" : "已忽略";
+  const restorePending = suggestionId && restoringSpawnSuggestionId === suggestionId;
+  const updatedAt = typeof suggestion?.updatedAt === "string" ? suggestion.updatedAt : "";
+  const reason = isRecord(suggestion?.auditFacts) && typeof suggestion.auditFacts.creationReason === "string"
+    ? suggestion.auditFacts.creationReason
+    : typeof suggestion?.rationale === "string"
+      ? suggestion.rationale
+      : "当前没有保留建议理由。";
+
+  return `
+    <article class="agent-card">
+      <div class="agent-card-head">
+        <div>
+          <h4>${escapeHtml(displayName)}</h4>
+          <p class="agent-card-copy">${escapeHtml(departmentRole)} · 原建议由 ${escapeHtml(supportingAgent)} 带教</p>
+        </div>
+        <span class="agent-status-pill warning">${escapeHtml(badgeLabel)}</span>
+      </div>
+      <p class="agent-card-copy">${escapeHtml(reason)}</p>
+      ${updatedAt ? `<p class="agent-card-copy">最近治理：${escapeHtml(formatRelativeTime(updatedAt) || updatedAt)}</p>` : ""}
+      <div class="agent-mailbox-actions">
+        <button
+          type="button"
+          class="toolbar-button subtle"
+          data-agent-spawn-restore="${escapeHtml(suggestionId)}"
+          ${!suggestionId || busy ? "disabled" : ""}
+        >${restorePending ? "恢复中..." : "恢复建议"}</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderAgentSpawnAuditLogCard(auditLog, {
+  escapeHtml,
+  formatRelativeTime,
+}) {
+  const eventType = typeof auditLog?.eventType === "string" ? auditLog.eventType : "";
+  const displayName = typeof auditLog?.displayName === "string" ? auditLog.displayName : "待命名 agent";
+  const departmentRole = typeof auditLog?.departmentRole === "string" ? auditLog.departmentRole : "未知职责";
+  const summary = typeof auditLog?.summary === "string" ? auditLog.summary : "当前没有审计摘要。";
+  const supportingAgentDisplayName = typeof auditLog?.supportingAgentDisplayName === "string"
+    ? auditLog.supportingAgentDisplayName
+    : "";
+  const auditFacts = isRecord(auditLog?.auditFacts) ? auditLog.auditFacts : null;
+  const guardrail = isRecord(auditLog?.guardrail) ? auditLog.guardrail : null;
+  const badgeLabel = eventType === "spawn_suggestion_blocked"
+    ? "护栏拦截"
+    : eventType === "spawn_suggestion_ignored"
+      ? "已忽略"
+      : eventType === "spawn_suggestion_rejected"
+        ? "已拒绝"
+        : eventType === "spawn_suggestion_restored"
+          ? "已恢复"
+          : "已批准";
+  const badgeClass = eventType === "spawn_suggestion_blocked"
+    || eventType === "spawn_suggestion_ignored"
+    || eventType === "spawn_suggestion_rejected"
+    ? "warning"
+    : "active";
+  const guardrailText = guardrail
+    ? `组织活跃 agent ${Number.isFinite(guardrail.organizationActiveAgentCount) ? Number(guardrail.organizationActiveAgentCount) : 0}/${Number.isFinite(guardrail.organizationActiveAgentLimit) ? Number(guardrail.organizationActiveAgentLimit) : 0} · 同角色 ${Number.isFinite(guardrail.roleActiveAgentCount) ? Number(guardrail.roleActiveAgentCount) : 0}/${Number.isFinite(guardrail.roleActiveAgentLimit) ? Number(guardrail.roleActiveAgentLimit) : 0}`
+    : "";
+
+  return `
+    <article class="agent-card">
+      <div class="agent-card-head">
+        <div>
+          <h4>${escapeHtml(displayName)}</h4>
+          <p class="agent-card-copy">${escapeHtml(departmentRole)}${supportingAgentDisplayName ? ` · 来源 ${escapeHtml(supportingAgentDisplayName)}` : ""}</p>
+        </div>
+        <span class="agent-status-pill ${badgeClass}">${escapeHtml(badgeLabel)}</span>
+      </div>
+      <p class="agent-card-copy">${escapeHtml(summary)}</p>
+      ${typeof auditFacts?.expectedScope === "string" ? `<p class="agent-card-copy">${escapeHtml(auditFacts.expectedScope)}</p>` : ""}
+      ${guardrailText ? `<p class="agent-card-copy">${escapeHtml(guardrailText)}</p>` : ""}
+      <p class="agent-card-copy">记录时间：${escapeHtml(formatRelativeTime(auditLog?.createdAt))}</p>
+    </article>
+  `;
+}
+
+function renderAgentIdleRecoverySuggestionCard(suggestion, {
+  busy,
+  approvingIdleRecoverySuggestionId,
+  escapeHtml,
+}) {
+  const suggestionId = typeof suggestion?.suggestionId === "string" ? suggestion.suggestionId : "";
+  const displayName = typeof suggestion?.displayName === "string" ? suggestion.displayName : "待命名 agent";
+  const departmentRole = typeof suggestion?.departmentRole === "string" ? suggestion.departmentRole : "未知职责";
+  const recommendedAction = typeof suggestion?.recommendedAction === "string" ? suggestion.recommendedAction : "pause";
+  const idleHours = Number.isFinite(suggestion?.idleHours) ? Number(suggestion.idleHours) : 0;
+  const lastActivitySummary = typeof suggestion?.lastActivitySummary === "string"
+    ? suggestion.lastActivitySummary
+    : "当前没有记录最近活动。";
+  const rationale = typeof suggestion?.rationale === "string"
+    ? suggestion.rationale
+    : "当前没有记录空闲回收原因。";
+  const openWorkItemCount = Number.isFinite(suggestion?.openWorkItemCount) ? Number(suggestion.openWorkItemCount) : 0;
+  const pendingMailboxCount = Number.isFinite(suggestion?.pendingMailboxCount) ? Number(suggestion.pendingMailboxCount) : 0;
+  const recentClosedWorkItemCount = Number.isFinite(suggestion?.recentClosedWorkItemCount)
+    ? Number(suggestion.recentClosedWorkItemCount)
+    : 0;
+  const recentHandoffCount = Number.isFinite(suggestion?.recentHandoffCount) ? Number(suggestion.recentHandoffCount) : 0;
+  const approving = suggestionId && approvingIdleRecoverySuggestionId === suggestionId;
+
+  return `
+    <article class="agent-card">
+      <div class="agent-card-head">
+        <div>
+          <h4>${escapeHtml(displayName)}</h4>
+          <p class="agent-card-copy">${escapeHtml(departmentRole)} · ${escapeHtml(recommendedAction === "archive" ? "建议归档" : "建议暂停")}</p>
+        </div>
+        <span class="agent-status-pill warning">${escapeHtml(recommendedAction === "archive" ? "建议归档" : "建议暂停")}</span>
+      </div>
+      <p class="agent-card-copy">${escapeHtml(rationale)}</p>
+      <p class="agent-card-copy">连续空闲 ${idleHours} 小时 · 未完成任务 ${openWorkItemCount} · 待处理 mailbox ${pendingMailboxCount}</p>
+      <p class="agent-card-copy">近 30 天已收口任务 ${recentClosedWorkItemCount} · handoff ${recentHandoffCount}</p>
+      <p class="agent-card-copy">${escapeHtml(lastActivitySummary)}</p>
+      <div class="agent-mailbox-actions">
+        <button
+          type="button"
+          class="toolbar-button subtle"
+          data-agent-idle-approve="${escapeHtml(suggestionId)}"
+          ${!suggestionId || busy ? "disabled" : ""}
+        >${approving ? "处理中..." : recommendedAction === "archive" ? "按建议归档" : "按建议暂停"}</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderAgentIdleRecoveryAuditLogCard(auditLog, {
+  escapeHtml,
+  formatRelativeTime,
+}) {
+  const eventType = typeof auditLog?.eventType === "string" ? auditLog.eventType : "";
+  const displayName = typeof auditLog?.displayName === "string" ? auditLog.displayName : "待命名 agent";
+  const departmentRole = typeof auditLog?.departmentRole === "string" ? auditLog.departmentRole : "未知职责";
+  const summary = typeof auditLog?.summary === "string" ? auditLog.summary : "当前没有审计摘要。";
+  const badgeLabel = eventType === "idle_recovery_archive_approved" ? "已归档" : "已暂停";
+  const idleHours = Number.isFinite(auditLog?.idleHours) ? Number(auditLog.idleHours) : 0;
+
+  return `
+    <article class="agent-card">
+      <div class="agent-card-head">
+        <div>
+          <h4>${escapeHtml(displayName)}</h4>
+          <p class="agent-card-copy">${escapeHtml(departmentRole)} · 连续空闲 ${idleHours} 小时</p>
+        </div>
+        <span class="agent-status-pill warning">${escapeHtml(badgeLabel)}</span>
+      </div>
+      <p class="agent-card-copy">${escapeHtml(summary)}</p>
+      <p class="agent-card-copy">记录时间：${escapeHtml(formatRelativeTime(auditLog?.createdAt))}</p>
+    </article>
+  `;
+}
+
+function renderAgentCard(agent, { selected, escapeHtml, formatRelativeTime }) {
+  const status = resolveAgentStatus(agent?.status);
+  const role = typeof agent?.departmentRole === "string" ? agent.departmentRole : "未分类";
+  const mission = typeof agent?.mission === "string" && agent.mission.trim()
+    ? agent.mission
+    : "还没有填写使命说明。";
+
+  return `
+    <article class="agent-card">
+      <div class="agent-card-head">
+        <div class="agent-card-heading">
+          <h4>${escapeHtml(agent?.displayName || role)}</h4>
+          <p class="agent-card-copy">${escapeHtml(mission)}</p>
+        </div>
+        <div class="agent-pill-row">
+          <span class="badge ${escapeHtml(resolveStatusTone(status))}">${escapeHtml(resolveAgentStatusLabel(status))}</span>
+          <span class="agent-pill">${escapeHtml(role)}</span>
+        </div>
+      </div>
+      <div class="agent-meta-grid">
+        ${renderAgentMetaItem("创建方式", agent?.creationMode || "manual", escapeHtml)}
+        ${renderAgentMetaItem("自治级别", agent?.autonomyLevel || "bounded", escapeHtml)}
+        ${renderAgentMetaItem("暴露策略", agent?.exposurePolicy || "gateway_only", escapeHtml)}
+        ${renderAgentMetaItem("最近更新", formatRelativeTime(agent?.updatedAt), escapeHtml)}
+      </div>
+      <div class="agent-card-actions">
+        <button
+          type="button"
+          class="toolbar-button subtle"
+          data-agent-select="${escapeHtml(agent?.agentId || "")}"
+        >
+          ${selected ? "当前查看中" : "查看详情"}
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function renderAgentMetaGrid({
+  selectedAgent,
+  principal,
+  organization,
+  workItemCount,
+  mailboxCount,
+  lifecycleUpdatingAgentId,
+  lifecycleUpdatingAction,
+  busy,
+  escapeHtml,
+}) {
+  const status = resolveAgentStatus(selectedAgent?.status);
+  const agentId = selectedAgent?.agentId || "";
+  const updatingThisAgent = agentId && agentId === lifecycleUpdatingAgentId;
+
+  return [
+    renderAgentMetaItem("职责", selectedAgent?.departmentRole || "未分类", escapeHtml),
+    renderAgentMetaItem("状态", resolveAgentStatusLabel(status), escapeHtml),
+    renderAgentMetaItem("建档", resolveAgentBootstrapLabel(selectedAgent?.bootstrapProfile), escapeHtml),
+    renderAgentMetaItem("Organization", organization?.displayName || organization?.organizationId || "未绑定", escapeHtml),
+    renderAgentMetaItem("Principal", principal?.principalId || selectedAgent?.principalId || "未知", escapeHtml),
+    renderAgentMetaItem("Work Items", String(workItemCount ?? 0), escapeHtml),
+    renderAgentMetaItem("Mailbox", String(mailboxCount ?? 0), escapeHtml),
+    renderAgentLifecycleActions({
+      agentId,
+      status,
+      updatingThisAgent,
+      lifecycleUpdatingAction,
+      busy,
+      escapeHtml,
+    }),
+  ].join("");
+}
+
+function renderAgentMetaItem(label, value, escapeHtml) {
+  return `
+    <div class="agent-meta-item">
+      <dt>${escapeHtml(label)}</dt>
+      <dd>${escapeHtml(value)}</dd>
+    </div>
+  `;
+}
+
+function renderAgentLifecycleActions({
+  agentId,
+  status,
+  updatingThisAgent,
+  lifecycleUpdatingAction,
+  busy,
+  escapeHtml,
+}) {
+  if (!agentId) {
+    return "";
+  }
+
+  const actions = status === "paused"
+    ? ["resume", "archive"]
+    : status === "archived"
+      ? []
+      : ["pause", "archive"];
+  const helperCopy = status === "archived"
+    ? "这个 agent 已归档，不再接收新任务，也不会再被 scheduler claim。"
+    : "暂停后不会再被 scheduler claim 新任务；归档后仍可查看历史，但不再接收新任务。";
+
+  return `
+    <div class="agent-block">
+      <p class="agent-block-title">治理动作</p>
+      <div class="settings-stack">
+        <p class="settings-section-copy">${escapeHtml(helperCopy)}</p>
+        ${actions.length ? `
+          <div class="agent-card-actions">
+            ${actions.map((action) => `
+              <button
+                type="button"
+                class="${action === "archive" ? "ghost-button" : "toolbar-button subtle"}"
+                data-agent-lifecycle-action="${escapeHtml(action)}"
+                data-agent-lifecycle-agent-id="${escapeHtml(agentId)}"
+                ${busy ? "disabled" : ""}
+              >
+                ${escapeHtml(resolveAgentLifecycleButtonLabel(action, updatingThisAgent && lifecycleUpdatingAction === action))}
+              </button>
+            `).join("")}
+          </div>
+        ` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderAgentWorkItemCard(workItem, { selected, escapeHtml, formatRelativeTime }) {
+  const status = resolveWorkItemStatus(workItem?.status);
+  const priority = resolvePriority(workItem?.priority);
+
+  return `
+    <article class="agent-card agent-card-compact">
+      <div class="agent-card-head">
+        <div class="agent-card-heading">
+          <h4>${escapeHtml(workItem?.goal || workItem?.dispatchReason || "未命名 work item")}</h4>
+          <p class="agent-card-copy">${escapeHtml(workItem?.dispatchReason || "没有额外派工原因。")}</p>
+        </div>
+        <div class="agent-pill-row">
+          <span class="badge ${escapeHtml(resolveStatusTone(status))}">${escapeHtml(resolveWorkItemStatusLabel(status))}</span>
+          <span class="agent-pill">${escapeHtml(resolvePriorityLabel(priority))}</span>
+        </div>
+      </div>
+      <div class="agent-meta-grid">
+        ${renderAgentMetaItem("来源", resolveSourceTypeLabel(workItem?.sourceType), escapeHtml)}
+        ${renderAgentMetaItem("创建时间", formatRelativeTime(workItem?.createdAt), escapeHtml)}
+        ${renderAgentMetaItem("workItemId", workItem?.workItemId || "未知", escapeHtml)}
+      </div>
+      <div class="agent-card-actions">
+        <button
+          type="button"
+          class="toolbar-button subtle"
+          data-agent-work-item-select="${escapeHtml(workItem?.workItemId || "")}"
+        >
+          ${selected ? "正在查看详情" : "查看详情"}
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function renderAgentWorkItemDetail(detail, {
+  loading,
+  busy,
+  cancelingWorkItemId,
+  respondingWorkItemId,
+  humanResponseDraft,
+  escapeHtml,
+}) {
+  if (loading) {
+    return '<div class="settings-section-copy">正在读取 work item 详情。</div>';
+  }
+
+  if (!detail?.workItem) {
+    return '<div class="settings-section-copy">选择一条 work item 后，这里会显示上下文包和内部消息。</div>';
+  }
+
+  const contextPacket = renderJsonBlock(detail.workItem.contextPacket, escapeHtml);
+  const waitingAction = detail.workItem.waitingActionRequest;
+  const latestHumanResponse = detail.workItem.latestHumanResponse;
+  const messages = Array.isArray(detail.messages) ? detail.messages : [];
+  const waitingHuman = detail.workItem.status === "waiting_human";
+  const waitingActionBlock = renderWaitingActionBlock(waitingAction, escapeHtml);
+  const latestHumanResponseBlock = renderLatestHumanResponseBlock(latestHumanResponse, escapeHtml);
+  const decisionChoices = Array.isArray(waitingAction?.choices)
+    ? waitingAction.choices.filter((choice) => choice === "approve" || choice === "deny")
+    : [];
+  const showDecisionSelect = waitingHuman && decisionChoices.length > 0;
+  const currentDraft = humanResponseDraft ?? { decision: "", inputText: "" };
+  const cancellable = canCancelWorkItem(detail.workItem);
+  const cancelDisabled = busy || detail.workItem.workItemId === cancelingWorkItemId;
+  const submitDisabled = busy || detail.workItem.workItemId === respondingWorkItemId;
+
+  return `
+    <article class="agent-detail-shell">
+      <div class="tool-group-head">
+        <h4>Work Item Detail</h4>
+        <span class="meta-label">${escapeHtml(detail.workItem.workItemId || "")}</span>
+      </div>
+      <div class="settings-stack">
+        <p class="settings-section-copy">${escapeHtml(detail.workItem.goal || "没有目标说明。")}</p>
+        <div class="agent-meta-grid">
+          ${renderAgentMetaItem("目标 agent", detail.targetAgent?.displayName || detail.targetAgent?.agentId || "未知", escapeHtml)}
+          ${renderAgentMetaItem("来源 principal", detail.sourcePrincipal?.principalId || "未知", escapeHtml)}
+          ${renderAgentMetaItem("来源 agent", detail.sourceAgent?.displayName || detail.sourceAgent?.agentId || "human / system", escapeHtml)}
+          ${renderAgentMetaItem("状态", resolveWorkItemStatusLabel(resolveWorkItemStatus(detail.workItem.status)), escapeHtml)}
+        </div>
+        ${contextPacket ? `
+          <div class="agent-block">
+            <p class="agent-block-title">上下文包</p>
+            ${contextPacket}
+          </div>
+        ` : ""}
+        ${waitingActionBlock}
+        ${latestHumanResponseBlock}
+        ${cancellable ? `
+          <div class="agent-block">
+            <p class="agent-block-title">治理动作</p>
+            <div class="settings-stack">
+              <p class="settings-section-copy">这条 work item 目前还在安全可收口范围内。取消后会关闭旧 mailbox，并把状态收口成 cancelled。</p>
+              <div class="agent-card-actions">
+                <button
+                  type="button"
+                  class="toolbar-button subtle"
+                  data-agent-work-item-cancel="${escapeHtml(detail.workItem.workItemId || "")}"
+                  ${cancelDisabled ? "disabled" : ""}
+                >
+                  ${detail.workItem.workItemId === cancelingWorkItemId ? "取消中..." : "取消该 work item"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ` : ""}
+        ${waitingHuman ? `
+          <div class="agent-block">
+            <p class="agent-block-title">顶层治理回复</p>
+            <div class="settings-stack">
+              <p class="settings-section-copy">子 agent 不直接对人。这里提交的是治理回复，提交后会把当前 work item 重新排回队列继续执行。</p>
+              ${showDecisionSelect ? `
+                <label class="settings-field">
+                  <span>审批结果</span>
+                  <select data-agent-human-decision ${submitDisabled ? "disabled" : ""}>
+                    <option value="">请选择</option>
+                    <option value="approve" ${currentDraft.decision === "approve" ? "selected" : ""}>approve</option>
+                    <option value="deny" ${currentDraft.decision === "deny" ? "selected" : ""}>deny</option>
+                  </select>
+                </label>
+              ` : ""}
+              <label class="settings-field">
+                <span>补充说明</span>
+                <textarea
+                  rows="4"
+                  data-agent-human-input
+                  placeholder="例如：可以继续发布，但要先补 release note。"
+                  ${submitDisabled ? "disabled" : ""}
+                >${escapeHtml(currentDraft.inputText || "")}</textarea>
+              </label>
+              <div class="agent-card-actions">
+                <button
+                  type="button"
+                  class="toolbar-button subtle"
+                  data-agent-human-respond="${escapeHtml(detail.workItem.workItemId || "")}"
+                  ${submitDisabled ? "disabled" : ""}
+                >
+                  ${detail.workItem.workItemId === respondingWorkItemId ? "提交中..." : "提交治理回复"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ` : ""}
+        <div class="agent-block">
+          <p class="agent-block-title">内部消息</p>
+          <div class="agent-message-list">
+            ${messages.length
+              ? messages.map((message) => `
+                <article class="agent-message-card">
+                  <div class="agent-card-head">
+                    <div class="agent-card-heading">
+                      <h4>${escapeHtml(resolveMessageTypeLabel(message?.messageType))}</h4>
+                      <p class="agent-card-copy">${escapeHtml(renderMessageSummary(message))}</p>
+                    </div>
+                    <span class="agent-pill">${escapeHtml(resolvePriorityLabel(resolvePriority(message?.priority)))}</span>
+                  </div>
+                </article>
+              `).join("")
+              : '<p class="settings-section-copy">这条 work item 还没有结构化内部消息。</p>'}
+          </div>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function renderWaitingActionBlock(waitingAction, escapeHtml) {
+  if (!waitingAction || typeof waitingAction !== "object") {
+    return "";
+  }
+
+  const prompt = typeof waitingAction.prompt === "string" ? waitingAction.prompt : "";
+  const actionType = typeof waitingAction.actionType === "string" ? waitingAction.actionType : "unknown";
+  const choices = Array.isArray(waitingAction.choices)
+    ? waitingAction.choices.filter((choice) => typeof choice === "string" && choice.trim())
+    : [];
+  const inputSchema = renderJsonBlock(waitingAction.inputSchema, escapeHtml);
+
+  return `
+    <div class="agent-block">
+      <p class="agent-block-title">等待中的治理请求</p>
+      <div class="settings-stack">
+        <p class="settings-section-copy">${escapeHtml(prompt || "当前等待请求没有额外说明。")}</p>
+        <div class="agent-meta-grid">
+          ${renderAgentMetaItem("类型", actionType, escapeHtml)}
+          ${renderAgentMetaItem("候选项", choices.length ? choices.join(", ") : "无", escapeHtml)}
+        </div>
+        ${inputSchema ? `
+          <div>
+            <p class="agent-block-title">输入约束</p>
+            ${inputSchema}
+          </div>
+        ` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderLatestHumanResponseBlock(latestHumanResponse, escapeHtml) {
+  const rendered = renderJsonBlock(latestHumanResponse, escapeHtml);
+
+  if (!rendered) {
+    return "";
+  }
+
+  return `
+    <div class="agent-block">
+      <p class="agent-block-title">最近一次治理回复</p>
+      ${rendered}
+    </div>
+  `;
+}
+
+function renderAgentMailboxCard(item, { busy, ackingMailboxEntryId, escapeHtml, formatRelativeTime }) {
+  const entry = item?.entry ?? {};
+  const message = item?.message ?? {};
+  const ackable = entry.status !== "acked";
+
+  return `
+    <article class="agent-card agent-card-compact">
+      <div class="agent-card-head">
+        <div class="agent-card-heading">
+          <h4>${escapeHtml(resolveMessageTypeLabel(message.messageType))}</h4>
+          <p class="agent-card-copy">${escapeHtml(renderMessageSummary(message))}</p>
+        </div>
+        <div class="agent-pill-row">
+          <span class="badge ${escapeHtml(resolveStatusTone(resolveMailboxStatus(entry.status)))}">${escapeHtml(resolveMailboxStatusLabel(resolveMailboxStatus(entry.status)))}</span>
+          <span class="agent-pill">${escapeHtml(resolvePriorityLabel(resolvePriority(entry.priority || message.priority)))}</span>
+        </div>
+      </div>
+      <div class="agent-meta-grid">
+        ${renderAgentMetaItem("messageId", message.messageId || "未知", escapeHtml)}
+        ${renderAgentMetaItem("workItem", message.workItemId || entry.workItemId || "无", escapeHtml)}
+        ${renderAgentMetaItem("可见时间", formatRelativeTime(entry.availableAt), escapeHtml)}
+      </div>
+      <div class="agent-card-actions">
+        <button
+          type="button"
+          class="toolbar-button subtle"
+          data-agent-mailbox-ack="${escapeHtml(entry.mailboxEntryId || "")}"
+          data-agent-mailbox-owner-id="${escapeHtml(entry.ownerAgentId || "")}"
+          ${!ackable || busy ? "disabled" : ""}
+        >
+          ${entry.mailboxEntryId === ackingMailboxEntryId ? "确认中..." : ackable ? "确认消息" : "已确认"}
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function renderJsonBlock(value, escapeHtml) {
+  if (value === undefined || value === null || value === "") {
+    return "";
+  }
+
+  const rendered = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  return `<pre class="agent-code-block">${escapeHtml(rendered)}</pre>`;
+}
+
+function renderMessageSummary(message) {
+  const payload = message?.payload;
+
+  if (typeof payload === "string" && payload.trim()) {
+    return payload.trim();
+  }
+
+  if (payload && typeof payload === "object") {
+    if (typeof payload.goal === "string" && payload.goal.trim()) {
+      return payload.goal.trim();
+    }
+
+    if (typeof payload.question === "string" && payload.question.trim()) {
+      return payload.question.trim();
+    }
+
+    if (typeof payload.dispatchReason === "string" && payload.dispatchReason.trim()) {
+      return payload.dispatchReason.trim();
+    }
+  }
+
+  return "没有额外摘要。";
+}
+
+function resolveWaitingQueueItemSummary(workItem, latestWaitingMessage) {
+  const prompt = typeof workItem?.waitingActionRequest?.prompt === "string"
+    ? workItem.waitingActionRequest.prompt.trim()
+    : "";
+  const messageSummary = latestWaitingMessage ? renderMessageSummary(latestWaitingMessage) : "";
+  const goal = typeof workItem?.goal === "string" ? workItem.goal.trim() : "";
+
+  return prompt || messageSummary || goal || "当前等待项没有额外摘要。";
+}
+
+function resolveWaitingAttentionLabel(workItem, latestWaitingMessage) {
+  if (workItem?.status === "waiting_human") {
+    return "顶层治理";
+  }
+
+  if (latestWaitingMessage?.messageType === "approval_request") {
+    return "审批请求";
+  }
+
+  if (latestWaitingMessage?.messageType === "question") {
+    return "等待回复";
+  }
+
+  if (latestWaitingMessage?.messageType === "escalation") {
+    return "升级阻塞";
+  }
+
+  return "待处理";
+}
+
+function resolveAgentStatus(status) {
+  return ["provisioning", "bootstrapping", "active", "paused", "degraded", "archived"].includes(status)
+    ? status
+    : "provisioning";
+}
+
+function resolveSelectedAgentCopy(agent) {
+  const mission = typeof agent?.mission === "string" && agent.mission.trim()
+    ? agent.mission.trim()
+    : "这个 agent 还没有补充使命说明。";
+  const bootstrapProfile = isRecord(agent?.bootstrapProfile) ? agent.bootstrapProfile : null;
+  const bootstrapState = typeof bootstrapProfile?.state === "string" ? bootstrapProfile.state : "";
+  const summary = typeof bootstrapProfile?.summary === "string" && bootstrapProfile.summary.trim()
+    ? bootstrapProfile.summary.trim()
+    : "";
+
+  if (!bootstrapProfile) {
+    return mission;
+  }
+
+  if (bootstrapState === "completed" && summary) {
+    return `${mission} 当前建档摘要：${summary}`;
+  }
+
+  if (bootstrapState === "waiting_agent" || bootstrapState === "waiting_human") {
+    return `${mission} 当前仍在做首次职责建档，正在等待上游补充信息。`;
+  }
+
+  if (bootstrapState === "failed" || bootstrapState === "cancelled") {
+    return `${mission} 首次职责建档还没有成功收口，需要治理介入。`;
+  }
+
+  if (resolveAgentStatus(agent?.status) === "bootstrapping") {
+    return `${mission} 当前正在做首次职责建档，还不能承接新的正式派工。`;
+  }
+
+  return mission;
+}
+
+function resolveAgentBootstrapLabel(bootstrapProfile) {
+  const record = isRecord(bootstrapProfile) ? bootstrapProfile : null;
+  const state = typeof record?.state === "string" ? record.state : "";
+
+  return {
+    pending: "建档进行中",
+    waiting_human: "建档等治理",
+    waiting_agent: "建档等上游",
+    completed: "已完成建档",
+    failed: "建档失败",
+    cancelled: "建档取消",
+  }[state] ?? "未建档";
+}
+
+function resolveAgentStatusLabel(status) {
+  return {
+    provisioning: "筹备中",
+    bootstrapping: "建档中",
+    active: "活跃",
+    paused: "暂停",
+    degraded: "降级",
+    archived: "归档",
+  }[status] ?? status;
+}
+
+function resolveWorkItemStatus(status) {
+  return [
+    "queued",
+    "planning",
+    "running",
+    "waiting_human",
+    "waiting_agent",
+    "blocked",
+    "handoff_pending",
+    "completed",
+    "failed",
+    "cancelled",
+  ].includes(status)
+    ? status
+    : "queued";
+}
+
+function resolveWorkItemStatusLabel(status) {
+  return {
+    queued: "排队中",
+    planning: "规划中",
+    running: "执行中",
+    waiting_human: "等人类",
+    waiting_agent: "等 agent",
+    blocked: "阻塞",
+    handoff_pending: "待交接",
+    completed: "完成",
+    failed: "失败",
+    cancelled: "取消",
+  }[status] ?? status;
+}
+
+function resolveMailboxStatus(status) {
+  return ["pending", "leased", "acked"].includes(status) ? status : "pending";
+}
+
+function resolveMailboxStatusLabel(status) {
+  return {
+    pending: "待处理",
+    leased: "处理中",
+    acked: "已确认",
+  }[status] ?? status;
+}
+
+function resolveAgentLifecycleButtonLabel(action, busy) {
+  if (action === "pause") {
+    return busy ? "暂停中..." : "暂停";
+  }
+
+  if (action === "resume") {
+    return busy ? "恢复中..." : "恢复";
+  }
+
+  if (action === "archive") {
+    return busy ? "归档中..." : "归档";
+  }
+
+  return action || "更新状态";
+}
+
+function resolveAgentLifecycleStatusMessage(action) {
+  if (action === "pause") {
+    return "正在暂停当前 agent。";
+  }
+
+  if (action === "resume") {
+    return "正在恢复当前 agent。";
+  }
+
+  if (action === "archive") {
+    return "正在归档当前 agent。";
+  }
+
+  return "正在更新 agent 生命周期状态。";
+}
+
+function resolvePriority(priority) {
+  return ["low", "normal", "high", "urgent"].includes(priority) ? priority : "normal";
+}
+
+function resolvePriorityLabel(priority) {
+  return {
+    low: "低优先级",
+    normal: "普通",
+    high: "高优先级",
+    urgent: "紧急",
+  }[priority] ?? priority;
+}
+
+function resolveSourceTypeLabel(sourceType) {
+  return {
+    human: "human",
+    agent: "agent",
+    system: "system",
+  }[sourceType] ?? "human";
+}
+
+function resolveMessageTypeLabel(messageType) {
+  return {
+    dispatch: "正式派工",
+    status_update: "状态更新",
+    question: "问题",
+    answer: "回答",
+    handoff: "交接",
+    escalation: "升级",
+    approval_request: "审批请求",
+    approval_result: "审批结果",
+    artifact_offer: "产物交付",
+    cancel: "取消",
+  }[messageType] ?? (messageType || "内部消息");
+}
+
+function resolveStatusTone(status) {
+  if (["running", "queued", "planning", "waiting_human", "waiting_agent", "pending", "leased", "provisioning", "bootstrapping"].includes(status)) {
+    return "busy";
+  }
+
+  if (["failed", "blocked", "degraded"].includes(status)) {
+    return "error";
+  }
+
+  if (["cancelled", "paused", "archived", "acked"].includes(status)) {
+    return "cancelled";
+  }
+
+  return "idle";
+}
+
+function canCancelWorkItem(workItem) {
+  const status = resolveWorkItemStatus(workItem?.status);
+  return ["queued", "planning", "running", "waiting_human", "waiting_agent", "blocked", "handoff_pending"].includes(status);
 }
 
 function resolveEmptyMemoryCandidatesLabel(candidatesState) {
@@ -2232,6 +3768,10 @@ function formatAuthAccountDisplayName(account, fallbackAccountId = "") {
 
 function normalizeAuthAccountId(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function isRecord(value) {
+  return typeof value === "object" && value !== null;
 }
 
 function shouldShowRemoteBrowserLoginWarning(auth) {

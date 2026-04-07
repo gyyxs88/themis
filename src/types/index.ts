@@ -6,3 +6,4 @@ export * from "./persona.js";
 export * from "./runtime-engine.js";
 export * from "./task-input.js";
 export * from "./task.js";
+export * from "./managed-agents.js";

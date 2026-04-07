@@ -297,6 +297,18 @@
                 </button>
 
                 <button
+                  id="settings-agents-tab"
+                  type="button"
+                  class="settings-nav-button"
+                  data-settings-section="agents"
+                  role="tab"
+                  aria-controls="settings-agents-section"
+                  aria-selected="false"
+                >
+                  <span class="settings-nav-title">Agents</span>
+                </button>
+
+                <button
                   id="settings-memory-candidates-tab"
                   type="button"
                   class="settings-nav-button"
@@ -886,6 +898,337 @@
                     <div id="skills-curated-list" class="settings-stack"></div>
                   </section>
                 </div>
+              </section>
+
+              <section
+                id="settings-agents-section"
+                class="settings-panel hidden"
+                role="tabpanel"
+                aria-labelledby="settings-agents-tab"
+              >
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>Agents</h3>
+                    <span class="meta-label">最小治理面</span>
+                  </div>
+
+                  <p class="settings-section-copy">
+                    默认只有组织级入口直接对人。这里展示当前组织下的持久化 agent、任务单和内部信箱，并提供最小治理动作。
+                  </p>
+
+                  <div class="settings-stack">
+                    <div class="settings-inline-actions">
+                      <button id="agents-refresh-button" type="button" class="toolbar-button subtle">刷新</button>
+                      <p class="settings-inline-copy">
+                        会同步拉取 agent 列表、当前选中 agent 的 work item，以及 mailbox 摘要。
+                      </p>
+                    </div>
+
+                    <div class="agents-summary-grid">
+                      <article class="agent-summary-card">
+                        <span>组织</span>
+                        <strong id="agents-summary-organizations">0</strong>
+                      </article>
+                      <article class="agent-summary-card">
+                        <span>Agents</span>
+                        <strong id="agents-summary-agents">0</strong>
+                      </article>
+                      <article class="agent-summary-card">
+                        <span>当前任务</span>
+                        <strong id="agents-summary-work-items">0</strong>
+                      </article>
+                      <article class="agent-summary-card">
+                        <span>待确认信箱</span>
+                        <strong id="agents-summary-mailbox">0</strong>
+                      </article>
+                    </div>
+
+                    <p
+                      id="agents-status-note"
+                      class="settings-section-copy settings-probe-note hidden"
+                      aria-live="polite"
+                    ></p>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>创建 Agent</h3>
+                    <span class="meta-label">持久化主体</span>
+                  </div>
+
+                  <div class="settings-stack">
+                    <div class="settings-grid">
+                      <label class="settings-field">
+                        <span>职责</span>
+                        <input
+                          id="agents-create-role-input"
+                          type="text"
+                          placeholder="例如：后端、运维、营销"
+                          autocomplete="off"
+                        />
+                      </label>
+
+                      <label class="settings-field">
+                        <span>显示名（可选）</span>
+                        <input
+                          id="agents-create-name-input"
+                          type="text"
+                          placeholder="留空则由 Themis 自动命名"
+                          autocomplete="off"
+                        />
+                      </label>
+                    </div>
+
+                    <label class="settings-field">
+                      <span>使命（可选）</span>
+                      <textarea
+                        id="agents-create-mission-input"
+                        rows="3"
+                        placeholder="例如：负责 Web 工作台的交互、状态管理和交付节奏。"
+                      ></textarea>
+                    </label>
+
+                    <div class="settings-inline-actions">
+                      <button id="agents-create-button" type="button" class="toolbar-button subtle">创建 Agent</button>
+                      <p class="settings-inline-copy">创建后会自动刷新列表，并把焦点切到新 agent。</p>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>组织级待治理</h3>
+                    <span class="meta-label">Waiting Queue</span>
+                  </div>
+
+                  <p
+                    id="agents-waiting-summary"
+                    class="settings-section-copy"
+                  >
+                    顶层 Themis 会在这里汇总当前组织下需要治理的等待项。
+                  </p>
+
+                  <div class="settings-stack">
+                    <div id="agents-waiting-empty" class="settings-section-copy hidden">当前没有待治理阻塞。</div>
+                    <div id="agents-waiting-list" class="settings-stack"></div>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>自动创建建议</h3>
+                    <span class="meta-label">Spawn Suggestions</span>
+                  </div>
+
+                  <p
+                    id="agents-spawn-policy-summary"
+                    class="settings-section-copy"
+                  >
+                    这里可以查看并调整当前组织的自动创建护栏。
+                  </p>
+
+                  <div class="settings-inline-grid">
+                    <label class="settings-field">
+                      <span>组织活跃 agent 上限</span>
+                      <input
+                        id="agents-spawn-policy-max-active-input"
+                        type="number"
+                        min="1"
+                        step="1"
+                        inputmode="numeric"
+                      />
+                    </label>
+                    <label class="settings-field">
+                      <span>同角色活跃 agent 上限</span>
+                      <input
+                        id="agents-spawn-policy-max-role-input"
+                        type="number"
+                        min="1"
+                        step="1"
+                        inputmode="numeric"
+                      />
+                    </label>
+                  </div>
+
+                  <div class="settings-inline-actions">
+                    <button id="agents-spawn-policy-save-button" type="button" class="toolbar-button subtle">保存护栏</button>
+                    <p class="settings-inline-copy">自动创建建议与批准都会使用这里的组织级策略。</p>
+                  </div>
+
+                  <p
+                    id="agents-spawn-suggestions-summary"
+                    class="settings-section-copy"
+                  >
+                    顶层 Themis 会在这里给出当前组织下值得新增长期 agent 的建议。
+                  </p>
+
+                  <div class="settings-stack">
+                    <div id="agents-spawn-suggestions-empty" class="settings-section-copy hidden">当前没有新的自动创建建议。</div>
+                    <div id="agents-spawn-suggestions-list" class="settings-stack"></div>
+                    <p id="agents-suppressed-spawn-suggestions-summary" class="settings-section-copy">被忽略或拒绝的自动创建建议会显示在这里，方便后续恢复。</p>
+                    <div id="agents-suppressed-spawn-suggestions-empty" class="settings-section-copy hidden">当前没有被忽略或拒绝的自动创建建议。</div>
+                    <div id="agents-suppressed-spawn-suggestions-list" class="settings-stack"></div>
+                    <p id="agents-spawn-audit-summary" class="settings-section-copy">最近的自动创建审批与护栏拦截记录会显示在这里。</p>
+                    <div id="agents-spawn-audit-empty" class="settings-section-copy hidden">当前还没有自动创建审计记录。</div>
+                    <div id="agents-spawn-audit-list" class="settings-stack"></div>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>空闲回收建议</h3>
+                    <span class="meta-label">Idle Recovery</span>
+                  </div>
+
+                  <p
+                    id="agents-idle-recovery-suggestions-summary"
+                    class="settings-section-copy"
+                  >
+                    顶层 Themis 会在这里提示哪些 auto-created agent 已长期空闲，值得暂停或归档。
+                  </p>
+
+                  <div class="settings-stack">
+                    <div id="agents-idle-recovery-suggestions-empty" class="settings-section-copy hidden">当前没有空闲回收建议。</div>
+                    <div id="agents-idle-recovery-suggestions-list" class="settings-stack"></div>
+                    <p id="agents-idle-recovery-audit-summary" class="settings-section-copy">最近的空闲回收批准记录会显示在这里。</p>
+                    <div id="agents-idle-recovery-audit-empty" class="settings-section-copy hidden">当前还没有空闲回收审计记录。</div>
+                    <div id="agents-idle-recovery-audit-list" class="settings-stack"></div>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>查看与派工</h3>
+                    <span class="meta-label">当前组织</span>
+                  </div>
+
+                  <div class="settings-stack">
+                    <label class="settings-field">
+                      <span>当前查看 agent</span>
+                      <select id="agents-select">
+                        <option value="">当前还没有 agent</option>
+                      </select>
+                    </label>
+
+                    <div id="agents-list-empty" class="settings-section-copy hidden">当前还没有持久化 agent。</div>
+                    <div id="agents-list" class="settings-stack"></div>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>派工</h3>
+                    <span class="meta-label">治理动作</span>
+                  </div>
+
+                  <div class="settings-stack">
+                    <div class="settings-grid">
+                      <label class="settings-field">
+                        <span>目标 agent</span>
+                        <select id="agents-dispatch-target-select">
+                          <option value="">当前还没有 agent</option>
+                        </select>
+                      </label>
+
+                      <label class="settings-field">
+                        <span>派工来源</span>
+                        <select id="agents-dispatch-source-type-select">
+                          <option value="human">human</option>
+                          <option value="agent">agent</option>
+                          <option value="system">system</option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <label class="settings-field">
+                      <span>来源 agent</span>
+                      <select id="agents-dispatch-source-agent-select">
+                        <option value="">仅在 agent 派工时需要</option>
+                      </select>
+                    </label>
+
+                    <div class="settings-grid">
+                      <label class="settings-field">
+                        <span>派工原因</span>
+                        <input
+                          id="agents-dispatch-reason-input"
+                          type="text"
+                          placeholder="例如：前端依赖新的 detail API"
+                          autocomplete="off"
+                        />
+                      </label>
+
+                      <label class="settings-field">
+                        <span>优先级</span>
+                        <select id="agents-dispatch-priority-select">
+                          <option value="low">low</option>
+                          <option value="normal" selected>normal</option>
+                          <option value="high">high</option>
+                          <option value="urgent">urgent</option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <label class="settings-field">
+                      <span>任务目标</span>
+                      <textarea
+                        id="agents-dispatch-goal-input"
+                        rows="3"
+                        placeholder="例如：补 dispatch / work-item detail / mailbox pull 的最小 HTTP 治理闭环。"
+                      ></textarea>
+                    </label>
+
+                    <label class="settings-field">
+                      <span>上下文包（可选）</span>
+                      <textarea
+                        id="agents-dispatch-context-input"
+                        rows="4"
+                        placeholder='可留空，也可以填 JSON，例如：{"ticket":"AGENT-1","milestone":"phase-a"}'
+                      ></textarea>
+                    </label>
+
+                    <div class="settings-inline-actions">
+                      <button id="agents-dispatch-button" type="button" class="toolbar-button subtle">提交派工</button>
+                      <p class="settings-inline-copy">这会生成持久化 work item；如果来源是 agent，还会自动写入目标 agent 的 mailbox。</p>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3 id="agents-selected-agent-heading">当前 agent</h3>
+                    <span class="meta-label">工作视图</span>
+                  </div>
+
+                  <p id="agents-selected-agent-copy" class="settings-section-copy">先从上方选择一个 agent，才能查看它的任务和内部信箱。</p>
+                  <div id="agents-selected-agent-meta" class="agent-meta-grid hidden"></div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>Work Items</h3>
+                    <span class="meta-label">当前 agent</span>
+                  </div>
+
+                  <div class="settings-stack">
+                    <div id="agents-work-items-empty" class="settings-section-copy hidden">当前 agent 暂时没有 work item。</div>
+                    <div id="agents-work-items-list" class="settings-stack"></div>
+                    <div id="agents-work-item-detail" class="settings-stack"></div>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>Mailbox</h3>
+                    <span class="meta-label">当前 agent</span>
+                  </div>
+
+                  <div class="settings-stack">
+                    <div id="agents-mailbox-empty" class="settings-section-copy hidden">当前 agent 的 mailbox 还是空的。</div>
+                    <div id="agents-mailbox-list" class="settings-stack"></div>
+                  </div>
+                </section>
               </section>
 
               <section

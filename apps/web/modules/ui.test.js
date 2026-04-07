@@ -304,6 +304,775 @@ test("renderThreadControlPanel 重渲染时保留 details 展开态，并只更�
   assert.ok(harness.dom.threadControlDetailsBody.innerHTML.includes("conversation-b"));
 });
 
+test("renderAgentsState 会在组织级等待队列渲染直接治理入口", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      agents: {
+        status: "ready",
+        errorMessage: "",
+        noticeMessage: "",
+        loading: false,
+        detailLoading: false,
+        workItemDetailLoading: false,
+        creating: false,
+        dispatching: false,
+        ackingMailboxEntryId: "",
+        respondingWorkItemId: "",
+        organizations: [{ organizationId: "org-1", displayName: "老板团队" }],
+        agents: [
+          {
+            agentId: "agent-ops",
+            principalId: "principal-ops",
+            displayName: "运维·曜",
+            departmentRole: "运维",
+            mission: "负责发布和值班。",
+            status: "active",
+            updatedAt: "2026-04-06T15:05:00.000Z",
+          },
+        ],
+        organizationWaitingSummary: {
+          totalCount: 1,
+          waitingHumanCount: 1,
+          waitingAgentCount: 0,
+          escalationCount: 1,
+        },
+        organizationWaitingItems: [
+          {
+            workItem: {
+              workItemId: "work-item-1",
+              targetAgentId: "agent-ops",
+              status: "waiting_human",
+              goal: "确认是否允许继续发布",
+              priority: "urgent",
+              updatedAt: "2026-04-06T15:05:00.000Z",
+              waitingActionRequest: {
+                actionType: "approval",
+                prompt: "是否允许继续执行发布命令？",
+                choices: ["approve", "deny"],
+              },
+            },
+            targetAgent: {
+              agentId: "agent-ops",
+              displayName: "运维·曜",
+              departmentRole: "运维",
+            },
+            sourceAgent: null,
+            sourcePrincipal: {
+              principalId: "principal-owner",
+              displayName: "Owner",
+            },
+            latestWaitingMessage: null,
+          },
+        ],
+        organizationWaitingResponseDrafts: {
+          "work-item-1": {
+            decision: "approve",
+            inputText: "可以继续，但请先确认监控。",
+          },
+        },
+        selectedAgentId: "agent-ops",
+        selectedAgent: null,
+        selectedAgentPrincipal: null,
+        selectedOrganization: null,
+        workItems: [],
+        mailboxItems: [],
+        selectedWorkItemId: "",
+        selectedWorkItemDetail: null,
+        humanResponseDraft: {
+          workItemId: "",
+          decision: "",
+          inputText: "",
+        },
+        createDraft: {
+          departmentRole: "",
+          displayName: "",
+          mission: "",
+        },
+        dispatchDraft: {
+          targetAgentId: "agent-ops",
+          sourceType: "human",
+          sourceAgentId: "",
+          dispatchReason: "",
+          goal: "",
+          contextPacketText: "",
+          priority: "normal",
+        },
+      },
+    },
+  });
+
+  assert.equal(typeof harness.renderer.renderAgentsState, "function");
+  harness.renderer.renderAgentsState();
+
+  assert.ok(harness.dom.agentsWaitingSummary.textContent.includes("当前共有 1 条待治理项"));
+  assert.ok(harness.dom.agentsWaitingList.innerHTML.includes("直接治理"));
+  assert.ok(harness.dom.agentsWaitingList.innerHTML.includes('data-agent-waiting-respond="work-item-1"'));
+  assert.ok(harness.dom.agentsWaitingList.innerHTML.includes('data-agent-waiting-decision="work-item-1"'));
+  assert.ok(harness.dom.agentsWaitingList.innerHTML.includes("可以继续，但请先确认监控。"));
+});
+
+test("renderAgentsState 会渲染自动创建建议卡片与批准按钮", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      agents: {
+        status: "ready",
+        errorMessage: "",
+        noticeMessage: "",
+        loading: false,
+        detailLoading: false,
+        workItemDetailLoading: false,
+        creating: false,
+        dispatching: false,
+        approvingSpawnSuggestionId: "",
+        ignoringSpawnSuggestionId: "",
+        rejectingSpawnSuggestionId: "",
+        restoringSpawnSuggestionId: "",
+        ackingMailboxEntryId: "",
+        respondingWorkItemId: "",
+        organizations: [{ organizationId: "org-1", displayName: "老板团队" }],
+        agents: [],
+        organizationWaitingSummary: null,
+        organizationWaitingItems: [],
+        spawnPolicies: [
+          {
+            organizationId: "org-1",
+            maxActiveAgents: 12,
+            maxActiveAgentsPerRole: 3,
+          },
+        ],
+        spawnSuggestions: [
+          {
+            suggestionId: "spawn-suggestion-1",
+            departmentRole: "运维",
+            displayName: "运维·砺",
+            rationale: "运维·曜 当前有 4 个未完成 work item，建议增设一个 运维 长期 agent 分担持续负载。",
+            supportingAgentDisplayName: "运维·曜",
+            openWorkItemCount: 4,
+            waitingWorkItemCount: 2,
+            highPriorityWorkItemCount: 2,
+            guardrail: {
+              organizationActiveAgentCount: 2,
+              organizationActiveAgentLimit: 12,
+              roleActiveAgentCount: 2,
+              roleActiveAgentLimit: 3,
+              blocked: false,
+            },
+            auditFacts: {
+              creationReason: "运维·曜 当前有 4 个未完成 work item，建议增设一个 运维 长期 agent 分担持续负载。",
+              expectedScope: "负责分担运维持续性工作。",
+              insufficiencyReason: "运维·曜 当前积压较高。",
+              namingBasis: "沿用“运维·风格名”自动命名规则。",
+            },
+          },
+        ],
+        suppressedSpawnSuggestions: [
+          {
+            suggestionId: "spawn-suggestion-suppressed-1",
+            departmentRole: "运维",
+            displayName: "运维·岚",
+            supportingAgentDisplayName: "运维·曜",
+            rationale: "运维积压较高，建议增员。",
+            suppressionState: "ignored",
+            updatedAt: "2026-04-07T09:10:00.000Z",
+            auditFacts: {
+              creationReason: "运维积压较高，建议增员。",
+            },
+          },
+        ],
+        spawnPolicyDraft: {
+          organizationId: "org-1",
+          maxActiveAgents: 12,
+          maxActiveAgentsPerRole: 3,
+        },
+        spawnAuditLogs: [
+          {
+            auditLogId: "agent-audit-1",
+            eventType: "spawn_suggestion_approved",
+            displayName: "运维·砺",
+            departmentRole: "运维",
+            summary: "已批准自动创建 运维·砺，作为新的 运维 长期 agent。",
+            supportingAgentDisplayName: "运维·曜",
+            guardrail: {
+              organizationActiveAgentCount: 1,
+              organizationActiveAgentLimit: 12,
+              roleActiveAgentCount: 1,
+              roleActiveAgentLimit: 3,
+            },
+            auditFacts: {
+              expectedScope: "负责分担运维持续性工作。",
+            },
+            createdAt: "2026-04-07T09:00:00.000Z",
+          },
+        ],
+        selectedAgentId: "",
+        selectedAgent: null,
+        selectedAgentPrincipal: null,
+        selectedOrganization: null,
+        workItems: [],
+        mailboxItems: [],
+        selectedWorkItemId: "",
+        selectedWorkItemDetail: null,
+        humanResponseDraft: { workItemId: "", decision: "", inputText: "" },
+        createDraft: { departmentRole: "", displayName: "", mission: "" },
+        dispatchDraft: {
+          targetAgentId: "",
+          sourceType: "human",
+          sourceAgentId: "",
+          dispatchReason: "",
+          goal: "",
+          contextPacketText: "",
+          priority: "normal",
+        },
+      },
+    },
+  });
+
+  harness.renderer.renderAgentsState();
+
+  assert.ok(harness.dom.agentsSpawnSuggestionsSummary.textContent.includes("1 条"));
+  assert.ok(harness.dom.agentsSpawnPolicySummary.textContent.includes("活跃 agent 上限 12"));
+  assert.equal(harness.dom.agentsSpawnPolicyMaxActiveInput.value, "12");
+  assert.equal(harness.dom.agentsSpawnPolicyMaxRoleInput.value, "3");
+  assert.ok(harness.dom.agentsSpawnSuggestionsList.innerHTML.includes("运维·砺"));
+  assert.ok(harness.dom.agentsSpawnSuggestionsList.innerHTML.includes('data-agent-spawn-approve="spawn-suggestion-1"'));
+  assert.ok(harness.dom.agentsSpawnSuggestionsList.innerHTML.includes('data-agent-spawn-ignore="spawn-suggestion-1"'));
+  assert.ok(harness.dom.agentsSpawnSuggestionsList.innerHTML.includes('data-agent-spawn-reject="spawn-suggestion-1"'));
+  assert.ok(harness.dom.agentsSpawnSuggestionsList.innerHTML.includes("按建议创建"));
+  assert.ok(harness.dom.agentsSpawnSuggestionsList.innerHTML.includes("组织活跃 agent 2/12"));
+  assert.ok(harness.dom.agentsSuppressedSpawnSuggestionsSummary.textContent.includes("1 条"));
+  assert.ok(harness.dom.agentsSuppressedSpawnSuggestionsList.innerHTML.includes("运维·岚"));
+  assert.ok(harness.dom.agentsSuppressedSpawnSuggestionsList.innerHTML.includes('data-agent-spawn-restore="spawn-suggestion-suppressed-1"'));
+  assert.ok(harness.dom.agentsSpawnAuditSummary.textContent.includes("1 条"));
+  assert.ok(harness.dom.agentsSpawnAuditList.innerHTML.includes("已批准"));
+  assert.ok(harness.dom.agentsSpawnAuditList.innerHTML.includes("运维·曜"));
+});
+
+test("renderAgentsState 会渲染 idle 回收建议与审计记录", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      agents: {
+        status: "ready",
+        errorMessage: "",
+        noticeMessage: "",
+        loading: false,
+        detailLoading: false,
+        workItemDetailLoading: false,
+        creating: false,
+        dispatching: false,
+        approvingIdleRecoverySuggestionId: "",
+        organizations: [{ organizationId: "org-1", displayName: "老板团队" }],
+        agents: [],
+        organizationWaitingSummary: null,
+        organizationWaitingItems: [],
+        spawnPolicies: [],
+        spawnSuggestions: [],
+        suppressedSpawnSuggestions: [],
+        spawnAuditLogs: [],
+        idleRecoverySuggestions: [
+          {
+            suggestionId: "idle-suggestion-1",
+            agentId: "agent-ops",
+            displayName: "运维·砺",
+            departmentRole: "运维",
+            currentStatus: "active",
+            recommendedAction: "pause",
+            idleHours: 99,
+            lastActivitySummary: "最近一次 handoff 已完成交接。",
+            openWorkItemCount: 0,
+            pendingMailboxCount: 0,
+            recentClosedWorkItemCount: 1,
+            recentHandoffCount: 1,
+            rationale: "该 auto agent 已连续空闲 99 小时，且当前没有未完成任务或待处理 mailbox。",
+          },
+        ],
+        idleRecoveryAuditLogs: [
+          {
+            auditLogId: "agent-audit-idle-1",
+            eventType: "idle_recovery_pause_approved",
+            displayName: "运维·砺",
+            departmentRole: "运维",
+            summary: "已按建议暂停空闲 agent 运维·砺。",
+            createdAt: "2026-04-07T12:00:00.000Z",
+          },
+        ],
+        spawnPolicyDraft: {
+          organizationId: "org-1",
+          maxActiveAgents: 12,
+          maxActiveAgentsPerRole: 3,
+        },
+        selectedAgentId: "",
+        selectedAgent: null,
+        selectedAgentPrincipal: null,
+        selectedOrganization: null,
+        workItems: [],
+        mailboxItems: [],
+        selectedWorkItemId: "",
+        selectedWorkItemDetail: null,
+        humanResponseDraft: { workItemId: "", decision: "", inputText: "" },
+        createDraft: { departmentRole: "", displayName: "", mission: "" },
+        dispatchDraft: {
+          targetAgentId: "",
+          sourceType: "human",
+          sourceAgentId: "",
+          dispatchReason: "",
+          goal: "",
+          contextPacketText: "",
+          priority: "normal",
+        },
+      },
+    },
+  });
+
+  harness.renderer.renderAgentsState();
+
+  assert.ok(harness.dom.agentsIdleRecoverySuggestionsSummary.textContent.includes("1 条"));
+  assert.ok(harness.dom.agentsIdleRecoverySuggestionsList.innerHTML.includes("运维·砺"));
+  assert.ok(harness.dom.agentsIdleRecoverySuggestionsList.innerHTML.includes("建议暂停"));
+  assert.ok(harness.dom.agentsIdleRecoverySuggestionsList.innerHTML.includes('data-agent-idle-approve="idle-suggestion-1"'));
+  assert.ok(harness.dom.agentsIdleRecoveryAuditSummary.textContent.includes("1 条"));
+  assert.ok(harness.dom.agentsIdleRecoveryAuditList.innerHTML.includes("已暂停"));
+});
+
+test("renderAgentsState 会把 bootstrapping agent 的建档状态和提示文案渲染出来", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      agents: {
+        status: "ready",
+        errorMessage: "",
+        noticeMessage: "",
+        loading: false,
+        detailLoading: false,
+        workItemDetailLoading: false,
+        creating: false,
+        dispatching: false,
+        organizations: [{ organizationId: "org-1", displayName: "老板团队" }],
+        organizationWaitingSummary: {
+          totalCount: 0,
+          waitingHumanCount: 0,
+          waitingAgentCount: 0,
+          escalationCount: 0,
+        },
+        organizationWaitingItems: [],
+        spawnPolicies: [],
+        spawnPolicyDraft: {
+          organizationId: "org-1",
+          maxActiveAgents: 12,
+          maxActiveAgentsPerRole: 3,
+        },
+        spawnSuggestions: [],
+        suppressedSpawnSuggestions: [],
+        spawnAuditLogs: [],
+        agents: [
+          {
+            agentId: "agent-ops-2",
+            principalId: "principal-ops-2",
+            organizationId: "org-1",
+            displayName: "运维·砺",
+            departmentRole: "运维",
+            mission: "负责运维值班与巡检分流。",
+            status: "bootstrapping",
+            creationMode: "auto",
+            bootstrapProfile: {
+              state: "pending",
+              bootstrapWorkItemId: "work-item-bootstrap-1",
+            },
+          },
+        ],
+        selectedAgentId: "agent-ops-2",
+        selectedAgent: {
+          agentId: "agent-ops-2",
+          principalId: "principal-ops-2",
+          organizationId: "org-1",
+          displayName: "运维·砺",
+          departmentRole: "运维",
+          mission: "负责运维值班与巡检分流。",
+          status: "bootstrapping",
+          creationMode: "auto",
+          bootstrapProfile: {
+            state: "pending",
+            bootstrapWorkItemId: "work-item-bootstrap-1",
+          },
+        },
+        selectedAgentPrincipal: { principalId: "principal-ops-2" },
+        selectedOrganization: { organizationId: "org-1", displayName: "老板团队" },
+        workItems: [],
+        mailboxItems: [],
+        selectedWorkItemId: "",
+        selectedWorkItemDetail: null,
+        humanResponseDraft: { workItemId: "", decision: "", inputText: "" },
+        createDraft: { departmentRole: "", displayName: "", mission: "" },
+        dispatchDraft: {
+          targetAgentId: "agent-ops-2",
+          sourceType: "human",
+          sourceAgentId: "",
+          dispatchReason: "",
+          goal: "",
+          contextPacketText: "",
+          priority: "normal",
+        },
+      },
+    },
+  });
+
+  harness.renderer.renderAgentsState();
+
+  assert.equal(harness.dom.agentsSelectedAgentHeading.textContent, "运维·砺");
+  assert.ok(harness.dom.agentsSelectedAgentCopy.textContent.includes("首次职责建档"));
+  assert.ok(harness.dom.agentsSelectedAgentMeta.innerHTML.includes("建档"));
+  assert.ok(harness.dom.agentsSelectedAgentMeta.innerHTML.includes("建档进行中"));
+});
+
+test("renderAgentsState 会在 waiting_agent 卡片渲染升级入口", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      agents: {
+        status: "ready",
+        errorMessage: "",
+        noticeMessage: "",
+        loading: false,
+        detailLoading: false,
+        workItemDetailLoading: false,
+        creating: false,
+        dispatching: false,
+        ackingMailboxEntryId: "",
+        escalatingWorkItemId: "",
+        respondingWorkItemId: "",
+        organizations: [{ organizationId: "org-1", displayName: "老板团队" }],
+        agents: [
+          {
+            agentId: "agent-frontend",
+            principalId: "principal-frontend",
+            displayName: "前端·岚",
+            departmentRole: "前端",
+            mission: "负责 Web 工作台。",
+            status: "active",
+            updatedAt: "2026-04-07T09:05:00.000Z",
+          },
+          {
+            agentId: "agent-backend",
+            principalId: "principal-backend",
+            displayName: "后端·衡",
+            departmentRole: "后端",
+            mission: "负责接口与存储。",
+            status: "active",
+            updatedAt: "2026-04-07T09:05:00.000Z",
+          },
+        ],
+        organizationWaitingSummary: {
+          totalCount: 1,
+          waitingHumanCount: 0,
+          waitingAgentCount: 1,
+          escalationCount: 0,
+        },
+        organizationWaitingItems: [
+          {
+            workItem: {
+              workItemId: "work-item-2",
+              targetAgentId: "agent-backend",
+              status: "waiting_agent",
+              goal: "确认是否可以继续部署",
+              priority: "urgent",
+              updatedAt: "2026-04-07T09:05:00.000Z",
+              waitingActionRequest: {
+                waitingFor: "agent",
+                actionType: "approval",
+                prompt: "是否允许执行 deploy production？",
+                choices: ["approve", "deny"],
+              },
+            },
+            targetAgent: {
+              agentId: "agent-backend",
+              displayName: "后端·衡",
+              departmentRole: "后端",
+            },
+            sourceAgent: {
+              agentId: "agent-frontend",
+              displayName: "前端·岚",
+              departmentRole: "前端",
+            },
+            sourcePrincipal: {
+              principalId: "principal-owner",
+              displayName: "Owner",
+            },
+            latestWaitingMessage: {
+              messageId: "msg-waiting-2",
+              messageType: "approval_request",
+            },
+          },
+        ],
+        organizationWaitingResponseDrafts: {},
+        selectedAgentId: "agent-backend",
+        selectedAgent: null,
+        selectedAgentPrincipal: null,
+        selectedOrganization: null,
+        workItems: [],
+        mailboxItems: [],
+        selectedWorkItemId: "",
+        selectedWorkItemDetail: null,
+        humanResponseDraft: {
+          workItemId: "",
+          decision: "",
+          inputText: "",
+        },
+        createDraft: {
+          departmentRole: "",
+          displayName: "",
+          mission: "",
+        },
+        dispatchDraft: {
+          targetAgentId: "agent-backend",
+          sourceType: "human",
+          sourceAgentId: "",
+          dispatchReason: "",
+          goal: "",
+          contextPacketText: "",
+          priority: "normal",
+        },
+      },
+    },
+  });
+
+  harness.renderer.renderAgentsState();
+
+  assert.ok(harness.dom.agentsWaitingSummary.textContent.includes("等 agent 1 条"));
+  assert.ok(harness.dom.agentsWaitingList.innerHTML.includes("升级处理"));
+  assert.ok(harness.dom.agentsWaitingList.innerHTML.includes('data-agent-waiting-escalate="work-item-2"'));
+  assert.ok(harness.dom.agentsWaitingList.innerHTML.includes("升级到顶层治理"));
+});
+
+test("renderAgentsState 会在可安全取消的 work item 详情里渲染取消动作", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      agents: {
+        status: "ready",
+        errorMessage: "",
+        noticeMessage: "",
+        loading: false,
+        detailLoading: false,
+        workItemDetailLoading: false,
+        creating: false,
+        dispatching: false,
+        ackingMailboxEntryId: "",
+        cancelingWorkItemId: "",
+        escalatingWorkItemId: "",
+        respondingWorkItemId: "",
+        lifecycleUpdatingAgentId: "",
+        lifecycleUpdatingAction: "",
+        organizations: [{ organizationId: "org-1", displayName: "老板团队" }],
+        agents: [
+          {
+            agentId: "agent-backend",
+            principalId: "principal-backend",
+            displayName: "后端·衡",
+            departmentRole: "后端",
+            mission: "负责接口与存储。",
+            status: "active",
+            updatedAt: "2026-04-07T10:20:00.000Z",
+          },
+        ],
+        organizationWaitingSummary: {
+          totalCount: 0,
+          waitingHumanCount: 0,
+          waitingAgentCount: 0,
+          escalationCount: 0,
+        },
+        organizationWaitingItems: [],
+        organizationWaitingResponseDrafts: {},
+        selectedAgentId: "agent-backend",
+        selectedAgent: {
+          agentId: "agent-backend",
+          principalId: "principal-backend",
+          displayName: "后端·衡",
+          departmentRole: "后端",
+          mission: "负责接口与存储。",
+          status: "active",
+        },
+        selectedAgentPrincipal: {
+          principalId: "principal-backend",
+        },
+        selectedOrganization: {
+          organizationId: "org-1",
+          displayName: "老板团队",
+        },
+        workItems: [
+          {
+            workItemId: "work-item-3",
+            targetAgentId: "agent-backend",
+            status: "queued",
+            sourceType: "human",
+            goal: "这条任务现在应该被取消",
+          },
+        ],
+        mailboxItems: [],
+        selectedWorkItemId: "work-item-3",
+        selectedWorkItemDetail: {
+          workItem: {
+            workItemId: "work-item-3",
+            targetAgentId: "agent-backend",
+            status: "queued",
+            goal: "这条任务现在应该被取消",
+          },
+          targetAgent: {
+            agentId: "agent-backend",
+            displayName: "后端·衡",
+          },
+          sourcePrincipal: {
+            principalId: "principal-owner",
+          },
+          messages: [],
+        },
+        humanResponseDraft: {
+          workItemId: "",
+          decision: "",
+          inputText: "",
+        },
+        createDraft: {
+          departmentRole: "",
+          displayName: "",
+          mission: "",
+        },
+        dispatchDraft: {
+          targetAgentId: "agent-backend",
+          sourceType: "human",
+          sourceAgentId: "",
+          dispatchReason: "",
+          goal: "",
+          contextPacketText: "",
+          priority: "normal",
+        },
+      },
+    },
+  });
+
+  harness.renderer.renderAgentsState();
+
+  assert.ok(harness.dom.agentsWorkItemDetail.innerHTML.includes("治理动作"));
+  assert.ok(harness.dom.agentsWorkItemDetail.innerHTML.includes('data-agent-work-item-cancel="work-item-3"'));
+  assert.ok(harness.dom.agentsWorkItemDetail.innerHTML.includes("取消该 work item"));
+});
+
+test("renderAgentsState 会在当前 agent 面板渲染 lifecycle 治理动作", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      agents: {
+        status: "ready",
+        errorMessage: "",
+        noticeMessage: "",
+        loading: false,
+        detailLoading: false,
+        workItemDetailLoading: false,
+        creating: false,
+        dispatching: false,
+        ackingMailboxEntryId: "",
+        escalatingWorkItemId: "",
+        respondingWorkItemId: "",
+        lifecycleUpdatingAgentId: "",
+        lifecycleUpdatingAction: "",
+        organizations: [{ organizationId: "org-1", displayName: "老板团队" }],
+        agents: [
+          {
+            agentId: "agent-ops",
+            principalId: "principal-ops",
+            displayName: "运维·曜",
+            departmentRole: "运维",
+            mission: "负责部署与值班。",
+            status: "active",
+            updatedAt: "2026-04-07T10:00:00.000Z",
+          },
+        ],
+        organizationWaitingSummary: {
+          totalCount: 0,
+          waitingHumanCount: 0,
+          waitingAgentCount: 0,
+          escalationCount: 0,
+        },
+        organizationWaitingItems: [],
+        organizationWaitingResponseDrafts: {},
+        selectedAgentId: "agent-ops",
+        selectedAgent: {
+          agentId: "agent-ops",
+          principalId: "principal-ops",
+          displayName: "运维·曜",
+          departmentRole: "运维",
+          mission: "负责部署与值班。",
+          status: "active",
+        },
+        selectedAgentPrincipal: {
+          principalId: "principal-ops",
+        },
+        selectedOrganization: {
+          organizationId: "org-1",
+          displayName: "老板团队",
+        },
+        workItems: [],
+        mailboxItems: [],
+        selectedWorkItemId: "",
+        selectedWorkItemDetail: null,
+        humanResponseDraft: {
+          workItemId: "",
+          decision: "",
+          inputText: "",
+        },
+        createDraft: {
+          departmentRole: "",
+          displayName: "",
+          mission: "",
+        },
+        dispatchDraft: {
+          targetAgentId: "agent-ops",
+          sourceType: "human",
+          sourceAgentId: "",
+          dispatchReason: "",
+          goal: "",
+          contextPacketText: "",
+          priority: "normal",
+        },
+      },
+    },
+  });
+
+  harness.renderer.renderAgentsState();
+
+  assert.ok(harness.dom.agentsSelectedAgentMeta.innerHTML.includes("治理动作"));
+  assert.ok(harness.dom.agentsSelectedAgentMeta.innerHTML.includes('data-agent-lifecycle-action="pause"'));
+  assert.ok(harness.dom.agentsSelectedAgentMeta.innerHTML.includes('data-agent-lifecycle-action="archive"'));
+});
+
 function createHarness({ actionBarState, threadControlState = null, runtime = {}, threadOverrides = {} }) {
   const thread = {
     id: "thread-composer",
@@ -351,6 +1120,7 @@ function createHarness({ actionBarState, threadControlState = null, runtime = {}
     settingsRuntimeSection: createPanelStub(),
     settingsAuthSection: createPanelStub(true),
     settingsSkillsSection: createPanelStub(true),
+    settingsAgentsSection: createPanelStub(true),
     settingsMemoryCandidatesSection: createPanelStub(true),
     settingsThirdPartySection: createPanelStub(true),
     settingsModeSwitchSection: createPanelStub(true),
@@ -381,6 +1151,57 @@ function createHarness({ actionBarState, threadControlState = null, runtime = {}
         return [];
       },
     },
+    agentsRefreshButton: createButtonStub(),
+    agentsStatusNote: createTextStub(),
+    agentsSummaryOrganizations: createTextStub(),
+    agentsSummaryAgents: createTextStub(),
+    agentsSummaryWorkItems: createTextStub(),
+    agentsSummaryMailbox: createTextStub(),
+    agentsWaitingSummary: createTextStub(),
+    agentsWaitingEmpty: createTextStub(),
+    agentsWaitingList: createTextStub(),
+    agentsSpawnPolicySummary: createTextStub(),
+    agentsSpawnPolicyMaxActiveInput: createDisabledInputStub(),
+    agentsSpawnPolicyMaxRoleInput: createDisabledInputStub(),
+    agentsSpawnPolicySaveButton: createButtonStub(),
+    agentsSpawnSuggestionsSummary: createTextStub(),
+    agentsSpawnSuggestionsEmpty: createTextStub(),
+    agentsSpawnSuggestionsList: createTextStub(),
+    agentsSuppressedSpawnSuggestionsSummary: createTextStub(),
+    agentsSuppressedSpawnSuggestionsEmpty: createTextStub(),
+    agentsSuppressedSpawnSuggestionsList: createTextStub(),
+    agentsSpawnAuditSummary: createTextStub(),
+    agentsSpawnAuditEmpty: createTextStub(),
+    agentsSpawnAuditList: createTextStub(),
+    agentsIdleRecoverySuggestionsSummary: createTextStub(),
+    agentsIdleRecoverySuggestionsEmpty: createTextStub(),
+    agentsIdleRecoverySuggestionsList: createTextStub(),
+    agentsIdleRecoveryAuditSummary: createTextStub(),
+    agentsIdleRecoveryAuditEmpty: createTextStub(),
+    agentsIdleRecoveryAuditList: createTextStub(),
+    agentsCreateRoleInput: createDisabledInputStub(),
+    agentsCreateNameInput: createDisabledInputStub(),
+    agentsCreateMissionInput: createDisabledInputStub(),
+    agentsCreateButton: createButtonStub(),
+    agentsSelect: createDisabledInputStub(),
+    agentsListEmpty: createTextStub(),
+    agentsList: createTextStub(),
+    agentsDispatchTargetSelect: createDisabledInputStub(),
+    agentsDispatchSourceTypeSelect: createDisabledInputStub(),
+    agentsDispatchSourceAgentSelect: createDisabledInputStub(),
+    agentsDispatchReasonInput: createDisabledInputStub(),
+    agentsDispatchGoalInput: createDisabledInputStub(),
+    agentsDispatchContextInput: createDisabledInputStub(),
+    agentsDispatchPrioritySelect: createDisabledInputStub(),
+    agentsDispatchButton: createButtonStub(),
+    agentsSelectedAgentHeading: createTextStub(),
+    agentsSelectedAgentCopy: createTextStub(),
+    agentsSelectedAgentMeta: createTextStub(),
+    agentsWorkItemsEmpty: createTextStub(),
+    agentsWorkItemsList: createTextStub(),
+    agentsWorkItemDetail: createTextStub(),
+    agentsMailboxEmpty: createTextStub(),
+    agentsMailboxList: createTextStub(),
     memoryCandidatesRefreshButton: createButtonStub(),
     memoryCandidatesExtractButton: createButtonStub(),
     memoryCandidatesFilterSelect: createDisabledInputStub(),
@@ -500,6 +1321,7 @@ function createHarness({ actionBarState, threadControlState = null, runtime = {}
     utils: {
       autoResizeTextarea() {},
       escapeHtml: (value) => String(value),
+      formatRelativeTime: (value) => value || "",
       scrollConversationToBottom() {},
     },
     runtime: {
@@ -611,6 +1433,7 @@ function createTextStub() {
     disabled: false,
     textContent: "",
     innerHTML: "",
+    dataset: {},
     classList: {
       add() {},
       remove() {},
@@ -644,6 +1467,7 @@ function createButtonStub() {
     hidden: false,
     textContent: "",
     attributes: {},
+    dataset: {},
     classList: {
       add() {},
       remove() {},

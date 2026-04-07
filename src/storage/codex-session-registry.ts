@@ -19,20 +19,48 @@ import {
   normalizeSessionTaskSettings,
 } from "../core/session-task-settings.js";
 import {
+  AGENT_RUN_STATUSES,
+  AGENT_AUDIT_LOG_EVENT_TYPES,
+  AGENT_MAILBOX_STATUSES,
+  AGENT_MESSAGE_TYPES,
+  AGENT_SPAWN_SUGGESTION_STATES,
   ACTOR_RUNTIME_MEMORY_KINDS,
   ACTOR_RUNTIME_MEMORY_STATUSES,
   ACTOR_TASK_SCOPE_STATUSES,
+  MANAGED_AGENT_AUTONOMY_LEVELS,
+  MANAGED_AGENT_CREATION_MODES,
+  MANAGED_AGENT_EXPOSURE_POLICIES,
+  MANAGED_AGENT_INTERNAL_SOURCE_CHANNEL,
+  MANAGED_AGENT_PRIORITIES,
+  MANAGED_AGENT_STATUSES,
+  MANAGED_AGENT_WORK_ITEM_SOURCE_TYPES,
+  MANAGED_AGENT_WORK_ITEM_STATUSES,
   PRINCIPAL_ACTOR_STATUSES,
+  PRINCIPAL_KINDS,
   PRINCIPAL_MAIN_MEMORY_CANDIDATE_STATUSES,
   PRINCIPAL_MAIN_MEMORY_KINDS,
   PRINCIPAL_MAIN_MEMORY_SOURCE_TYPES,
   PRINCIPAL_MAIN_MEMORY_STATUSES,
 } from "../types/index.js";
 import type {
+  AgentRunStatus,
+  AgentAuditLogEventType,
+  AgentMailboxStatus,
+  AgentMessageType,
+  AgentSpawnSuggestionState,
+  ManagedAgentBootstrapProfile,
   ActorRuntimeMemoryKind,
   ActorRuntimeMemoryStatus,
   ActorTaskScopeStatus,
+  ManagedAgentAutonomyLevel,
+  ManagedAgentCreationMode,
+  ManagedAgentExposurePolicy,
+  ManagedAgentPriority,
+  ManagedAgentStatus,
+  ManagedAgentWorkItemSourceType,
+  ManagedAgentWorkItemStatus,
   PrincipalTaskSettings,
+  PrincipalKind,
   PrincipalPersonaOnboardingState,
   PrincipalPersonaProfileData,
   PrincipalActorStatus,
@@ -41,6 +69,15 @@ import type {
   PrincipalMainMemorySourceType,
   PrincipalMainMemoryStatus,
   SessionTaskSettings,
+  StoredAgentMailboxEntryRecord,
+  StoredAgentAuditLogRecord,
+  StoredAgentSpawnSuggestionStateRecord,
+  StoredAgentSpawnPolicyRecord,
+  StoredAgentMessageRecord,
+  StoredAgentRunRecord,
+  StoredAgentWorkItemRecord,
+  StoredManagedAgentRecord,
+  StoredOrganizationRecord,
   TaskEvent,
   TaskInputAsset,
   TaskInputEnvelope,
@@ -53,7 +90,7 @@ import type {
   StoredPrincipalMainMemoryRecord,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 16;
+const DATABASE_SCHEMA_VERSION = 24;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -245,6 +282,8 @@ export interface StoredAuthAccountRecord {
 export interface StoredPrincipalRecord {
   principalId: string;
   displayName?: string;
+  kind?: PrincipalKind;
+  organizationId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -527,6 +566,141 @@ interface AuthAccountRow {
 interface PrincipalRow {
   principal_id: string;
   display_name: string | null;
+  principal_kind?: string | null;
+  organization_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface OrganizationRow {
+  organization_id: string;
+  owner_principal_id: string;
+  display_name: string;
+  slug: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface AgentSpawnPolicyRow {
+  organization_id: string;
+  max_active_agents: number;
+  max_active_agents_per_role: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface AgentSpawnSuggestionStateRow {
+  suggestion_id: string;
+  organization_id: string;
+  state: string;
+  payload_json: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ManagedAgentRow {
+  agent_id: string;
+  principal_id: string;
+  organization_id: string;
+  created_by_principal_id: string;
+  supervisor_principal_id: string | null;
+  display_name: string;
+  slug: string;
+  department_role: string;
+  mission: string;
+  status: string;
+  autonomy_level: string;
+  creation_mode: string;
+  exposure_policy: string;
+  bootstrap_profile_json: string | null;
+  bootstrapped_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface AgentWorkItemRow {
+  work_item_id: string;
+  organization_id: string;
+  target_agent_id: string;
+  source_type: string;
+  source_principal_id: string;
+  source_agent_id: string | null;
+  parent_work_item_id: string | null;
+  dispatch_reason: string;
+  goal: string;
+  context_packet_json: string | null;
+  waiting_action_request_json: string | null;
+  latest_human_response_json: string | null;
+  priority: string;
+  status: string;
+  workspace_policy_snapshot_json: string | null;
+  runtime_profile_snapshot_json: string | null;
+  created_at: string;
+  scheduled_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  updated_at: string;
+}
+
+interface AgentMessageRow {
+  message_id: string;
+  organization_id: string;
+  from_agent_id: string;
+  to_agent_id: string;
+  work_item_id: string | null;
+  run_id: string | null;
+  parent_message_id: string | null;
+  message_type: string;
+  payload_json: string | null;
+  artifact_refs_json: string | null;
+  priority: string;
+  requires_ack: number;
+  created_at: string;
+}
+
+interface AgentRunRow {
+  run_id: string;
+  organization_id: string;
+  work_item_id: string;
+  target_agent_id: string;
+  scheduler_id: string;
+  lease_token: string;
+  lease_expires_at: string;
+  status: string;
+  started_at: string | null;
+  last_heartbeat_at: string | null;
+  completed_at: string | null;
+  failure_code: string | null;
+  failure_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface AgentAuditLogRow {
+  audit_log_id: string;
+  organization_id: string;
+  event_type: string;
+  actor_principal_id: string;
+  subject_agent_id: string | null;
+  suggestion_id: string | null;
+  summary: string;
+  payload_json: string | null;
+  created_at: string;
+}
+
+interface AgentMailboxEntryRow {
+  mailbox_entry_id: string;
+  organization_id: string;
+  owner_agent_id: string;
+  message_id: string;
+  work_item_id: string | null;
+  priority: string;
+  status: string;
+  requires_ack: number;
+  available_at: string;
+  lease_token: string | null;
+  leased_at: string | null;
+  acked_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -1499,7 +1673,7 @@ export class SqliteCodexSessionRegistry {
     const row = this.db
       .prepare(
         `
-          SELECT principal_id, display_name, created_at, updated_at
+          SELECT principal_id, display_name, principal_kind, organization_id, created_at, updated_at
           FROM themis_principals
           WHERE principal_id = ?
         `,
@@ -1533,8 +1707,12 @@ export class SqliteCodexSessionRegistry {
 
   savePrincipal(record: StoredPrincipalRecord): void {
     const principalId = record.principalId.trim();
+    const existing = principalId ? this.getPrincipal(principalId) : null;
+    const principalKind = normalizeText(record.kind) ?? existing?.kind ?? "human_user";
+    const organizationId = normalizeText(record.organizationId) ?? existing?.organizationId ?? null;
+    const displayName = normalizeText(record.displayName) ?? existing?.displayName ?? null;
 
-    if (!principalId) {
+    if (!principalId || !PRINCIPAL_KINDS.includes(principalKind as PrincipalKind)) {
       throw new Error("Principal id is required.");
     }
 
@@ -1544,25 +1722,1921 @@ export class SqliteCodexSessionRegistry {
           INSERT INTO themis_principals (
             principal_id,
             display_name,
+            principal_kind,
+            organization_id,
             created_at,
             updated_at
           ) VALUES (
             @principal_id,
             @display_name,
+            @principal_kind,
+            @organization_id,
             @created_at,
             @updated_at
           )
           ON CONFLICT(principal_id) DO UPDATE SET
             display_name = excluded.display_name,
+            principal_kind = excluded.principal_kind,
+            organization_id = excluded.organization_id,
             updated_at = excluded.updated_at
         `,
       )
       .run({
         principal_id: principalId,
-        display_name: record.displayName?.trim() || null,
+        display_name: displayName,
+        principal_kind: principalKind,
+        organization_id: organizationId,
         created_at: record.createdAt,
         updated_at: record.updatedAt,
       });
+  }
+
+  getOrganization(organizationId: string): StoredOrganizationRecord | null {
+    const normalizedOrganizationId = organizationId.trim();
+
+    if (!normalizedOrganizationId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            organization_id,
+            owner_principal_id,
+            display_name,
+            slug,
+            created_at,
+            updated_at
+          FROM themis_organizations
+          WHERE organization_id = ?
+        `,
+      )
+      .get(normalizedOrganizationId) as OrganizationRow | undefined;
+
+    return row ? mapOrganizationRow(row) : null;
+  }
+
+  listOrganizationsByOwnerPrincipal(ownerPrincipalId: string): StoredOrganizationRecord[] {
+    const normalizedOwnerPrincipalId = ownerPrincipalId.trim();
+
+    if (!normalizedOwnerPrincipalId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            organization_id,
+            owner_principal_id,
+            display_name,
+            slug,
+            created_at,
+            updated_at
+          FROM themis_organizations
+          WHERE owner_principal_id = ?
+          ORDER BY updated_at DESC, organization_id ASC
+        `,
+      )
+      .all(normalizedOwnerPrincipalId) as OrganizationRow[];
+
+    return rows.map(mapOrganizationRow);
+  }
+
+  saveOrganization(record: StoredOrganizationRecord): void {
+    const organizationId = record.organizationId.trim();
+    const ownerPrincipalId = record.ownerPrincipalId.trim();
+    const displayName = record.displayName.trim();
+    const slug = record.slug.trim();
+
+    if (!organizationId || !ownerPrincipalId || !displayName || !slug) {
+      throw new Error("Organization record is incomplete.");
+    }
+
+    const existing = this.db
+      .prepare(
+        `
+          SELECT owner_principal_id
+          FROM themis_organizations
+          WHERE organization_id = ?
+        `,
+      )
+      .get(organizationId) as { owner_principal_id: string } | undefined;
+
+    if (existing && existing.owner_principal_id !== ownerPrincipalId) {
+      throw new Error("Organization belongs to another principal.");
+    }
+
+    const writeResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_organizations (
+            organization_id,
+            owner_principal_id,
+            display_name,
+            slug,
+            created_at,
+            updated_at
+          ) VALUES (
+            @organization_id,
+            @owner_principal_id,
+            @display_name,
+            @slug,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(organization_id) DO UPDATE SET
+            display_name = excluded.display_name,
+            slug = excluded.slug,
+            updated_at = excluded.updated_at
+          WHERE themis_organizations.owner_principal_id = excluded.owner_principal_id
+        `,
+      )
+      .run({
+        organization_id: organizationId,
+        owner_principal_id: ownerPrincipalId,
+        display_name: displayName,
+        slug,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+
+    if (writeResult.changes === 0) {
+      throw new Error("Organization write did not apply.");
+    }
+  }
+
+  getAgentSpawnPolicy(organizationId: string): StoredAgentSpawnPolicyRecord | null {
+    const normalizedOrganizationId = organizationId.trim();
+
+    if (!normalizedOrganizationId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            organization_id,
+            max_active_agents,
+            max_active_agents_per_role,
+            created_at,
+            updated_at
+          FROM themis_agent_spawn_policies
+          WHERE organization_id = ?
+        `,
+      )
+      .get(normalizedOrganizationId) as AgentSpawnPolicyRow | undefined;
+
+    return row ? mapAgentSpawnPolicyRow(row) : null;
+  }
+
+  listAgentSpawnPoliciesByOwnerPrincipal(ownerPrincipalId: string): StoredAgentSpawnPolicyRecord[] {
+    const normalizedOwnerPrincipalId = ownerPrincipalId.trim();
+
+    if (!normalizedOwnerPrincipalId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            policy.organization_id,
+            policy.max_active_agents,
+            policy.max_active_agents_per_role,
+            policy.created_at,
+            policy.updated_at
+          FROM themis_agent_spawn_policies policy
+          INNER JOIN themis_organizations organization
+            ON organization.organization_id = policy.organization_id
+          WHERE organization.owner_principal_id = ?
+          ORDER BY policy.updated_at DESC, policy.organization_id ASC
+        `,
+      )
+      .all(normalizedOwnerPrincipalId) as AgentSpawnPolicyRow[];
+
+    return rows.map(mapAgentSpawnPolicyRow);
+  }
+
+  getAgentSpawnSuggestionState(suggestionId: string): StoredAgentSpawnSuggestionStateRecord | null {
+    const normalizedSuggestionId = suggestionId.trim();
+
+    if (!normalizedSuggestionId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            suggestion_id,
+            organization_id,
+            state,
+            payload_json,
+            created_at,
+            updated_at
+          FROM themis_agent_spawn_suggestion_states
+          WHERE suggestion_id = ?
+        `,
+      )
+      .get(normalizedSuggestionId) as AgentSpawnSuggestionStateRow | undefined;
+
+    return row ? mapAgentSpawnSuggestionStateRow(row) : null;
+  }
+
+  listAgentSpawnSuggestionStatesByOrganization(organizationId: string): StoredAgentSpawnSuggestionStateRecord[] {
+    const normalizedOrganizationId = organizationId.trim();
+
+    if (!normalizedOrganizationId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            suggestion_id,
+            organization_id,
+            state,
+            payload_json,
+            created_at,
+            updated_at
+          FROM themis_agent_spawn_suggestion_states
+          WHERE organization_id = ?
+          ORDER BY updated_at DESC, suggestion_id ASC
+        `,
+      )
+      .all(normalizedOrganizationId) as AgentSpawnSuggestionStateRow[];
+
+    return rows.map(mapAgentSpawnSuggestionStateRow);
+  }
+
+  saveAgentSpawnPolicy(record: StoredAgentSpawnPolicyRecord): void {
+    const organizationId = record.organizationId.trim();
+    const maxActiveAgents = Math.floor(record.maxActiveAgents);
+    const maxActiveAgentsPerRole = Math.floor(record.maxActiveAgentsPerRole);
+
+    if (
+      !organizationId
+      || !Number.isInteger(maxActiveAgents)
+      || maxActiveAgents <= 0
+      || !Number.isInteger(maxActiveAgentsPerRole)
+      || maxActiveAgentsPerRole <= 0
+    ) {
+      throw new Error("Agent spawn policy record is incomplete.");
+    }
+
+    const writeResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_agent_spawn_policies (
+            organization_id,
+            max_active_agents,
+            max_active_agents_per_role,
+            created_at,
+            updated_at
+          ) VALUES (
+            @organization_id,
+            @max_active_agents,
+            @max_active_agents_per_role,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(organization_id) DO UPDATE SET
+            max_active_agents = excluded.max_active_agents,
+            max_active_agents_per_role = excluded.max_active_agents_per_role,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        organization_id: organizationId,
+        max_active_agents: maxActiveAgents,
+        max_active_agents_per_role: maxActiveAgentsPerRole,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+
+    if (writeResult.changes === 0) {
+      throw new Error("Agent spawn policy write did not apply.");
+    }
+  }
+
+  saveAgentSpawnSuggestionState(record: StoredAgentSpawnSuggestionStateRecord): void {
+    const suggestionId = record.suggestionId.trim();
+    const organizationId = record.organizationId.trim();
+    const state = normalizeText(record.state);
+
+    if (
+      !suggestionId
+      || !organizationId
+      || !state
+      || !AGENT_SPAWN_SUGGESTION_STATES.includes(state as AgentSpawnSuggestionState)
+    ) {
+      throw new Error("Agent spawn suggestion state record is incomplete.");
+    }
+
+    const writeResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_agent_spawn_suggestion_states (
+            suggestion_id,
+            organization_id,
+            state,
+            payload_json,
+            created_at,
+            updated_at
+          ) VALUES (
+            @suggestion_id,
+            @organization_id,
+            @state,
+            @payload_json,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(suggestion_id) DO UPDATE SET
+            organization_id = excluded.organization_id,
+            state = excluded.state,
+            payload_json = excluded.payload_json,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        suggestion_id: suggestionId,
+        organization_id: organizationId,
+        state,
+        payload_json: stringifyJson(record.payload),
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+
+    if (writeResult.changes === 0) {
+      throw new Error("Agent spawn suggestion state write did not apply.");
+    }
+  }
+
+  deleteAgentSpawnSuggestionState(suggestionId: string): boolean {
+    const normalizedSuggestionId = suggestionId.trim();
+
+    if (!normalizedSuggestionId) {
+      return false;
+    }
+
+    const result = this.db
+      .prepare(
+        `
+          DELETE FROM themis_agent_spawn_suggestion_states
+          WHERE suggestion_id = ?
+        `,
+      )
+      .run(normalizedSuggestionId);
+
+    return result.changes > 0;
+  }
+
+  getManagedAgent(agentId: string): StoredManagedAgentRecord | null {
+    const normalizedAgentId = agentId.trim();
+
+    if (!normalizedAgentId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            agent_id,
+            principal_id,
+            organization_id,
+            created_by_principal_id,
+            supervisor_principal_id,
+            display_name,
+            slug,
+            department_role,
+            mission,
+          status,
+          autonomy_level,
+          creation_mode,
+          exposure_policy,
+          bootstrap_profile_json,
+          bootstrapped_at,
+          created_at,
+          updated_at
+          FROM themis_managed_agents
+          WHERE agent_id = ?
+        `,
+      )
+      .get(normalizedAgentId) as ManagedAgentRow | undefined;
+
+    return row ? mapManagedAgentRow(row) : null;
+  }
+
+  getManagedAgentByPrincipal(principalId: string): StoredManagedAgentRecord | null {
+    const normalizedPrincipalId = principalId.trim();
+
+    if (!normalizedPrincipalId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            agent_id,
+            principal_id,
+            organization_id,
+            created_by_principal_id,
+            supervisor_principal_id,
+            display_name,
+            slug,
+            department_role,
+            mission,
+            status,
+            autonomy_level,
+            creation_mode,
+            exposure_policy,
+            bootstrap_profile_json,
+            bootstrapped_at,
+            created_at,
+            updated_at
+          FROM themis_managed_agents
+          WHERE principal_id = ?
+        `,
+      )
+      .get(normalizedPrincipalId) as ManagedAgentRow | undefined;
+
+    return row ? mapManagedAgentRow(row) : null;
+  }
+
+  listManagedAgentsByOrganization(organizationId: string): StoredManagedAgentRecord[] {
+    const normalizedOrganizationId = organizationId.trim();
+
+    if (!normalizedOrganizationId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            agent_id,
+            principal_id,
+            organization_id,
+            created_by_principal_id,
+            supervisor_principal_id,
+            display_name,
+            slug,
+            department_role,
+            mission,
+            status,
+            autonomy_level,
+            creation_mode,
+            exposure_policy,
+            bootstrap_profile_json,
+            bootstrapped_at,
+            created_at,
+            updated_at
+          FROM themis_managed_agents
+          WHERE organization_id = ?
+          ORDER BY updated_at DESC, agent_id ASC
+        `,
+      )
+      .all(normalizedOrganizationId) as ManagedAgentRow[];
+
+    return rows.map(mapManagedAgentRow);
+  }
+
+  listManagedAgentsByOwnerPrincipal(ownerPrincipalId: string): StoredManagedAgentRecord[] {
+    const normalizedOwnerPrincipalId = ownerPrincipalId.trim();
+
+    if (!normalizedOwnerPrincipalId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            agent.agent_id,
+            agent.principal_id,
+            agent.organization_id,
+            agent.created_by_principal_id,
+            agent.supervisor_principal_id,
+            agent.display_name,
+            agent.slug,
+            agent.department_role,
+            agent.mission,
+            agent.status,
+            agent.autonomy_level,
+            agent.creation_mode,
+            agent.exposure_policy,
+            agent.bootstrap_profile_json,
+            agent.bootstrapped_at,
+            agent.created_at,
+            agent.updated_at
+          FROM themis_managed_agents agent
+          INNER JOIN themis_organizations organization
+            ON organization.organization_id = agent.organization_id
+          WHERE organization.owner_principal_id = ?
+          ORDER BY agent.updated_at DESC, agent.agent_id ASC
+        `,
+      )
+      .all(normalizedOwnerPrincipalId) as ManagedAgentRow[];
+
+    return rows.map(mapManagedAgentRow);
+  }
+
+  saveManagedAgent(record: StoredManagedAgentRecord): void {
+    const agentId = record.agentId.trim();
+    const principalId = record.principalId.trim();
+    const organizationId = record.organizationId.trim();
+    const createdByPrincipalId = record.createdByPrincipalId.trim();
+    const supervisorPrincipalId = normalizeText(record.supervisorPrincipalId);
+    const displayName = record.displayName.trim();
+    const slug = record.slug.trim();
+    const departmentRole = record.departmentRole.trim();
+    const mission = record.mission.trim();
+    const status = normalizeText(record.status);
+    const autonomyLevel = normalizeText(record.autonomyLevel);
+    const creationMode = normalizeText(record.creationMode);
+    const exposurePolicy = normalizeText(record.exposurePolicy);
+    const bootstrapProfile = normalizeManagedAgentBootstrapProfile(record.bootstrapProfile);
+    const bootstrappedAt = normalizeText(record.bootstrappedAt);
+
+    if (
+      !agentId ||
+      !principalId ||
+      !organizationId ||
+      !createdByPrincipalId ||
+      !displayName ||
+      !slug ||
+      !departmentRole ||
+      !mission ||
+      !status ||
+      !MANAGED_AGENT_STATUSES.includes(status as ManagedAgentStatus) ||
+      !autonomyLevel ||
+      !MANAGED_AGENT_AUTONOMY_LEVELS.includes(autonomyLevel as ManagedAgentAutonomyLevel) ||
+      !creationMode ||
+      !MANAGED_AGENT_CREATION_MODES.includes(creationMode as ManagedAgentCreationMode) ||
+      !exposurePolicy ||
+      !MANAGED_AGENT_EXPOSURE_POLICIES.includes(exposurePolicy as ManagedAgentExposurePolicy)
+    ) {
+      throw new Error("Managed agent record is incomplete.");
+    }
+
+    const existing = this.db
+      .prepare(
+        `
+          SELECT organization_id
+          FROM themis_managed_agents
+          WHERE agent_id = ?
+        `,
+      )
+      .get(agentId) as { organization_id: string } | undefined;
+
+    if (existing && existing.organization_id !== organizationId) {
+      throw new Error("Managed agent belongs to another organization.");
+    }
+
+    const writeResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_managed_agents (
+            agent_id,
+            principal_id,
+            organization_id,
+            created_by_principal_id,
+            supervisor_principal_id,
+            display_name,
+            slug,
+            department_role,
+            mission,
+            status,
+            autonomy_level,
+            creation_mode,
+            exposure_policy,
+            bootstrap_profile_json,
+            bootstrapped_at,
+            created_at,
+            updated_at
+          ) VALUES (
+            @agent_id,
+            @principal_id,
+            @organization_id,
+            @created_by_principal_id,
+            @supervisor_principal_id,
+            @display_name,
+            @slug,
+            @department_role,
+            @mission,
+            @status,
+            @autonomy_level,
+            @creation_mode,
+            @exposure_policy,
+            @bootstrap_profile_json,
+            @bootstrapped_at,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(agent_id) DO UPDATE SET
+            supervisor_principal_id = excluded.supervisor_principal_id,
+            display_name = excluded.display_name,
+            slug = excluded.slug,
+            department_role = excluded.department_role,
+            mission = excluded.mission,
+            status = excluded.status,
+            autonomy_level = excluded.autonomy_level,
+            creation_mode = excluded.creation_mode,
+            exposure_policy = excluded.exposure_policy,
+            bootstrap_profile_json = excluded.bootstrap_profile_json,
+            bootstrapped_at = excluded.bootstrapped_at,
+            updated_at = excluded.updated_at
+          WHERE themis_managed_agents.organization_id = excluded.organization_id
+        `,
+      )
+      .run({
+        agent_id: agentId,
+        principal_id: principalId,
+        organization_id: organizationId,
+        created_by_principal_id: createdByPrincipalId,
+        supervisor_principal_id: supervisorPrincipalId ?? null,
+        display_name: displayName,
+        slug,
+        department_role: departmentRole,
+        mission,
+        status,
+        autonomy_level: autonomyLevel,
+        creation_mode: creationMode,
+        exposure_policy: exposurePolicy,
+        bootstrap_profile_json: bootstrapProfile ? JSON.stringify(bootstrapProfile) : null,
+        bootstrapped_at: bootstrappedAt ?? null,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+
+    if (writeResult.changes === 0) {
+      throw new Error("Managed agent write did not apply.");
+    }
+  }
+
+  getAgentWorkItem(workItemId: string): StoredAgentWorkItemRecord | null {
+    const normalizedWorkItemId = workItemId.trim();
+
+    if (!normalizedWorkItemId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            work_item_id,
+            organization_id,
+            target_agent_id,
+            source_type,
+            source_principal_id,
+            source_agent_id,
+            parent_work_item_id,
+            dispatch_reason,
+            goal,
+            context_packet_json,
+            waiting_action_request_json,
+            latest_human_response_json,
+            priority,
+            status,
+            workspace_policy_snapshot_json,
+            runtime_profile_snapshot_json,
+            created_at,
+            scheduled_at,
+            started_at,
+            completed_at,
+            updated_at
+          FROM themis_agent_work_items
+          WHERE work_item_id = ?
+        `,
+      )
+      .get(normalizedWorkItemId) as AgentWorkItemRow | undefined;
+
+    return row ? mapAgentWorkItemRow(row) : null;
+  }
+
+  listAgentWorkItemsByTargetAgent(targetAgentId: string): StoredAgentWorkItemRecord[] {
+    const normalizedTargetAgentId = targetAgentId.trim();
+
+    if (!normalizedTargetAgentId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            work_item_id,
+            organization_id,
+            target_agent_id,
+            source_type,
+            source_principal_id,
+            source_agent_id,
+            parent_work_item_id,
+            dispatch_reason,
+            goal,
+            context_packet_json,
+            waiting_action_request_json,
+            latest_human_response_json,
+            priority,
+            status,
+            workspace_policy_snapshot_json,
+            runtime_profile_snapshot_json,
+            created_at,
+            scheduled_at,
+            started_at,
+            completed_at,
+            updated_at
+          FROM themis_agent_work_items
+          WHERE target_agent_id = ?
+          ORDER BY created_at DESC, work_item_id ASC
+        `,
+      )
+      .all(normalizedTargetAgentId) as AgentWorkItemRow[];
+
+    return rows.map(mapAgentWorkItemRow);
+  }
+
+  listAgentWorkItemsByOwnerPrincipal(ownerPrincipalId: string): StoredAgentWorkItemRecord[] {
+    const normalizedOwnerPrincipalId = ownerPrincipalId.trim();
+
+    if (!normalizedOwnerPrincipalId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            work_item.work_item_id,
+            work_item.organization_id,
+            work_item.target_agent_id,
+            work_item.source_type,
+            work_item.source_principal_id,
+            work_item.source_agent_id,
+            work_item.parent_work_item_id,
+            work_item.dispatch_reason,
+            work_item.goal,
+            work_item.context_packet_json,
+            work_item.waiting_action_request_json,
+            work_item.latest_human_response_json,
+            work_item.priority,
+            work_item.status,
+            work_item.workspace_policy_snapshot_json,
+            work_item.runtime_profile_snapshot_json,
+            work_item.created_at,
+            work_item.scheduled_at,
+            work_item.started_at,
+            work_item.completed_at,
+            work_item.updated_at
+          FROM themis_agent_work_items work_item
+          INNER JOIN themis_organizations organization
+            ON organization.organization_id = work_item.organization_id
+          WHERE organization.owner_principal_id = ?
+          ORDER BY work_item.created_at DESC, work_item.work_item_id ASC
+        `,
+      )
+      .all(normalizedOwnerPrincipalId) as AgentWorkItemRow[];
+
+    return rows.map(mapAgentWorkItemRow);
+  }
+
+  saveAgentWorkItem(record: StoredAgentWorkItemRecord): void {
+    const workItemId = record.workItemId.trim();
+    const organizationId = record.organizationId.trim();
+    const targetAgentId = record.targetAgentId.trim();
+    const sourceType = normalizeText(record.sourceType);
+    const sourcePrincipalId = record.sourcePrincipalId.trim();
+    const sourceAgentId = normalizeText(record.sourceAgentId);
+    const parentWorkItemId = normalizeText(record.parentWorkItemId);
+    const dispatchReason = record.dispatchReason.trim();
+    const goal = record.goal.trim();
+    const priority = normalizeText(record.priority);
+    const status = normalizeText(record.status);
+
+    if (
+      !workItemId ||
+      !organizationId ||
+      !targetAgentId ||
+      !sourceType ||
+      !MANAGED_AGENT_WORK_ITEM_SOURCE_TYPES.includes(sourceType as ManagedAgentWorkItemSourceType) ||
+      !sourcePrincipalId ||
+      !dispatchReason ||
+      !goal ||
+      !priority ||
+      !MANAGED_AGENT_PRIORITIES.includes(priority as ManagedAgentPriority) ||
+      !status ||
+      !MANAGED_AGENT_WORK_ITEM_STATUSES.includes(status as ManagedAgentWorkItemStatus)
+    ) {
+      throw new Error("Agent work item record is incomplete.");
+    }
+
+    const existing = this.db
+      .prepare(
+        `
+          SELECT organization_id, target_agent_id
+          FROM themis_agent_work_items
+          WHERE work_item_id = ?
+        `,
+      )
+      .get(workItemId) as { organization_id: string; target_agent_id: string } | undefined;
+
+    if (existing && (existing.organization_id !== organizationId || existing.target_agent_id !== targetAgentId)) {
+      throw new Error("Agent work item belongs to another organization or target agent.");
+    }
+
+    const writeResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_agent_work_items (
+            work_item_id,
+            organization_id,
+            target_agent_id,
+            source_type,
+            source_principal_id,
+            source_agent_id,
+            parent_work_item_id,
+            dispatch_reason,
+            goal,
+            context_packet_json,
+            waiting_action_request_json,
+            latest_human_response_json,
+            priority,
+            status,
+            workspace_policy_snapshot_json,
+            runtime_profile_snapshot_json,
+            created_at,
+            scheduled_at,
+            started_at,
+            completed_at,
+            updated_at
+          ) VALUES (
+            @work_item_id,
+            @organization_id,
+            @target_agent_id,
+            @source_type,
+            @source_principal_id,
+            @source_agent_id,
+            @parent_work_item_id,
+            @dispatch_reason,
+            @goal,
+            @context_packet_json,
+            @waiting_action_request_json,
+            @latest_human_response_json,
+            @priority,
+            @status,
+            @workspace_policy_snapshot_json,
+            @runtime_profile_snapshot_json,
+            @created_at,
+            @scheduled_at,
+            @started_at,
+            @completed_at,
+            @updated_at
+          )
+          ON CONFLICT(work_item_id) DO UPDATE SET
+            source_type = excluded.source_type,
+            source_principal_id = excluded.source_principal_id,
+            source_agent_id = excluded.source_agent_id,
+            parent_work_item_id = excluded.parent_work_item_id,
+            dispatch_reason = excluded.dispatch_reason,
+            goal = excluded.goal,
+            context_packet_json = excluded.context_packet_json,
+            waiting_action_request_json = excluded.waiting_action_request_json,
+            latest_human_response_json = excluded.latest_human_response_json,
+            priority = excluded.priority,
+            status = excluded.status,
+            workspace_policy_snapshot_json = excluded.workspace_policy_snapshot_json,
+            runtime_profile_snapshot_json = excluded.runtime_profile_snapshot_json,
+            scheduled_at = excluded.scheduled_at,
+            started_at = excluded.started_at,
+            completed_at = excluded.completed_at,
+            updated_at = excluded.updated_at
+          WHERE themis_agent_work_items.organization_id = excluded.organization_id
+            AND themis_agent_work_items.target_agent_id = excluded.target_agent_id
+        `,
+      )
+      .run({
+        work_item_id: workItemId,
+        organization_id: organizationId,
+        target_agent_id: targetAgentId,
+        source_type: sourceType,
+        source_principal_id: sourcePrincipalId,
+        source_agent_id: sourceAgentId ?? null,
+        parent_work_item_id: parentWorkItemId ?? null,
+        dispatch_reason: dispatchReason,
+        goal,
+        context_packet_json: stringifyJson(record.contextPacket),
+        waiting_action_request_json: stringifyJson(record.waitingActionRequest),
+        latest_human_response_json: stringifyJson(record.latestHumanResponse),
+        priority,
+        status,
+        workspace_policy_snapshot_json: stringifyJson(record.workspacePolicySnapshot),
+        runtime_profile_snapshot_json: stringifyJson(record.runtimeProfileSnapshot),
+        created_at: record.createdAt,
+        scheduled_at: normalizeText(record.scheduledAt) ?? null,
+        started_at: normalizeText(record.startedAt) ?? null,
+        completed_at: normalizeText(record.completedAt) ?? null,
+        updated_at: record.updatedAt,
+      });
+
+    if (writeResult.changes === 0) {
+      throw new Error("Agent work item write did not apply.");
+    }
+  }
+
+  getAgentRun(runId: string): StoredAgentRunRecord | null {
+    const normalizedRunId = runId.trim();
+
+    if (!normalizedRunId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            run_id,
+            organization_id,
+            work_item_id,
+            target_agent_id,
+            scheduler_id,
+            lease_token,
+            lease_expires_at,
+            status,
+            started_at,
+            last_heartbeat_at,
+            completed_at,
+            failure_code,
+            failure_message,
+            created_at,
+            updated_at
+          FROM themis_agent_runs
+          WHERE run_id = ?
+        `,
+      )
+      .get(normalizedRunId) as AgentRunRow | undefined;
+
+    return row ? mapAgentRunRow(row) : null;
+  }
+
+  listAgentRunsByWorkItem(workItemId: string): StoredAgentRunRecord[] {
+    const normalizedWorkItemId = workItemId.trim();
+
+    if (!normalizedWorkItemId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            run_id,
+            organization_id,
+            work_item_id,
+            target_agent_id,
+            scheduler_id,
+            lease_token,
+            lease_expires_at,
+            status,
+            started_at,
+            last_heartbeat_at,
+            completed_at,
+            failure_code,
+            failure_message,
+            created_at,
+            updated_at
+          FROM themis_agent_runs
+          WHERE work_item_id = ?
+          ORDER BY created_at DESC, run_id ASC
+        `,
+      )
+      .all(normalizedWorkItemId) as AgentRunRow[];
+
+    return rows.map(mapAgentRunRow);
+  }
+
+  listAgentRunsByOwnerPrincipal(ownerPrincipalId: string): StoredAgentRunRecord[] {
+    const normalizedOwnerPrincipalId = ownerPrincipalId.trim();
+
+    if (!normalizedOwnerPrincipalId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            run.run_id,
+            run.organization_id,
+            run.work_item_id,
+            run.target_agent_id,
+            run.scheduler_id,
+            run.lease_token,
+            run.lease_expires_at,
+            run.status,
+            run.started_at,
+            run.last_heartbeat_at,
+            run.completed_at,
+            run.failure_code,
+            run.failure_message,
+            run.created_at,
+            run.updated_at
+          FROM themis_agent_runs run
+          INNER JOIN themis_organizations organization
+            ON organization.organization_id = run.organization_id
+          WHERE organization.owner_principal_id = ?
+          ORDER BY run.created_at DESC, run.run_id ASC
+        `,
+      )
+      .all(normalizedOwnerPrincipalId) as AgentRunRow[];
+
+    return rows.map(mapAgentRunRow);
+  }
+
+  listStaleActiveAgentRuns(leaseExpiresBefore: string): StoredAgentRunRecord[] {
+    const normalizedLeaseExpiresBefore = leaseExpiresBefore.trim();
+
+    if (!normalizedLeaseExpiresBefore) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            run_id,
+            organization_id,
+            work_item_id,
+            target_agent_id,
+            scheduler_id,
+            lease_token,
+            lease_expires_at,
+            status,
+            started_at,
+            last_heartbeat_at,
+            completed_at,
+            failure_code,
+            failure_message,
+            created_at,
+            updated_at
+          FROM themis_agent_runs
+          WHERE status IN ('created', 'starting', 'running', 'waiting_action')
+            AND lease_expires_at <= ?
+          ORDER BY lease_expires_at ASC, run_id ASC
+        `,
+      )
+      .all(normalizedLeaseExpiresBefore) as AgentRunRow[];
+
+    return rows.map(mapAgentRunRow);
+  }
+
+  saveAgentRun(record: StoredAgentRunRecord): void {
+    const runId = record.runId.trim();
+    const organizationId = record.organizationId.trim();
+    const workItemId = record.workItemId.trim();
+    const targetAgentId = record.targetAgentId.trim();
+    const schedulerId = record.schedulerId.trim();
+    const leaseToken = record.leaseToken.trim();
+    const leaseExpiresAt = record.leaseExpiresAt.trim();
+    const status = normalizeText(record.status);
+    const startedAt = normalizeText(record.startedAt);
+    const lastHeartbeatAt = normalizeText(record.lastHeartbeatAt);
+    const completedAt = normalizeText(record.completedAt);
+    const failureCode = normalizeText(record.failureCode);
+    const failureMessage = normalizeText(record.failureMessage);
+
+    if (
+      !runId ||
+      !organizationId ||
+      !workItemId ||
+      !targetAgentId ||
+      !schedulerId ||
+      !leaseToken ||
+      !leaseExpiresAt ||
+      !status ||
+      !AGENT_RUN_STATUSES.includes(status as AgentRunStatus)
+    ) {
+      throw new Error("Agent run record is incomplete.");
+    }
+
+    const existing = this.db
+      .prepare(
+        `
+          SELECT organization_id, work_item_id
+          FROM themis_agent_runs
+          WHERE run_id = ?
+        `,
+      )
+      .get(runId) as { organization_id: string; work_item_id: string } | undefined;
+
+    if (existing && (existing.organization_id !== organizationId || existing.work_item_id !== workItemId)) {
+      throw new Error("Agent run belongs to another organization or work item.");
+    }
+
+    const writeResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_agent_runs (
+            run_id,
+            organization_id,
+            work_item_id,
+            target_agent_id,
+            scheduler_id,
+            lease_token,
+            lease_expires_at,
+            status,
+            started_at,
+            last_heartbeat_at,
+            completed_at,
+            failure_code,
+            failure_message,
+            created_at,
+            updated_at
+          ) VALUES (
+            @run_id,
+            @organization_id,
+            @work_item_id,
+            @target_agent_id,
+            @scheduler_id,
+            @lease_token,
+            @lease_expires_at,
+            @status,
+            @started_at,
+            @last_heartbeat_at,
+            @completed_at,
+            @failure_code,
+            @failure_message,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(run_id) DO UPDATE SET
+            target_agent_id = excluded.target_agent_id,
+            scheduler_id = excluded.scheduler_id,
+            lease_token = excluded.lease_token,
+            lease_expires_at = excluded.lease_expires_at,
+            status = excluded.status,
+            started_at = excluded.started_at,
+            last_heartbeat_at = excluded.last_heartbeat_at,
+            completed_at = excluded.completed_at,
+            failure_code = excluded.failure_code,
+            failure_message = excluded.failure_message,
+            updated_at = excluded.updated_at
+          WHERE themis_agent_runs.organization_id = excluded.organization_id
+            AND themis_agent_runs.work_item_id = excluded.work_item_id
+        `,
+      )
+      .run({
+        run_id: runId,
+        organization_id: organizationId,
+        work_item_id: workItemId,
+        target_agent_id: targetAgentId,
+        scheduler_id: schedulerId,
+        lease_token: leaseToken,
+        lease_expires_at: leaseExpiresAt,
+        status,
+        started_at: startedAt ?? null,
+        last_heartbeat_at: lastHeartbeatAt ?? null,
+        completed_at: completedAt ?? null,
+        failure_code: failureCode ?? null,
+        failure_message: failureMessage ?? null,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+
+    if (writeResult.changes === 0) {
+      throw new Error("Agent run write did not apply.");
+    }
+  }
+
+  listAgentAuditLogsByOrganization(organizationId: string, limit = 20): StoredAgentAuditLogRecord[] {
+    const normalizedOrganizationId = organizationId.trim();
+
+    if (!normalizedOrganizationId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            audit_log_id,
+            organization_id,
+            event_type,
+            actor_principal_id,
+            subject_agent_id,
+            suggestion_id,
+            summary,
+            payload_json,
+            created_at
+          FROM themis_agent_audit_logs
+          WHERE organization_id = ?
+          ORDER BY created_at DESC, audit_log_id DESC
+          LIMIT ?
+        `,
+      )
+      .all(normalizedOrganizationId, normalizeLimit(limit)) as AgentAuditLogRow[];
+
+    return rows.map(mapAgentAuditLogRow);
+  }
+
+  saveAgentAuditLog(record: StoredAgentAuditLogRecord): void {
+    const auditLogId = record.auditLogId.trim();
+    const organizationId = record.organizationId.trim();
+    const eventType = normalizeText(record.eventType);
+    const actorPrincipalId = record.actorPrincipalId.trim();
+    const subjectAgentId = normalizeText(record.subjectAgentId);
+    const suggestionId = normalizeText(record.suggestionId);
+    const summary = record.summary.trim();
+
+    if (
+      !auditLogId
+      || !organizationId
+      || !eventType
+      || !AGENT_AUDIT_LOG_EVENT_TYPES.includes(eventType as AgentAuditLogEventType)
+      || !actorPrincipalId
+      || !summary
+    ) {
+      throw new Error("Agent audit log record is incomplete.");
+    }
+
+    const writeResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_agent_audit_logs (
+            audit_log_id,
+            organization_id,
+            event_type,
+            actor_principal_id,
+            subject_agent_id,
+            suggestion_id,
+            summary,
+            payload_json,
+            created_at
+          ) VALUES (
+            @audit_log_id,
+            @organization_id,
+            @event_type,
+            @actor_principal_id,
+            @subject_agent_id,
+            @suggestion_id,
+            @summary,
+            @payload_json,
+            @created_at
+          )
+          ON CONFLICT(audit_log_id) DO UPDATE SET
+            event_type = excluded.event_type,
+            actor_principal_id = excluded.actor_principal_id,
+            subject_agent_id = excluded.subject_agent_id,
+            suggestion_id = excluded.suggestion_id,
+            summary = excluded.summary,
+            payload_json = excluded.payload_json,
+            created_at = excluded.created_at
+          WHERE themis_agent_audit_logs.organization_id = excluded.organization_id
+        `,
+      )
+      .run({
+        audit_log_id: auditLogId,
+        organization_id: organizationId,
+        event_type: eventType,
+        actor_principal_id: actorPrincipalId,
+        subject_agent_id: subjectAgentId ?? null,
+        suggestion_id: suggestionId ?? null,
+        summary,
+        payload_json: stringifyJson(record.payload),
+        created_at: record.createdAt,
+      });
+
+    if (writeResult.changes === 0) {
+      throw new Error("Agent audit log write did not apply.");
+    }
+  }
+
+  claimNextAgentMailboxEntry(input: {
+    ownerAgentId: string;
+    leaseToken: string;
+    leasedAt: string;
+    now: string;
+    staleLeaseBefore?: string;
+  }): StoredAgentMailboxEntryRecord | null {
+    const ownerAgentId = input.ownerAgentId.trim();
+    const leaseToken = input.leaseToken.trim();
+    const leasedAt = input.leasedAt.trim();
+    const now = input.now.trim();
+    const staleLeaseBefore = normalizeText(input.staleLeaseBefore);
+
+    if (!ownerAgentId || !leaseToken || !leasedAt || !now) {
+      throw new Error("Agent mailbox claim input is incomplete.");
+    }
+
+    const claim = this.db.transaction(() => {
+      const candidate = this.db
+        .prepare(
+          `
+            SELECT mailbox_entry_id
+            FROM themis_agent_mailboxes mailbox
+            WHERE mailbox.owner_agent_id = @owner_agent_id
+              AND mailbox.available_at <= @now
+              AND (
+                mailbox.status = 'pending'
+                OR (
+                  mailbox.status = 'leased'
+                  AND @stale_lease_before IS NOT NULL
+                  AND (
+                    mailbox.leased_at IS NULL
+                    OR mailbox.leased_at <= @stale_lease_before
+                  )
+                )
+              )
+            ORDER BY
+              CASE mailbox.status
+                WHEN 'pending' THEN 0
+                ELSE 1
+              END ASC,
+              CASE mailbox.priority
+                WHEN 'urgent' THEN 0
+                WHEN 'high' THEN 1
+                WHEN 'normal' THEN 2
+                ELSE 3
+              END ASC,
+              mailbox.created_at ASC,
+              mailbox.mailbox_entry_id ASC
+            LIMIT 1
+          `,
+        )
+        .get({
+          owner_agent_id: ownerAgentId,
+          now,
+          stale_lease_before: staleLeaseBefore ?? null,
+        }) as { mailbox_entry_id: string } | undefined;
+
+      if (!candidate?.mailbox_entry_id) {
+        return null;
+      }
+
+      const updateResult = this.db
+        .prepare(
+          `
+            UPDATE themis_agent_mailboxes
+            SET
+              status = 'leased',
+              lease_token = @lease_token,
+              leased_at = @leased_at,
+              updated_at = @updated_at
+            WHERE mailbox_entry_id = @mailbox_entry_id
+              AND (
+                status = 'pending'
+                OR (
+                  status = 'leased'
+                  AND @stale_lease_before IS NOT NULL
+                  AND (
+                    leased_at IS NULL
+                    OR leased_at <= @stale_lease_before
+                  )
+                )
+              )
+          `,
+        )
+        .run({
+          mailbox_entry_id: candidate.mailbox_entry_id,
+          lease_token: leaseToken,
+          leased_at: leasedAt,
+          updated_at: now,
+          stale_lease_before: staleLeaseBefore ?? null,
+        });
+
+      if (updateResult.changes === 0) {
+        return null;
+      }
+
+      return this.getAgentMailboxEntry(candidate.mailbox_entry_id);
+    });
+
+    return claim();
+  }
+
+  claimNextRunnableAgentWorkItem(input: {
+    schedulerId: string;
+    leaseToken: string;
+    leaseExpiresAt: string;
+    now: string;
+    organizationId?: string;
+    targetAgentId?: string;
+  }): { workItem: StoredAgentWorkItemRecord; run: StoredAgentRunRecord } | null {
+    const schedulerId = input.schedulerId.trim();
+    const leaseToken = input.leaseToken.trim();
+    const leaseExpiresAt = input.leaseExpiresAt.trim();
+    const now = input.now.trim();
+    const organizationId = normalizeText(input.organizationId);
+    const targetAgentId = normalizeText(input.targetAgentId);
+
+    if (!schedulerId || !leaseToken || !leaseExpiresAt || !now) {
+      throw new Error("Agent work item claim input is incomplete.");
+    }
+
+    const claim = this.db.transaction(() => {
+      const filters: string[] = [
+        "work_item.status = 'queued'",
+        "agent.status IN ('active', 'bootstrapping')",
+        "(work_item.scheduled_at IS NULL OR work_item.scheduled_at <= @now)",
+        `
+        NOT EXISTS (
+          SELECT 1
+          FROM themis_agent_runs active_run
+          WHERE active_run.work_item_id = work_item.work_item_id
+            AND active_run.status IN ('created', 'starting', 'running', 'waiting_action')
+        )
+        `,
+        `
+        NOT EXISTS (
+          SELECT 1
+          FROM themis_agent_runs active_run
+          WHERE active_run.target_agent_id = work_item.target_agent_id
+            AND active_run.status IN ('created', 'starting', 'running', 'waiting_action')
+        )
+        `,
+      ];
+      const params: Record<string, string> = {
+        now,
+      };
+
+      if (organizationId) {
+        filters.push("work_item.organization_id = @organization_id");
+        params.organization_id = organizationId;
+      }
+
+      if (targetAgentId) {
+        filters.push("work_item.target_agent_id = @target_agent_id");
+        params.target_agent_id = targetAgentId;
+      }
+
+      const candidate = this.db
+        .prepare(
+          `
+            SELECT work_item_id
+            FROM themis_agent_work_items work_item
+            INNER JOIN themis_managed_agents agent
+              ON agent.agent_id = work_item.target_agent_id
+            WHERE ${filters.join("\n              AND ")}
+            ORDER BY
+              CASE work_item.priority
+                WHEN 'urgent' THEN 0
+                WHEN 'high' THEN 1
+                WHEN 'normal' THEN 2
+                ELSE 3
+              END ASC,
+              COALESCE(work_item.scheduled_at, work_item.created_at) ASC,
+              work_item.created_at ASC,
+              work_item.work_item_id ASC
+            LIMIT 1
+          `,
+        )
+        .get(params) as { work_item_id: string } | undefined;
+
+      if (!candidate?.work_item_id) {
+        return null;
+      }
+
+      const updateResult = this.db
+        .prepare(
+          `
+            UPDATE themis_agent_work_items
+            SET
+              status = 'planning',
+              started_at = COALESCE(started_at, @started_at),
+              updated_at = @updated_at
+            WHERE work_item_id = @work_item_id
+              AND status = 'queued'
+          `,
+        )
+        .run({
+          work_item_id: candidate.work_item_id,
+          started_at: now,
+          updated_at: now,
+        });
+
+      if (updateResult.changes === 0) {
+        return null;
+      }
+
+      const workItem = this.getAgentWorkItem(candidate.work_item_id);
+
+      if (!workItem) {
+        throw new Error("Claimed work item disappeared.");
+      }
+
+      const run: StoredAgentRunRecord = {
+        runId: createId("run"),
+        organizationId: workItem.organizationId,
+        workItemId: workItem.workItemId,
+        targetAgentId: workItem.targetAgentId,
+        schedulerId,
+        leaseToken,
+        leaseExpiresAt,
+        status: "created",
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      this.saveAgentRun(run);
+      return {
+        workItem,
+        run: this.getAgentRun(run.runId) ?? run,
+      };
+    });
+
+    return claim();
+  }
+
+  getAgentMessage(messageId: string): StoredAgentMessageRecord | null {
+    const normalizedMessageId = messageId.trim();
+
+    if (!normalizedMessageId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            message_id,
+            organization_id,
+            from_agent_id,
+            to_agent_id,
+            work_item_id,
+            run_id,
+            parent_message_id,
+            message_type,
+            payload_json,
+            artifact_refs_json,
+            priority,
+            requires_ack,
+            created_at
+          FROM themis_agent_messages
+          WHERE message_id = ?
+        `,
+      )
+      .get(normalizedMessageId) as AgentMessageRow | undefined;
+
+    return row ? mapAgentMessageRow(row) : null;
+  }
+
+  listAgentMessagesByWorkItem(workItemId: string): StoredAgentMessageRecord[] {
+    const normalizedWorkItemId = workItemId.trim();
+
+    if (!normalizedWorkItemId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            message_id,
+            organization_id,
+            from_agent_id,
+            to_agent_id,
+            work_item_id,
+            run_id,
+            parent_message_id,
+            message_type,
+            payload_json,
+            artifact_refs_json,
+            priority,
+            requires_ack,
+            created_at
+          FROM themis_agent_messages
+          WHERE work_item_id = ?
+          ORDER BY created_at ASC, message_id ASC
+        `,
+      )
+      .all(normalizedWorkItemId) as AgentMessageRow[];
+
+    return rows.map(mapAgentMessageRow);
+  }
+
+  listAgentMessagesByAgent(agentId: string): StoredAgentMessageRecord[] {
+    const normalizedAgentId = agentId.trim();
+
+    if (!normalizedAgentId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            message_id,
+            organization_id,
+            from_agent_id,
+            to_agent_id,
+            work_item_id,
+            run_id,
+            parent_message_id,
+            message_type,
+            payload_json,
+            artifact_refs_json,
+            priority,
+            requires_ack,
+            created_at
+          FROM themis_agent_messages
+          WHERE from_agent_id = ?
+             OR to_agent_id = ?
+          ORDER BY created_at DESC, message_id DESC
+        `,
+      )
+      .all(normalizedAgentId, normalizedAgentId) as AgentMessageRow[];
+
+    return rows.map(mapAgentMessageRow);
+  }
+
+  saveAgentMessage(record: StoredAgentMessageRecord): void {
+    const messageId = record.messageId.trim();
+    const organizationId = record.organizationId.trim();
+    const fromAgentId = record.fromAgentId.trim();
+    const toAgentId = record.toAgentId.trim();
+    const workItemId = normalizeText(record.workItemId);
+    const runId = normalizeText(record.runId);
+    const parentMessageId = normalizeText(record.parentMessageId);
+    const messageType = normalizeText(record.messageType);
+    const priority = normalizeText(record.priority);
+    const artifactRefs = dedupeStrings(record.artifactRefs);
+
+    if (
+      !messageId ||
+      !organizationId ||
+      !fromAgentId ||
+      !toAgentId ||
+      !messageType ||
+      !AGENT_MESSAGE_TYPES.includes(messageType as AgentMessageType) ||
+      !priority ||
+      !MANAGED_AGENT_PRIORITIES.includes(priority as ManagedAgentPriority)
+    ) {
+      throw new Error("Agent message record is incomplete.");
+    }
+
+    const existing = this.db
+      .prepare(
+        `
+          SELECT organization_id, to_agent_id
+          FROM themis_agent_messages
+          WHERE message_id = ?
+        `,
+      )
+      .get(messageId) as { organization_id: string; to_agent_id: string } | undefined;
+
+    if (existing && (existing.organization_id !== organizationId || existing.to_agent_id !== toAgentId)) {
+      throw new Error("Agent message belongs to another organization or mailbox.");
+    }
+
+    const writeResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_agent_messages (
+            message_id,
+            organization_id,
+            from_agent_id,
+            to_agent_id,
+            work_item_id,
+            run_id,
+            parent_message_id,
+            message_type,
+            payload_json,
+            artifact_refs_json,
+            priority,
+            requires_ack,
+            created_at
+          ) VALUES (
+            @message_id,
+            @organization_id,
+            @from_agent_id,
+            @to_agent_id,
+            @work_item_id,
+            @run_id,
+            @parent_message_id,
+            @message_type,
+            @payload_json,
+            @artifact_refs_json,
+            @priority,
+            @requires_ack,
+            @created_at
+          )
+          ON CONFLICT(message_id) DO UPDATE SET
+            work_item_id = excluded.work_item_id,
+            run_id = excluded.run_id,
+            parent_message_id = excluded.parent_message_id,
+            message_type = excluded.message_type,
+            payload_json = excluded.payload_json,
+            artifact_refs_json = excluded.artifact_refs_json,
+            priority = excluded.priority,
+            requires_ack = excluded.requires_ack
+          WHERE themis_agent_messages.organization_id = excluded.organization_id
+            AND themis_agent_messages.to_agent_id = excluded.to_agent_id
+        `,
+      )
+      .run({
+        message_id: messageId,
+        organization_id: organizationId,
+        from_agent_id: fromAgentId,
+        to_agent_id: toAgentId,
+        work_item_id: workItemId ?? null,
+        run_id: runId ?? null,
+        parent_message_id: parentMessageId ?? null,
+        message_type: messageType,
+        payload_json: stringifyJson(record.payload),
+        artifact_refs_json: JSON.stringify(artifactRefs),
+        priority,
+        requires_ack: record.requiresAck ? 1 : 0,
+        created_at: record.createdAt,
+      });
+
+    if (writeResult.changes === 0) {
+      throw new Error("Agent message write did not apply.");
+    }
+  }
+
+  getAgentMailboxEntry(mailboxEntryId: string): StoredAgentMailboxEntryRecord | null {
+    const normalizedMailboxEntryId = mailboxEntryId.trim();
+
+    if (!normalizedMailboxEntryId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            mailbox_entry_id,
+            organization_id,
+            owner_agent_id,
+            message_id,
+            work_item_id,
+            priority,
+            status,
+            requires_ack,
+            available_at,
+            lease_token,
+            leased_at,
+            acked_at,
+            created_at,
+            updated_at
+          FROM themis_agent_mailboxes
+          WHERE mailbox_entry_id = ?
+        `,
+      )
+      .get(normalizedMailboxEntryId) as AgentMailboxEntryRow | undefined;
+
+    return row ? mapAgentMailboxEntryRow(row) : null;
+  }
+
+  listAgentMailboxEntriesByAgent(ownerAgentId: string): StoredAgentMailboxEntryRecord[] {
+    const normalizedOwnerAgentId = ownerAgentId.trim();
+
+    if (!normalizedOwnerAgentId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            mailbox_entry_id,
+            organization_id,
+            owner_agent_id,
+            message_id,
+            work_item_id,
+            priority,
+            status,
+            requires_ack,
+            available_at,
+            lease_token,
+            leased_at,
+            acked_at,
+            created_at,
+            updated_at
+          FROM themis_agent_mailboxes
+          WHERE owner_agent_id = ?
+          ORDER BY created_at ASC, mailbox_entry_id ASC
+        `,
+      )
+      .all(normalizedOwnerAgentId) as AgentMailboxEntryRow[];
+
+    return rows.map(mapAgentMailboxEntryRow);
+  }
+
+  saveAgentMailboxEntry(record: StoredAgentMailboxEntryRecord): void {
+    const mailboxEntryId = record.mailboxEntryId.trim();
+    const organizationId = record.organizationId.trim();
+    const ownerAgentId = record.ownerAgentId.trim();
+    const messageId = record.messageId.trim();
+    const workItemId = normalizeText(record.workItemId);
+    const priority = normalizeText(record.priority);
+    const status = normalizeText(record.status);
+    const availableAt = record.availableAt.trim();
+    const leaseToken = normalizeText(record.leaseToken);
+    const leasedAt = normalizeText(record.leasedAt);
+    const ackedAt = normalizeText(record.ackedAt);
+
+    if (
+      !mailboxEntryId ||
+      !organizationId ||
+      !ownerAgentId ||
+      !messageId ||
+      !priority ||
+      !MANAGED_AGENT_PRIORITIES.includes(priority as ManagedAgentPriority) ||
+      !status ||
+      !AGENT_MAILBOX_STATUSES.includes(status as AgentMailboxStatus) ||
+      !availableAt
+    ) {
+      throw new Error("Agent mailbox entry record is incomplete.");
+    }
+
+    const existing = this.db
+      .prepare(
+        `
+          SELECT organization_id, owner_agent_id
+          FROM themis_agent_mailboxes
+          WHERE mailbox_entry_id = ?
+        `,
+      )
+      .get(mailboxEntryId) as { organization_id: string; owner_agent_id: string } | undefined;
+
+    if (existing && (existing.organization_id !== organizationId || existing.owner_agent_id !== ownerAgentId)) {
+      throw new Error("Agent mailbox entry belongs to another organization or owner agent.");
+    }
+
+    const writeResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_agent_mailboxes (
+            mailbox_entry_id,
+            organization_id,
+            owner_agent_id,
+            message_id,
+            work_item_id,
+            priority,
+            status,
+            requires_ack,
+            available_at,
+            lease_token,
+            leased_at,
+            acked_at,
+            created_at,
+            updated_at
+          ) VALUES (
+            @mailbox_entry_id,
+            @organization_id,
+            @owner_agent_id,
+            @message_id,
+            @work_item_id,
+            @priority,
+            @status,
+            @requires_ack,
+            @available_at,
+            @lease_token,
+            @leased_at,
+            @acked_at,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(mailbox_entry_id) DO UPDATE SET
+            priority = excluded.priority,
+            status = excluded.status,
+            requires_ack = excluded.requires_ack,
+            available_at = excluded.available_at,
+            lease_token = excluded.lease_token,
+            leased_at = excluded.leased_at,
+            acked_at = excluded.acked_at,
+            updated_at = excluded.updated_at
+          WHERE themis_agent_mailboxes.organization_id = excluded.organization_id
+            AND themis_agent_mailboxes.owner_agent_id = excluded.owner_agent_id
+        `,
+      )
+      .run({
+        mailbox_entry_id: mailboxEntryId,
+        organization_id: organizationId,
+        owner_agent_id: ownerAgentId,
+        message_id: messageId,
+        work_item_id: workItemId ?? null,
+        priority,
+        status,
+        requires_ack: record.requiresAck ? 1 : 0,
+        available_at: availableAt,
+        lease_token: leaseToken ?? null,
+        leased_at: leasedAt ?? null,
+        acked_at: ackedAt ?? null,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+
+    if (writeResult.changes === 0) {
+      throw new Error("Agent mailbox entry write did not apply.");
+    }
   }
 
   getPrincipalActor(principalId: string, actorId: string): StoredPrincipalActorRecord | null {
@@ -4817,6 +6891,8 @@ export class SqliteCodexSessionRegistry {
       CREATE TABLE IF NOT EXISTS themis_principals (
         principal_id TEXT PRIMARY KEY,
         display_name TEXT,
+        principal_kind TEXT NOT NULL DEFAULT 'human_user',
+        organization_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -5138,6 +7214,7 @@ export class SqliteCodexSessionRegistry {
 
     this.createTurnInputTables(database);
     this.createActorMemoryTables(database);
+    this.createManagedAgentTables(database);
   }
 
   private openDatabase(): Database.Database {
@@ -5263,6 +7340,233 @@ export class SqliteCodexSessionRegistry {
 
       CREATE INDEX IF NOT EXISTS themis_actor_runtime_memory_scope_timeline_idx
       ON themis_actor_runtime_memory(principal_id, scope_id, created_at ASC, runtime_memory_id ASC);
+    `);
+  }
+
+  private createManagedAgentTables(database: Database.Database): void {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS themis_organizations (
+        organization_id TEXT PRIMARY KEY,
+        owner_principal_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (owner_principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE,
+        UNIQUE(owner_principal_id, slug)
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_organizations_owner_idx
+      ON themis_organizations(owner_principal_id, updated_at DESC, organization_id ASC);
+
+      CREATE TABLE IF NOT EXISTS themis_agent_spawn_policies (
+        organization_id TEXT PRIMARY KEY,
+        max_active_agents INTEGER NOT NULL,
+        max_active_agents_per_role INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (organization_id) REFERENCES themis_organizations(organization_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_agent_spawn_policies_updated_idx
+      ON themis_agent_spawn_policies(updated_at DESC, organization_id ASC);
+
+      CREATE TABLE IF NOT EXISTS themis_agent_spawn_suggestion_states (
+        suggestion_id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        state TEXT NOT NULL,
+        payload_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (organization_id) REFERENCES themis_organizations(organization_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_agent_spawn_suggestion_states_org_idx
+      ON themis_agent_spawn_suggestion_states(organization_id, state, updated_at DESC, suggestion_id ASC);
+
+      CREATE TABLE IF NOT EXISTS themis_managed_agents (
+        agent_id TEXT PRIMARY KEY,
+        principal_id TEXT NOT NULL UNIQUE,
+        organization_id TEXT NOT NULL,
+        created_by_principal_id TEXT NOT NULL,
+        supervisor_principal_id TEXT,
+        display_name TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        department_role TEXT NOT NULL,
+        mission TEXT NOT NULL,
+        status TEXT NOT NULL,
+        autonomy_level TEXT NOT NULL,
+        creation_mode TEXT NOT NULL,
+        exposure_policy TEXT NOT NULL,
+        bootstrap_profile_json TEXT,
+        bootstrapped_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE,
+        FOREIGN KEY (organization_id) REFERENCES themis_organizations(organization_id) ON DELETE CASCADE,
+        FOREIGN KEY (created_by_principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE,
+        FOREIGN KEY (supervisor_principal_id) REFERENCES themis_principals(principal_id) ON DELETE SET NULL,
+        UNIQUE(organization_id, slug)
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_managed_agents_organization_idx
+      ON themis_managed_agents(organization_id, updated_at DESC, agent_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_managed_agents_supervisor_idx
+      ON themis_managed_agents(supervisor_principal_id, updated_at DESC, agent_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_managed_agents_status_idx
+      ON themis_managed_agents(organization_id, status, updated_at DESC, agent_id ASC);
+
+      CREATE TABLE IF NOT EXISTS themis_agent_work_items (
+        work_item_id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        target_agent_id TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_principal_id TEXT NOT NULL,
+        source_agent_id TEXT,
+        parent_work_item_id TEXT,
+        dispatch_reason TEXT NOT NULL,
+        goal TEXT NOT NULL,
+        context_packet_json TEXT,
+        waiting_action_request_json TEXT,
+        latest_human_response_json TEXT,
+        priority TEXT NOT NULL,
+        status TEXT NOT NULL,
+        workspace_policy_snapshot_json TEXT,
+        runtime_profile_snapshot_json TEXT,
+        created_at TEXT NOT NULL,
+        scheduled_at TEXT,
+        started_at TEXT,
+        completed_at TEXT,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (organization_id) REFERENCES themis_organizations(organization_id) ON DELETE CASCADE,
+        FOREIGN KEY (target_agent_id) REFERENCES themis_managed_agents(agent_id) ON DELETE CASCADE,
+        FOREIGN KEY (source_principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE,
+        FOREIGN KEY (source_agent_id) REFERENCES themis_managed_agents(agent_id) ON DELETE SET NULL,
+        FOREIGN KEY (parent_work_item_id) REFERENCES themis_agent_work_items(work_item_id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_agent_work_items_target_idx
+      ON themis_agent_work_items(target_agent_id, status, created_at DESC, work_item_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_agent_work_items_organization_idx
+      ON themis_agent_work_items(organization_id, status, created_at DESC, work_item_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_agent_work_items_parent_idx
+      ON themis_agent_work_items(parent_work_item_id, created_at ASC, work_item_id ASC);
+
+      CREATE TABLE IF NOT EXISTS themis_agent_runs (
+        run_id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        work_item_id TEXT NOT NULL,
+        target_agent_id TEXT NOT NULL,
+        scheduler_id TEXT NOT NULL,
+        lease_token TEXT NOT NULL,
+        lease_expires_at TEXT NOT NULL,
+        status TEXT NOT NULL,
+        started_at TEXT,
+        last_heartbeat_at TEXT,
+        completed_at TEXT,
+        failure_code TEXT,
+        failure_message TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (organization_id) REFERENCES themis_organizations(organization_id) ON DELETE CASCADE,
+        FOREIGN KEY (work_item_id) REFERENCES themis_agent_work_items(work_item_id) ON DELETE CASCADE,
+        FOREIGN KEY (target_agent_id) REFERENCES themis_managed_agents(agent_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_agent_runs_work_item_idx
+      ON themis_agent_runs(work_item_id, created_at DESC, run_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_agent_runs_target_agent_idx
+      ON themis_agent_runs(target_agent_id, status, updated_at DESC, run_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_agent_runs_scheduler_idx
+      ON themis_agent_runs(scheduler_id, status, updated_at DESC, run_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_agent_runs_lease_idx
+      ON themis_agent_runs(status, lease_expires_at ASC, run_id ASC);
+
+      CREATE TABLE IF NOT EXISTS themis_agent_messages (
+        message_id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        from_agent_id TEXT NOT NULL,
+        to_agent_id TEXT NOT NULL,
+        work_item_id TEXT,
+        run_id TEXT,
+        parent_message_id TEXT,
+        message_type TEXT NOT NULL,
+        payload_json TEXT,
+        artifact_refs_json TEXT NOT NULL DEFAULT '[]',
+        priority TEXT NOT NULL,
+        requires_ack INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (organization_id) REFERENCES themis_organizations(organization_id) ON DELETE CASCADE,
+        FOREIGN KEY (from_agent_id) REFERENCES themis_managed_agents(agent_id) ON DELETE CASCADE,
+        FOREIGN KEY (to_agent_id) REFERENCES themis_managed_agents(agent_id) ON DELETE CASCADE,
+        FOREIGN KEY (work_item_id) REFERENCES themis_agent_work_items(work_item_id) ON DELETE SET NULL,
+        FOREIGN KEY (parent_message_id) REFERENCES themis_agent_messages(message_id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_agent_messages_to_agent_idx
+      ON themis_agent_messages(to_agent_id, created_at DESC, message_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_agent_messages_work_item_idx
+      ON themis_agent_messages(work_item_id, created_at ASC, message_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_agent_messages_org_idx
+      ON themis_agent_messages(organization_id, created_at DESC, message_id ASC);
+
+      CREATE TABLE IF NOT EXISTS themis_agent_mailboxes (
+        mailbox_entry_id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        owner_agent_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        work_item_id TEXT,
+        priority TEXT NOT NULL,
+        status TEXT NOT NULL,
+        requires_ack INTEGER NOT NULL DEFAULT 0,
+        available_at TEXT NOT NULL,
+        lease_token TEXT,
+        leased_at TEXT,
+        acked_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (organization_id) REFERENCES themis_organizations(organization_id) ON DELETE CASCADE,
+        FOREIGN KEY (owner_agent_id) REFERENCES themis_managed_agents(agent_id) ON DELETE CASCADE,
+        FOREIGN KEY (message_id) REFERENCES themis_agent_messages(message_id) ON DELETE CASCADE,
+        FOREIGN KEY (work_item_id) REFERENCES themis_agent_work_items(work_item_id) ON DELETE SET NULL,
+        UNIQUE(owner_agent_id, message_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_agent_mailboxes_owner_idx
+      ON themis_agent_mailboxes(owner_agent_id, status, created_at ASC, mailbox_entry_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_agent_mailboxes_work_item_idx
+      ON themis_agent_mailboxes(work_item_id, status, created_at ASC, mailbox_entry_id ASC);
+
+      CREATE TABLE IF NOT EXISTS themis_agent_audit_logs (
+        audit_log_id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        actor_principal_id TEXT NOT NULL,
+        subject_agent_id TEXT,
+        suggestion_id TEXT,
+        summary TEXT NOT NULL,
+        payload_json TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (organization_id) REFERENCES themis_organizations(organization_id) ON DELETE CASCADE,
+        FOREIGN KEY (actor_principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE,
+        FOREIGN KEY (subject_agent_id) REFERENCES themis_managed_agents(agent_id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_agent_audit_logs_organization_idx
+      ON themis_agent_audit_logs(organization_id, created_at DESC, audit_log_id DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_agent_audit_logs_event_idx
+      ON themis_agent_audit_logs(event_type, created_at DESC, audit_log_id DESC);
     `);
   }
 
@@ -5513,8 +7817,74 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_web_audit_events_created_idx
       ON themis_web_audit_events(created_at DESC);
     `);
+    const principalColumns = database
+      .prepare(`PRAGMA table_info(themis_principals)`)
+      .all() as Array<{ name: string }>;
+    const principalColumnNames = new Set(principalColumns.map((column) => column.name));
+
+    if (!principalColumnNames.has("principal_kind")) {
+      database.exec(`
+        ALTER TABLE themis_principals
+        ADD COLUMN principal_kind TEXT NOT NULL DEFAULT 'human_user';
+      `);
+    }
+
+    if (!principalColumnNames.has("organization_id")) {
+      database.exec(`
+        ALTER TABLE themis_principals
+        ADD COLUMN organization_id TEXT;
+      `);
+    }
+
+    database.exec(`
+      CREATE INDEX IF NOT EXISTS themis_principals_kind_idx
+      ON themis_principals(principal_kind, updated_at DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_principals_organization_idx
+      ON themis_principals(organization_id, updated_at DESC);
+    `);
+
     this.createSessionHistoryMetadataTables(database);
     this.createTurnInputTables(database);
+    this.createManagedAgentTables(database);
+
+    const agentWorkItemColumns = database
+      .prepare(`PRAGMA table_info(themis_agent_work_items)`)
+      .all() as Array<{ name: string }>;
+    const agentWorkItemColumnNames = new Set(agentWorkItemColumns.map((column) => column.name));
+
+    if (!agentWorkItemColumnNames.has("waiting_action_request_json")) {
+      database.exec(`
+        ALTER TABLE themis_agent_work_items
+        ADD COLUMN waiting_action_request_json TEXT;
+      `);
+    }
+
+    if (!agentWorkItemColumnNames.has("latest_human_response_json")) {
+      database.exec(`
+        ALTER TABLE themis_agent_work_items
+        ADD COLUMN latest_human_response_json TEXT;
+      `);
+    }
+
+    const managedAgentColumns = database
+      .prepare(`PRAGMA table_info(themis_managed_agents)`)
+      .all() as Array<{ name: string }>;
+    const managedAgentColumnNames = new Set(managedAgentColumns.map((column) => column.name));
+
+    if (!managedAgentColumnNames.has("bootstrap_profile_json")) {
+      database.exec(`
+        ALTER TABLE themis_managed_agents
+        ADD COLUMN bootstrap_profile_json TEXT;
+      `);
+    }
+
+    if (!managedAgentColumnNames.has("bootstrapped_at")) {
+      database.exec(`
+        ALTER TABLE themis_managed_agents
+        ADD COLUMN bootstrapped_at TEXT;
+      `);
+    }
 
     const authAccountColumns = database
       .prepare(`PRAGMA table_info(themis_auth_accounts)`)
@@ -5697,6 +8067,9 @@ export class SqliteCodexSessionRegistry {
     if (typeof filter.sourceChannel === "string" && filter.sourceChannel.trim()) {
       groupedClauses.push("source_channel = ?");
       groupedParams.push(filter.sourceChannel.trim());
+    } else if (!options.sessionId) {
+      groupedClauses.push("source_channel <> ?");
+      groupedParams.push(MANAGED_AGENT_INTERNAL_SOURCE_CHANNEL);
     }
 
     if (typeof filter.userId === "string" && filter.userId.trim()) {
@@ -5944,9 +8317,180 @@ function mapAuthAccountRow(row: AuthAccountRow): StoredAuthAccountRecord {
 }
 
 function mapPrincipalRow(row: PrincipalRow): StoredPrincipalRecord {
+  const principalKind = normalizeText(row.principal_kind ?? undefined);
+  const organizationId = normalizeText(row.organization_id ?? undefined);
   return {
     principalId: row.principal_id,
     ...(row.display_name ? { displayName: row.display_name } : {}),
+    ...(principalKind && PRINCIPAL_KINDS.includes(principalKind as PrincipalKind)
+      ? { kind: principalKind as PrincipalKind }
+      : { kind: "human_user" }),
+    ...(organizationId ? { organizationId } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapOrganizationRow(row: OrganizationRow): StoredOrganizationRecord {
+  return {
+    organizationId: row.organization_id,
+    ownerPrincipalId: row.owner_principal_id,
+    displayName: row.display_name,
+    slug: row.slug,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapAgentSpawnPolicyRow(row: AgentSpawnPolicyRow): StoredAgentSpawnPolicyRecord {
+  return {
+    organizationId: row.organization_id,
+    maxActiveAgents: row.max_active_agents,
+    maxActiveAgentsPerRole: row.max_active_agents_per_role,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapAgentSpawnSuggestionStateRow(
+  row: AgentSpawnSuggestionStateRow,
+): StoredAgentSpawnSuggestionStateRecord {
+  return {
+    suggestionId: row.suggestion_id,
+    organizationId: row.organization_id,
+    state: row.state as AgentSpawnSuggestionState,
+    ...(row.payload_json ? { payload: safeParseJson(row.payload_json) } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapManagedAgentRow(row: ManagedAgentRow): StoredManagedAgentRecord {
+  const bootstrapProfile = row.bootstrap_profile_json
+    ? normalizeManagedAgentBootstrapProfile(safeParseJson(row.bootstrap_profile_json))
+    : undefined;
+
+  return {
+    agentId: row.agent_id,
+    principalId: row.principal_id,
+    organizationId: row.organization_id,
+    createdByPrincipalId: row.created_by_principal_id,
+    ...(row.supervisor_principal_id ? { supervisorPrincipalId: row.supervisor_principal_id } : {}),
+    displayName: row.display_name,
+    slug: row.slug,
+    departmentRole: row.department_role,
+    mission: row.mission,
+    status: row.status as ManagedAgentStatus,
+    autonomyLevel: row.autonomy_level as ManagedAgentAutonomyLevel,
+    creationMode: row.creation_mode as ManagedAgentCreationMode,
+    exposurePolicy: row.exposure_policy as ManagedAgentExposurePolicy,
+    ...(bootstrapProfile ? { bootstrapProfile } : {}),
+    ...(row.bootstrapped_at ? { bootstrappedAt: row.bootstrapped_at } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapAgentWorkItemRow(row: AgentWorkItemRow): StoredAgentWorkItemRecord {
+  return {
+    workItemId: row.work_item_id,
+    organizationId: row.organization_id,
+    targetAgentId: row.target_agent_id,
+    sourceType: row.source_type as ManagedAgentWorkItemSourceType,
+    sourcePrincipalId: row.source_principal_id,
+    ...(row.source_agent_id ? { sourceAgentId: row.source_agent_id } : {}),
+    ...(row.parent_work_item_id ? { parentWorkItemId: row.parent_work_item_id } : {}),
+    dispatchReason: row.dispatch_reason,
+    goal: row.goal,
+    ...(row.context_packet_json ? { contextPacket: safeParseJson(row.context_packet_json) } : {}),
+    ...(row.waiting_action_request_json
+      ? { waitingActionRequest: safeParseJson(row.waiting_action_request_json) }
+      : {}),
+    ...(row.latest_human_response_json
+      ? { latestHumanResponse: safeParseJson(row.latest_human_response_json) }
+      : {}),
+    priority: row.priority as ManagedAgentPriority,
+    status: row.status as ManagedAgentWorkItemStatus,
+    ...(row.workspace_policy_snapshot_json
+      ? { workspacePolicySnapshot: safeParseJson(row.workspace_policy_snapshot_json) }
+      : {}),
+    ...(row.runtime_profile_snapshot_json
+      ? { runtimeProfileSnapshot: safeParseJson(row.runtime_profile_snapshot_json) }
+      : {}),
+    createdAt: row.created_at,
+    ...(row.scheduled_at ? { scheduledAt: row.scheduled_at } : {}),
+    ...(row.started_at ? { startedAt: row.started_at } : {}),
+    ...(row.completed_at ? { completedAt: row.completed_at } : {}),
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapAgentRunRow(row: AgentRunRow): StoredAgentRunRecord {
+  return {
+    runId: row.run_id,
+    organizationId: row.organization_id,
+    workItemId: row.work_item_id,
+    targetAgentId: row.target_agent_id,
+    schedulerId: row.scheduler_id,
+    leaseToken: row.lease_token,
+    leaseExpiresAt: row.lease_expires_at,
+    status: row.status as AgentRunStatus,
+    ...(row.started_at ? { startedAt: row.started_at } : {}),
+    ...(row.last_heartbeat_at ? { lastHeartbeatAt: row.last_heartbeat_at } : {}),
+    ...(row.completed_at ? { completedAt: row.completed_at } : {}),
+    ...(row.failure_code ? { failureCode: row.failure_code } : {}),
+    ...(row.failure_message ? { failureMessage: row.failure_message } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapAgentAuditLogRow(row: AgentAuditLogRow): StoredAgentAuditLogRecord {
+  return {
+    auditLogId: row.audit_log_id,
+    organizationId: row.organization_id,
+    eventType: row.event_type as AgentAuditLogEventType,
+    actorPrincipalId: row.actor_principal_id,
+    ...(row.subject_agent_id ? { subjectAgentId: row.subject_agent_id } : {}),
+    ...(row.suggestion_id ? { suggestionId: row.suggestion_id } : {}),
+    summary: row.summary,
+    ...(row.payload_json ? { payload: safeParseJson(row.payload_json) } : {}),
+    createdAt: row.created_at,
+  };
+}
+
+function mapAgentMessageRow(row: AgentMessageRow): StoredAgentMessageRecord {
+  return {
+    messageId: row.message_id,
+    organizationId: row.organization_id,
+    fromAgentId: row.from_agent_id,
+    toAgentId: row.to_agent_id,
+    ...(row.work_item_id ? { workItemId: row.work_item_id } : {}),
+    ...(row.run_id ? { runId: row.run_id } : {}),
+    ...(row.parent_message_id ? { parentMessageId: row.parent_message_id } : {}),
+    messageType: row.message_type as AgentMessageType,
+    ...(row.payload_json ? { payload: safeParseJson(row.payload_json) } : {}),
+    artifactRefs: normalizeStringArray(safeParseJson(row.artifact_refs_json ?? "[]")),
+    priority: row.priority as ManagedAgentPriority,
+    requiresAck: row.requires_ack === 1,
+    createdAt: row.created_at,
+  };
+}
+
+function mapAgentMailboxEntryRow(row: AgentMailboxEntryRow): StoredAgentMailboxEntryRecord {
+  return {
+    mailboxEntryId: row.mailbox_entry_id,
+    organizationId: row.organization_id,
+    ownerAgentId: row.owner_agent_id,
+    messageId: row.message_id,
+    ...(row.work_item_id ? { workItemId: row.work_item_id } : {}),
+    priority: row.priority as ManagedAgentPriority,
+    status: row.status as AgentMailboxStatus,
+    requiresAck: row.requires_ack === 1,
+    availableAt: row.available_at,
+    ...(row.lease_token ? { leaseToken: row.lease_token } : {}),
+    ...(row.leased_at ? { leasedAt: row.leased_at } : {}),
+    ...(row.acked_at ? { ackedAt: row.acked_at } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -6785,6 +9329,18 @@ function dedupeStrings(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return dedupeStrings(value.filter((item): item is string => typeof item === "string"));
+}
+
+function createId(prefix: string): string {
+  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function stringifyJson(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }
@@ -6805,6 +9361,14 @@ function safeParseJson(value: string): unknown {
   } catch {
     return null;
   }
+}
+
+function normalizeManagedAgentBootstrapProfile(value: unknown): ManagedAgentBootstrapProfile | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+
+  return value as ManagedAgentBootstrapProfile;
 }
 
 function normalizeText(value: string | undefined): string | undefined {

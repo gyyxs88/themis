@@ -1,0 +1,1548 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { CodexTaskRuntime } from "../core/codex-runtime.js";
+import type { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
+import {
+  MANAGED_AGENT_IDLE_RECOVERY_ACTIONS,
+  MANAGED_AGENT_PRIORITIES,
+  MANAGED_AGENT_WORK_ITEM_SOURCE_TYPES,
+  type ManagedAgentIdleRecoveryAction,
+  type ManagedAgentPriority,
+  type ManagedAgentWorkItemSourceType,
+} from "../types/index.js";
+import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
+import { readJsonBody } from "./http-request.js";
+import { writeJson } from "./http-responses.js";
+
+interface IdentityPayload {
+  channel: string;
+  channelUserId: string;
+  displayName?: string;
+}
+
+interface AgentCreatePayload extends IdentityPayload {
+  agent: {
+    displayName?: string;
+    departmentRole: string;
+    mission?: string;
+    organizationId?: string;
+    supervisorAgentId?: string;
+  };
+}
+
+interface AgentDetailPayload extends IdentityPayload {
+  agentId: string;
+}
+
+interface AgentSpawnSuggestionsPayload extends IdentityPayload {}
+
+interface AgentIdleRecoverySuggestionsPayload extends IdentityPayload {}
+
+interface AgentSpawnPolicyUpdatePayload extends IdentityPayload {
+  policy: {
+    organizationId?: string;
+    maxActiveAgents: number;
+    maxActiveAgentsPerRole: number;
+  };
+}
+
+interface AgentSpawnApprovePayload extends IdentityPayload {
+  agent: {
+    departmentRole: string;
+    displayName?: string;
+    mission?: string;
+    organizationId?: string;
+    supervisorAgentId?: string;
+  };
+}
+
+interface AgentSpawnSuggestionActionPayload extends IdentityPayload {
+  suggestion: {
+    suggestionId: string;
+    organizationId: string;
+    departmentRole: string;
+    displayName: string;
+    mission?: string;
+    rationale?: string;
+    supportingAgentId?: string;
+    supportingAgentDisplayName?: string;
+    suggestedSupervisorAgentId?: string;
+    openWorkItemCount?: number;
+    waitingWorkItemCount?: number;
+    highPriorityWorkItemCount?: number;
+    spawnPolicy?: unknown;
+    guardrail?: unknown;
+    auditFacts?: unknown;
+  };
+}
+
+interface AgentSpawnSuggestionRestorePayload extends IdentityPayload {
+  suggestion: {
+    suggestionId: string;
+    organizationId?: string;
+  };
+}
+
+interface AgentIdleRecoveryApprovePayload extends IdentityPayload {
+  suggestion: {
+    suggestionId: string;
+    organizationId?: string;
+    agentId: string;
+    action: ManagedAgentIdleRecoveryAction;
+  };
+}
+
+interface AgentLifecyclePayload extends IdentityPayload {
+  agentId: string;
+}
+
+interface AgentDispatchPayload extends IdentityPayload {
+  workItem: {
+    targetAgentId: string;
+    sourceType?: ManagedAgentWorkItemSourceType;
+    sourceAgentId?: string;
+    sourcePrincipalId?: string;
+    parentWorkItemId?: string;
+    dispatchReason: string;
+    goal: string;
+    contextPacket?: unknown;
+    priority?: ManagedAgentPriority;
+    workspacePolicySnapshot?: unknown;
+    runtimeProfileSnapshot?: unknown;
+    scheduledAt?: string;
+  };
+}
+
+interface WorkItemListPayload extends IdentityPayload {
+  agentId?: string;
+}
+
+interface WorkItemDetailPayload extends IdentityPayload {
+  workItemId: string;
+}
+
+interface WorkItemCancelPayload extends IdentityPayload {
+  workItemId: string;
+}
+
+interface WaitingQueueListPayload extends IdentityPayload {}
+
+interface WorkItemRespondPayload extends IdentityPayload {
+  workItemId: string;
+  response: {
+    decision?: "approve" | "deny";
+    inputText?: string;
+    payload?: unknown;
+    artifactRefs?: string[];
+  };
+}
+
+interface WorkItemEscalatePayload extends IdentityPayload {
+  workItemId: string;
+  escalation?: {
+    inputText?: string;
+  };
+}
+
+interface AgentRunListPayload extends IdentityPayload {
+  agentId?: string;
+  workItemId?: string;
+}
+
+interface AgentRunDetailPayload extends IdentityPayload {
+  runId: string;
+}
+
+interface MailboxListPayload extends IdentityPayload {
+  agentId: string;
+}
+
+interface MailboxPullPayload extends IdentityPayload {
+  agentId: string;
+}
+
+interface MailboxAckPayload extends IdentityPayload {
+  agentId: string;
+  mailboxEntryId: string;
+}
+
+interface MailboxRespondPayload extends IdentityPayload {
+  agentId: string;
+  mailboxEntryId: string;
+  response: {
+    decision?: "approve" | "deny";
+    inputText?: string;
+    payload?: unknown;
+    artifactRefs?: string[];
+    priority?: ManagedAgentPriority;
+  };
+}
+
+async function readAndNormalizePayload<T>(
+  request: IncomingMessage,
+  response: ServerResponse,
+  normalize: (value: unknown) => T,
+): Promise<T | null> {
+  try {
+    return normalize(await readJsonBody(request));
+  } catch (error) {
+    writeJson(response, resolveErrorStatusCode(error, false), {
+      error: createTaskError(error, false),
+    });
+    return null;
+  }
+}
+
+function writeRuntimeError(response: ServerResponse, error: unknown): void {
+  writeJson(response, resolveErrorStatusCode(error, true), {
+    error: createTaskError(error, true),
+  });
+}
+
+function writeManagedAgentBoundaryError(response: ServerResponse, error: unknown): void {
+  if (
+    error instanceof Error
+    && (
+      error.message === "Managed agent does not exist."
+      || error.message === "Organization does not exist."
+      || error.message === "Supervisor agent does not exist."
+      || error.message === "Work item does not exist."
+      || error.message === "Agent run does not exist."
+      || error.message === "Mailbox entry does not exist."
+      || error.message === "Mailbox entry is already acked."
+      || error.message === "Agent message does not exist."
+      || error.message === "Mailbox response to approval_request requires decision."
+      || error.message === "Mailbox response requires inputText or payload."
+      || error.message === "Work item is not waiting for human input."
+      || error.message === "Work item is not waiting for agent input."
+      || error.message === "Completed or failed work item cannot be cancelled."
+      || error.message === "Work item has active runs and cannot be cancelled yet."
+      || error.message === "Managed agent is not active."
+      || error.message === "Archived managed agent cannot be paused."
+      || error.message === "Archived managed agent cannot be resumed."
+      || error.message === "maxActiveAgents must be a positive integer."
+      || error.message === "maxActiveAgentsPerRole must be a positive integer."
+      || error.message === "maxActiveAgentsPerRole cannot exceed maxActiveAgents."
+      || error.message === "Human response to approval waiting requires decision."
+      || error.message === "Human response requires decision, inputText, payload, or artifactRefs."
+      || error.message === "Only agent-sourced work items may set sourceAgentId."
+      || error.message === "Source principal id must match the source agent principal."
+      || error.message === "Dispatch message target agent must match the work item target."
+      || error.message === "当前组织已达到活跃 agent 数量上限。"
+      || error.message.endsWith("角色已达到活跃 agent 上限。")
+      || error.message === "Suggestion id is required."
+      || error.message === "Display name is required."
+      || error.message === "Suppressed spawn suggestion does not exist."
+      || error.message === "Idle recovery suggestion no longer applies."
+    )
+  ) {
+    writeJson(response, 400, {
+      error: createTaskError(error, false),
+    });
+    return;
+  }
+
+  writeRuntimeError(response, error);
+}
+
+export async function handleAgentCreate(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeAgentCreatePayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const createInput = {
+      ownerPrincipalId: identity.principalId,
+      departmentRole: payload.agent.departmentRole,
+      ...(payload.agent.displayName ? { displayName: payload.agent.displayName } : {}),
+      ...(payload.agent.mission ? { mission: payload.agent.mission } : {}),
+      ...(payload.agent.organizationId ? { organizationId: payload.agent.organizationId } : {}),
+      ...(payload.agent.supervisorAgentId ? { supervisorAgentId: payload.agent.supervisorAgentId } : {}),
+    };
+    const result = runtime.getManagedAgentsService().createManagedAgent(createInput);
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      organization: result.organization,
+      principal: result.principal,
+      agent: result.agent,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentList(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeIdentityPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const organizations = runtime.getManagedAgentsService().listOrganizations(identity.principalId);
+    const agents = runtime.getManagedAgentsService().listManagedAgents(identity.principalId);
+
+    writeJson(response, 200, {
+      identity,
+      organizations,
+      agents,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentDetail(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeAgentDetailPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const agent = runtime.getManagedAgentsService().getManagedAgent(identity.principalId, payload.agentId);
+
+    if (!agent) {
+      throw new Error("Managed agent does not exist.");
+    }
+
+    const principal = runtime.getRuntimeStore().getPrincipal(agent.principalId);
+    const organization = runtime.getRuntimeStore().getOrganization(agent.organizationId);
+
+    writeJson(response, 200, {
+      identity,
+      organization,
+      principal,
+      agent,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+async function handleAgentLifecycleUpdate(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+  action: "pause" | "resume" | "archive",
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeAgentLifecyclePayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const service = runtime.getManagedAgentsService();
+    const agent = action === "pause"
+      ? service.pauseManagedAgent(identity.principalId, payload.agentId)
+      : action === "resume"
+        ? service.resumeManagedAgent(identity.principalId, payload.agentId)
+        : service.archiveManagedAgent(identity.principalId, payload.agentId);
+    const principal = runtime.getRuntimeStore().getPrincipal(agent.principalId);
+    const organization = runtime.getRuntimeStore().getOrganization(agent.organizationId);
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      organization,
+      principal,
+      agent,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentSpawnSuggestions(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeAgentSpawnSuggestionsPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const suggestions = runtime.getManagedAgentsService().listSpawnSuggestions(identity.principalId);
+    const suppressedSuggestions = runtime.getManagedAgentsService().listSuppressedSpawnSuggestions(identity.principalId);
+    const spawnPolicies = runtime.getManagedAgentsService().listSpawnPolicies(identity.principalId);
+    const recentAuditLogs = runtime.getManagedAgentsService().listSpawnAuditLogs(identity.principalId);
+
+    writeJson(response, 200, {
+      identity,
+      spawnPolicies,
+      suggestions,
+      suppressedSuggestions,
+      recentAuditLogs,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentIdleRecoverySuggestions(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeAgentIdleRecoverySuggestionsPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const suggestions = runtime.getManagedAgentsService().listIdleRecoverySuggestions(identity.principalId);
+    const recentAuditLogs = runtime.getManagedAgentsService().listIdleRecoveryAuditLogs(identity.principalId);
+
+    writeJson(response, 200, {
+      identity,
+      suggestions,
+      recentAuditLogs,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentSpawnPolicyUpdate(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeAgentSpawnPolicyUpdatePayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const policy = runtime.getManagedAgentsService().updateSpawnPolicy({
+      ownerPrincipalId: identity.principalId,
+      ...(payload.policy.organizationId ? { organizationId: payload.policy.organizationId } : {}),
+      maxActiveAgents: payload.policy.maxActiveAgents,
+      maxActiveAgentsPerRole: payload.policy.maxActiveAgentsPerRole,
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      policy,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentSpawnApprove(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeAgentSpawnApprovePayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = runtime.getManagedAgentsService().approveSpawnSuggestion({
+      ownerPrincipalId: identity.principalId,
+      departmentRole: payload.agent.departmentRole,
+      ...(payload.agent.displayName ? { displayName: payload.agent.displayName } : {}),
+      ...(payload.agent.mission ? { mission: payload.agent.mission } : {}),
+      ...(payload.agent.organizationId ? { organizationId: payload.agent.organizationId } : {}),
+      ...(payload.agent.supervisorAgentId ? { supervisorAgentId: payload.agent.supervisorAgentId } : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      organization: result.organization,
+      principal: result.principal,
+      agent: result.agent,
+      bootstrapWorkItem: result.bootstrapWorkItem,
+      auditLog: result.auditLog,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+async function handleAgentSpawnSuggestionDecision(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+  action: "ignore" | "reject",
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeAgentSpawnSuggestionActionPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = action === "ignore"
+      ? runtime.getManagedAgentsService().ignoreSpawnSuggestion({
+        ownerPrincipalId: identity.principalId,
+        ...payload.suggestion,
+      })
+      : runtime.getManagedAgentsService().rejectSpawnSuggestion({
+        ownerPrincipalId: identity.principalId,
+        ...payload.suggestion,
+      });
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      suppressedSuggestion: result.suppressedSuggestion,
+      auditLog: result.auditLog,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentSpawnIgnore(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  await handleAgentSpawnSuggestionDecision(request, response, runtime, "ignore");
+}
+
+export async function handleAgentSpawnReject(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  await handleAgentSpawnSuggestionDecision(request, response, runtime, "reject");
+}
+
+export async function handleAgentSpawnRestore(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeAgentSpawnSuggestionRestorePayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const auditLog = runtime.getManagedAgentsService().restoreSpawnSuggestion({
+      ownerPrincipalId: identity.principalId,
+      suggestionId: payload.suggestion.suggestionId,
+      ...(payload.suggestion.organizationId ? { organizationId: payload.suggestion.organizationId } : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      auditLog,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentIdleRecoveryApprove(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeAgentIdleRecoveryApprovePayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = runtime.getManagedAgentsService().approveIdleRecoverySuggestion({
+      ownerPrincipalId: identity.principalId,
+      suggestionId: payload.suggestion.suggestionId,
+      ...(payload.suggestion.organizationId ? { organizationId: payload.suggestion.organizationId } : {}),
+      agentId: payload.suggestion.agentId,
+      action: payload.suggestion.action,
+    });
+    const principal = runtime.getRuntimeStore().getPrincipal(result.agent.principalId);
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      organization: result.organization,
+      principal,
+      agent: result.agent,
+      auditLog: result.auditLog,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentPause(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  await handleAgentLifecycleUpdate(request, response, runtime, "pause");
+}
+
+export async function handleAgentResume(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  await handleAgentLifecycleUpdate(request, response, runtime, "resume");
+}
+
+export async function handleAgentArchive(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  await handleAgentLifecycleUpdate(request, response, runtime, "archive");
+}
+
+export async function handleAgentDispatch(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeAgentDispatchPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = runtime.getManagedAgentCoordinationService().dispatchWorkItem({
+      ownerPrincipalId: identity.principalId,
+      targetAgentId: payload.workItem.targetAgentId,
+      ...(payload.workItem.sourceType ? { sourceType: payload.workItem.sourceType } : {}),
+      ...(payload.workItem.sourceAgentId ? { sourceAgentId: payload.workItem.sourceAgentId } : {}),
+      ...(payload.workItem.sourcePrincipalId ? { sourcePrincipalId: payload.workItem.sourcePrincipalId } : {}),
+      ...(payload.workItem.parentWorkItemId ? { parentWorkItemId: payload.workItem.parentWorkItemId } : {}),
+      dispatchReason: payload.workItem.dispatchReason,
+      goal: payload.workItem.goal,
+      ...(hasOwn(payload.workItem, "contextPacket") ? { contextPacket: payload.workItem.contextPacket } : {}),
+      ...(payload.workItem.priority ? { priority: payload.workItem.priority } : {}),
+      ...(hasOwn(payload.workItem, "workspacePolicySnapshot")
+        ? { workspacePolicySnapshot: payload.workItem.workspacePolicySnapshot }
+        : {}),
+      ...(hasOwn(payload.workItem, "runtimeProfileSnapshot")
+        ? { runtimeProfileSnapshot: payload.workItem.runtimeProfileSnapshot }
+        : {}),
+      ...(payload.workItem.scheduledAt ? { scheduledAt: payload.workItem.scheduledAt } : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      organization: result.organization,
+      targetAgent: result.targetAgent,
+      workItem: result.workItem,
+      ...(result.dispatchMessage ? { dispatchMessage: result.dispatchMessage } : {}),
+      ...(result.mailboxEntry ? { mailboxEntry: result.mailboxEntry } : {}),
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentWorkItemList(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeWorkItemListPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const workItems = runtime.getManagedAgentCoordinationService().listWorkItems(
+      identity.principalId,
+      payload.agentId,
+    );
+
+    writeJson(response, 200, {
+      identity,
+      workItems,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentWaitingQueueList(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeWaitingQueueListPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = runtime.getManagedAgentCoordinationService().listOrganizationWaitingQueue(identity.principalId);
+
+    writeJson(response, 200, {
+      identity,
+      summary: result.summary,
+      items: result.items,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentWorkItemDetail(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeWorkItemDetailPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const workItem = runtime.getManagedAgentCoordinationService().getWorkItem(identity.principalId, payload.workItemId);
+
+    if (!workItem) {
+      throw new Error("Work item does not exist.");
+    }
+
+    const targetAgent = runtime.getRuntimeStore().getManagedAgent(workItem.targetAgentId);
+    const sourceAgent = workItem.sourceAgentId
+      ? runtime.getRuntimeStore().getManagedAgent(workItem.sourceAgentId)
+      : null;
+    const sourcePrincipal = runtime.getRuntimeStore().getPrincipal(workItem.sourcePrincipalId);
+    const organization = runtime.getRuntimeStore().getOrganization(workItem.organizationId);
+    const messages = runtime.getManagedAgentCoordinationService().listMessagesForWorkItem(
+      identity.principalId,
+      workItem.workItemId,
+    );
+
+    writeJson(response, 200, {
+      identity,
+      organization,
+      workItem,
+      targetAgent,
+      sourcePrincipal,
+      ...(sourceAgent ? { sourceAgent } : {}),
+      messages,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentWorkItemCancel(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+  executionService: ManagedAgentExecutionService,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeWorkItemCancelPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = await executionService.cancelWorkItem({
+      ownerPrincipalId: identity.principalId,
+      workItemId: payload.workItemId,
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      organization: result.organization,
+      targetAgent: result.targetAgent,
+      workItem: result.workItem,
+      ackedMailboxEntries: result.ackedMailboxEntries,
+      ...(result.notificationMessage ? { notificationMessage: result.notificationMessage } : {}),
+      ...(result.notificationMailboxEntry ? { notificationMailboxEntry: result.notificationMailboxEntry } : {}),
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentWorkItemRespond(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeWorkItemRespondPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = runtime.getManagedAgentCoordinationService().respondToHumanWaitingWorkItem({
+      ownerPrincipalId: identity.principalId,
+      workItemId: payload.workItemId,
+      ...(payload.response.decision ? { decision: payload.response.decision } : {}),
+      ...(payload.response.inputText ? { inputText: payload.response.inputText } : {}),
+      ...(hasOwn(payload.response, "payload") ? { payload: payload.response.payload } : {}),
+      ...(payload.response.artifactRefs ? { artifactRefs: payload.response.artifactRefs } : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      organization: result.organization,
+      targetAgent: result.targetAgent,
+      workItem: result.workItem,
+      resumedRuns: result.resumedRuns,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentWorkItemEscalate(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeWorkItemEscalatePayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = runtime.getManagedAgentCoordinationService().escalateWaitingAgentWorkItemToHuman({
+      ownerPrincipalId: identity.principalId,
+      workItemId: payload.workItemId,
+      ...(payload.escalation?.inputText ? { inputText: payload.escalation.inputText } : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      organization: result.organization,
+      targetAgent: result.targetAgent,
+      workItem: result.workItem,
+      latestWaitingMessage: result.latestWaitingMessage,
+      ackedMailboxEntries: result.ackedMailboxEntries,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentRunList(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeAgentRunListPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const runs = runtime.getManagedAgentSchedulerService().listRuns({
+      ownerPrincipalId: identity.principalId,
+      ...(payload.agentId ? { agentId: payload.agentId } : {}),
+      ...(payload.workItemId ? { workItemId: payload.workItemId } : {}),
+    });
+
+    writeJson(response, 200, {
+      identity,
+      runs,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentRunDetail(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeAgentRunDetailPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const run = runtime.getManagedAgentSchedulerService().getRun(identity.principalId, payload.runId);
+
+    if (!run) {
+      throw new Error("Agent run does not exist.");
+    }
+
+    const workItem = runtime.getRuntimeStore().getAgentWorkItem(run.workItemId);
+    const targetAgent = runtime.getRuntimeStore().getManagedAgent(run.targetAgentId);
+    const organization = runtime.getRuntimeStore().getOrganization(run.organizationId);
+
+    writeJson(response, 200, {
+      identity,
+      organization,
+      run,
+      workItem,
+      targetAgent,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentMailboxList(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeMailboxListPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const items = runtime.getManagedAgentCoordinationService().listMailbox(identity.principalId, payload.agentId);
+    const agent = runtime.getRuntimeStore().getManagedAgent(payload.agentId);
+
+    writeJson(response, 200, {
+      identity,
+      agent,
+      items,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentMailboxPull(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeMailboxPullPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = runtime.getManagedAgentCoordinationService().pullMailboxEntry(identity.principalId, payload.agentId);
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      agent: result.agent,
+      ...(result.item ? { item: result.item } : { item: null }),
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentMailboxAck(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeMailboxAckPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const mailboxEntry = runtime.getManagedAgentCoordinationService().ackMailboxEntry(
+      identity.principalId,
+      payload.agentId,
+      payload.mailboxEntryId,
+    );
+    const agent = runtime.getRuntimeStore().getManagedAgent(payload.agentId);
+    const message = runtime.getRuntimeStore().getAgentMessage(mailboxEntry.messageId);
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      agent,
+      mailboxEntry,
+      ...(message ? { message } : {}),
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentMailboxRespond(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeMailboxRespondPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = runtime.getManagedAgentCoordinationService().respondToMailboxEntry({
+      ownerPrincipalId: identity.principalId,
+      agentId: payload.agentId,
+      mailboxEntryId: payload.mailboxEntryId,
+      ...(payload.response.decision ? { decision: payload.response.decision } : {}),
+      ...(payload.response.inputText ? { inputText: payload.response.inputText } : {}),
+      ...(hasOwn(payload.response, "payload") ? { payload: payload.response.payload } : {}),
+      ...(payload.response.artifactRefs ? { artifactRefs: payload.response.artifactRefs } : {}),
+      ...(payload.response.priority ? { priority: payload.response.priority } : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      identity,
+      agent: result.agent,
+      organization: result.organization,
+      sourceMailboxEntry: result.sourceMailboxEntry,
+      sourceMessage: result.sourceMessage,
+      responseMessage: result.responseMessage,
+      responseMailboxEntry: result.responseMailboxEntry,
+      resumedRuns: result.resumedRuns,
+      ...(result.resumedWorkItem ? { resumedWorkItem: result.resumedWorkItem } : {}),
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+function normalizeIdentityPayload(value: unknown): IdentityPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  const channel = readRequiredString(value.channel, "channel");
+  const channelUserId = readRequiredString(value.channelUserId, "channelUserId");
+  const displayName = readOptionalString(value.displayName);
+
+  return {
+    channel,
+    channelUserId,
+    ...(displayName ? { displayName } : {}),
+  };
+}
+
+function normalizeAgentCreatePayload(value: unknown): AgentCreatePayload {
+  if (!isRecord(value) || !isRecord(value.agent)) {
+    throw new Error("Request body.agent must be an object.");
+  }
+
+  const displayName = readOptionalString(value.agent.displayName);
+  const mission = readOptionalString(value.agent.mission);
+  const organizationId = readOptionalString(value.agent.organizationId);
+  const supervisorAgentId = readOptionalString(value.agent.supervisorAgentId);
+
+  return {
+    ...normalizeIdentityPayload(value),
+    agent: {
+      ...(displayName ? { displayName } : {}),
+      departmentRole: readRequiredString(value.agent.departmentRole, "agent.departmentRole"),
+      ...(mission ? { mission } : {}),
+      ...(organizationId ? { organizationId } : {}),
+      ...(supervisorAgentId ? { supervisorAgentId } : {}),
+    },
+  };
+}
+
+function normalizeAgentDetailPayload(value: unknown): AgentDetailPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return {
+    ...normalizeIdentityPayload(value),
+    agentId: readRequiredString(value.agentId, "agentId"),
+  };
+}
+
+function normalizeAgentSpawnSuggestionsPayload(value: unknown): AgentSpawnSuggestionsPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return normalizeIdentityPayload(value);
+}
+
+function normalizeAgentIdleRecoverySuggestionsPayload(value: unknown): AgentIdleRecoverySuggestionsPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return normalizeIdentityPayload(value);
+}
+
+function normalizeAgentSpawnPolicyUpdatePayload(value: unknown): AgentSpawnPolicyUpdatePayload {
+  if (!isRecord(value) || !isRecord(value.policy)) {
+    throw new Error("Request body.policy must be an object.");
+  }
+
+  return {
+    ...normalizeIdentityPayload(value),
+    policy: {
+      ...(readOptionalString(value.policy.organizationId) ? { organizationId: readOptionalString(value.policy.organizationId) as string } : {}),
+      maxActiveAgents: readRequiredPositiveInteger(value.policy.maxActiveAgents, "policy.maxActiveAgents"),
+      maxActiveAgentsPerRole: readRequiredPositiveInteger(
+        value.policy.maxActiveAgentsPerRole,
+        "policy.maxActiveAgentsPerRole",
+      ),
+    },
+  };
+}
+
+function normalizeAgentSpawnApprovePayload(value: unknown): AgentSpawnApprovePayload {
+  if (!isRecord(value) || !isRecord(value.agent)) {
+    throw new Error("Request body.agent must be an object.");
+  }
+
+  const displayName = readOptionalString(value.agent.displayName);
+  const mission = readOptionalString(value.agent.mission);
+  const organizationId = readOptionalString(value.agent.organizationId);
+  const supervisorAgentId = readOptionalString(value.agent.supervisorAgentId);
+
+  return {
+    ...normalizeIdentityPayload(value),
+    agent: {
+      departmentRole: readRequiredString(value.agent.departmentRole, "agent.departmentRole"),
+      ...(displayName ? { displayName } : {}),
+      ...(mission ? { mission } : {}),
+      ...(organizationId ? { organizationId } : {}),
+      ...(supervisorAgentId ? { supervisorAgentId } : {}),
+    },
+  };
+}
+
+function normalizeAgentSpawnSuggestionActionPayload(value: unknown): AgentSpawnSuggestionActionPayload {
+  if (!isRecord(value) || !isRecord(value.suggestion)) {
+    throw new Error("Request body.suggestion must be an object.");
+  }
+
+  return {
+    ...normalizeIdentityPayload(value),
+    suggestion: {
+      suggestionId: readRequiredString(value.suggestion.suggestionId, "suggestion.suggestionId"),
+      organizationId: readRequiredString(value.suggestion.organizationId, "suggestion.organizationId"),
+      departmentRole: readRequiredString(value.suggestion.departmentRole, "suggestion.departmentRole"),
+      displayName: readRequiredString(value.suggestion.displayName, "suggestion.displayName"),
+      ...(readOptionalString(value.suggestion.mission) ? { mission: readOptionalString(value.suggestion.mission) as string } : {}),
+      ...(readOptionalString(value.suggestion.rationale) ? { rationale: readOptionalString(value.suggestion.rationale) as string } : {}),
+      ...(readOptionalString(value.suggestion.supportingAgentId)
+        ? { supportingAgentId: readOptionalString(value.suggestion.supportingAgentId) as string }
+        : {}),
+      ...(readOptionalString(value.suggestion.supportingAgentDisplayName)
+        ? { supportingAgentDisplayName: readOptionalString(value.suggestion.supportingAgentDisplayName) as string }
+        : {}),
+      ...(readOptionalString(value.suggestion.suggestedSupervisorAgentId)
+        ? { suggestedSupervisorAgentId: readOptionalString(value.suggestion.suggestedSupervisorAgentId) as string }
+        : {}),
+      ...(typeof value.suggestion.openWorkItemCount === "number"
+        ? { openWorkItemCount: value.suggestion.openWorkItemCount }
+        : {}),
+      ...(typeof value.suggestion.waitingWorkItemCount === "number"
+        ? { waitingWorkItemCount: value.suggestion.waitingWorkItemCount }
+        : {}),
+      ...(typeof value.suggestion.highPriorityWorkItemCount === "number"
+        ? { highPriorityWorkItemCount: value.suggestion.highPriorityWorkItemCount }
+        : {}),
+      ...(hasOwn(value.suggestion, "spawnPolicy") ? { spawnPolicy: value.suggestion.spawnPolicy } : {}),
+      ...(hasOwn(value.suggestion, "guardrail") ? { guardrail: value.suggestion.guardrail } : {}),
+      ...(hasOwn(value.suggestion, "auditFacts") ? { auditFacts: value.suggestion.auditFacts } : {}),
+    },
+  };
+}
+
+function normalizeAgentSpawnSuggestionRestorePayload(value: unknown): AgentSpawnSuggestionRestorePayload {
+  if (!isRecord(value) || !isRecord(value.suggestion)) {
+    throw new Error("Request body.suggestion must be an object.");
+  }
+
+  return {
+    ...normalizeIdentityPayload(value),
+    suggestion: {
+      suggestionId: readRequiredString(value.suggestion.suggestionId, "suggestion.suggestionId"),
+      ...(readOptionalString(value.suggestion.organizationId)
+        ? { organizationId: readOptionalString(value.suggestion.organizationId) as string }
+        : {}),
+    },
+  };
+}
+
+function normalizeAgentIdleRecoveryApprovePayload(value: unknown): AgentIdleRecoveryApprovePayload {
+  if (!isRecord(value) || !isRecord(value.suggestion)) {
+    throw new Error("Request body.suggestion must be an object.");
+  }
+
+  return {
+    ...normalizeIdentityPayload(value),
+    suggestion: {
+      suggestionId: readRequiredString(value.suggestion.suggestionId, "suggestion.suggestionId"),
+      ...(readOptionalString(value.suggestion.organizationId)
+        ? { organizationId: readOptionalString(value.suggestion.organizationId) as string }
+        : {}),
+      agentId: readRequiredString(value.suggestion.agentId, "suggestion.agentId"),
+      action: readRequiredEnum(
+        value.suggestion.action,
+        MANAGED_AGENT_IDLE_RECOVERY_ACTIONS,
+        "suggestion.action",
+      ),
+    },
+  };
+}
+
+function normalizeAgentLifecyclePayload(value: unknown): AgentLifecyclePayload {
+  return normalizeAgentDetailPayload(value);
+}
+
+function normalizeAgentDispatchPayload(value: unknown): AgentDispatchPayload {
+  if (!isRecord(value) || !isRecord(value.workItem)) {
+    throw new Error("Request body.workItem must be an object.");
+  }
+
+  const sourceAgentId = readOptionalString(value.workItem.sourceAgentId);
+  const sourcePrincipalId = readOptionalString(value.workItem.sourcePrincipalId);
+  const parentWorkItemId = readOptionalString(value.workItem.parentWorkItemId);
+  const scheduledAt = readOptionalString(value.workItem.scheduledAt);
+  const sourceType = readOptionalEnum(
+    value.workItem.sourceType,
+    MANAGED_AGENT_WORK_ITEM_SOURCE_TYPES,
+    "workItem.sourceType",
+  );
+  const priority = readOptionalEnum(
+    value.workItem.priority,
+    MANAGED_AGENT_PRIORITIES,
+    "workItem.priority",
+  );
+
+  return {
+    ...normalizeIdentityPayload(value),
+    workItem: {
+      targetAgentId: readRequiredString(value.workItem.targetAgentId, "workItem.targetAgentId"),
+      ...(sourceType ? { sourceType } : {}),
+      ...(sourceAgentId ? { sourceAgentId } : {}),
+      ...(sourcePrincipalId ? { sourcePrincipalId } : {}),
+      ...(parentWorkItemId ? { parentWorkItemId } : {}),
+      dispatchReason: readRequiredString(value.workItem.dispatchReason, "workItem.dispatchReason"),
+      goal: readRequiredString(value.workItem.goal, "workItem.goal"),
+      ...(hasOwn(value.workItem, "contextPacket") ? { contextPacket: value.workItem.contextPacket } : {}),
+      ...(priority ? { priority } : {}),
+      ...(hasOwn(value.workItem, "workspacePolicySnapshot")
+        ? { workspacePolicySnapshot: value.workItem.workspacePolicySnapshot }
+        : {}),
+      ...(hasOwn(value.workItem, "runtimeProfileSnapshot")
+        ? { runtimeProfileSnapshot: value.workItem.runtimeProfileSnapshot }
+        : {}),
+      ...(scheduledAt ? { scheduledAt } : {}),
+    },
+  };
+}
+
+function normalizeWorkItemListPayload(value: unknown): WorkItemListPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  const agentId = readOptionalString(value.agentId);
+
+  return {
+    ...normalizeIdentityPayload(value),
+    ...(agentId ? { agentId } : {}),
+  };
+}
+
+function normalizeWaitingQueueListPayload(value: unknown): WaitingQueueListPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return normalizeIdentityPayload(value);
+}
+
+function normalizeWorkItemDetailPayload(value: unknown): WorkItemDetailPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return {
+    ...normalizeIdentityPayload(value),
+    workItemId: readRequiredString(value.workItemId, "workItemId"),
+  };
+}
+
+function normalizeWorkItemCancelPayload(value: unknown): WorkItemCancelPayload {
+  return normalizeWorkItemDetailPayload(value);
+}
+
+function normalizeWorkItemRespondPayload(value: unknown): WorkItemRespondPayload {
+  if (!isRecord(value) || !isRecord(value.response)) {
+    throw new Error("Request body.response must be an object.");
+  }
+
+  const decision = readOptionalEnum(
+    value.response.decision,
+    ["approve", "deny"] as const,
+    "response.decision",
+  );
+  const inputText = readOptionalString(value.response.inputText);
+  const artifactRefs = Array.isArray(value.response.artifactRefs)
+    ? value.response.artifactRefs
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+    : undefined;
+
+  return {
+    ...normalizeIdentityPayload(value),
+    workItemId: readRequiredString(value.workItemId, "workItemId"),
+    response: {
+      ...(decision ? { decision } : {}),
+      ...(inputText ? { inputText } : {}),
+      ...(hasOwn(value.response, "payload") ? { payload: value.response.payload } : {}),
+      ...(artifactRefs?.length ? { artifactRefs } : {}),
+    },
+  };
+}
+
+function normalizeMailboxListPayload(value: unknown): MailboxListPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return {
+    ...normalizeIdentityPayload(value),
+    agentId: readRequiredString(value.agentId, "agentId"),
+  };
+}
+
+function normalizeMailboxPullPayload(value: unknown): MailboxPullPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return {
+    ...normalizeIdentityPayload(value),
+    agentId: readRequiredString(value.agentId, "agentId"),
+  };
+}
+
+function normalizeWorkItemEscalatePayload(value: unknown): WorkItemEscalatePayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  const escalation = isRecord(value.escalation)
+    ? {
+        ...(readOptionalString(value.escalation.inputText)
+          ? { inputText: readOptionalString(value.escalation.inputText) as string }
+          : {}),
+      }
+    : undefined;
+
+  return {
+    ...normalizeIdentityPayload(value),
+    workItemId: readRequiredString(value.workItemId, "workItemId"),
+    ...(escalation ? { escalation } : {}),
+  };
+}
+
+function normalizeAgentRunListPayload(value: unknown): AgentRunListPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  const agentId = readOptionalString(value.agentId);
+  const workItemId = readOptionalString(value.workItemId);
+
+  return {
+    ...normalizeIdentityPayload(value),
+    ...(agentId ? { agentId } : {}),
+    ...(workItemId ? { workItemId } : {}),
+  };
+}
+
+function normalizeAgentRunDetailPayload(value: unknown): AgentRunDetailPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return {
+    ...normalizeIdentityPayload(value),
+    runId: readRequiredString(value.runId, "runId"),
+  };
+}
+
+function normalizeMailboxAckPayload(value: unknown): MailboxAckPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return {
+    ...normalizeIdentityPayload(value),
+    agentId: readRequiredString(value.agentId, "agentId"),
+    mailboxEntryId: readRequiredString(value.mailboxEntryId, "mailboxEntryId"),
+  };
+}
+
+function normalizeMailboxRespondPayload(value: unknown): MailboxRespondPayload {
+  if (!isRecord(value) || !isRecord(value.response)) {
+    throw new Error("Request body.response must be an object.");
+  }
+
+  const decision = readOptionalEnum(
+    value.response.decision,
+    ["approve", "deny"] as const,
+    "response.decision",
+  );
+  const inputText = readOptionalString(value.response.inputText);
+  const priority = readOptionalEnum(
+    value.response.priority,
+    MANAGED_AGENT_PRIORITIES,
+    "response.priority",
+  );
+  const artifactRefs = Array.isArray(value.response.artifactRefs)
+    ? value.response.artifactRefs
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+    : undefined;
+
+  return {
+    ...normalizeIdentityPayload(value),
+    agentId: readRequiredString(value.agentId, "agentId"),
+    mailboxEntryId: readRequiredString(value.mailboxEntryId, "mailboxEntryId"),
+    response: {
+      ...(decision ? { decision } : {}),
+      ...(inputText ? { inputText } : {}),
+      ...(hasOwn(value.response, "payload") ? { payload: value.response.payload } : {}),
+      ...(artifactRefs?.length ? { artifactRefs } : {}),
+      ...(priority ? { priority } : {}),
+    },
+  };
+}
+
+function readRequiredString(value: unknown, fieldName: string): string {
+  const normalized = readOptionalString(value);
+
+  if (!normalized) {
+    throw new Error(`${fieldName} is required.`);
+  }
+
+  return normalized;
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function readOptionalEnum<T extends readonly string[]>(
+  value: unknown,
+  candidates: T,
+  fieldName: string,
+): T[number] | undefined {
+  const normalized = readOptionalString(value);
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (!candidates.includes(normalized)) {
+    throw new Error(`${fieldName} is invalid.`);
+  }
+
+  return normalized as T[number];
+}
+
+function readRequiredEnum<T extends readonly string[]>(
+  value: unknown,
+  candidates: T,
+  fieldName: string,
+): T[number] {
+  const normalized = readOptionalEnum(value, candidates, fieldName);
+
+  if (!normalized) {
+    throw new Error(`${fieldName} is required.`);
+  }
+
+  return normalized;
+}
+
+function readRequiredPositiveInteger(value: unknown, fieldName: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${fieldName} is invalid.`);
+  }
+
+  return value;
+}
+
+function hasOwn(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}

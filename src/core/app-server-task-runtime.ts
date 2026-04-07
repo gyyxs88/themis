@@ -34,6 +34,9 @@ import {
 } from "./codex-app-server.js";
 import { translateAppServerNotification } from "./app-server-event-translator.js";
 import { ConversationService } from "./conversation-service.js";
+import { ManagedAgentCoordinationService } from "./managed-agent-coordination-service.js";
+import { ManagedAgentsService } from "./managed-agents-service.js";
+import { ManagedAgentSchedulerService } from "./managed-agent-scheduler-service.js";
 import {
   buildStoredTurnInputCompileSummary,
   createTaskEvent,
@@ -84,6 +87,7 @@ export interface AppServerTaskRuntimeSession {
   startReview?(threadId: string, instructions: string): Promise<TaskRuntimeStartReviewResult>;
   steerTurn?(threadId: string, expectedTurnId: string, message: string): Promise<TaskRuntimeSteerTurnResult>;
   startTurn(threadId: string, input: string | AppServerTurnInputPart[]): Promise<{ turnId: string }>;
+  interruptTurn?(threadId: string, turnId: string): Promise<void>;
   close(): Promise<void>;
   onNotification(handler: (notification: CodexAppServerNotification) => void): void | (() => void);
   onServerRequest(handler: (request: AppServerReverseRequest) => void): void | (() => void);
@@ -100,11 +104,62 @@ export interface AppServerTaskRuntimeOptions {
   runtimeCatalogReader?: () => Promise<CodexRuntimeCatalog>;
 }
 
+export interface AppServerInternalTaskContext {
+  principalId: string;
+  conversationId?: string;
+}
+
+export interface AppServerTaskExecutionController {
+  threadId: string;
+  turnId: string;
+  interrupt: () => Promise<void>;
+}
+
+interface AppServerResolvedExecutionRequest {
+  request: TaskRequest;
+  principalId?: string;
+  conversationId?: string;
+}
+
+interface AppServerInternalTaskRunHooks extends TaskRuntimeRunHooks {
+  onExecutionReady?: (
+    controller: AppServerTaskExecutionController,
+  ) => Promise<void> | void;
+}
+
+export class AppServerTaskWaitingForActionError extends Error {
+  readonly waitingFor: "human" | "agent";
+
+  constructor(waitingFor: "human" | "agent", message = "App-server task is waiting for follow-up action.") {
+    super(message);
+    this.name = "AppServerTaskWaitingForActionError";
+    this.waitingFor = waitingFor;
+  }
+}
+
+export function isAppServerTaskWaitingForActionError(error: unknown): error is AppServerTaskWaitingForActionError {
+  return error instanceof AppServerTaskWaitingForActionError;
+}
+
+class AppServerTurnCancelledError extends Error {
+  constructor(message = "App-server turn cancelled.") {
+    super(message);
+    this.name = "AppServerTurnCancelledError";
+  }
+}
+
+function isAppServerTurnCancelledError(error: unknown): error is AppServerTurnCancelledError {
+  return error instanceof AppServerTurnCancelledError;
+}
+
 export class AppServerTaskRuntime {
   private readonly workingDirectory: string;
   private readonly runtimeStore: SqliteCodexSessionRegistry;
   private readonly identityLinkService: IdentityLinkService;
   private readonly conversationService: ConversationService;
+  private readonly managedAgentCoordinationService: ManagedAgentCoordinationService;
+  private readonly managedAgentsService: ManagedAgentsService;
+  private readonly managedAgentSchedulerService: ManagedAgentSchedulerService;
   private readonly principalActorsService: PrincipalActorsService;
   private readonly principalSkillsService: PrincipalSkillsService;
   private readonly sessionFactory: () => Promise<AppServerTaskRuntimeSession>;
@@ -116,6 +171,15 @@ export class AppServerTaskRuntime {
     this.runtimeStore = options.runtimeStore ?? new SqliteCodexSessionRegistry();
     this.identityLinkService = new IdentityLinkService(this.runtimeStore);
     this.conversationService = new ConversationService(this.runtimeStore, this.identityLinkService);
+    this.managedAgentCoordinationService = new ManagedAgentCoordinationService({
+      registry: this.runtimeStore,
+    });
+    this.managedAgentsService = new ManagedAgentsService({
+      registry: this.runtimeStore,
+    });
+    this.managedAgentSchedulerService = new ManagedAgentSchedulerService({
+      registry: this.runtimeStore,
+    });
     this.principalActorsService = new PrincipalActorsService({
       registry: this.runtimeStore,
     });
@@ -136,8 +200,48 @@ export class AppServerTaskRuntime {
   }
 
   async runTask(request: TaskRequest, hooks: TaskRuntimeRunHooks = {}): Promise<TaskResult> {
-    const resolvedRequest = this.conversationService.resolveRequest(request);
-    request = resolvedRequest.request;
+    return await this.executeTask(this.conversationService.resolveRequest(request), hooks);
+  }
+
+  async runTaskAsPrincipal(
+    request: TaskRequest,
+    context: AppServerInternalTaskContext,
+    hooks: AppServerInternalTaskRunHooks = {},
+  ): Promise<TaskResult> {
+    const principalId = normalizeTextValue(context.principalId);
+
+    if (!principalId) {
+      throw new Error("Internal app-server execution requires principalId.");
+    }
+
+    const conversationId = normalizeTextValue(
+      context.conversationId
+        ?? request.channelContext.sessionId
+        ?? request.channelContext.channelSessionKey,
+    );
+    const normalizedRequest = conversationId
+      ? {
+        ...request,
+        channelContext: {
+          ...request.channelContext,
+          sessionId: request.channelContext.sessionId ?? conversationId,
+          channelSessionKey: request.channelContext.channelSessionKey ?? conversationId,
+        },
+      }
+      : request;
+
+    return await this.executeTask({
+      request: normalizedRequest,
+      principalId,
+      ...(conversationId ? { conversationId } : {}),
+    }, hooks);
+  }
+
+  private async executeTask(
+    resolvedRequest: AppServerResolvedExecutionRequest,
+    hooks: AppServerInternalTaskRunHooks = {},
+  ): Promise<TaskResult> {
+    let request = resolvedRequest.request;
     const principalId = resolvedRequest.principalId;
 
     const taskId = request.taskId ?? request.requestId;
@@ -156,6 +260,7 @@ export class AppServerTaskRuntime {
     const turnCompletion = createAppServerTurnCompletionState();
     const pendingServerRequests = new Set<Promise<void>>();
     const sessionId = normalizeSessionId(request.channelContext.sessionId);
+    let skipFinalEventFlush = false;
 
     const emit = async (event: TaskEvent): Promise<void> => {
       await abortable(() => eventDelivery.deliver(event), signal);
@@ -279,6 +384,17 @@ export class AppServerTaskRuntime {
         : prompt;
       const turn = await abortable(() => activeSession.startTurn(threadId, turnInput), signal);
       turnCompletion.targetTurnId = turn.turnId;
+      await hooks.onExecutionReady?.({
+        threadId,
+        turnId: turn.turnId,
+        interrupt: async () => {
+          if (typeof activeSession.interruptTurn !== "function") {
+            return;
+          }
+
+          await activeSession.interruptTurn(threadId, turn.turnId);
+        },
+      });
       await abortable(() => waitForPendingServerRequests(pendingServerRequests), signal);
       await abortable(() => turnCompletion.promise, signal);
       await abortable(() => eventDelivery.flush(), signal);
@@ -359,10 +475,16 @@ export class AppServerTaskRuntime {
         }
         : result;
     } catch (error) {
-      const message = toErrorMessage(error);
+      const waitingError = isAppServerTaskWaitingForActionError(error);
+      const cancelledError = !waitingError && (isAbortLikeError(error) || isAppServerTurnCancelledError(error) || signal.aborted);
+      const message = cancelledError
+        ? describeAbort(signal, error)
+        : toErrorMessage(error);
 
       try {
-        if (!signal.aborted) {
+        if (waitingError) {
+          await eventDelivery.flush();
+        } else if (!signal.aborted) {
           await abortable(() => eventDelivery.flush(), signal);
           await emit(createTaskEvent(taskId, request.requestId, "task.failed", "failed", message));
         }
@@ -370,28 +492,63 @@ export class AppServerTaskRuntime {
         // 保留原始执行错误，不让事件回调错误覆盖它。
       }
 
-      this.runtimeStore.failTaskTurn({
-        request,
-        taskId,
-        message,
-        sessionMode,
-        ...(resolvedThreadId
-          ? {
-              structuredOutput: {
-                session: {
-                  sessionId: sessionId || null,
-                  threadId: resolvedThreadId,
-                  engine: "app-server",
+      if (cancelledError) {
+        skipFinalEventFlush = true;
+        const result: TaskResult = {
+          taskId,
+          requestId: request.requestId,
+          status: "cancelled",
+          summary: message,
+          ...(resolvedThreadId
+            ? {
+                structuredOutput: {
+                  session: {
+                    sessionId: sessionId || null,
+                    threadId: resolvedThreadId,
+                    engine: "app-server",
+                  },
                 },
-              },
-            }
-          : {}),
-        ...(resolvedThreadId ? { threadId: resolvedThreadId } : {}),
-      });
+              }
+            : {}),
+          completedAt: new Date().toISOString(),
+        };
+
+        this.runtimeStore.completeTaskTurn({
+          request,
+          result,
+          sessionMode,
+          ...(resolvedThreadId ? { threadId: resolvedThreadId } : {}),
+        });
+        persistThreadSession(this.runtimeStore, sessionId, resolvedThreadId, result.completedAt);
+        this.runtimeStore.appendTaskEvent(createTaskEvent(taskId, request.requestId, "task.cancelled", "cancelled", message));
+
+        return result;
+      }
+
+      if (!waitingError) {
+        this.runtimeStore.failTaskTurn({
+          request,
+          taskId,
+          message,
+          sessionMode,
+          ...(resolvedThreadId
+            ? {
+                structuredOutput: {
+                  session: {
+                    sessionId: sessionId || null,
+                    threadId: resolvedThreadId,
+                    engine: "app-server",
+                  },
+                },
+              }
+            : {}),
+          ...(resolvedThreadId ? { threadId: resolvedThreadId } : {}),
+        });
+      }
       throw error;
     } finally {
       try {
-        if (!signal.aborted) {
+        if (!skipFinalEventFlush && !signal.aborted) {
           await abortable(() => eventDelivery.flush(), signal);
         }
       } catch {
@@ -438,6 +595,18 @@ export class AppServerTaskRuntime {
 
   getPrincipalActorsService(): PrincipalActorsService {
     return this.principalActorsService;
+  }
+
+  getManagedAgentsService(): ManagedAgentsService {
+    return this.managedAgentsService;
+  }
+
+  getManagedAgentCoordinationService(): ManagedAgentCoordinationService {
+    return this.managedAgentCoordinationService;
+  }
+
+  getManagedAgentSchedulerService(): ManagedAgentSchedulerService {
+    return this.managedAgentSchedulerService;
   }
 
   getPrincipalSkillsService(): PrincipalSkillsService {
@@ -1067,6 +1236,17 @@ function observeAppServerTurnCompletion(
       return;
     }
 
+    if (status === "cancelled") {
+      const errorRecord = asRecord(turn?.error);
+      state.settled = true;
+      state.reject(
+        new AppServerTurnCancelledError(
+          normalizeTextValue(errorRecord?.message) ?? "App-server turn cancelled.",
+        ),
+      );
+      return;
+    }
+
     const errorRecord = asRecord(turn?.error);
     state.settled = true;
     state.reject(new Error(normalizeTextValue(errorRecord?.message) ?? "App-server turn failed."));
@@ -1138,7 +1318,7 @@ function throwIfAborted(signal: AbortSignal): void {
     return;
   }
 
-  throw signal.reason instanceof Error ? signal.reason : new Error("任务已被取消。");
+  throw signal.reason instanceof Error ? signal.reason : new Error(describeAbort(signal));
 }
 
 async function abortable<T>(
@@ -1154,7 +1334,7 @@ async function abortable<T>(
 
   return await new Promise<T>((resolve, reject) => {
     const abort = (): void => {
-      reject(signal.reason instanceof Error ? signal.reason : new Error("任务已被取消。"));
+      reject(signal.reason instanceof Error ? signal.reason : new Error(describeAbort(signal)));
     };
 
     signal.addEventListener("abort", abort, { once: true });
@@ -1170,6 +1350,36 @@ async function abortable<T>(
       },
     );
   });
+}
+
+function isAbortLikeError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return error.name === "AbortError" || error.message.startsWith("TASK_TIMEOUT:");
+}
+
+function describeAbort(signal: AbortSignal, error?: unknown): string {
+  if (isAppServerTurnCancelledError(error)) {
+    return error.message || "任务已被取消。";
+  }
+
+  const reason = signal.reason;
+
+  if (reason instanceof Error) {
+    if (reason.message.startsWith("TASK_TIMEOUT:")) {
+      const timeout = reason.message.split(":")[1] ?? "0";
+      const seconds = Math.max(1, Math.round(Number.parseInt(timeout, 10) / 1000));
+      return `任务因超时被取消，超时时间约为 ${seconds} 秒。`;
+    }
+
+    if (reason.message === "WORK_ITEM_CANCELLED") {
+      return "顶层治理已取消该任务。";
+    }
+  }
+
+  return "任务已被取消。";
 }
 
 async function withOperationTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
