@@ -1271,6 +1271,152 @@ test("POST /api/agents/waiting/list 会返回组织级等待队列与摘要", as
   });
 });
 
+test("POST /api/agents/collaboration-dashboard 会返回跨父任务汇总台，并支持 attentionOnly 过滤", async () => {
+  await withHttpServer(async ({ baseUrl, runtime, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+    const manager = await createManagedAgent(baseUrl, authHeaders, "owner-agent-collaboration-dashboard", {
+      departmentRole: "经理",
+      displayName: "经理·曜",
+      mission: "负责拆解任务与汇总结果。",
+    });
+    const backend = await createManagedAgent(baseUrl, authHeaders, "owner-agent-collaboration-dashboard", {
+      departmentRole: "后端",
+      displayName: "后端·衡",
+      mission: "负责接口与存储。",
+    });
+    const frontend = await createManagedAgent(baseUrl, authHeaders, "owner-agent-collaboration-dashboard", {
+      departmentRole: "前端",
+      displayName: "前端·岚",
+      mission: "负责页面联调。",
+    });
+
+    const urgentParent = runtime.getManagedAgentCoordinationService().dispatchWorkItem({
+      ownerPrincipalId: "principal-local-owner",
+      targetAgentId: manager.agentId,
+      dispatchReason: "推进 manager dashboard",
+      goal: "把组织级跨父任务汇总挂到 Agents 面板",
+      priority: "urgent",
+      now: "2026-04-07T15:00:00.000Z",
+    });
+    const urgentChild = runtime.getManagedAgentCoordinationService().dispatchWorkItem({
+      ownerPrincipalId: "principal-local-owner",
+      targetAgentId: frontend.agentId,
+      sourceType: "agent",
+      sourceAgentId: manager.agentId,
+      sourcePrincipalId: manager.principalId,
+      parentWorkItemId: urgentParent.workItem.workItemId,
+      dispatchReason: "补 Web 汇总卡片",
+      goal: "补 attention badge 与跳转动作",
+      priority: "high",
+      now: "2026-04-07T15:05:00.000Z",
+    });
+    const normalParent = runtime.getManagedAgentCoordinationService().dispatchWorkItem({
+      ownerPrincipalId: "principal-local-owner",
+      targetAgentId: manager.agentId,
+      dispatchReason: "同步文档说明",
+      goal: "把实现说明落到文档",
+      priority: "normal",
+      now: "2026-04-07T15:06:00.000Z",
+    });
+    const normalChild = runtime.getManagedAgentCoordinationService().dispatchWorkItem({
+      ownerPrincipalId: "principal-local-owner",
+      targetAgentId: backend.agentId,
+      sourceType: "agent",
+      sourceAgentId: manager.agentId,
+      sourcePrincipalId: manager.principalId,
+      parentWorkItemId: normalParent.workItem.workItemId,
+      dispatchReason: "补文档内容",
+      goal: "同步 P6 dashboard 实现细节",
+      priority: "normal",
+      now: "2026-04-07T15:07:00.000Z",
+    });
+
+    runtimeStore.saveAgentWorkItem({
+      ...urgentChild.workItem,
+      status: "waiting_human",
+      waitingActionRequest: {
+        actionType: "approval",
+        prompt: "是否允许直接把 dashboard 默认暴露在 Agents 面板？",
+        choices: ["approve", "deny"],
+      },
+      updatedAt: "2026-04-07T15:10:00.000Z",
+    });
+    runtimeStore.saveAgentWorkItem({
+      ...normalChild.workItem,
+      status: "completed",
+      completedAt: "2026-04-07T15:12:00.000Z",
+      updatedAt: "2026-04-07T15:12:00.000Z",
+    });
+
+    runtime.getManagedAgentCoordinationService().sendAgentMessage({
+      ownerPrincipalId: "principal-local-owner",
+      fromAgentId: frontend.agentId,
+      toAgentId: manager.agentId,
+      workItemId: urgentChild.workItem.workItemId,
+      messageType: "escalation",
+      payload: {
+        summary: "当前 UI 交互还需要顶层治理拍板。",
+      },
+      priority: "high",
+      now: "2026-04-07T15:10:30.000Z",
+    });
+    runtime.getManagedAgentCoordinationService().createAgentHandoff({
+      ownerPrincipalId: "principal-local-owner",
+      fromAgentId: backend.agentId,
+      toAgentId: manager.agentId,
+      workItemId: normalChild.workItem.workItemId,
+      summary: "文档同步已收口。",
+      blockers: [],
+      recommendedNextActions: ["继续做界面联调"],
+      attachedArtifacts: ["docs/product/themis-p6-manager-governance-dashboard-plan.md"],
+      now: "2026-04-07T15:12:30.000Z",
+    });
+
+    const response = await postJson(
+      baseUrl,
+      "/api/agents/collaboration-dashboard",
+      {
+        ...buildIdentityPayload("owner-agent-collaboration-dashboard"),
+        managerAgentId: manager.agentId,
+        attentionOnly: true,
+        limit: 10,
+      },
+      authHeaders,
+    );
+
+    assert.equal(response.status, 200);
+    const payload = await response.json() as {
+      summary?: {
+        totalCount?: number;
+        urgentCount?: number;
+        attentionCount?: number;
+        normalCount?: number;
+      };
+      items?: Array<{
+        parentWorkItem?: { workItemId?: string; goal?: string };
+        managerAgent?: { agentId?: string; displayName?: string };
+        attentionLevel?: string;
+        attentionReasons?: string[];
+        latestWaitingMessage?: { messageType?: string };
+        lastActivityKind?: string;
+      }>;
+    };
+    assert.equal(payload.summary?.totalCount, 1);
+    assert.equal(payload.summary?.urgentCount, 1);
+    assert.equal(payload.summary?.attentionCount, 0);
+    assert.equal(payload.summary?.normalCount, 0);
+    assert.equal(payload.items?.length, 1);
+    assert.equal(payload.items?.[0]?.parentWorkItem?.workItemId, urgentParent.workItem.workItemId);
+    assert.equal(payload.items?.[0]?.parentWorkItem?.goal, "把组织级跨父任务汇总挂到 Agents 面板");
+    assert.equal(payload.items?.[0]?.managerAgent?.agentId, manager.agentId);
+    assert.equal(payload.items?.[0]?.managerAgent?.displayName, "经理·曜");
+    assert.equal(payload.items?.[0]?.attentionLevel, "urgent");
+    assert.match(payload.items?.[0]?.attentionReasons?.join("；") ?? "", /等待顶层治理/);
+    assert.equal(payload.items?.[0]?.latestWaitingMessage?.messageType, "escalation");
+    assert.equal(payload.items?.[0]?.lastActivityKind, "waiting");
+  });
+});
+
 test("POST /api/agents/work-items/escalate 会把 waiting_agent 升级成顶层治理并关闭待回复 mailbox", async () => {
   await withHttpServer(async ({ baseUrl, runtime, runtimeStore }) => {
     const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });

@@ -158,6 +158,12 @@ interface WorkItemCancelPayload extends IdentityPayload {
 
 interface WaitingQueueListPayload extends IdentityPayload {}
 
+interface CollaborationDashboardPayload extends IdentityPayload {
+  managerAgentId?: string;
+  attentionOnly?: boolean;
+  limit?: number;
+}
+
 interface WorkItemRespondPayload extends IdentityPayload {
   workItemId: string;
   response: {
@@ -811,6 +817,38 @@ export async function handleAgentWaitingQueueList(
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
     const result = runtime.getManagedAgentCoordinationService().listOrganizationWaitingQueue(identity.principalId);
+
+    writeJson(response, 200, {
+      identity,
+      summary: result.summary,
+      items: result.items,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentCollaborationDashboard(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeCollaborationDashboardPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = runtime.getManagedAgentCoordinationService().listOrganizationCollaborationDashboard(
+      identity.principalId,
+      {
+        ...(payload.managerAgentId ? { managerAgentId: payload.managerAgentId } : {}),
+        ...(payload.attentionOnly === true ? { attentionOnly: true } : {}),
+        ...(payload.limit ? { limit: payload.limit } : {}),
+      },
+    );
 
     writeJson(response, 200, {
       identity,
@@ -1535,6 +1573,23 @@ function normalizeWaitingQueueListPayload(value: unknown): WaitingQueueListPaylo
   return normalizeIdentityPayload(value);
 }
 
+function normalizeCollaborationDashboardPayload(value: unknown): CollaborationDashboardPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  const managerAgentId = readOptionalString(value.managerAgentId);
+  const attentionOnly = readOptionalBoolean(value.attentionOnly);
+  const limit = readOptionalPositiveInteger(value.limit);
+
+  return {
+    ...normalizeIdentityPayload(value),
+    ...(managerAgentId ? { managerAgentId } : {}),
+    ...(attentionOnly !== undefined ? { attentionOnly } : {}),
+    ...(limit ? { limit } : {}),
+  };
+}
+
 function normalizeWorkItemDetailPayload(value: unknown): WorkItemDetailPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
@@ -1730,6 +1785,10 @@ function readOptionalString(value: unknown): string | undefined {
 
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function readOptionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function readOptionalPositiveInteger(value: unknown): number | undefined {

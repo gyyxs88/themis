@@ -337,6 +337,9 @@ export function createRenderer(app) {
     const workItems = Array.isArray(agentsState.workItems) ? agentsState.workItems : [];
     const mailboxItems = Array.isArray(agentsState.mailboxItems) ? agentsState.mailboxItems : [];
     const waitingItems = Array.isArray(agentsState.organizationWaitingItems) ? agentsState.organizationWaitingItems : [];
+    const collaborationItems = Array.isArray(agentsState.organizationCollaborationItems)
+      ? agentsState.organizationCollaborationItems
+      : [];
     const spawnPolicies = Array.isArray(agentsState.spawnPolicies) ? agentsState.spawnPolicies : [];
     const spawnSuggestions = Array.isArray(agentsState.spawnSuggestions) ? agentsState.spawnSuggestions : [];
     const suppressedSpawnSuggestions = Array.isArray(agentsState.suppressedSpawnSuggestions)
@@ -350,6 +353,10 @@ export function createRenderer(app) {
       ? agentsState.idleRecoveryAuditLogs
       : [];
     const waitingSummary = normalizeWaitingQueueSummary(agentsState.organizationWaitingSummary, waitingItems.length);
+    const collaborationSummary = normalizeCollaborationDashboardSummary(
+      agentsState.organizationCollaborationSummary,
+      collaborationItems.length,
+    );
     const busy = Boolean(
       agentsState.loading
       || agentsState.detailLoading
@@ -411,6 +418,24 @@ export function createRenderer(app) {
         waitingResponseDraft: waitingResponseDrafts[item?.workItem?.workItemId] ?? null,
         escalatingWorkItemId: typeof agentsState.escalatingWorkItemId === "string" ? agentsState.escalatingWorkItemId : "",
         respondingWorkItemId: typeof agentsState.respondingWorkItemId === "string" ? agentsState.respondingWorkItemId : "",
+        busy,
+        escapeHtml: utils.escapeHtml,
+        formatRelativeTime: utils.formatRelativeTime,
+      }))
+      .join("");
+    dom.agentsCollaborationSummary.textContent = resolveCollaborationDashboardSummaryText({
+      loading: Boolean(agentsState.loading),
+      summary: collaborationSummary,
+      collaborationCount: collaborationItems.length,
+    });
+    dom.agentsCollaborationEmpty.classList.toggle("hidden", collaborationItems.length > 0);
+    dom.agentsCollaborationEmpty.textContent = agentsState.loading
+      ? "正在汇总组织级跨父任务协作链路。"
+      : "当前还没有跨父任务协作链路。";
+    dom.agentsCollaborationList.innerHTML = collaborationItems
+      .map((item) => renderOrganizationCollaborationDashboardCard(item, {
+        selectedAgentId,
+        selectedWorkItemId: typeof agentsState.selectedWorkItemId === "string" ? agentsState.selectedWorkItemId : "",
         busy,
         escapeHtml: utils.escapeHtml,
         formatRelativeTime: utils.formatRelativeTime,
@@ -2297,6 +2322,27 @@ function resolveWaitingQueueSummaryText({ loading, waitingSummary, waitingCount 
   return `当前共有 ${waitingSummary.totalCount} 条待治理项：等人 ${waitingSummary.waitingHumanCount} 条，等 agent ${waitingSummary.waitingAgentCount} 条，升级摘要 ${waitingSummary.escalationCount} 条。`;
 }
 
+function normalizeCollaborationDashboardSummary(summary, fallbackTotalCount) {
+  return {
+    totalCount: Number.isFinite(summary?.totalCount) ? Number(summary.totalCount) : Number(fallbackTotalCount || 0),
+    urgentCount: Number.isFinite(summary?.urgentCount) ? Number(summary.urgentCount) : 0,
+    attentionCount: Number.isFinite(summary?.attentionCount) ? Number(summary.attentionCount) : 0,
+    normalCount: Number.isFinite(summary?.normalCount) ? Number(summary.normalCount) : 0,
+  };
+}
+
+function resolveCollaborationDashboardSummaryText({ loading, summary, collaborationCount }) {
+  if (loading) {
+    return "正在汇总跨父任务协作链路与关注等级。";
+  }
+
+  if (!collaborationCount) {
+    return "当前还没有进入组织级汇总台的跨父任务协作链路。";
+  }
+
+  return `当前共有 ${summary.totalCount} 条跨父任务协作链路：紧急 ${summary.urgentCount} 条，需要关注 ${summary.attentionCount} 条，正常推进 ${summary.normalCount} 条。`;
+}
+
 function renderAgentSelect(select, agents, currentAgentId, emptyLabel, escapeHtml) {
   if (!select) {
     return;
@@ -2494,6 +2540,81 @@ function renderOrganizationWaitingCard(item, {
           data-agent-waiting-agent-id="${escapeHtml(targetAgent?.agentId || "")}"
         >
           ${selected ? "正在查看中" : "定位并处理"}
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function renderOrganizationCollaborationDashboardCard(item, {
+  selectedAgentId,
+  selectedWorkItemId,
+  busy,
+  escapeHtml,
+  formatRelativeTime,
+}) {
+  const parentWorkItem = item?.parentWorkItem ?? {};
+  const managerAgent = item?.managerAgent ?? {};
+  const childSummary = normalizeChildWorkItemSummary(item?.childSummary);
+  const attentionLevel = resolveCollaborationAttentionLevel(item?.attentionLevel);
+  const attentionReasons = Array.isArray(item?.attentionReasons)
+    ? item.attentionReasons.filter((reason) => typeof reason === "string" && reason.trim())
+    : [];
+  const selected = parentWorkItem?.workItemId === selectedWorkItemId;
+  const focusedManager = managerAgent?.agentId === selectedAgentId;
+  const openDisabled = busy || !parentWorkItem?.workItemId || !managerAgent?.agentId;
+  const focusDisabled = busy || !managerAgent?.agentId;
+  const activitySummary = typeof item?.lastActivitySummary === "string" && item.lastActivitySummary.trim()
+    ? item.lastActivitySummary.trim()
+    : (typeof parentWorkItem?.goal === "string" && parentWorkItem.goal.trim())
+      ? parentWorkItem.goal.trim()
+      : "当前父任务没有额外摘要。";
+
+  return `
+    <article class="agent-card">
+      <div class="agent-card-head">
+        <div class="agent-card-heading">
+          <h4>${escapeHtml(parentWorkItem?.goal || parentWorkItem?.dispatchReason || parentWorkItem?.workItemId || "未命名父任务")}</h4>
+          <p class="agent-card-copy">${escapeHtml(activitySummary)}</p>
+        </div>
+        <div class="agent-pill-row">
+          <span class="badge ${escapeHtml(resolveAttentionTone(attentionLevel))}">${escapeHtml(resolveCollaborationAttentionLabel(attentionLevel))}</span>
+          <span class="badge ${escapeHtml(resolveStatusTone(resolveWorkItemStatus(parentWorkItem?.status)))}">${escapeHtml(resolveWorkItemStatusLabel(resolveWorkItemStatus(parentWorkItem?.status)))}</span>
+        </div>
+      </div>
+      <div class="agent-meta-grid">
+        ${renderAgentMetaItem("manager", managerAgent?.displayName || managerAgent?.agentId || "未知", escapeHtml)}
+        ${renderAgentMetaItem("父 workItem", parentWorkItem?.workItemId || "未知", escapeHtml)}
+        ${renderAgentMetaItem("子任务", `${childSummary.totalCount} 条 / 进行中 ${childSummary.openCount}`, escapeHtml)}
+        ${renderAgentMetaItem("等待中", `${childSummary.waitingCount} 条`, escapeHtml)}
+        ${renderAgentMetaItem("最近活动", formatRelativeTime(item?.lastActivityAt), escapeHtml)}
+        ${renderAgentMetaItem("最近动作", resolveCollaborationActivityKindLabel(item?.lastActivityKind), escapeHtml)}
+      </div>
+      ${attentionReasons.length
+        ? `
+          <div class="agent-block">
+            <p class="agent-block-title">关注原因</p>
+            <p class="agent-card-copy">${escapeHtml(attentionReasons.join("；"))}</p>
+          </div>
+        `
+        : ""}
+      <div class="agent-card-actions">
+        <button
+          type="button"
+          class="toolbar-button subtle"
+          data-agent-collaboration-open="${escapeHtml(parentWorkItem?.workItemId || "")}"
+          data-agent-collaboration-agent-id="${escapeHtml(managerAgent?.agentId || "")}"
+          ${openDisabled ? "disabled" : ""}
+        >
+          ${selected ? "正在查看父任务" : "查看父任务详情"}
+        </button>
+        <button
+          type="button"
+          class="toolbar-button subtle"
+          data-agent-collaboration-focus="${escapeHtml(managerAgent?.agentId || "")}"
+          ${focusDisabled ? "disabled" : ""}
+        >
+          ${focusedManager ? "当前 manager" : "切到 manager"}
         </button>
       </div>
     </article>
@@ -3399,6 +3520,27 @@ function resolveWaitingAttentionLabel(workItem, latestWaitingMessage) {
   return "待处理";
 }
 
+function resolveCollaborationAttentionLevel(level) {
+  return ["normal", "attention", "urgent"].includes(level) ? level : "normal";
+}
+
+function resolveCollaborationAttentionLabel(level) {
+  return {
+    urgent: "紧急介入",
+    attention: "需要关注",
+    normal: "正常推进",
+  }[resolveCollaborationAttentionLevel(level)] ?? "正常推进";
+}
+
+function resolveCollaborationActivityKindLabel(kind) {
+  return {
+    handoff: "最新交接",
+    waiting: "最新等待",
+    governance: "最新治理",
+    work_item: "最近更新",
+  }[typeof kind === "string" ? kind : "work_item"] ?? "最近更新";
+}
+
 function resolveAgentStatus(status) {
   return ["provisioning", "bootstrapping", "active", "paused", "degraded", "archived"].includes(status)
     ? status
@@ -3586,6 +3728,18 @@ function resolveStatusTone(status) {
 
   if (["cancelled", "paused", "archived", "acked"].includes(status)) {
     return "cancelled";
+  }
+
+  return "idle";
+}
+
+function resolveAttentionTone(level) {
+  if (level === "urgent") {
+    return "error";
+  }
+
+  if (level === "attention") {
+    return "busy";
   }
 
   return "idle";

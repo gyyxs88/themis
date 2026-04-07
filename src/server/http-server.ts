@@ -10,6 +10,7 @@ import { WebAccessService } from "../core/web-access.js";
 import { serveWebAsset } from "./http-assets.js";
 import {
   handleAgentArchive,
+  handleAgentCollaborationDashboard,
   handleAgentCreate,
   handleAgentDetail,
   handleAgentDispatch,
@@ -322,6 +323,10 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/agents/waiting/list") {
         return handleAgentWaitingQueueList(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/collaboration-dashboard") {
+        return handleAgentCollaborationDashboard(request, response, runtime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/agents/work-items/detail") {

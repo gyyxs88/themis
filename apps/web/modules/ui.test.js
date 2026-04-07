@@ -416,6 +416,136 @@ test("renderAgentsState 会在组织级等待队列渲染直接治理入口", ()
   assert.ok(harness.dom.agentsWaitingList.innerHTML.includes("可以继续，但请先确认监控。"));
 });
 
+test("renderAgentsState 会渲染组织级跨父任务汇总台卡片，并暴露父任务跳转动作", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      agents: {
+        status: "ready",
+        errorMessage: "",
+        noticeMessage: "",
+        loading: false,
+        detailLoading: false,
+        workItemDetailLoading: false,
+        creating: false,
+        dispatching: false,
+        ackingMailboxEntryId: "",
+        respondingWorkItemId: "",
+        organizations: [{ organizationId: "org-1", displayName: "老板团队" }],
+        agents: [
+          {
+            agentId: "agent-manager",
+            principalId: "principal-manager",
+            displayName: "经理·曜",
+            departmentRole: "经理",
+            mission: "负责拆解任务与汇总结果。",
+            status: "active",
+          },
+        ],
+        organizationWaitingSummary: {
+          totalCount: 0,
+          waitingHumanCount: 0,
+          waitingAgentCount: 0,
+          escalationCount: 0,
+        },
+        organizationWaitingItems: [],
+        organizationCollaborationSummary: {
+          totalCount: 1,
+          urgentCount: 1,
+          attentionCount: 0,
+          normalCount: 0,
+        },
+        organizationCollaborationItems: [
+          {
+            parentWorkItem: {
+              workItemId: "work-item-parent-1",
+              targetAgentId: "agent-manager",
+              status: "running",
+              goal: "把组织级跨父任务汇总挂到 Agents 面板",
+            },
+            managerAgent: {
+              agentId: "agent-manager",
+              displayName: "经理·曜",
+            },
+            childSummary: {
+              totalCount: 3,
+              openCount: 2,
+              waitingCount: 1,
+              completedCount: 1,
+              failedCount: 0,
+              cancelledCount: 0,
+            },
+            latestHandoff: null,
+            latestWaitingMessage: {
+              messageId: "msg-1",
+              messageType: "escalation",
+            },
+            latestGovernanceResponse: null,
+            lastActivityAt: "2026-04-07T12:10:00.000Z",
+            lastActivityKind: "waiting",
+            lastActivitySummary: "当前 UI 交互还需要顶层治理拍板。",
+            attentionLevel: "urgent",
+            attentionReasons: ["1 条任务等待顶层治理", "最近出现升级阻塞"],
+          },
+        ],
+        organizationWaitingResponseDrafts: {},
+        selectedAgentId: "agent-manager",
+        selectedAgent: {
+          agentId: "agent-manager",
+          principalId: "principal-manager",
+          displayName: "经理·曜",
+          departmentRole: "经理",
+          mission: "负责拆解任务与汇总结果。",
+          status: "active",
+        },
+        selectedAgentPrincipal: {
+          principalId: "principal-manager",
+        },
+        selectedOrganization: {
+          organizationId: "org-1",
+          displayName: "老板团队",
+        },
+        workItems: [],
+        mailboxItems: [],
+        selectedWorkItemId: "work-item-parent-1",
+        selectedWorkItemDetail: null,
+        humanResponseDraft: {
+          workItemId: "",
+          decision: "",
+          inputText: "",
+        },
+        createDraft: {
+          departmentRole: "",
+          displayName: "",
+          mission: "",
+        },
+        dispatchDraft: {
+          targetAgentId: "agent-manager",
+          sourceType: "human",
+          sourceAgentId: "",
+          dispatchReason: "",
+          goal: "",
+          contextPacketText: "",
+          priority: "normal",
+        },
+      },
+    },
+  });
+
+  harness.renderer.renderAgentsState();
+
+  assert.ok(harness.dom.agentsCollaborationSummary.textContent.includes("当前共有 1 条跨父任务协作链路"));
+  assert.ok(harness.dom.agentsCollaborationList.innerHTML.includes("紧急介入"));
+  assert.ok(harness.dom.agentsCollaborationList.innerHTML.includes("经理·曜"));
+  assert.ok(harness.dom.agentsCollaborationList.innerHTML.includes("关注原因"));
+  assert.ok(harness.dom.agentsCollaborationList.innerHTML.includes('data-agent-collaboration-open="work-item-parent-1"'));
+  assert.ok(harness.dom.agentsCollaborationList.innerHTML.includes('data-agent-collaboration-focus="agent-manager"'));
+});
+
 test("renderAgentsState 会渲染自动创建建议卡片与批准按钮", () => {
   const harness = createHarness({
     actionBarState: {
@@ -1455,6 +1585,9 @@ function createHarness({ actionBarState, threadControlState = null, runtime = {}
     agentsWaitingSummary: createTextStub(),
     agentsWaitingEmpty: createTextStub(),
     agentsWaitingList: createTextStub(),
+    agentsCollaborationSummary: createTextStub(),
+    agentsCollaborationEmpty: createTextStub(),
+    agentsCollaborationList: createTextStub(),
     agentsSpawnPolicySummary: createTextStub(),
     agentsSpawnPolicyMaxActiveInput: createDisabledInputStub(),
     agentsSpawnPolicyMaxRoleInput: createDisabledInputStub(),

@@ -16,6 +16,7 @@ import type {
 import { THEMIS_GLOBAL_TASK_DEFAULTS } from "./task-defaults.js";
 
 const DEFAULT_MAILBOX_LEASE_TTL_MS = 5 * 60 * 1000;
+const COLLABORATION_STALE_OPEN_WORK_ITEM_MS = 6 * 60 * 60 * 1000;
 const ACTIVE_AGENT_RUN_STATUSES = new Set<string>(["created", "starting", "running", "waiting_action"]);
 
 export interface ManagedAgentCoordinationServiceOptions {
@@ -224,6 +225,41 @@ export interface OrganizationWaitingQueueItem {
 export interface OrganizationWaitingQueueResult {
   summary: OrganizationWaitingQueueSummary;
   items: OrganizationWaitingQueueItem[];
+}
+
+export type ManagedAgentAttentionLevel = "normal" | "attention" | "urgent";
+
+export interface OrganizationCollaborationDashboardFilters {
+  managerAgentId?: string;
+  attentionOnly?: boolean;
+  limit?: number;
+  now?: string;
+}
+
+export interface OrganizationCollaborationDashboardSummary {
+  totalCount: number;
+  urgentCount: number;
+  attentionCount: number;
+  normalCount: number;
+}
+
+export interface OrganizationCollaborationDashboardItem {
+  parentWorkItem: StoredAgentWorkItemRecord;
+  managerAgent: StoredManagedAgentRecord;
+  childSummary: ManagedAgentChildWorkItemSummary;
+  latestHandoff: StoredAgentHandoffRecord | null;
+  latestWaitingMessage: StoredAgentMessageRecord | null;
+  latestGovernanceResponse: Record<string, unknown> | null;
+  lastActivityAt: string;
+  lastActivityKind: "handoff" | "waiting" | "governance" | "work_item";
+  lastActivitySummary: string;
+  attentionLevel: ManagedAgentAttentionLevel;
+  attentionReasons: string[];
+}
+
+export interface OrganizationCollaborationDashboardResult {
+  summary: OrganizationCollaborationDashboardSummary;
+  items: OrganizationCollaborationDashboardItem[];
 }
 
 export class ManagedAgentCoordinationService {
@@ -564,6 +600,51 @@ export class ManagedAgentCoordinationService {
           || item.latestWaitingMessage?.messageType === "escalation"
         ).length,
       },
+      items,
+    };
+  }
+
+  listOrganizationCollaborationDashboard(
+    ownerPrincipalId: string,
+    filters: OrganizationCollaborationDashboardFilters = {},
+  ): OrganizationCollaborationDashboardResult {
+    this.requirePrincipal(ownerPrincipalId);
+    const managerAgentId = normalizeOptionalText(filters.managerAgentId);
+    const attentionOnly = filters.attentionOnly === true;
+    const limit = normalizePositiveLimit(filters.limit, 20);
+    const now = normalizeNow(filters.now);
+
+    if (managerAgentId) {
+      this.requireOwnedAgent(ownerPrincipalId, managerAgentId);
+    }
+
+    const allWorkItems = this.registry.listAgentWorkItemsByOwnerPrincipal(ownerPrincipalId);
+    const childWorkItemsByParent = new Map<string, StoredAgentWorkItemRecord[]>();
+
+    for (const workItem of allWorkItems) {
+      const parentWorkItemId = normalizeOptionalText(workItem.parentWorkItemId);
+
+      if (!parentWorkItemId) {
+        continue;
+      }
+
+      const currentList = childWorkItemsByParent.get(parentWorkItemId) ?? [];
+      currentList.push(workItem);
+      childWorkItemsByParent.set(parentWorkItemId, currentList);
+    }
+
+    const items = Array.from(childWorkItemsByParent.entries())
+      .map(([parentWorkItemId, childWorkItems]) =>
+        this.buildOrganizationCollaborationDashboardItem(ownerPrincipalId, parentWorkItemId, childWorkItems, now)
+      )
+      .filter((item): item is OrganizationCollaborationDashboardItem => Boolean(item))
+      .filter((item) => !managerAgentId || item.managerAgent.agentId === managerAgentId)
+      .filter((item) => !attentionOnly || item.attentionLevel !== "normal")
+      .sort(compareOrganizationCollaborationDashboardItems)
+      .slice(0, limit);
+
+    return {
+      summary: summarizeOrganizationCollaborationDashboardItems(items),
       items,
     };
   }
@@ -1321,6 +1402,57 @@ export class ManagedAgentCoordinationService {
       latestWaitingMessage,
     };
   }
+
+  private buildOrganizationCollaborationDashboardItem(
+    ownerPrincipalId: string,
+    parentWorkItemId: string,
+    childWorkItems: StoredAgentWorkItemRecord[],
+    now: string,
+  ): OrganizationCollaborationDashboardItem | null {
+    const parentWorkItem = this.getWorkItem(ownerPrincipalId, parentWorkItemId);
+
+    if (!parentWorkItem) {
+      return null;
+    }
+
+    const managerAgent = this.registry.getManagedAgent(parentWorkItem.targetAgentId);
+
+    if (!managerAgent) {
+      return null;
+    }
+
+    const childSummary = summarizeChildWorkItems(childWorkItems);
+    const latestHandoff = resolveDashboardLatestHandoff(this.registry, parentWorkItem, childWorkItems);
+    const latestWaitingMessage = resolveDashboardLatestWaitingMessage(this.registry, childWorkItems);
+    const latestGovernance = resolveDashboardLatestGovernanceResponse(parentWorkItem, childWorkItems);
+    const latestGovernanceResponse = latestGovernance?.response ?? null;
+    const lastActivity = resolveDashboardLastActivity({
+      parentWorkItem,
+      latestHandoff,
+      latestWaitingMessage,
+      latestGovernance: latestGovernance ?? null,
+    });
+    const attention = resolveDashboardAttention({
+      parentWorkItem,
+      childWorkItems,
+      latestWaitingMessage,
+      now,
+    });
+
+    return {
+      parentWorkItem,
+      managerAgent,
+      childSummary,
+      latestHandoff,
+      latestWaitingMessage,
+      latestGovernanceResponse,
+      lastActivityAt: lastActivity.at,
+      lastActivityKind: lastActivity.kind,
+      lastActivitySummary: lastActivity.summary,
+      attentionLevel: attention.level,
+      attentionReasons: attention.reasons,
+    };
+  }
 }
 
 function compareMailboxItems(left: ManagedAgentMailboxItem, right: ManagedAgentMailboxItem): number {
@@ -1380,6 +1512,44 @@ function compareOrganizationWaitingQueueItems(
   return left.workItem.updatedAt.localeCompare(right.workItem.updatedAt);
 }
 
+function compareOrganizationCollaborationDashboardItems(
+  left: OrganizationCollaborationDashboardItem,
+  right: OrganizationCollaborationDashboardItem,
+): number {
+  const attentionDiff = rankAttentionLevel(right.attentionLevel) - rankAttentionLevel(left.attentionLevel);
+
+  if (attentionDiff !== 0) {
+    return attentionDiff;
+  }
+
+  const activityDiff = right.lastActivityAt.localeCompare(left.lastActivityAt);
+
+  if (activityDiff !== 0) {
+    return activityDiff;
+  }
+
+  const priorityDiff = rankPriority(right.parentWorkItem.priority) - rankPriority(left.parentWorkItem.priority);
+
+  if (priorityDiff !== 0) {
+    return priorityDiff;
+  }
+
+  return left.parentWorkItem.workItemId.localeCompare(right.parentWorkItem.workItemId);
+}
+
+function rankAttentionLevel(level: ManagedAgentAttentionLevel): number {
+  switch (level) {
+    case "urgent":
+      return 3;
+    case "attention":
+      return 2;
+    case "normal":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
 function dedupeTimelineEntries(entries: ManagedAgentTimelineEntry[]): ManagedAgentTimelineEntry[] {
   const seen = new Set<string>();
   const deduped: ManagedAgentTimelineEntry[] = [];
@@ -1428,6 +1598,261 @@ function summarizeChildWorkItems(workItems: StoredAgentWorkItemRecord[]): Manage
   }
 
   return summary;
+}
+
+function summarizeOrganizationCollaborationDashboardItems(
+  items: OrganizationCollaborationDashboardItem[],
+): OrganizationCollaborationDashboardSummary {
+  const summary: OrganizationCollaborationDashboardSummary = {
+    totalCount: items.length,
+    urgentCount: 0,
+    attentionCount: 0,
+    normalCount: 0,
+  };
+
+  for (const item of items) {
+    switch (item.attentionLevel) {
+      case "urgent":
+        summary.urgentCount += 1;
+        break;
+      case "attention":
+        summary.attentionCount += 1;
+        break;
+      default:
+        summary.normalCount += 1;
+        break;
+    }
+  }
+
+  return summary;
+}
+
+function resolveDashboardLatestHandoff(
+  registry: SqliteCodexSessionRegistry,
+  parentWorkItem: StoredAgentWorkItemRecord,
+  childWorkItems: StoredAgentWorkItemRecord[],
+): StoredAgentHandoffRecord | null {
+  const candidates: StoredAgentHandoffRecord[] = [];
+
+  for (const childWorkItem of childWorkItems) {
+    const handoffs = registry.listAgentHandoffsByWorkItem(childWorkItem.workItemId);
+    const preferred = handoffs.find((handoff) => handoff.toAgentId === parentWorkItem.targetAgentId) ?? handoffs[0] ?? null;
+
+    if (preferred) {
+      candidates.push(preferred);
+    }
+  }
+
+  return candidates.sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
+}
+
+function resolveDashboardLatestWaitingMessage(
+  registry: SqliteCodexSessionRegistry,
+  childWorkItems: StoredAgentWorkItemRecord[],
+): StoredAgentMessageRecord | null {
+  const candidates: StoredAgentMessageRecord[] = [];
+
+  for (const childWorkItem of childWorkItems) {
+    if (childWorkItem.status !== "waiting_human" && childWorkItem.status !== "waiting_agent") {
+      continue;
+    }
+
+    const message = resolveLatestWaitingMessage(
+      registry.listAgentMessagesByWorkItem(childWorkItem.workItemId),
+      childWorkItem,
+    );
+
+    if (message) {
+      candidates.push(message);
+    }
+  }
+
+  return candidates.sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
+}
+
+function resolveDashboardLatestGovernanceResponse(
+  parentWorkItem: StoredAgentWorkItemRecord,
+  childWorkItems: StoredAgentWorkItemRecord[],
+): { response: Record<string, unknown>; at: string } | null {
+  const workItems = [parentWorkItem, ...childWorkItems];
+  let latest: { response: Record<string, unknown>; at: string } | null = null;
+
+  for (const workItem of workItems) {
+    const response = asRecord(workItem.latestHumanResponse);
+    const respondedAt = normalizeOptionalText(asString(response?.respondedAt));
+
+    if (!response || !respondedAt) {
+      continue;
+    }
+
+    if (!latest || respondedAt > latest.at) {
+      latest = {
+        response,
+        at: respondedAt,
+      };
+    }
+  }
+
+  return latest;
+}
+
+function resolveDashboardLastActivity(input: {
+  parentWorkItem: StoredAgentWorkItemRecord;
+  latestHandoff: StoredAgentHandoffRecord | null;
+  latestWaitingMessage: StoredAgentMessageRecord | null;
+  latestGovernance: { response: Record<string, unknown>; at: string } | null;
+}): { at: string; kind: OrganizationCollaborationDashboardItem["lastActivityKind"]; summary: string } {
+  const candidates = [
+    {
+      at: input.parentWorkItem.updatedAt,
+      kind: "work_item" as const,
+      summary: input.parentWorkItem.goal || input.parentWorkItem.dispatchReason || "父任务仍在推进。",
+    },
+    ...(input.latestHandoff
+      ? [{
+          at: input.latestHandoff.createdAt,
+          kind: "handoff" as const,
+          summary: buildHandoffSummaryText(input.latestHandoff),
+        }]
+      : []),
+    ...(input.latestWaitingMessage
+      ? [{
+          at: input.latestWaitingMessage.createdAt,
+          kind: "waiting" as const,
+          summary: renderMessageSummary(input.latestWaitingMessage),
+        }]
+      : []),
+    ...(input.latestGovernance
+      ? [{
+          at: input.latestGovernance.at,
+          kind: "governance" as const,
+          summary: buildHumanGovernanceSummary(input.latestGovernance.response),
+        }]
+      : []),
+  ];
+
+  return candidates.sort((left, right) =>
+    right.at.localeCompare(left.at) || rankDashboardActivityKind(right.kind) - rankDashboardActivityKind(left.kind)
+  )[0]!;
+}
+
+function resolveDashboardAttention(input: {
+  parentWorkItem: StoredAgentWorkItemRecord;
+  childWorkItems: StoredAgentWorkItemRecord[];
+  latestWaitingMessage: StoredAgentMessageRecord | null;
+  now: string;
+}): { level: ManagedAgentAttentionLevel; reasons: string[] } {
+  const workItems = [input.parentWorkItem, ...input.childWorkItems];
+  const failedCount = countWorkItemsByStatus(workItems, "failed");
+  const waitingHumanCount = countWorkItemsByStatus(workItems, "waiting_human");
+  const waitingAgentCount = countWorkItemsByStatus(workItems, "waiting_agent");
+  const blockedCount = countWorkItemsByStatus(workItems, "blocked") + countWorkItemsByStatus(workItems, "handoff_pending");
+  const staleOpenCount = countStaleOpenWorkItems(workItems, input.now);
+  const reasons: string[] = [];
+
+  if (waitingHumanCount > 0) {
+    reasons.push(renderAttentionReason(waitingHumanCount, "条任务等待顶层治理"));
+  }
+
+  if (failedCount > 0) {
+    reasons.push(renderAttentionReason(failedCount, "条任务执行失败"));
+  }
+
+  if (waitingAgentCount > 0) {
+    reasons.push(renderAttentionReason(waitingAgentCount, "条任务等待 agent 回复"));
+  }
+
+  if (blockedCount > 0) {
+    reasons.push(renderAttentionReason(blockedCount, "条任务仍处于阻塞或待交接"));
+  }
+
+  if (input.latestWaitingMessage?.messageType === "escalation") {
+    reasons.push("最近出现升级阻塞");
+  }
+
+  if (staleOpenCount > 0) {
+    reasons.push(renderAttentionReason(staleOpenCount, "条进行中任务超过 6 小时无更新"));
+  }
+
+  if (waitingHumanCount > 0 || failedCount > 0) {
+    return {
+      level: "urgent",
+      reasons: reasons.length > 0 ? reasons : ["需要立即治理"],
+    };
+  }
+
+  if (waitingAgentCount > 0 || blockedCount > 0 || input.latestWaitingMessage?.messageType === "escalation" || staleOpenCount > 0) {
+    return {
+      level: "attention",
+      reasons: reasons.length > 0 ? reasons : ["需要经理继续跟进"],
+    };
+  }
+
+  return {
+    level: "normal",
+    reasons: reasons.length > 0 ? reasons : ["当前下游协作推进正常"],
+  };
+}
+
+function countWorkItemsByStatus(
+  workItems: StoredAgentWorkItemRecord[],
+  status: StoredAgentWorkItemRecord["status"],
+): number {
+  return workItems.filter((workItem) => workItem.status === status).length;
+}
+
+function countStaleOpenWorkItems(workItems: StoredAgentWorkItemRecord[], now: string): number {
+  const nowTimestamp = safeParseTimestamp(now);
+
+  if (nowTimestamp === null) {
+    return 0;
+  }
+
+  return workItems.filter((workItem) => {
+    if (!isOpenWorkItemStatus(workItem.status)) {
+      return false;
+    }
+
+    const updatedAt = safeParseTimestamp(workItem.updatedAt);
+
+    if (updatedAt === null) {
+      return false;
+    }
+
+    return nowTimestamp - updatedAt >= COLLABORATION_STALE_OPEN_WORK_ITEM_MS;
+  }).length;
+}
+
+function isOpenWorkItemStatus(status: StoredAgentWorkItemRecord["status"]): boolean {
+  return !["completed", "failed", "cancelled"].includes(status);
+}
+
+function renderAttentionReason(count: number, suffix: string): string {
+  return `${count} ${suffix}`;
+}
+
+function safeParseTimestamp(value: string | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function rankDashboardActivityKind(kind: OrganizationCollaborationDashboardItem["lastActivityKind"]): number {
+  switch (kind) {
+    case "governance":
+      return 4;
+    case "handoff":
+      return 3;
+    case "waiting":
+      return 2;
+    case "work_item":
+      return 1;
+    default:
+      return 0;
+  }
 }
 
 function computeMailboxLeaseStaleBefore(now: string, mailboxLeaseTtlMs: number): string {

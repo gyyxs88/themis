@@ -909,6 +909,192 @@ test("ManagedAgentCoordinationService 会汇总组织级等待队列与升级摘
   }
 });
 
+test("ManagedAgentCoordinationService 会汇总组织级跨父任务协作看板，并给出 attention 级别", () => {
+  const { root, registry, managedAgentsService, coordinationService } = createServiceContext();
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "老板",
+      createdAt: "2026-04-07T12:00:00.000Z",
+      updatedAt: "2026-04-07T12:00:00.000Z",
+    });
+
+    const managerA = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "经理·曜",
+      departmentRole: "经理",
+      mission: "负责拆解任务与汇总结果。",
+      now: "2026-04-07T12:01:00.000Z",
+    });
+    const managerB = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "经理·青",
+      departmentRole: "经理",
+      mission: "负责另一条协作链路。",
+      now: "2026-04-07T12:02:00.000Z",
+    });
+    const backend = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "后端·衡",
+      departmentRole: "后端",
+      mission: "负责接口与存储。",
+      now: "2026-04-07T12:03:00.000Z",
+    });
+    const frontend = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "前端·岚",
+      departmentRole: "前端",
+      mission: "负责页面联调。",
+      now: "2026-04-07T12:04:00.000Z",
+    });
+
+    const urgentParent = coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: managerA.agent.agentId,
+      dispatchReason: "收口 P6 经理治理台",
+      goal: "把下游协作摘要沉到组织级治理面",
+      priority: "urgent",
+      now: "2026-04-07T12:05:00.000Z",
+    });
+    const urgentWaitingChild = coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: frontend.agent.agentId,
+      sourceType: "agent",
+      sourceAgentId: managerA.agent.agentId,
+      parentWorkItemId: urgentParent.workItem.workItemId,
+      dispatchReason: "补 Web 汇总卡片",
+      goal: "补组织级跨父任务汇总台 UI",
+      priority: "high",
+      now: "2026-04-07T12:06:00.000Z",
+    });
+    const urgentCompletedChild = coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: backend.agent.agentId,
+      sourceType: "agent",
+      sourceAgentId: managerA.agent.agentId,
+      parentWorkItemId: urgentParent.workItem.workItemId,
+      dispatchReason: "补 dashboard 接口",
+      goal: "补组织级跨父任务汇总 API",
+      priority: "high",
+      now: "2026-04-07T12:07:00.000Z",
+    });
+    const normalParent = coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: managerB.agent.agentId,
+      dispatchReason: "整理常规协作进展",
+      goal: "把低风险协作保持在正常推进状态",
+      priority: "normal",
+      now: "2026-04-07T12:08:00.000Z",
+    });
+    const normalChild = coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: backend.agent.agentId,
+      sourceType: "agent",
+      sourceAgentId: managerB.agent.agentId,
+      parentWorkItemId: normalParent.workItem.workItemId,
+      dispatchReason: "补文档同步",
+      goal: "同步实现说明到文档",
+      priority: "normal",
+      now: "2026-04-07T12:09:00.000Z",
+    });
+
+    registry.saveAgentWorkItem({
+      ...urgentWaitingChild.workItem,
+      status: "waiting_human",
+      waitingActionRequest: {
+        actionType: "approval",
+        prompt: "是否允许直接上线这版 manager dashboard？",
+        choices: ["approve", "deny"],
+      },
+      updatedAt: "2026-04-07T12:10:00.000Z",
+    });
+    registry.saveAgentWorkItem({
+      ...urgentCompletedChild.workItem,
+      status: "completed",
+      completedAt: "2026-04-07T12:11:00.000Z",
+      updatedAt: "2026-04-07T12:11:00.000Z",
+    });
+    registry.saveAgentWorkItem({
+      ...urgentParent.workItem,
+      latestHumanResponse: {
+        decision: "approve",
+        inputText: "可以继续，把跨父任务聚合面直接接到 Agents 面板。",
+        respondedAt: "2026-04-07T12:13:00.000Z",
+      },
+      updatedAt: "2026-04-07T12:13:00.000Z",
+    });
+    registry.saveAgentWorkItem({
+      ...normalChild.workItem,
+      status: "running",
+      updatedAt: "2026-04-07T12:12:00.000Z",
+    });
+
+    coordinationService.sendAgentMessage({
+      ownerPrincipalId: "principal-owner",
+      fromAgentId: frontend.agent.agentId,
+      toAgentId: managerA.agent.agentId,
+      workItemId: urgentWaitingChild.workItem.workItemId,
+      messageType: "escalation",
+      payload: {
+        summary: "UI 方案还有一个治理分歧，需要顶层确认。",
+      },
+      priority: "high",
+      now: "2026-04-07T12:12:30.000Z",
+    });
+    coordinationService.createAgentHandoff({
+      ownerPrincipalId: "principal-owner",
+      fromAgentId: backend.agent.agentId,
+      toAgentId: managerA.agent.agentId,
+      workItemId: urgentCompletedChild.workItem.workItemId,
+      summary: "跨父任务 dashboard API 已经可用。",
+      blockers: [],
+      recommendedNextActions: ["把 Web 卡片接上去"],
+      attachedArtifacts: ["src/server/http-agents.ts"],
+      now: "2026-04-07T12:12:00.000Z",
+    });
+    coordinationService.createAgentHandoff({
+      ownerPrincipalId: "principal-owner",
+      fromAgentId: backend.agent.agentId,
+      toAgentId: managerB.agent.agentId,
+      workItemId: normalChild.workItem.workItemId,
+      summary: "文档同步正在推进，没有额外阻塞。",
+      blockers: [],
+      recommendedNextActions: ["继续补文档"],
+      attachedArtifacts: ["docs/product/themis-p6-manager-governance-dashboard-plan.md"],
+      now: "2026-04-07T12:12:10.000Z",
+    });
+
+    const dashboard = coordinationService.listOrganizationCollaborationDashboard("principal-owner", {
+      now: "2026-04-07T12:30:00.000Z",
+    });
+    assert.equal(dashboard.summary.totalCount, 2);
+    assert.equal(dashboard.summary.urgentCount, 1);
+    assert.equal(dashboard.summary.attentionCount, 0);
+    assert.equal(dashboard.summary.normalCount, 1);
+    assert.equal(dashboard.items[0]?.parentWorkItem.workItemId, urgentParent.workItem.workItemId);
+    assert.equal(dashboard.items[0]?.managerAgent.displayName, "经理·曜");
+    assert.equal(dashboard.items[0]?.attentionLevel, "urgent");
+    assert.match(dashboard.items[0]?.attentionReasons.join("；") ?? "", /等待顶层治理/);
+    assert.equal(dashboard.items[0]?.latestWaitingMessage?.messageType, "escalation");
+    assert.equal(dashboard.items[0]?.latestHandoff?.summary, "跨父任务 dashboard API 已经可用。");
+    assert.equal(dashboard.items[0]?.lastActivityKind, "governance");
+    assert.match(dashboard.items[0]?.lastActivitySummary ?? "", /治理结论：approve/);
+    assert.equal(dashboard.items[1]?.attentionLevel, "normal");
+
+    const filtered = coordinationService.listOrganizationCollaborationDashboard("principal-owner", {
+      managerAgentId: managerA.agent.agentId,
+      attentionOnly: true,
+      now: "2026-04-07T12:30:00.000Z",
+    });
+    assert.equal(filtered.summary.totalCount, 1);
+    assert.equal(filtered.items.length, 1);
+    assert.equal(filtered.items[0]?.parentWorkItem.workItemId, urgentParent.workItem.workItemId);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("schema 25 迁移会创建 work item、message、mailbox 与 handoff 表", () => {
   const root = mkdtempSync(join(tmpdir(), "themis-managed-agent-coordination-schema-"));
   const databaseFile = join(root, "infra/local/themis.db");

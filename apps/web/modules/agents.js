@@ -89,6 +89,8 @@ export function createDefaultAgentsState() {
     agents: [],
     organizationWaitingSummary: null,
     organizationWaitingItems: [],
+    organizationCollaborationSummary: null,
+    organizationCollaborationItems: [],
     spawnPolicies: [],
     spawnSuggestions: [],
     suppressedSpawnSuggestions: [],
@@ -384,6 +386,34 @@ export function createAgentsController(app) {
       }
     });
 
+    dom?.agentsCollaborationList?.addEventListener("click", (event) => {
+      const openButton = event.target.closest("[data-agent-collaboration-open]");
+
+      if (openButton?.dataset.agentCollaborationOpen) {
+        const targetAgentId = normalizeText(openButton.dataset.agentCollaborationAgentId);
+        const workItemId = normalizeText(openButton.dataset.agentCollaborationOpen);
+
+        if (!targetAgentId || !workItemId) {
+          return;
+        }
+
+        void runSafely(() => load({
+          preserveNoticeMessage: true,
+          selectAgentId: targetAgentId,
+          selectWorkItemId: workItemId,
+        }));
+        return;
+      }
+
+      const focusButton = event.target.closest("[data-agent-collaboration-focus]");
+
+      if (!focusButton?.dataset.agentCollaborationFocus) {
+        return;
+      }
+
+      void runSafely(() => selectAgent(focusButton.dataset.agentCollaborationFocus));
+    });
+
     dom?.agentsSpawnSuggestionsList?.addEventListener("click", (event) => {
       const approveButton = event.target.closest("[data-agent-spawn-approve]");
 
@@ -653,9 +683,11 @@ export function createAgentsController(app) {
     render();
 
     try {
-      const [data, waitingData, suggestionsData, idleRecoveryData] = await Promise.all([
+      const [data, waitingData, collaborationData, suggestionsData, idleRecoveryData] = await Promise.all([
         postAgents("/api/agents/list", buildIdentityPayload(app)),
         postAgents("/api/agents/waiting/list", buildIdentityPayload(app)),
+        postAgents("/api/agents/collaboration-dashboard", buildIdentityPayload(app))
+          .catch(() => createEmptyCollaborationDashboardResponse()),
         postAgents("/api/agents/spawn-suggestions", buildIdentityPayload(app)),
         postAgents("/api/agents/idle-suggestions", buildIdentityPayload(app)),
       ]);
@@ -667,6 +699,7 @@ export function createAgentsController(app) {
       const organizations = normalizeOrganizations(data.organizations);
       const agents = normalizeAgents(data.agents);
       const waitingItems = normalizeWaitingItems(waitingData.items);
+      const collaborationItems = normalizeCollaborationDashboardItems(collaborationData.items);
       const spawnPolicies = normalizeSpawnPolicies(suggestionsData.spawnPolicies);
       const spawnSuggestions = normalizeSpawnSuggestions(suggestionsData.suggestions);
       const suppressedSpawnSuggestions = normalizeSuppressedSpawnSuggestions(suggestionsData.suppressedSuggestions);
@@ -692,6 +725,8 @@ export function createAgentsController(app) {
         agents,
         organizationWaitingSummary: normalizeWaitingSummary(waitingData.summary),
         organizationWaitingItems: waitingItems,
+        organizationCollaborationSummary: normalizeCollaborationDashboardSummary(collaborationData.summary),
+        organizationCollaborationItems: collaborationItems,
         spawnPolicies,
         spawnSuggestions,
         suppressedSpawnSuggestions,
@@ -1959,6 +1994,28 @@ function normalizeWaitingItems(value) {
     : [];
 }
 
+function normalizeCollaborationDashboardSummary(value) {
+  return isRecord(value)
+    ? {
+        totalCount: Number.isFinite(value.totalCount) ? Number(value.totalCount) : 0,
+        urgentCount: Number.isFinite(value.urgentCount) ? Number(value.urgentCount) : 0,
+        attentionCount: Number.isFinite(value.attentionCount) ? Number(value.attentionCount) : 0,
+        normalCount: Number.isFinite(value.normalCount) ? Number(value.normalCount) : 0,
+      }
+    : {
+        totalCount: 0,
+        urgentCount: 0,
+        attentionCount: 0,
+        normalCount: 0,
+      };
+}
+
+function normalizeCollaborationDashboardItems(value) {
+  return Array.isArray(value)
+    ? value.filter((item) => isRecord(item) && isRecord(item.parentWorkItem) && isRecord(item.managerAgent))
+    : [];
+}
+
 function normalizeSpawnPolicies(value) {
   return Array.isArray(value)
     ? value.filter((item) => isRecord(item) && normalizeText(item.organizationId))
@@ -2017,6 +2074,18 @@ function normalizeExecutionRuntimeProfile(value) {
 
 function normalizeWorkItemDetail(value) {
   return isRecord(value) ? value : null;
+}
+
+function createEmptyCollaborationDashboardResponse() {
+  return {
+    summary: {
+      totalCount: 0,
+      urgentCount: 0,
+      attentionCount: 0,
+      normalCount: 0,
+    },
+    items: [],
+  };
 }
 
 function resolveAgentId(candidateId, agents) {

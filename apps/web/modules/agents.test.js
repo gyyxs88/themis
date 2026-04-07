@@ -53,6 +53,36 @@ test("load 会读取 agent 列表并补齐当前选中 agent 的任务与 mailbo
         });
       }
 
+      if (url === "/api/agents/collaboration-dashboard") {
+        return jsonResponse({
+          summary: {
+            totalCount: 1,
+            urgentCount: 1,
+            attentionCount: 0,
+            normalCount: 0,
+          },
+          items: [
+            {
+              parentWorkItem: {
+                workItemId: "work-item-parent-1",
+                targetAgentId: "agent-backend",
+                status: "waiting_human",
+                goal: "把组织级跨父任务汇总挂到 Agents 面板",
+              },
+              managerAgent: {
+                agentId: "agent-backend",
+                displayName: "后端·衡",
+              },
+              attentionLevel: "urgent",
+              attentionReasons: ["1 条任务等待顶层治理"],
+              lastActivityAt: "2026-04-07T12:10:00.000Z",
+              lastActivityKind: "waiting",
+              lastActivitySummary: "需要顶层拍板当前交互方案。",
+            },
+          ],
+        });
+      }
+
       if (url === "/api/agents/detail") {
         return jsonResponse({
           organization: { organizationId: "org-1", displayName: "老板团队" },
@@ -136,6 +166,7 @@ test("load 会读取 agent 列表并补齐当前选中 agent 的任务与 mailbo
       [
         "/api/agents/list",
         "/api/agents/waiting/list",
+        "/api/agents/collaboration-dashboard",
         "/api/agents/spawn-suggestions",
         "/api/agents/idle-suggestions",
         "/api/agents/detail",
@@ -148,6 +179,8 @@ test("load 会读取 agent 列表并补齐当前选中 agent 的任务与 mailbo
     assert.equal(result.organizations.length, 1);
     assert.equal(result.agents.length, 1);
     assert.equal(result.selectedAgentId, "agent-backend");
+    assert.equal(result.organizationCollaborationSummary?.totalCount, 1);
+    assert.equal(result.organizationCollaborationItems.length, 1);
     assert.equal(result.workItems.length, 1);
     assert.equal(result.mailboxItems.length, 1);
     assert.equal(result.selectedWorkItemId, "work-item-1");
@@ -2291,6 +2324,7 @@ function createAppStub(agentsState) {
       agentsDispatchButton: null,
       agentsList: null,
       agentsWaitingList: null,
+      agentsCollaborationList: null,
       agentsSpawnPolicyMaxActiveInput: null,
       agentsSpawnPolicyMaxRoleInput: null,
       agentsSpawnPolicySaveButton: null,
