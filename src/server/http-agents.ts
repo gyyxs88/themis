@@ -156,11 +156,28 @@ interface WorkItemCancelPayload extends IdentityPayload {
   workItemId: string;
 }
 
-interface WaitingQueueListPayload extends IdentityPayload {}
-
-interface CollaborationDashboardPayload extends IdentityPayload {
+interface GovernanceOverviewPayload extends IdentityPayload {
+  organizationId?: string;
   managerAgentId?: string;
   attentionOnly?: boolean;
+  attentionLevels?: Array<"normal" | "attention" | "urgent">;
+  waitingFor?: "any" | "human" | "agent";
+  staleOnly?: boolean;
+  failedOnly?: boolean;
+}
+
+interface WaitingQueueListPayload extends GovernanceOverviewPayload {
+  limit?: number;
+}
+
+interface CollaborationDashboardPayload extends IdentityPayload {
+  organizationId?: string;
+  managerAgentId?: string;
+  attentionOnly?: boolean;
+  attentionLevels?: Array<"normal" | "attention" | "urgent">;
+  waitingFor?: "any" | "human" | "agent";
+  staleOnly?: boolean;
+  failedOnly?: boolean;
   limit?: number;
 }
 
@@ -816,12 +833,56 @@ export async function handleAgentWaitingQueueList(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const result = runtime.getManagedAgentCoordinationService().listOrganizationWaitingQueue(identity.principalId);
+    const result = runtime.getManagedAgentCoordinationService().listOrganizationWaitingQueue(identity.principalId, {
+      ...(payload.organizationId ? { organizationId: payload.organizationId } : {}),
+      ...(payload.managerAgentId ? { managerAgentId: payload.managerAgentId } : {}),
+      ...(payload.attentionOnly === true ? { attentionOnly: true } : {}),
+      ...(payload.attentionLevels ? { attentionLevels: payload.attentionLevels } : {}),
+      ...(payload.waitingFor ? { waitingFor: payload.waitingFor } : {}),
+      ...(payload.staleOnly === true ? { staleOnly: true } : {}),
+      ...(payload.failedOnly === true ? { failedOnly: true } : {}),
+      ...(payload.limit ? { limit: payload.limit } : {}),
+    });
 
     writeJson(response, 200, {
       identity,
       summary: result.summary,
       items: result.items,
+    });
+  } catch (error) {
+    writeManagedAgentBoundaryError(response, error);
+  }
+}
+
+export async function handleAgentGovernanceOverview(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeGovernanceOverviewPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const overview = runtime.getManagedAgentCoordinationService().getOrganizationGovernanceOverview(
+      identity.principalId,
+      {
+        ...(payload.organizationId ? { organizationId: payload.organizationId } : {}),
+        ...(payload.managerAgentId ? { managerAgentId: payload.managerAgentId } : {}),
+        ...(payload.attentionOnly === true ? { attentionOnly: true } : {}),
+        ...(payload.attentionLevels ? { attentionLevels: payload.attentionLevels } : {}),
+        ...(payload.waitingFor ? { waitingFor: payload.waitingFor } : {}),
+        ...(payload.staleOnly === true ? { staleOnly: true } : {}),
+        ...(payload.failedOnly === true ? { failedOnly: true } : {}),
+      },
+    );
+
+    writeJson(response, 200, {
+      identity,
+      overview,
     });
   } catch (error) {
     writeManagedAgentBoundaryError(response, error);
@@ -844,8 +905,13 @@ export async function handleAgentCollaborationDashboard(
     const result = runtime.getManagedAgentCoordinationService().listOrganizationCollaborationDashboard(
       identity.principalId,
       {
+        ...(payload.organizationId ? { organizationId: payload.organizationId } : {}),
         ...(payload.managerAgentId ? { managerAgentId: payload.managerAgentId } : {}),
         ...(payload.attentionOnly === true ? { attentionOnly: true } : {}),
+        ...(payload.attentionLevels ? { attentionLevels: payload.attentionLevels } : {}),
+        ...(payload.waitingFor ? { waitingFor: payload.waitingFor } : {}),
+        ...(payload.staleOnly === true ? { staleOnly: true } : {}),
+        ...(payload.failedOnly === true ? { failedOnly: true } : {}),
         ...(payload.limit ? { limit: payload.limit } : {}),
       },
     );
@@ -1570,7 +1636,59 @@ function normalizeWaitingQueueListPayload(value: unknown): WaitingQueueListPaylo
     throw new Error("Request body must be an object.");
   }
 
-  return normalizeIdentityPayload(value);
+  const organizationId = readOptionalString(value.organizationId);
+  const managerAgentId = readOptionalString(value.managerAgentId);
+  const attentionOnly = readOptionalBoolean(value.attentionOnly);
+  const attentionLevels = readOptionalEnumArray(
+    value.attentionLevels,
+    ["normal", "attention", "urgent"] as const,
+    "attentionLevels",
+  );
+  const waitingFor = readOptionalEnum(value.waitingFor, ["any", "human", "agent"] as const, "waitingFor");
+  const staleOnly = readOptionalBoolean(value.staleOnly);
+  const failedOnly = readOptionalBoolean(value.failedOnly);
+  const limit = readOptionalPositiveInteger(value.limit);
+
+  return {
+    ...normalizeIdentityPayload(value),
+    ...(organizationId ? { organizationId } : {}),
+    ...(managerAgentId ? { managerAgentId } : {}),
+    ...(attentionOnly !== undefined ? { attentionOnly } : {}),
+    ...(attentionLevels ? { attentionLevels } : {}),
+    ...(waitingFor ? { waitingFor } : {}),
+    ...(staleOnly !== undefined ? { staleOnly } : {}),
+    ...(failedOnly !== undefined ? { failedOnly } : {}),
+    ...(limit ? { limit } : {}),
+  };
+}
+
+function normalizeGovernanceOverviewPayload(value: unknown): GovernanceOverviewPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  const organizationId = readOptionalString(value.organizationId);
+  const managerAgentId = readOptionalString(value.managerAgentId);
+  const attentionOnly = readOptionalBoolean(value.attentionOnly);
+  const attentionLevels = readOptionalEnumArray(
+    value.attentionLevels,
+    ["normal", "attention", "urgent"] as const,
+    "attentionLevels",
+  );
+  const waitingFor = readOptionalEnum(value.waitingFor, ["any", "human", "agent"] as const, "waitingFor");
+  const staleOnly = readOptionalBoolean(value.staleOnly);
+  const failedOnly = readOptionalBoolean(value.failedOnly);
+
+  return {
+    ...normalizeIdentityPayload(value),
+    ...(organizationId ? { organizationId } : {}),
+    ...(managerAgentId ? { managerAgentId } : {}),
+    ...(attentionOnly !== undefined ? { attentionOnly } : {}),
+    ...(attentionLevels ? { attentionLevels } : {}),
+    ...(waitingFor ? { waitingFor } : {}),
+    ...(staleOnly !== undefined ? { staleOnly } : {}),
+    ...(failedOnly !== undefined ? { failedOnly } : {}),
+  };
 }
 
 function normalizeCollaborationDashboardPayload(value: unknown): CollaborationDashboardPayload {
@@ -1578,14 +1696,28 @@ function normalizeCollaborationDashboardPayload(value: unknown): CollaborationDa
     throw new Error("Request body must be an object.");
   }
 
+  const organizationId = readOptionalString(value.organizationId);
   const managerAgentId = readOptionalString(value.managerAgentId);
   const attentionOnly = readOptionalBoolean(value.attentionOnly);
+  const attentionLevels = readOptionalEnumArray(
+    value.attentionLevels,
+    ["normal", "attention", "urgent"] as const,
+    "attentionLevels",
+  );
+  const waitingFor = readOptionalEnum(value.waitingFor, ["any", "human", "agent"] as const, "waitingFor");
+  const staleOnly = readOptionalBoolean(value.staleOnly);
+  const failedOnly = readOptionalBoolean(value.failedOnly);
   const limit = readOptionalPositiveInteger(value.limit);
 
   return {
     ...normalizeIdentityPayload(value),
+    ...(organizationId ? { organizationId } : {}),
     ...(managerAgentId ? { managerAgentId } : {}),
     ...(attentionOnly !== undefined ? { attentionOnly } : {}),
+    ...(attentionLevels ? { attentionLevels } : {}),
+    ...(waitingFor ? { waitingFor } : {}),
+    ...(staleOnly !== undefined ? { staleOnly } : {}),
+    ...(failedOnly !== undefined ? { failedOnly } : {}),
     ...(limit ? { limit } : {}),
   };
 }
@@ -1816,6 +1948,26 @@ function readOptionalEnum<T extends readonly string[]>(
   }
 
   return normalized as T[number];
+}
+
+function readOptionalEnumArray<T extends readonly string[]>(
+  value: unknown,
+  candidates: T,
+  fieldName: string,
+): T[number][] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error(`${fieldName} is invalid.`);
+  }
+
+  const normalized = value
+    .map((entry) => readOptionalEnum(entry, candidates, fieldName))
+    .filter((entry): entry is T[number] => Boolean(entry));
+
+  return normalized.length > 0 ? [...new Set(normalized)] : undefined;
 }
 
 function readRequiredEnum<T extends readonly string[]>(

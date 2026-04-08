@@ -340,6 +340,15 @@ export function createRenderer(app) {
     const collaborationItems = Array.isArray(agentsState.organizationCollaborationItems)
       ? agentsState.organizationCollaborationItems
       : [];
+    const governanceOverview = normalizeGovernanceOverviewState(agentsState.organizationGovernanceOverview);
+    const governanceFilters = normalizeGovernanceFiltersState(
+      agentsState.governanceFilters,
+      organizations,
+      agents,
+    );
+    const governanceHotspots = Array.isArray(governanceOverview.managerHotspots)
+      ? governanceOverview.managerHotspots
+      : [];
     const spawnPolicies = Array.isArray(agentsState.spawnPolicies) ? agentsState.spawnPolicies : [];
     const spawnSuggestions = Array.isArray(agentsState.spawnSuggestions) ? agentsState.spawnSuggestions : [];
     const suppressedSpawnSuggestions = Array.isArray(agentsState.suppressedSpawnSuggestions)
@@ -403,6 +412,47 @@ export function createRenderer(app) {
     dom.agentsSummaryAgents.textContent = String(agents.length);
     dom.agentsSummaryWorkItems.textContent = String(workItems.length);
     dom.agentsSummaryMailbox.textContent = String(pendingMailboxCount);
+    dom.agentsGovernanceOverviewSummary.textContent = resolveGovernanceOverviewSummaryText({
+      loading: Boolean(agentsState.loading),
+      overview: governanceOverview,
+    });
+    dom.agentsGovernanceSummaryGrid.innerHTML = renderGovernanceOverviewSummaryCards(governanceOverview, {
+      busy,
+      escapeHtml: utils.escapeHtml,
+    });
+    dom.agentsGovernanceFilterManagerSelect.innerHTML = renderGovernanceManagerOptions(
+      agents,
+      governanceFilters.organizationId,
+      governanceFilters.managerAgentId,
+      utils.escapeHtml,
+    );
+    dom.agentsGovernanceFilterManagerSelect.value = governanceFilters.managerAgentId;
+    dom.agentsGovernanceFilterManagerSelect.disabled = busy;
+    dom.agentsGovernanceFilterAttentionSelect.value = governanceFilters.attentionLevel;
+    dom.agentsGovernanceFilterAttentionSelect.disabled = busy;
+    dom.agentsGovernanceFilterWaitingSelect.value = governanceFilters.waitingFor;
+    dom.agentsGovernanceFilterWaitingSelect.disabled = busy;
+    dom.agentsGovernanceFilterStaleInput.checked = governanceFilters.staleOnly;
+    dom.agentsGovernanceFilterStaleInput.disabled = busy;
+    dom.agentsGovernanceFilterFailedInput.checked = governanceFilters.failedOnly;
+    dom.agentsGovernanceFilterFailedInput.disabled = busy;
+    dom.agentsGovernanceFilterResetButton.disabled = busy;
+    dom.agentsGovernanceHotspotsSummary.textContent = resolveGovernanceHotspotsSummaryText({
+      loading: Boolean(agentsState.loading),
+      hotspotCount: governanceHotspots.length,
+      managerCount: governanceOverview.managersNeedingAttentionCount,
+    });
+    dom.agentsGovernanceHotspotsEmpty.classList.toggle("hidden", governanceHotspots.length > 0);
+    dom.agentsGovernanceHotspotsEmpty.textContent = agentsState.loading
+      ? "正在汇总 manager 热点。"
+      : "当前还没有需要特别关注的 manager 热点。";
+    dom.agentsGovernanceHotspotsList.innerHTML = governanceHotspots
+      .map((item) => renderGovernanceHotspotCard(item, {
+        busy,
+        escapeHtml: utils.escapeHtml,
+        formatRelativeTime: utils.formatRelativeTime,
+      }))
+      .join("");
     dom.agentsWaitingSummary.textContent = resolveWaitingQueueSummaryText({
       loading: Boolean(agentsState.loading),
       waitingSummary,
@@ -2310,6 +2360,214 @@ function normalizeWaitingQueueSummary(summary, fallbackTotalCount) {
   };
 }
 
+function normalizeGovernanceOverviewState(value) {
+  const overview = isRecord(value) ? value : {};
+
+  return {
+    urgentParentCount: Number.isFinite(overview.urgentParentCount) ? Number(overview.urgentParentCount) : 0,
+    attentionParentCount: Number.isFinite(overview.attentionParentCount) ? Number(overview.attentionParentCount) : 0,
+    waitingHumanCount: Number.isFinite(overview.waitingHumanCount) ? Number(overview.waitingHumanCount) : 0,
+    waitingAgentCount: Number.isFinite(overview.waitingAgentCount) ? Number(overview.waitingAgentCount) : 0,
+    staleParentCount: Number.isFinite(overview.staleParentCount) ? Number(overview.staleParentCount) : 0,
+    failedChildCount: Number.isFinite(overview.failedChildCount) ? Number(overview.failedChildCount) : 0,
+    managersNeedingAttentionCount: Number.isFinite(overview.managersNeedingAttentionCount)
+      ? Number(overview.managersNeedingAttentionCount)
+      : 0,
+    managerHotspots: Array.isArray(overview.managerHotspots)
+      ? overview.managerHotspots.filter((item) => isRecord(item) && isRecord(item.managerAgent))
+      : [],
+  };
+}
+
+function normalizeGovernanceFiltersState(value, organizations, agents) {
+  const safeValue = isRecord(value) ? value : {};
+  const organizationId = typeof safeValue.organizationId === "string" && safeValue.organizationId.trim()
+    ? safeValue.organizationId.trim()
+    : typeof organizations?.[0]?.organizationId === "string" && organizations[0].organizationId.trim()
+      ? organizations[0].organizationId.trim()
+      : "";
+  const managerAgentId = typeof safeValue.managerAgentId === "string" && safeValue.managerAgentId.trim()
+    ? safeValue.managerAgentId.trim()
+    : "";
+  const visibleAgents = Array.isArray(agents)
+    ? agents.filter((agent) => !organizationId || agent?.organizationId === organizationId)
+    : [];
+  const selectedManagerId = visibleAgents.some((agent) => agent?.agentId === managerAgentId)
+    ? managerAgentId
+    : "";
+
+  return {
+    organizationId,
+    managerAgentId: selectedManagerId,
+    attentionLevel: ["all", "normal", "attention", "urgent"].includes(safeValue.attentionLevel)
+      ? safeValue.attentionLevel
+      : "all",
+    waitingFor: ["any", "human", "agent"].includes(safeValue.waitingFor)
+      ? safeValue.waitingFor
+      : "any",
+    staleOnly: safeValue.staleOnly === true,
+    failedOnly: safeValue.failedOnly === true,
+  };
+}
+
+function resolveGovernanceOverviewSummaryText({ loading, overview }) {
+  if (loading) {
+    return "正在汇总当前组织的治理热点与 manager 负载。";
+  }
+
+  return `当前有 ${overview.urgentParentCount} 条紧急父任务、${overview.waitingHumanCount} 条等待顶层治理的任务、${overview.managersNeedingAttentionCount} 个需要关注的 manager。`;
+}
+
+function renderGovernanceOverviewSummaryCards(overview, { busy, escapeHtml }) {
+  const cards = [
+    {
+      label: "紧急父任务",
+      value: overview.urgentParentCount,
+      copy: "点击后只看 urgent。",
+      preset: "urgent",
+    },
+    {
+      label: "关注父任务",
+      value: overview.attentionParentCount,
+      copy: "点击后只看 attention。",
+      preset: "attention",
+    },
+    {
+      label: "等人类",
+      value: overview.waitingHumanCount,
+      copy: "点击后只看 waiting_human。",
+      preset: "waiting_human",
+    },
+    {
+      label: "等 agent",
+      value: overview.waitingAgentCount,
+      copy: "点击后只看 waiting_agent。",
+      preset: "waiting_agent",
+    },
+    {
+      label: "陈旧链路",
+      value: overview.staleParentCount,
+      copy: "点击后只看 stale。",
+      preset: "stale",
+    },
+    {
+      label: "需关注 manager",
+      value: overview.managersNeedingAttentionCount,
+      copy: `失败子任务 ${overview.failedChildCount} 条。`,
+      preset: "",
+    },
+  ];
+
+  return cards.map((card) => {
+    const actionable = card.preset.length > 0;
+
+    return actionable
+      ? `
+        <button
+          type="button"
+          class="agent-summary-card agent-summary-card-action"
+          data-agent-governance-preset="${escapeHtml(card.preset)}"
+          ${busy ? "disabled" : ""}
+        >
+          <span>${escapeHtml(card.label)}</span>
+          <strong>${escapeHtml(String(card.value))}</strong>
+          <small>${escapeHtml(card.copy)}</small>
+        </button>
+      `
+      : `
+        <article class="agent-summary-card">
+          <span>${escapeHtml(card.label)}</span>
+          <strong>${escapeHtml(String(card.value))}</strong>
+          <small>${escapeHtml(card.copy)}</small>
+        </article>
+      `;
+  }).join("");
+}
+
+function renderGovernanceManagerOptions(agents, organizationId, selectedManagerId, escapeHtml) {
+  const visibleAgents = Array.isArray(agents)
+    ? agents.filter((agent) => !organizationId || agent?.organizationId === organizationId)
+    : [];
+
+  return [
+    '<option value="">全部 manager</option>',
+    ...visibleAgents.map((agent) => {
+      const label = agent?.displayName || agent?.departmentRole || agent?.agentId || "未命名 agent";
+      const value = typeof agent?.agentId === "string" ? agent.agentId : "";
+      const selected = value === selectedManagerId ? ' selected="selected"' : "";
+      return `<option value="${escapeHtml(value)}"${selected}>${escapeHtml(label)}</option>`;
+    }),
+  ].join("");
+}
+
+function resolveGovernanceHotspotsSummaryText({ loading, hotspotCount, managerCount }) {
+  if (loading) {
+    return "正在计算 manager 热点。";
+  }
+
+  if (hotspotCount <= 0) {
+    return "当前还没有需要特别关注的 manager 热点。";
+  }
+
+  return `当前有 ${managerCount} 个需要关注的 manager，这里优先展示最值得先看的 ${hotspotCount} 条热点。`;
+}
+
+function renderGovernanceHotspotCard(item, {
+  busy,
+  escapeHtml,
+  formatRelativeTime,
+}) {
+  const managerAgent = isRecord(item?.managerAgent) ? item.managerAgent : {};
+  const status = resolveAgentStatus(managerAgent?.status);
+  const openParentCount = Number.isFinite(item?.openParentCount) ? Number(item.openParentCount) : 0;
+  const urgentParentCount = Number.isFinite(item?.urgentParentCount) ? Number(item.urgentParentCount) : 0;
+  const attentionParentCount = Number.isFinite(item?.attentionParentCount) ? Number(item.attentionParentCount) : 0;
+  const waitingCount = Number.isFinite(item?.waitingCount) ? Number(item.waitingCount) : 0;
+  const staleParentCount = Number.isFinite(item?.staleParentCount) ? Number(item.staleParentCount) : 0;
+  const failedChildCount = Number.isFinite(item?.failedChildCount) ? Number(item.failedChildCount) : 0;
+
+  return `
+    <article class="agent-card agent-card-compact">
+      <div class="agent-card-head">
+        <div class="agent-card-heading">
+          <h4>${escapeHtml(managerAgent?.displayName || managerAgent?.departmentRole || managerAgent?.agentId || "未知 manager")}</h4>
+          <p class="agent-card-copy">优先回答“现在该先盯谁”。这张热点卡只保留筛选和聚焦两个动作。</p>
+        </div>
+        <div class="agent-pill-row">
+          <span class="badge ${escapeHtml(resolveStatusTone(status))}">${escapeHtml(resolveAgentStatusLabel(status))}</span>
+          <span class="agent-pill">${escapeHtml(`urgent ${urgentParentCount}`)}</span>
+        </div>
+      </div>
+      <div class="agent-meta-grid">
+        ${renderAgentMetaItem("父任务", String(openParentCount), escapeHtml)}
+        ${renderAgentMetaItem("waiting", String(waitingCount), escapeHtml)}
+        ${renderAgentMetaItem("attention", String(attentionParentCount), escapeHtml)}
+        ${renderAgentMetaItem("stale", String(staleParentCount), escapeHtml)}
+        ${renderAgentMetaItem("失败子任务", String(failedChildCount), escapeHtml)}
+        ${renderAgentMetaItem("最近活动", formatRelativeTime(item?.latestActivityAt), escapeHtml)}
+      </div>
+      <div class="agent-card-actions">
+        <button
+          type="button"
+          class="toolbar-button subtle"
+          data-agent-governance-hotspot-filter="${escapeHtml(managerAgent?.agentId || "")}"
+          ${busy ? "disabled" : ""}
+        >
+          只看该 manager
+        </button>
+        <button
+          type="button"
+          class="toolbar-button subtle"
+          data-agent-governance-hotspot-focus="${escapeHtml(managerAgent?.agentId || "")}"
+          ${busy ? "disabled" : ""}
+        >
+          切到 manager
+        </button>
+      </div>
+    </article>
+  `;
+}
+
 function resolveWaitingQueueSummaryText({ loading, waitingSummary, waitingCount }) {
   if (loading) {
     return "正在汇总当前组织下的等待项与升级摘要。";
@@ -2437,6 +2695,8 @@ function renderOrganizationWaitingCard(item, {
 }) {
   const workItem = item?.workItem ?? {};
   const targetAgent = item?.targetAgent ?? {};
+  const managerAgent = item?.managerAgent ?? {};
+  const parentWorkItem = item?.parentWorkItem ?? null;
   const sourceAgent = item?.sourceAgent ?? null;
   const sourcePrincipal = item?.sourcePrincipal ?? null;
   const latestWaitingMessage = item?.latestWaitingMessage ?? null;
@@ -2470,10 +2730,17 @@ function renderOrganizationWaitingCard(item, {
       </div>
       <div class="agent-meta-grid">
         ${renderAgentMetaItem("workItem", workItem?.workItemId || "未知", escapeHtml)}
+        ${renderAgentMetaItem("manager", managerAgent?.displayName || managerAgent?.agentId || targetAgent?.displayName || "未知", escapeHtml)}
         ${renderAgentMetaItem("来源", sourceAgent?.displayName || sourcePrincipal?.displayName || sourcePrincipal?.principalId || "未知", escapeHtml)}
         ${renderAgentMetaItem("优先级", resolvePriorityLabel(resolvePriority(workItem?.priority)), escapeHtml)}
         ${renderAgentMetaItem("最近更新", formatRelativeTime(workItem?.updatedAt), escapeHtml)}
       </div>
+      ${parentWorkItem?.workItemId ? `
+        <div class="agent-block">
+          <p class="agent-block-title">所属父任务</p>
+          <p class="agent-card-copy">${escapeHtml(parentWorkItem?.goal || parentWorkItem?.dispatchReason || parentWorkItem?.workItemId || "当前父任务没有额外摘要。")}</p>
+        </div>
+      ` : ""}
       ${waitingHuman ? `
         <div class="agent-block">
           <p class="agent-block-title">直接治理</p>
@@ -2513,6 +2780,16 @@ function renderOrganizationWaitingCard(item, {
         </div>
       ` : ""}
       <div class="agent-card-actions">
+        ${parentWorkItem?.workItemId ? `
+          <button
+            type="button"
+            class="toolbar-button subtle"
+            data-agent-waiting-parent-open="${escapeHtml(parentWorkItem?.workItemId || "")}"
+            data-agent-waiting-parent-agent-id="${escapeHtml(managerAgent?.agentId || targetAgent?.agentId || "")}"
+          >
+            查看父任务
+          </button>
+        ` : ""}
         ${workItem?.status === "waiting_agent" ? `
           <button
             type="button"
@@ -2557,6 +2834,11 @@ function renderOrganizationCollaborationDashboardCard(item, {
   const managerAgent = item?.managerAgent ?? {};
   const childSummary = normalizeChildWorkItemSummary(item?.childSummary);
   const attentionLevel = resolveCollaborationAttentionLevel(item?.attentionLevel);
+  const managerStatus = resolveAgentStatus(item?.managerStatus || managerAgent?.status);
+  const waitingHumanChildCount = Number.isFinite(item?.waitingHumanChildCount) ? Number(item.waitingHumanChildCount) : 0;
+  const waitingAgentChildCount = Number.isFinite(item?.waitingAgentChildCount) ? Number(item.waitingAgentChildCount) : 0;
+  const failedChildCount = Number.isFinite(item?.failedChildCount) ? Number(item.failedChildCount) : 0;
+  const staleChildCount = Number.isFinite(item?.staleChildCount) ? Number(item.staleChildCount) : 0;
   const attentionReasons = Array.isArray(item?.attentionReasons)
     ? item.attentionReasons.filter((reason) => typeof reason === "string" && reason.trim())
     : [];
@@ -2564,6 +2846,9 @@ function renderOrganizationCollaborationDashboardCard(item, {
   const focusedManager = managerAgent?.agentId === selectedAgentId;
   const openDisabled = busy || !parentWorkItem?.workItemId || !managerAgent?.agentId;
   const focusDisabled = busy || !managerAgent?.agentId;
+  const waitingOpenDisabled = busy || !item?.latestWaitingWorkItemId || !item?.latestWaitingTargetAgentId;
+  const lifecycleAction = managerStatus === "paused" ? "resume" : managerStatus === "active" ? "pause" : "";
+  const lifecycleDisabled = busy || !lifecycleAction || !managerAgent?.agentId;
   const activitySummary = typeof item?.lastActivitySummary === "string" && item.lastActivitySummary.trim()
     ? item.lastActivitySummary.trim()
     : (typeof parentWorkItem?.goal === "string" && parentWorkItem.goal.trim())
@@ -2584,9 +2869,12 @@ function renderOrganizationCollaborationDashboardCard(item, {
       </div>
       <div class="agent-meta-grid">
         ${renderAgentMetaItem("manager", managerAgent?.displayName || managerAgent?.agentId || "未知", escapeHtml)}
+        ${renderAgentMetaItem("manager 状态", resolveAgentStatusLabel(managerStatus), escapeHtml)}
         ${renderAgentMetaItem("父 workItem", parentWorkItem?.workItemId || "未知", escapeHtml)}
         ${renderAgentMetaItem("子任务", `${childSummary.totalCount} 条 / 进行中 ${childSummary.openCount}`, escapeHtml)}
         ${renderAgentMetaItem("等待中", `${childSummary.waitingCount} 条`, escapeHtml)}
+        ${renderAgentMetaItem("等人类 / 等 agent", `${waitingHumanChildCount} / ${waitingAgentChildCount}`, escapeHtml)}
+        ${renderAgentMetaItem("失败 / stale", `${failedChildCount} / ${staleChildCount}`, escapeHtml)}
         ${renderAgentMetaItem("最近活动", formatRelativeTime(item?.lastActivityAt), escapeHtml)}
         ${renderAgentMetaItem("最近动作", resolveCollaborationActivityKindLabel(item?.lastActivityKind), escapeHtml)}
       </div>
@@ -2616,6 +2904,26 @@ function renderOrganizationCollaborationDashboardCard(item, {
         >
           ${focusedManager ? "当前 manager" : "切到 manager"}
         </button>
+        <button
+          type="button"
+          class="toolbar-button subtle"
+          data-agent-collaboration-waiting-open="${escapeHtml(item?.latestWaitingWorkItemId || "")}"
+          data-agent-collaboration-waiting-agent-id="${escapeHtml(item?.latestWaitingTargetAgentId || "")}"
+          ${waitingOpenDisabled ? "disabled" : ""}
+        >
+          查看等待项
+        </button>
+        ${lifecycleAction ? `
+          <button
+            type="button"
+            class="toolbar-button subtle"
+            data-agent-collaboration-lifecycle="${escapeHtml(lifecycleAction)}"
+            data-agent-collaboration-lifecycle-agent-id="${escapeHtml(managerAgent?.agentId || "")}"
+            ${lifecycleDisabled ? "disabled" : ""}
+          >
+            ${escapeHtml(lifecycleAction === "pause" ? "暂停 manager" : "恢复 manager")}
+          </button>
+        ` : ""}
       </div>
     </article>
   `;

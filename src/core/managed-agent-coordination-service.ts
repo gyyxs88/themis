@@ -213,13 +213,47 @@ export interface OrganizationWaitingQueueSummary {
   escalationCount: number;
 }
 
+export type OrganizationGovernanceWaitingFor = "any" | "human" | "agent";
+
+export interface OrganizationGovernanceFilters {
+  organizationId?: string;
+  managerAgentId?: string;
+  attentionOnly?: boolean;
+  attentionLevels?: ManagedAgentAttentionLevel[] | null;
+  waitingFor?: OrganizationGovernanceWaitingFor;
+  staleOnly?: boolean;
+  failedOnly?: boolean;
+  limit?: number;
+  now?: string;
+}
+
+interface NormalizedOrganizationGovernanceFilters {
+  organizationId?: string;
+  managerAgentId?: string;
+  attentionOnly?: true;
+  attentionLevels: ManagedAgentAttentionLevel[] | null;
+  waitingFor: OrganizationGovernanceWaitingFor;
+  staleOnly: boolean;
+  failedOnly: boolean;
+  limit?: number;
+  now: string;
+}
+
 export interface OrganizationWaitingQueueItem {
   workItem: StoredAgentWorkItemRecord;
   organization: StoredOrganizationRecord;
   targetAgent: StoredManagedAgentRecord;
+  managerAgent: StoredManagedAgentRecord;
+  parentWorkItem: StoredAgentWorkItemRecord | null;
   sourceAgent: StoredManagedAgentRecord | null;
   sourcePrincipal: StoredPrincipalRecord | null;
   latestWaitingMessage: StoredAgentMessageRecord | null;
+  waitingFor: Exclude<OrganizationGovernanceWaitingFor, "any">;
+  isStale: boolean;
+  relatedFailedChildCount: number;
+  relatedStaleChildCount: number;
+  attentionLevel: ManagedAgentAttentionLevel;
+  attentionReasons: string[];
 }
 
 export interface OrganizationWaitingQueueResult {
@@ -229,12 +263,7 @@ export interface OrganizationWaitingQueueResult {
 
 export type ManagedAgentAttentionLevel = "normal" | "attention" | "urgent";
 
-export interface OrganizationCollaborationDashboardFilters {
-  managerAgentId?: string;
-  attentionOnly?: boolean;
-  limit?: number;
-  now?: string;
-}
+export interface OrganizationCollaborationDashboardFilters extends OrganizationGovernanceFilters {}
 
 export interface OrganizationCollaborationDashboardSummary {
   totalCount: number;
@@ -247,8 +276,16 @@ export interface OrganizationCollaborationDashboardItem {
   parentWorkItem: StoredAgentWorkItemRecord;
   managerAgent: StoredManagedAgentRecord;
   childSummary: ManagedAgentChildWorkItemSummary;
+  waitingHumanChildCount: number;
+  waitingAgentChildCount: number;
+  failedChildCount: number;
+  staleChildCount: number;
+  managerStatus: StoredManagedAgentRecord["status"];
   latestHandoff: StoredAgentHandoffRecord | null;
   latestWaitingMessage: StoredAgentMessageRecord | null;
+  latestWaitingWorkItemId?: string;
+  latestWaitingTargetAgentId?: string;
+  latestWaitingActionType?: string;
   latestGovernanceResponse: Record<string, unknown> | null;
   lastActivityAt: string;
   lastActivityKind: "handoff" | "waiting" | "governance" | "work_item";
@@ -260,6 +297,28 @@ export interface OrganizationCollaborationDashboardItem {
 export interface OrganizationCollaborationDashboardResult {
   summary: OrganizationCollaborationDashboardSummary;
   items: OrganizationCollaborationDashboardItem[];
+}
+
+export interface OrganizationGovernanceManagerHotspot {
+  managerAgent: StoredManagedAgentRecord;
+  openParentCount: number;
+  urgentParentCount: number;
+  attentionParentCount: number;
+  waitingCount: number;
+  staleParentCount: number;
+  failedChildCount: number;
+  latestActivityAt: string;
+}
+
+export interface OrganizationGovernanceOverview {
+  urgentParentCount: number;
+  attentionParentCount: number;
+  waitingHumanCount: number;
+  waitingAgentCount: number;
+  staleParentCount: number;
+  failedChildCount: number;
+  managersNeedingAttentionCount: number;
+  managerHotspots: OrganizationGovernanceManagerHotspot[];
 }
 
 export class ManagedAgentCoordinationService {
@@ -580,14 +639,25 @@ export class ManagedAgentCoordinationService {
       .slice(0, limit);
   }
 
-  listOrganizationWaitingQueue(ownerPrincipalId: string): OrganizationWaitingQueueResult {
+  listOrganizationWaitingQueue(
+    ownerPrincipalId: string,
+    filters: OrganizationGovernanceFilters = {},
+  ): OrganizationWaitingQueueResult {
     this.requirePrincipal(ownerPrincipalId);
-    const workItems = this.registry
+    const normalizedFilters = this.normalizeGovernanceFilters(ownerPrincipalId, filters);
+    const allWorkItems = this.registry
       .listAgentWorkItemsByOwnerPrincipal(ownerPrincipalId)
+      .filter((workItem) =>
+        !normalizedFilters.organizationId || workItem.organizationId === normalizedFilters.organizationId
+      );
+    const workItems = allWorkItems
       .filter((workItem) => workItem.status === "waiting_human" || workItem.status === "waiting_agent");
     const items = workItems
-      .map((workItem) => this.buildOrganizationWaitingQueueItem(ownerPrincipalId, workItem))
+      .map((workItem) =>
+        this.buildOrganizationWaitingQueueItem(ownerPrincipalId, workItem, allWorkItems, normalizedFilters.now)
+      )
       .filter((item): item is OrganizationWaitingQueueItem => Boolean(item))
+      .filter((item) => matchesOrganizationWaitingQueueFilters(item, normalizedFilters))
       .sort(compareOrganizationWaitingQueueItems);
 
     return {
@@ -609,43 +679,38 @@ export class ManagedAgentCoordinationService {
     filters: OrganizationCollaborationDashboardFilters = {},
   ): OrganizationCollaborationDashboardResult {
     this.requirePrincipal(ownerPrincipalId);
-    const managerAgentId = normalizeOptionalText(filters.managerAgentId);
-    const attentionOnly = filters.attentionOnly === true;
-    const limit = normalizePositiveLimit(filters.limit, 20);
-    const now = normalizeNow(filters.now);
-
-    if (managerAgentId) {
-      this.requireOwnedAgent(ownerPrincipalId, managerAgentId);
-    }
-
-    const allWorkItems = this.registry.listAgentWorkItemsByOwnerPrincipal(ownerPrincipalId);
-    const childWorkItemsByParent = new Map<string, StoredAgentWorkItemRecord[]>();
-
-    for (const workItem of allWorkItems) {
-      const parentWorkItemId = normalizeOptionalText(workItem.parentWorkItemId);
-
-      if (!parentWorkItemId) {
-        continue;
-      }
-
-      const currentList = childWorkItemsByParent.get(parentWorkItemId) ?? [];
-      currentList.push(workItem);
-      childWorkItemsByParent.set(parentWorkItemId, currentList);
-    }
-
-    const items = Array.from(childWorkItemsByParent.entries())
-      .map(([parentWorkItemId, childWorkItems]) =>
-        this.buildOrganizationCollaborationDashboardItem(ownerPrincipalId, parentWorkItemId, childWorkItems, now)
-      )
-      .filter((item): item is OrganizationCollaborationDashboardItem => Boolean(item))
-      .filter((item) => !managerAgentId || item.managerAgent.agentId === managerAgentId)
-      .filter((item) => !attentionOnly || item.attentionLevel !== "normal")
-      .sort(compareOrganizationCollaborationDashboardItems)
-      .slice(0, limit);
+    const normalizedFilters = this.normalizeGovernanceFilters(ownerPrincipalId, filters);
+    const limit = normalizePositiveLimit(normalizedFilters.limit, 20);
+    const filteredItems = this.listFilteredOrganizationCollaborationDashboardItems(ownerPrincipalId, normalizedFilters)
+      .sort(compareOrganizationCollaborationDashboardItems);
 
     return {
-      summary: summarizeOrganizationCollaborationDashboardItems(items),
-      items,
+      summary: summarizeOrganizationCollaborationDashboardItems(filteredItems),
+      items: filteredItems.slice(0, limit),
+    };
+  }
+
+  getOrganizationGovernanceOverview(
+    ownerPrincipalId: string,
+    filters: OrganizationGovernanceFilters = {},
+  ): OrganizationGovernanceOverview {
+    this.requirePrincipal(ownerPrincipalId);
+    const normalizedFilters = this.normalizeGovernanceFilters(ownerPrincipalId, filters);
+    const waitingResult = this.listOrganizationWaitingQueue(ownerPrincipalId, normalizedFilters);
+    const collaborationItems = this.listFilteredOrganizationCollaborationDashboardItems(ownerPrincipalId, normalizedFilters)
+      .sort(compareOrganizationCollaborationDashboardItems);
+    const parentFacts = buildGovernanceParentFacts(waitingResult.items, collaborationItems);
+    const managerHotspots = summarizeGovernanceManagerHotspots(waitingResult.items, collaborationItems);
+
+    return {
+      urgentParentCount: countGovernanceParentFactsByAttention(parentFacts, "urgent"),
+      attentionParentCount: countGovernanceParentFactsByAttention(parentFacts, "attention"),
+      waitingHumanCount: waitingResult.summary.waitingHumanCount,
+      waitingAgentCount: waitingResult.summary.waitingAgentCount,
+      staleParentCount: countGovernanceParentFactsByStale(parentFacts),
+      failedChildCount: collaborationItems.reduce((sum, item) => sum + item.failedChildCount, 0),
+      managersNeedingAttentionCount: managerHotspots.filter((item) => managerHotspotNeedsAttention(item)).length,
+      managerHotspots,
     };
   }
 
@@ -1381,9 +1446,17 @@ export class ManagedAgentCoordinationService {
   private buildOrganizationWaitingQueueItem(
     ownerPrincipalId: string,
     workItem: StoredAgentWorkItemRecord,
+    relatedWaitingWorkItems: StoredAgentWorkItemRecord[],
+    now: string,
   ): OrganizationWaitingQueueItem | null {
     const organization = this.requireOwnedOrganization(ownerPrincipalId, workItem.organizationId);
     const targetAgent = this.requireAgentInOrganization(workItem.targetAgentId, organization.organizationId);
+    const parentWorkItem = normalizeOptionalText(workItem.parentWorkItemId)
+      ? this.getWorkItem(ownerPrincipalId, workItem.parentWorkItemId as string)
+      : null;
+    const managerAgent = parentWorkItem
+      ? this.requireAgentInOrganization(parentWorkItem.targetAgentId, organization.organizationId)
+      : targetAgent;
     const sourceAgent = normalizeOptionalText(workItem.sourceAgentId)
       ? this.requireAgentInOrganization(workItem.sourceAgentId as string, organization.organizationId)
       : null;
@@ -1392,14 +1465,42 @@ export class ManagedAgentCoordinationService {
       this.registry.listAgentMessagesByWorkItem(workItem.workItemId),
       workItem,
     );
+    const siblingWorkItems = parentWorkItem
+      ? relatedWaitingWorkItems.filter((item) => normalizeOptionalText(item.parentWorkItemId) === parentWorkItem.workItemId)
+      : [];
+    const groupWaitingMessage = parentWorkItem
+      ? resolveDashboardLatestWaitingMessage(this.registry, siblingWorkItems)
+      : latestWaitingMessage;
+    const groupAttention = resolveDashboardAttention({
+      parentWorkItem: parentWorkItem ?? workItem,
+      childWorkItems: parentWorkItem ? siblingWorkItems : [],
+      latestWaitingMessage: groupWaitingMessage,
+      now,
+    });
+    const waitingFor = workItem.status === "waiting_human" ? "human" : "agent";
+    const isStale = countStaleOpenWorkItems([workItem], now) > 0;
+    const relatedFailedChildCount = parentWorkItem
+      ? countWorkItemsByStatus(siblingWorkItems, "failed")
+      : 0;
+    const relatedStaleChildCount = parentWorkItem
+      ? countStaleOpenWorkItems(siblingWorkItems, now)
+      : 0;
 
     return {
       workItem,
       organization,
       targetAgent,
+      managerAgent,
+      parentWorkItem,
       sourceAgent,
       sourcePrincipal,
       latestWaitingMessage,
+      waitingFor,
+      isStale,
+      relatedFailedChildCount,
+      relatedStaleChildCount,
+      attentionLevel: groupAttention.level,
+      attentionReasons: groupAttention.reasons,
     };
   }
 
@@ -1423,7 +1524,9 @@ export class ManagedAgentCoordinationService {
 
     const childSummary = summarizeChildWorkItems(childWorkItems);
     const latestHandoff = resolveDashboardLatestHandoff(this.registry, parentWorkItem, childWorkItems);
-    const latestWaitingMessage = resolveDashboardLatestWaitingMessage(this.registry, childWorkItems);
+    const latestWaiting = resolveDashboardLatestWaitingContext(this.registry, childWorkItems);
+    const latestWaitingMessage = latestWaiting?.message ?? null;
+    const latestWaitingWorkItem = latestWaiting?.workItem ?? null;
     const latestGovernance = resolveDashboardLatestGovernanceResponse(parentWorkItem, childWorkItems);
     const latestGovernanceResponse = latestGovernance?.response ?? null;
     const lastActivity = resolveDashboardLastActivity({
@@ -1438,19 +1541,96 @@ export class ManagedAgentCoordinationService {
       latestWaitingMessage,
       now,
     });
+    const waitingHumanChildCount = countWorkItemsByStatus(childWorkItems, "waiting_human");
+    const waitingAgentChildCount = countWorkItemsByStatus(childWorkItems, "waiting_agent");
+    const failedChildCount = countWorkItemsByStatus(childWorkItems, "failed");
+    const staleChildCount = countStaleOpenWorkItems(childWorkItems, now);
+    const latestWaitingActionType = resolveWaitingActionType(
+      latestWaitingWorkItem?.waitingActionRequest,
+      latestWaitingMessage?.payload,
+    );
 
     return {
       parentWorkItem,
       managerAgent,
       childSummary,
+      waitingHumanChildCount,
+      waitingAgentChildCount,
+      failedChildCount,
+      staleChildCount,
+      managerStatus: managerAgent.status,
       latestHandoff,
       latestWaitingMessage,
+      ...(latestWaitingWorkItem?.workItemId ? { latestWaitingWorkItemId: latestWaitingWorkItem.workItemId } : {}),
+      ...(latestWaitingWorkItem?.targetAgentId ? { latestWaitingTargetAgentId: latestWaitingWorkItem.targetAgentId } : {}),
+      ...(latestWaitingActionType ? { latestWaitingActionType } : {}),
       latestGovernanceResponse,
       lastActivityAt: lastActivity.at,
       lastActivityKind: lastActivity.kind,
       lastActivitySummary: lastActivity.summary,
       attentionLevel: attention.level,
       attentionReasons: attention.reasons,
+    };
+  }
+
+  private listFilteredOrganizationCollaborationDashboardItems(
+    ownerPrincipalId: string,
+    filters: NormalizedOrganizationGovernanceFilters,
+  ): OrganizationCollaborationDashboardItem[] {
+    const allWorkItems = this.registry
+      .listAgentWorkItemsByOwnerPrincipal(ownerPrincipalId)
+      .filter((workItem) => !filters.organizationId || workItem.organizationId === filters.organizationId);
+    const childWorkItemsByParent = new Map<string, StoredAgentWorkItemRecord[]>();
+
+    for (const workItem of allWorkItems) {
+      const parentWorkItemId = normalizeOptionalText(workItem.parentWorkItemId);
+
+      if (!parentWorkItemId) {
+        continue;
+      }
+
+      const currentList = childWorkItemsByParent.get(parentWorkItemId) ?? [];
+      currentList.push(workItem);
+      childWorkItemsByParent.set(parentWorkItemId, currentList);
+    }
+
+    return Array.from(childWorkItemsByParent.entries())
+      .map(([parentWorkItemId, childWorkItems]) =>
+        this.buildOrganizationCollaborationDashboardItem(ownerPrincipalId, parentWorkItemId, childWorkItems, filters.now)
+      )
+      .filter((item): item is OrganizationCollaborationDashboardItem => Boolean(item))
+      .filter((item) => matchesOrganizationCollaborationDashboardFilters(item, filters));
+  }
+
+  private normalizeGovernanceFilters(
+    ownerPrincipalId: string,
+    filters: OrganizationGovernanceFilters,
+  ): NormalizedOrganizationGovernanceFilters {
+    const organizationId = normalizeOptionalText(filters.organizationId);
+    const managerAgentId = normalizeOptionalText(filters.managerAgentId);
+
+    if (organizationId) {
+      this.requireOwnedOrganization(ownerPrincipalId, organizationId);
+    }
+
+    if (managerAgentId) {
+      const managerAgent = this.requireOwnedAgent(ownerPrincipalId, managerAgentId);
+
+      if (organizationId && managerAgent.organizationId !== organizationId) {
+        throw new Error("Managed agent does not exist.");
+      }
+    }
+
+    return {
+      ...(organizationId ? { organizationId } : {}),
+      ...(managerAgentId ? { managerAgentId } : {}),
+      ...(filters.attentionOnly === true ? { attentionOnly: true } : {}),
+      attentionLevels: normalizeGovernanceAttentionLevels(filters.attentionLevels, filters.attentionOnly === true),
+      waitingFor: resolveOrganizationGovernanceWaitingFor(filters.waitingFor),
+      staleOnly: filters.staleOnly === true,
+      failedOnly: filters.failedOnly === true,
+      ...(filters.limit ? { limit: normalizePositiveLimit(filters.limit, filters.limit) } : {}),
+      now: normalizeNow(filters.now),
     };
   }
 }
@@ -1627,6 +1807,127 @@ function summarizeOrganizationCollaborationDashboardItems(
   return summary;
 }
 
+function summarizeGovernanceManagerHotspots(
+  waitingItems: OrganizationWaitingQueueItem[],
+  collaborationItems: OrganizationCollaborationDashboardItem[],
+): OrganizationGovernanceManagerHotspot[] {
+  const hotspots = new Map<string, OrganizationGovernanceManagerHotspot>();
+  const coveredParentWorkItemIds = new Set<string>();
+
+  for (const item of collaborationItems) {
+    coveredParentWorkItemIds.add(item.parentWorkItem.workItemId);
+    const existing = hotspots.get(item.managerAgent.agentId) ?? {
+      managerAgent: item.managerAgent,
+      openParentCount: 0,
+      urgentParentCount: 0,
+      attentionParentCount: 0,
+      waitingCount: 0,
+      staleParentCount: 0,
+      failedChildCount: 0,
+      latestActivityAt: item.lastActivityAt,
+    };
+
+    if (isOpenWorkItemStatus(item.parentWorkItem.status)) {
+      existing.openParentCount += 1;
+    }
+
+    if (item.attentionLevel === "urgent") {
+      existing.urgentParentCount += 1;
+    } else if (item.attentionLevel === "attention") {
+      existing.attentionParentCount += 1;
+    }
+
+    existing.waitingCount += item.waitingHumanChildCount + item.waitingAgentChildCount;
+    existing.staleParentCount += item.staleChildCount > 0 ? 1 : 0;
+    existing.failedChildCount += item.failedChildCount;
+
+    if (item.lastActivityAt > existing.latestActivityAt) {
+      existing.latestActivityAt = item.lastActivityAt;
+    }
+
+    hotspots.set(item.managerAgent.agentId, existing);
+  }
+
+  for (const item of waitingItems) {
+    const parentWorkItemId = item.parentWorkItem?.workItemId ?? item.workItem.workItemId;
+
+    if (item.parentWorkItem && coveredParentWorkItemIds.has(parentWorkItemId)) {
+      continue;
+    }
+
+    const existing = hotspots.get(item.managerAgent.agentId) ?? {
+      managerAgent: item.managerAgent,
+      openParentCount: 0,
+      urgentParentCount: 0,
+      attentionParentCount: 0,
+      waitingCount: 0,
+      staleParentCount: 0,
+      failedChildCount: 0,
+      latestActivityAt: item.workItem.updatedAt,
+    };
+
+    if (isOpenWorkItemStatus(item.workItem.status)) {
+      existing.openParentCount += 1;
+    }
+
+    if (item.attentionLevel === "urgent") {
+      existing.urgentParentCount += 1;
+    } else if (item.attentionLevel === "attention") {
+      existing.attentionParentCount += 1;
+    }
+
+    existing.waitingCount += 1;
+    existing.staleParentCount += item.isStale || item.relatedStaleChildCount > 0 ? 1 : 0;
+
+    if (item.workItem.updatedAt > existing.latestActivityAt) {
+      existing.latestActivityAt = item.workItem.updatedAt;
+    }
+
+    hotspots.set(item.managerAgent.agentId, existing);
+  }
+
+  return Array.from(hotspots.values()).sort(compareGovernanceManagerHotspots);
+}
+
+function compareGovernanceManagerHotspots(
+  left: OrganizationGovernanceManagerHotspot,
+  right: OrganizationGovernanceManagerHotspot,
+): number {
+  const urgentDiff = right.urgentParentCount - left.urgentParentCount;
+
+  if (urgentDiff !== 0) {
+    return urgentDiff;
+  }
+
+  const waitingDiff = right.waitingCount - left.waitingCount;
+
+  if (waitingDiff !== 0) {
+    return waitingDiff;
+  }
+
+  const staleDiff = right.staleParentCount - left.staleParentCount;
+
+  if (staleDiff !== 0) {
+    return staleDiff;
+  }
+
+  const activityDiff = right.latestActivityAt.localeCompare(left.latestActivityAt);
+
+  if (activityDiff !== 0) {
+    return activityDiff;
+  }
+
+  return left.managerAgent.agentId.localeCompare(right.managerAgent.agentId);
+}
+
+function managerHotspotNeedsAttention(item: OrganizationGovernanceManagerHotspot): boolean {
+  return item.urgentParentCount > 0
+    || item.attentionParentCount > 0
+    || item.waitingCount > 0
+    || item.staleParentCount > 0
+    || item.failedChildCount > 0;
+}
+
 function resolveDashboardLatestHandoff(
   registry: SqliteCodexSessionRegistry,
   parentWorkItem: StoredAgentWorkItemRecord,
@@ -1650,6 +1951,15 @@ function resolveDashboardLatestWaitingMessage(
   registry: SqliteCodexSessionRegistry,
   childWorkItems: StoredAgentWorkItemRecord[],
 ): StoredAgentMessageRecord | null {
+  return resolveDashboardLatestWaitingContext(registry, childWorkItems)?.message ?? null;
+}
+
+function resolveDashboardLatestWaitingContext(
+  registry: SqliteCodexSessionRegistry,
+  childWorkItems: StoredAgentWorkItemRecord[],
+): { workItem: StoredAgentWorkItemRecord; message: StoredAgentMessageRecord | null } | null {
+  let latest: { workItem: StoredAgentWorkItemRecord; message: StoredAgentMessageRecord | null; at: string } | null = null;
+
   const candidates: StoredAgentMessageRecord[] = [];
 
   for (const childWorkItem of childWorkItems) {
@@ -1661,13 +1971,23 @@ function resolveDashboardLatestWaitingMessage(
       registry.listAgentMessagesByWorkItem(childWorkItem.workItemId),
       childWorkItem,
     );
+    const candidateAt = message?.createdAt ?? childWorkItem.updatedAt;
 
-    if (message) {
-      candidates.push(message);
+    if (!latest || candidateAt > latest.at) {
+      latest = {
+        workItem: childWorkItem,
+        message,
+        at: candidateAt,
+      };
     }
   }
 
-  return candidates.sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
+  return latest
+    ? {
+        workItem: latest.workItem,
+        message: latest.message,
+      }
+    : null;
 }
 
 function resolveDashboardLatestGovernanceResponse(
@@ -1821,6 +2141,146 @@ function countStaleOpenWorkItems(workItems: StoredAgentWorkItemRecord[], now: st
 
     return nowTimestamp - updatedAt >= COLLABORATION_STALE_OPEN_WORK_ITEM_MS;
   }).length;
+}
+
+function matchesOrganizationWaitingQueueFilters(
+  item: OrganizationWaitingQueueItem,
+  filters: NormalizedOrganizationGovernanceFilters,
+): boolean {
+  if (filters.organizationId && item.organization.organizationId !== filters.organizationId) {
+    return false;
+  }
+
+  if (filters.managerAgentId && item.managerAgent.agentId !== filters.managerAgentId) {
+    return false;
+  }
+
+  if (filters.waitingFor && filters.waitingFor !== "any" && item.waitingFor !== filters.waitingFor) {
+    return false;
+  }
+
+  if (filters.attentionLevels && !filters.attentionLevels.includes(item.attentionLevel)) {
+    return false;
+  }
+
+  if (filters.staleOnly && !item.isStale && item.relatedStaleChildCount <= 0) {
+    return false;
+  }
+
+  if (filters.failedOnly && item.relatedFailedChildCount <= 0) {
+    return false;
+  }
+
+  return true;
+}
+
+function matchesOrganizationCollaborationDashboardFilters(
+  item: OrganizationCollaborationDashboardItem,
+  filters: NormalizedOrganizationGovernanceFilters,
+): boolean {
+  if (filters.organizationId && item.parentWorkItem.organizationId !== filters.organizationId) {
+    return false;
+  }
+
+  if (filters.managerAgentId && item.managerAgent.agentId !== filters.managerAgentId) {
+    return false;
+  }
+
+  if (filters.attentionLevels && !filters.attentionLevels.includes(item.attentionLevel)) {
+    return false;
+  }
+
+  if (filters.waitingFor === "human" && item.waitingHumanChildCount <= 0) {
+    return false;
+  }
+
+  if (filters.waitingFor === "agent" && item.waitingAgentChildCount <= 0) {
+    return false;
+  }
+
+  if (filters.staleOnly && item.staleChildCount <= 0) {
+    return false;
+  }
+
+  if (filters.failedOnly && item.failedChildCount <= 0) {
+    return false;
+  }
+
+  return true;
+}
+
+function normalizeGovernanceAttentionLevels(
+  value: unknown,
+  attentionOnly: boolean,
+): ManagedAgentAttentionLevel[] | null {
+  const levels = Array.isArray(value)
+    ? value.filter((entry): entry is ManagedAgentAttentionLevel => ["normal", "attention", "urgent"].includes(String(entry)))
+    : [];
+
+  if (levels.length > 0) {
+    return [...new Set(levels)];
+  }
+
+  return attentionOnly ? ["attention", "urgent"] : null;
+}
+
+function resolveOrganizationGovernanceWaitingFor(value: unknown): OrganizationGovernanceWaitingFor {
+  return value === "human" || value === "agent" ? value : "any";
+}
+
+function resolveWaitingActionType(
+  waitingActionRequest: unknown,
+  messagePayload: unknown,
+): string | null {
+  const waitingAction = asRecord(waitingActionRequest);
+  const message = asRecord(messagePayload);
+
+  return normalizeOptionalText(asString(waitingAction?.actionType))
+    ?? normalizeOptionalText(asString(message?.actionType));
+}
+
+function buildGovernanceParentFacts(
+  waitingItems: OrganizationWaitingQueueItem[],
+  collaborationItems: OrganizationCollaborationDashboardItem[],
+): Array<{ key: string; attentionLevel: ManagedAgentAttentionLevel; isStale: boolean }> {
+  const facts = new Map<string, { key: string; attentionLevel: ManagedAgentAttentionLevel; isStale: boolean }>();
+
+  for (const item of collaborationItems) {
+    facts.set(item.parentWorkItem.workItemId, {
+      key: item.parentWorkItem.workItemId,
+      attentionLevel: item.attentionLevel,
+      isStale: item.staleChildCount > 0,
+    });
+  }
+
+  for (const item of waitingItems) {
+    const key = item.parentWorkItem?.workItemId ?? item.workItem.workItemId;
+
+    if (facts.has(key)) {
+      continue;
+    }
+
+    facts.set(key, {
+      key,
+      attentionLevel: item.attentionLevel,
+      isStale: item.isStale || item.relatedStaleChildCount > 0,
+    });
+  }
+
+  return Array.from(facts.values());
+}
+
+function countGovernanceParentFactsByAttention(
+  facts: Array<{ attentionLevel: ManagedAgentAttentionLevel }>,
+  level: ManagedAgentAttentionLevel,
+): number {
+  return facts.filter((item) => item.attentionLevel === level).length;
+}
+
+function countGovernanceParentFactsByStale(
+  facts: Array<{ isStale: boolean }>,
+): number {
+  return facts.filter((item) => item.isStale).length;
 }
 
 function isOpenWorkItemStatus(status: StoredAgentWorkItemRecord["status"]): boolean {

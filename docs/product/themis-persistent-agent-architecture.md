@@ -13,12 +13,12 @@
   - `work item detail` 已新增 `parentWorkItem / parentTargetAgent / childSummary / childWorkItems`
   - 当前父任务下派 agent 子任务时会自动补上 `parentWorkItemId`
   - Web `Agents` 详情面板已能直接渲染“父任务”和“下游协作汇总”
-- `P6 / manager 治理面 / 组织级跨父任务汇总台` 已完成：
-  - `ManagedAgentCoordinationService` 已新增 `listOrganizationCollaborationDashboard(...)`
+- `P6 / manager 治理面` 已完成两轮收口：
+  - 第一轮已落成“组织级跨父任务汇总台”，`ManagedAgentCoordinationService` 已新增 `listOrganizationCollaborationDashboard(...)`
+  - 第二轮已落成“组织级治理工作台”，新增 `getOrganizationGovernanceOverview(...)`、共享筛选模型，以及治理摘要条 / manager 热点 / 总览层治理动作
   - 第一版 `attentionLevel / attentionReasons / lastActivity*` 规则已固定为可解释规则
-  - HTTP 已新增 `POST /api/agents/collaboration-dashboard`
-  - Web `Agents` 面板已新增“组织级跨父任务汇总台”
-  - 每张父任务卡都可直接“查看父任务详情”或“切到 manager”
+  - HTTP 已新增 `POST /api/agents/governance-overview` 与增强版 `POST /api/agents/collaboration-dashboard`
+  - Web `Agents` 面板现已同时具备“治理摘要 + 共享筛选 + waiting queue + 跨父任务汇总台”的完整工作台形态
 - `P5 / 持久化 agent / 运行边界与执行` 现已完成：
   - 每个长期 agent 都会持久化自己的默认 `workspace policy` 与 `runtime profile`
   - legacy agent 在 `create / list / detail` 链路也会自动补齐默认执行边界
@@ -28,7 +28,7 @@
   - 边界非法时，run 会以 `MANAGED_AGENT_EXECUTION_BOUNDARY_INVALID` 失败收口，并降级非 bootstrap agent
   - HTTP 已新增 `POST /api/agents/execution-boundary/update`
   - Web `Agents` 面板已新增默认执行边界治理区
-- 当前下一步优先项：如果继续推进，优先评估更强的物理隔离、远端 websocket `app-server` 节点，或在现有 dashboard 之上继续补更重的 manager 治理面，而不是回头重复补第一版执行边界。
+- 当前下一步优先项：如果继续推进，优先评估更强的物理隔离或远端 websocket `app-server` 节点，而不是回头重复补已经收口的 manager 治理面或第一版执行边界。
 
 ## 1. 设计目标
 

@@ -15,6 +15,7 @@ import {
   handleAgentDetail,
   handleAgentDispatch,
   handleAgentExecutionBoundaryUpdate,
+  handleAgentGovernanceOverview,
   handleAgentIdleRecoveryApprove,
   handleAgentIdleRecoverySuggestions,
   handleAgentHandoffList,
@@ -330,6 +331,10 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/agents/waiting/list") {
         return handleAgentWaitingQueueList(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/agents/governance-overview") {
+        return handleAgentGovernanceOverview(request, response, runtime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/agents/collaboration-dashboard") {

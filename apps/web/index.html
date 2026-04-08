@@ -998,6 +998,94 @@
 
                 <section class="workspace-tool-group">
                   <div class="tool-group-head">
+                    <h3>组织级治理摘要</h3>
+                    <span class="meta-label">Governance Overview</span>
+                  </div>
+
+                  <p
+                    id="agents-governance-overview-summary"
+                    class="settings-section-copy"
+                  >
+                    这里会把当前组织最需要优先介入的父任务、等待项和 manager 热点收成一眼可扫的摘要。
+                  </p>
+
+                  <div class="settings-stack">
+                    <div id="agents-governance-summary-grid" class="agents-summary-grid"></div>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>组织级筛选</h3>
+                    <span class="meta-label">Shared Filters</span>
+                  </div>
+
+                  <p class="settings-section-copy">
+                    这些筛选会同时作用到 waiting queue、manager 热点和跨父任务汇总台，不再让三块视图各自漂移。
+                  </p>
+
+                  <div class="settings-stack">
+                    <div class="settings-inline-grid">
+                      <label class="settings-field">
+                        <span>Manager</span>
+                        <select id="agents-governance-filter-manager-select">
+                          <option value="">全部 manager</option>
+                        </select>
+                      </label>
+                      <label class="settings-field">
+                        <span>关注级别</span>
+                        <select id="agents-governance-filter-attention-select">
+                          <option value="all">全部</option>
+                          <option value="urgent">只看紧急</option>
+                          <option value="attention">只看关注</option>
+                          <option value="normal">只看正常</option>
+                        </select>
+                      </label>
+                      <label class="settings-field">
+                        <span>等待类型</span>
+                        <select id="agents-governance-filter-waiting-select">
+                          <option value="any">全部</option>
+                          <option value="human">只看等人类</option>
+                          <option value="agent">只看等 agent</option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <div class="settings-inline-actions">
+                      <label class="settings-checkbox">
+                        <input id="agents-governance-filter-stale-input" type="checkbox" />
+                        <span>只看陈旧链路</span>
+                      </label>
+                      <label class="settings-checkbox">
+                        <input id="agents-governance-filter-failed-input" type="checkbox" />
+                        <span>只看带失败子任务</span>
+                      </label>
+                      <button id="agents-governance-filter-reset-button" type="button" class="toolbar-button subtle">重置筛选</button>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>Manager 热点</h3>
+                    <span class="meta-label">Hotspots</span>
+                  </div>
+
+                  <p
+                    id="agents-governance-hotspots-summary"
+                    class="settings-section-copy"
+                  >
+                    这里优先告诉你哪些 manager 手上的父任务、等待项和陈旧链路最值得先看。
+                  </p>
+
+                  <div class="settings-stack">
+                    <div id="agents-governance-hotspots-empty" class="settings-section-copy hidden">当前还没有需要特别关注的 manager 热点。</div>
+                    <div id="agents-governance-hotspots-list" class="settings-stack"></div>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
                     <h3>组织级待治理</h3>
                     <span class="meta-label">Waiting Queue</span>
                   </div>

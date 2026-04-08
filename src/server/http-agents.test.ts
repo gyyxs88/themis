@@ -1255,6 +1255,7 @@ test("POST /api/agents/waiting/list 会返回组织级等待队列与摘要", as
       items?: Array<{
         workItem?: { workItemId?: string; status?: string };
         targetAgent?: { agentId?: string };
+        managerAgent?: { agentId?: string };
         sourceAgent?: { agentId?: string };
         latestWaitingMessage?: { messageType?: string };
       }>;
@@ -1266,6 +1267,7 @@ test("POST /api/agents/waiting/list 会返回组织级等待队列与摘要", as
     assert.equal(payload.items?.[0]?.workItem?.workItemId, dispatched.workItem.workItemId);
     assert.equal(payload.items?.[0]?.workItem?.status, "waiting_agent");
     assert.equal(payload.items?.[0]?.targetAgent?.agentId, ops.agentId);
+    assert.equal(payload.items?.[0]?.managerAgent?.agentId, ops.agentId);
     assert.equal(payload.items?.[0]?.sourceAgent?.agentId, frontend.agentId);
     assert.equal(payload.items?.[0]?.latestWaitingMessage?.messageType, "approval_request");
   });
@@ -1347,6 +1349,12 @@ test("POST /api/agents/collaboration-dashboard 会返回跨父任务汇总台，
       completedAt: "2026-04-07T15:12:00.000Z",
       updatedAt: "2026-04-07T15:12:00.000Z",
     });
+    runtimeStore.saveAgentWorkItem({
+      ...normalParent.workItem,
+      status: "completed",
+      completedAt: "2026-04-07T15:12:20.000Z",
+      updatedAt: "2026-04-07T15:12:20.000Z",
+    });
 
     runtime.getManagedAgentCoordinationService().sendAgentMessage({
       ownerPrincipalId: "principal-local-owner",
@@ -1395,6 +1403,10 @@ test("POST /api/agents/collaboration-dashboard 会返回跨父任务汇总台，
       items?: Array<{
         parentWorkItem?: { workItemId?: string; goal?: string };
         managerAgent?: { agentId?: string; displayName?: string };
+        waitingHumanChildCount?: number;
+        latestWaitingWorkItemId?: string;
+        latestWaitingTargetAgentId?: string;
+        latestWaitingActionType?: string;
         attentionLevel?: string;
         attentionReasons?: string[];
         latestWaitingMessage?: { messageType?: string };
@@ -1410,10 +1422,94 @@ test("POST /api/agents/collaboration-dashboard 会返回跨父任务汇总台，
     assert.equal(payload.items?.[0]?.parentWorkItem?.goal, "把组织级跨父任务汇总挂到 Agents 面板");
     assert.equal(payload.items?.[0]?.managerAgent?.agentId, manager.agentId);
     assert.equal(payload.items?.[0]?.managerAgent?.displayName, "经理·曜");
+    assert.equal(payload.items?.[0]?.waitingHumanChildCount, 1);
+    assert.equal(payload.items?.[0]?.latestWaitingWorkItemId, urgentChild.workItem.workItemId);
+    assert.equal(payload.items?.[0]?.latestWaitingTargetAgentId, frontend.agentId);
+    assert.equal(payload.items?.[0]?.latestWaitingActionType, "approval");
     assert.equal(payload.items?.[0]?.attentionLevel, "urgent");
     assert.match(payload.items?.[0]?.attentionReasons?.join("；") ?? "", /等待顶层治理/);
     assert.equal(payload.items?.[0]?.latestWaitingMessage?.messageType, "escalation");
     assert.equal(payload.items?.[0]?.lastActivityKind, "waiting");
+  });
+});
+
+test("POST /api/agents/governance-overview 会返回组织级治理摘要与 manager 热点", async () => {
+  await withHttpServer(async ({ baseUrl, runtime, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+    const manager = await createManagedAgent(baseUrl, authHeaders, "owner-agent-governance-overview", {
+      departmentRole: "经理",
+      displayName: "经理·曜",
+      mission: "负责拆解任务与汇总结果。",
+    });
+    const frontend = await createManagedAgent(baseUrl, authHeaders, "owner-agent-governance-overview", {
+      departmentRole: "前端",
+      displayName: "前端·岚",
+      mission: "负责页面联调。",
+    });
+
+    const parent = runtime.getManagedAgentCoordinationService().dispatchWorkItem({
+      ownerPrincipalId: "principal-local-owner",
+      targetAgentId: manager.agentId,
+      dispatchReason: "推进治理工作台",
+      goal: "把 overview、筛选和热点卡接进 Agents 面板",
+      priority: "urgent",
+      now: "2026-04-08T09:00:00.000Z",
+    });
+    const child = runtime.getManagedAgentCoordinationService().dispatchWorkItem({
+      ownerPrincipalId: "principal-local-owner",
+      targetAgentId: frontend.agentId,
+      sourceType: "agent",
+      sourceAgentId: manager.agentId,
+      sourcePrincipalId: manager.principalId,
+      parentWorkItemId: parent.workItem.workItemId,
+      dispatchReason: "补治理摘要 UI",
+      goal: "显示组织级摘要与 manager 热点",
+      priority: "high",
+      now: "2026-04-08T09:01:00.000Z",
+    });
+
+    runtimeStore.saveAgentWorkItem({
+      ...child.workItem,
+      status: "waiting_human",
+      waitingActionRequest: {
+        actionType: "approval",
+        prompt: "是否允许把治理摘要条默认显示在 Agents 面板顶端？",
+        choices: ["approve", "deny"],
+      },
+      updatedAt: "2026-04-08T09:05:00.000Z",
+    });
+
+    const response = await postJson(
+      baseUrl,
+      "/api/agents/governance-overview",
+      buildIdentityPayload("owner-agent-governance-overview"),
+      authHeaders,
+    );
+
+    assert.equal(response.status, 200);
+    const payload = await response.json() as {
+      overview?: {
+        urgentParentCount?: number;
+        attentionParentCount?: number;
+        waitingHumanCount?: number;
+        waitingAgentCount?: number;
+        managersNeedingAttentionCount?: number;
+        managerHotspots?: Array<{
+          managerAgent?: { agentId?: string; displayName?: string };
+          urgentParentCount?: number;
+          waitingCount?: number;
+        }>;
+      };
+    };
+    assert.equal(payload.overview?.urgentParentCount, 1);
+    assert.equal(payload.overview?.attentionParentCount, 0);
+    assert.equal(payload.overview?.waitingHumanCount, 1);
+    assert.equal(payload.overview?.waitingAgentCount, 0);
+    assert.equal(payload.overview?.managersNeedingAttentionCount, 1);
+    assert.equal(payload.overview?.managerHotspots?.[0]?.managerAgent?.agentId, manager.agentId);
+    assert.equal(payload.overview?.managerHotspots?.[0]?.managerAgent?.displayName, "经理·曜");
+    assert.equal(payload.overview?.managerHotspots?.[0]?.urgentParentCount, 1);
+    assert.equal(payload.overview?.managerHotspots?.[0]?.waitingCount, 1);
   });
 });
 

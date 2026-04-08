@@ -416,6 +416,115 @@ test("renderAgentsState 会在组织级等待队列渲染直接治理入口", ()
   assert.ok(harness.dom.agentsWaitingList.innerHTML.includes("可以继续，但请先确认监控。"));
 });
 
+test("renderAgentsState 会渲染组织级治理摘要与 manager 热点卡", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      agents: {
+        status: "ready",
+        errorMessage: "",
+        noticeMessage: "",
+        loading: false,
+        detailLoading: false,
+        workItemDetailLoading: false,
+        creating: false,
+        dispatching: false,
+        organizations: [{ organizationId: "org-1", displayName: "老板团队" }],
+        agents: [
+          {
+            agentId: "agent-manager",
+            principalId: "principal-manager",
+            organizationId: "org-1",
+            displayName: "经理·曜",
+            departmentRole: "经理",
+            mission: "负责拆解任务与汇总结果。",
+            status: "active",
+          },
+        ],
+        organizationGovernanceOverview: {
+          urgentParentCount: 1,
+          attentionParentCount: 2,
+          waitingHumanCount: 1,
+          waitingAgentCount: 1,
+          staleParentCount: 1,
+          failedChildCount: 2,
+          managersNeedingAttentionCount: 1,
+          managerHotspots: [
+            {
+              managerAgent: {
+                agentId: "agent-manager",
+                displayName: "经理·曜",
+                status: "active",
+              },
+              openParentCount: 2,
+              urgentParentCount: 1,
+              attentionParentCount: 1,
+              waitingCount: 2,
+              staleParentCount: 1,
+              failedChildCount: 2,
+              latestActivityAt: "2026-04-08T09:05:00.000Z",
+            },
+          ],
+        },
+        governanceFilters: {
+          organizationId: "org-1",
+          managerAgentId: "",
+          attentionLevel: "all",
+          waitingFor: "any",
+          staleOnly: false,
+          failedOnly: false,
+        },
+        organizationWaitingSummary: null,
+        organizationWaitingItems: [],
+        organizationCollaborationSummary: null,
+        organizationCollaborationItems: [],
+        organizationWaitingResponseDrafts: {},
+        selectedAgentId: "",
+        selectedAgent: null,
+        selectedAgentPrincipal: null,
+        selectedOrganization: { organizationId: "org-1", displayName: "老板团队" },
+        workItems: [],
+        mailboxItems: [],
+        selectedWorkItemId: "",
+        selectedWorkItemDetail: null,
+        humanResponseDraft: {
+          workItemId: "",
+          decision: "",
+          inputText: "",
+        },
+        createDraft: {
+          departmentRole: "",
+          displayName: "",
+          mission: "",
+        },
+        dispatchDraft: {
+          targetAgentId: "",
+          sourceType: "human",
+          sourceAgentId: "",
+          dispatchReason: "",
+          goal: "",
+          contextPacketText: "",
+          priority: "normal",
+        },
+      },
+    },
+  });
+
+  harness.renderer.renderAgentsState();
+
+  assert.ok(harness.dom.agentsGovernanceOverviewSummary.textContent.includes("当前有 1 条紧急父任务"));
+  assert.ok(harness.dom.agentsGovernanceSummaryGrid.innerHTML.includes('data-agent-governance-preset="urgent"'));
+  assert.ok(harness.dom.agentsGovernanceSummaryGrid.innerHTML.includes("需关注 manager"));
+  assert.ok(harness.dom.agentsGovernanceHotspotsSummary.textContent.includes("1 个需要关注的 manager"));
+  assert.ok(harness.dom.agentsGovernanceHotspotsList.innerHTML.includes("经理·曜"));
+  assert.ok(harness.dom.agentsGovernanceHotspotsList.innerHTML.includes('data-agent-governance-hotspot-filter="agent-manager"'));
+  assert.ok(harness.dom.agentsGovernanceHotspotsList.innerHTML.includes('data-agent-governance-hotspot-focus="agent-manager"'));
+});
+
 test("renderAgentsState 会渲染组织级跨父任务汇总台卡片，并暴露父任务跳转动作", () => {
   const harness = createHarness({
     actionBarState: {
@@ -484,12 +593,20 @@ test("renderAgentsState 会渲染组织级跨父任务汇总台卡片，并暴�
               messageId: "msg-1",
               messageType: "escalation",
             },
+            latestWaitingWorkItemId: "work-item-child-1",
+            latestWaitingTargetAgentId: "agent-manager",
+            latestWaitingActionType: "approval",
             latestGovernanceResponse: null,
             lastActivityAt: "2026-04-07T12:10:00.000Z",
             lastActivityKind: "waiting",
             lastActivitySummary: "当前 UI 交互还需要顶层治理拍板。",
             attentionLevel: "urgent",
             attentionReasons: ["1 条任务等待顶层治理", "最近出现升级阻塞"],
+            waitingHumanChildCount: 1,
+            waitingAgentChildCount: 0,
+            failedChildCount: 0,
+            staleChildCount: 0,
+            managerStatus: "active",
           },
         ],
         organizationWaitingResponseDrafts: {},
@@ -544,6 +661,8 @@ test("renderAgentsState 会渲染组织级跨父任务汇总台卡片，并暴�
   assert.ok(harness.dom.agentsCollaborationList.innerHTML.includes("关注原因"));
   assert.ok(harness.dom.agentsCollaborationList.innerHTML.includes('data-agent-collaboration-open="work-item-parent-1"'));
   assert.ok(harness.dom.agentsCollaborationList.innerHTML.includes('data-agent-collaboration-focus="agent-manager"'));
+  assert.ok(harness.dom.agentsCollaborationList.innerHTML.includes('data-agent-collaboration-waiting-open="work-item-child-1"'));
+  assert.ok(harness.dom.agentsCollaborationList.innerHTML.includes('data-agent-collaboration-lifecycle="pause"'));
 });
 
 test("renderAgentsState 会渲染自动创建建议卡片与批准按钮", () => {
@@ -1582,6 +1701,17 @@ function createHarness({ actionBarState, threadControlState = null, runtime = {}
     agentsSummaryAgents: createTextStub(),
     agentsSummaryWorkItems: createTextStub(),
     agentsSummaryMailbox: createTextStub(),
+    agentsGovernanceOverviewSummary: createTextStub(),
+    agentsGovernanceSummaryGrid: createTextStub(),
+    agentsGovernanceFilterManagerSelect: createDisabledInputStub(),
+    agentsGovernanceFilterAttentionSelect: createDisabledInputStub(),
+    agentsGovernanceFilterWaitingSelect: createDisabledInputStub(),
+    agentsGovernanceFilterStaleInput: createCheckboxStub(),
+    agentsGovernanceFilterFailedInput: createCheckboxStub(),
+    agentsGovernanceFilterResetButton: createButtonStub(),
+    agentsGovernanceHotspotsSummary: createTextStub(),
+    agentsGovernanceHotspotsEmpty: createTextStub(),
+    agentsGovernanceHotspotsList: createTextStub(),
     agentsWaitingSummary: createTextStub(),
     agentsWaitingEmpty: createTextStub(),
     agentsWaitingList: createTextStub(),
@@ -1892,6 +2022,13 @@ function createDisabledInputStub() {
   return {
     ...createInputStub(),
     checked: false,
+  };
+}
+
+function createCheckboxStub() {
+  return {
+    checked: false,
+    disabled: false,
   };
 }
 

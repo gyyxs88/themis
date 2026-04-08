@@ -53,6 +53,36 @@ test("load 会读取 agent 列表并补齐当前选中 agent 的任务与 mailbo
         });
       }
 
+      if (url === "/api/agents/governance-overview") {
+        return jsonResponse({
+          overview: {
+            urgentParentCount: 1,
+            attentionParentCount: 0,
+            waitingHumanCount: 0,
+            waitingAgentCount: 0,
+            staleParentCount: 0,
+            failedChildCount: 0,
+            managersNeedingAttentionCount: 1,
+            managerHotspots: [
+              {
+                managerAgent: {
+                  agentId: "agent-backend",
+                  displayName: "后端·衡",
+                  status: "active",
+                },
+                openParentCount: 1,
+                urgentParentCount: 1,
+                attentionParentCount: 0,
+                waitingCount: 0,
+                staleParentCount: 0,
+                failedChildCount: 0,
+                latestActivityAt: "2026-04-07T12:10:00.000Z",
+              },
+            ],
+          },
+        });
+      }
+
       if (url === "/api/agents/collaboration-dashboard") {
         return jsonResponse({
           summary: {
@@ -165,10 +195,11 @@ test("load 会读取 agent 列表并补齐当前选中 agent 的任务与 mailbo
       calls.map((call) => call.url),
       [
         "/api/agents/list",
-        "/api/agents/waiting/list",
-        "/api/agents/collaboration-dashboard",
         "/api/agents/spawn-suggestions",
         "/api/agents/idle-suggestions",
+        "/api/agents/governance-overview",
+        "/api/agents/waiting/list",
+        "/api/agents/collaboration-dashboard",
         "/api/agents/detail",
         "/api/agents/work-items/list",
         "/api/agents/mailbox/list",
@@ -179,6 +210,8 @@ test("load 会读取 agent 列表并补齐当前选中 agent 的任务与 mailbo
     assert.equal(result.organizations.length, 1);
     assert.equal(result.agents.length, 1);
     assert.equal(result.selectedAgentId, "agent-backend");
+    assert.equal(result.organizationGovernanceOverview?.urgentParentCount, 1);
+    assert.equal(result.organizationGovernanceOverview?.managerHotspots?.length, 1);
     assert.equal(result.organizationCollaborationSummary?.totalCount, 1);
     assert.equal(result.organizationCollaborationItems.length, 1);
     assert.equal(result.workItems.length, 1);
@@ -295,6 +328,124 @@ test("createAgent 会调用创建接口并刷新列表，把焦点切到新 agen
     assert.equal(app.runtime.agents.noticeMessage, "已创建新的持久化 agent。");
     assert.equal(app.runtime.agents.createDraft.departmentRole, "");
     assert.equal(app.runtime.agents.agents.length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("load 会把共享治理筛选透传到 overview、waiting 和 collaboration 接口", async () => {
+  const state = createDefaultAgentsState();
+  state.governanceFilters = {
+    organizationId: "org-1",
+    managerAgentId: "agent-manager",
+    attentionLevel: "urgent",
+    waitingFor: "human",
+    staleOnly: true,
+    failedOnly: false,
+    limit: 20,
+  };
+  const app = createAppStub(state);
+  const controller = createAgentsController(app);
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+
+  try {
+    globalThis.fetch = async (url, init = {}) => {
+      calls.push({
+        url,
+        body: JSON.parse(init.body),
+      });
+
+      if (url === "/api/agents/list") {
+        return jsonResponse({
+          organizations: [{ organizationId: "org-1", displayName: "老板团队" }],
+          agents: [
+            {
+              agentId: "agent-manager",
+              principalId: "principal-manager",
+              organizationId: "org-1",
+              displayName: "经理·曜",
+              departmentRole: "经理",
+              status: "active",
+            },
+          ],
+        });
+      }
+
+      if (url === "/api/agents/spawn-suggestions") {
+        return jsonResponse({ suggestions: [] });
+      }
+
+      if (url === "/api/agents/idle-suggestions") {
+        return jsonResponse({ suggestions: [], recentAuditLogs: [] });
+      }
+
+      if (url === "/api/agents/governance-overview") {
+        return jsonResponse({ overview: {} });
+      }
+
+      if (url === "/api/agents/waiting/list") {
+        return jsonResponse({ summary: {}, items: [] });
+      }
+
+      if (url === "/api/agents/collaboration-dashboard") {
+        return jsonResponse({ summary: {}, items: [] });
+      }
+
+      if (url === "/api/agents/detail") {
+        return jsonResponse({
+          organization: { organizationId: "org-1", displayName: "老板团队" },
+          principal: { principalId: "principal-manager" },
+          agent: {
+            agentId: "agent-manager",
+            principalId: "principal-manager",
+            organizationId: "org-1",
+            displayName: "经理·曜",
+            departmentRole: "经理",
+            mission: "负责拆解任务。",
+            status: "active",
+          },
+        });
+      }
+
+      if (url === "/api/agents/work-items/list") {
+        return jsonResponse({ workItems: [] });
+      }
+
+      if (url === "/api/agents/mailbox/list") {
+        return jsonResponse({ items: [] });
+      }
+
+      if (url === "/api/agents/handoffs/list") {
+        return jsonResponse({ handoffs: [], timeline: [] });
+      }
+
+      if (url === "/api/agents/work-items/detail") {
+        return jsonResponse({ workItem: null, messages: [] });
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    };
+
+    await controller.load();
+
+    const filteredCalls = calls.filter((call) =>
+      [
+        "/api/agents/governance-overview",
+        "/api/agents/waiting/list",
+        "/api/agents/collaboration-dashboard",
+      ].includes(call.url)
+    );
+
+    assert.equal(filteredCalls.length, 3);
+    for (const call of filteredCalls) {
+      assert.equal(call.body.organizationId, "org-1");
+      assert.equal(call.body.managerAgentId, "agent-manager");
+      assert.deepEqual(call.body.attentionLevels, ["urgent"]);
+      assert.equal(call.body.waitingFor, "human");
+      assert.equal(call.body.staleOnly, true);
+      assert.equal(call.body.failedOnly, undefined);
+    }
   } finally {
     globalThis.fetch = originalFetch;
   }

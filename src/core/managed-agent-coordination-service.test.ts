@@ -1076,11 +1076,30 @@ test("ManagedAgentCoordinationService 会汇总组织级跨父任务协作看板
     assert.equal(dashboard.items[0]?.managerAgent.displayName, "经理·曜");
     assert.equal(dashboard.items[0]?.attentionLevel, "urgent");
     assert.match(dashboard.items[0]?.attentionReasons.join("；") ?? "", /等待顶层治理/);
+    assert.equal(dashboard.items[0]?.waitingHumanChildCount, 1);
+    assert.equal(dashboard.items[0]?.waitingAgentChildCount, 0);
+    assert.equal(dashboard.items[0]?.failedChildCount, 0);
+    assert.equal(dashboard.items[0]?.managerStatus, "active");
     assert.equal(dashboard.items[0]?.latestWaitingMessage?.messageType, "escalation");
+    assert.equal(dashboard.items[0]?.latestWaitingWorkItemId, urgentWaitingChild.workItem.workItemId);
+    assert.equal(dashboard.items[0]?.latestWaitingTargetAgentId, frontend.agent.agentId);
+    assert.equal(dashboard.items[0]?.latestWaitingActionType, "approval");
     assert.equal(dashboard.items[0]?.latestHandoff?.summary, "跨父任务 dashboard API 已经可用。");
     assert.equal(dashboard.items[0]?.lastActivityKind, "governance");
     assert.match(dashboard.items[0]?.lastActivitySummary ?? "", /治理结论：approve/);
     assert.equal(dashboard.items[1]?.attentionLevel, "normal");
+
+    const waitingQueue = coordinationService.listOrganizationWaitingQueue("principal-owner", {
+      managerAgentId: managerA.agent.agentId,
+      waitingFor: "human",
+      attentionLevels: ["urgent"],
+      now: "2026-04-07T12:30:00.000Z",
+    });
+    assert.equal(waitingQueue.summary.totalCount, 1);
+    assert.equal(waitingQueue.items[0]?.managerAgent.agentId, managerA.agent.agentId);
+    assert.equal(waitingQueue.items[0]?.parentWorkItem?.workItemId, urgentParent.workItem.workItemId);
+    assert.equal(waitingQueue.items[0]?.attentionLevel, "urgent");
+    assert.equal(waitingQueue.items[0]?.waitingFor, "human");
 
     const filtered = coordinationService.listOrganizationCollaborationDashboard("principal-owner", {
       managerAgentId: managerA.agent.agentId,
@@ -1090,6 +1109,19 @@ test("ManagedAgentCoordinationService 会汇总组织级跨父任务协作看板
     assert.equal(filtered.summary.totalCount, 1);
     assert.equal(filtered.items.length, 1);
     assert.equal(filtered.items[0]?.parentWorkItem.workItemId, urgentParent.workItem.workItemId);
+
+    const overview = coordinationService.getOrganizationGovernanceOverview("principal-owner", {
+      managerAgentId: managerA.agent.agentId,
+      now: "2026-04-07T12:30:00.000Z",
+    });
+    assert.equal(overview.urgentParentCount, 1);
+    assert.equal(overview.attentionParentCount, 0);
+    assert.equal(overview.waitingHumanCount, 1);
+    assert.equal(overview.waitingAgentCount, 0);
+    assert.equal(overview.managersNeedingAttentionCount, 1);
+    assert.equal(overview.managerHotspots[0]?.managerAgent.agentId, managerA.agent.agentId);
+    assert.equal(overview.managerHotspots[0]?.urgentParentCount, 1);
+    assert.equal(overview.managerHotspots[0]?.waitingCount, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

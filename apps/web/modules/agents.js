@@ -36,6 +36,18 @@ function createDefaultOrganizationWaitingResponseDraft() {
   };
 }
 
+function createDefaultGovernanceFilters() {
+  return {
+    organizationId: "",
+    managerAgentId: "",
+    attentionLevel: "all",
+    waitingFor: "any",
+    staleOnly: false,
+    failedOnly: false,
+    limit: 20,
+  };
+}
+
 function createDefaultSpawnPolicyDraft() {
   return {
     organizationId: "",
@@ -87,6 +99,7 @@ export function createDefaultAgentsState() {
     lifecycleUpdatingAction: "",
     organizations: [],
     agents: [],
+    organizationGovernanceOverview: null,
     organizationWaitingSummary: null,
     organizationWaitingItems: [],
     organizationCollaborationSummary: null,
@@ -97,6 +110,7 @@ export function createDefaultAgentsState() {
     spawnAuditLogs: [],
     idleRecoverySuggestions: [],
     idleRecoveryAuditLogs: [],
+    governanceFilters: createDefaultGovernanceFilters(),
     organizationWaitingResponseDrafts: {},
     selectedAgentId: "",
     selectedAgent: null,
@@ -332,6 +346,69 @@ export function createAgentsController(app) {
       void runSafely(saveExecutionBoundary);
     });
 
+    dom?.agentsGovernanceFilterManagerSelect?.addEventListener("change", () => {
+      void runSafely(() => applyGovernanceFilters({
+        managerAgentId: dom.agentsGovernanceFilterManagerSelect?.value ?? "",
+      }));
+    });
+
+    dom?.agentsGovernanceFilterAttentionSelect?.addEventListener("change", () => {
+      void runSafely(() => applyGovernanceFilters({
+        attentionLevel: normalizeGovernanceAttentionLevel(dom.agentsGovernanceFilterAttentionSelect?.value),
+      }));
+    });
+
+    dom?.agentsGovernanceFilterWaitingSelect?.addEventListener("change", () => {
+      void runSafely(() => applyGovernanceFilters({
+        waitingFor: normalizeGovernanceWaitingFor(dom.agentsGovernanceFilterWaitingSelect?.value),
+      }));
+    });
+
+    dom?.agentsGovernanceFilterStaleInput?.addEventListener("change", () => {
+      void runSafely(() => applyGovernanceFilters({
+        staleOnly: dom.agentsGovernanceFilterStaleInput?.checked === true,
+      }));
+    });
+
+    dom?.agentsGovernanceFilterFailedInput?.addEventListener("change", () => {
+      void runSafely(() => applyGovernanceFilters({
+        failedOnly: dom.agentsGovernanceFilterFailedInput?.checked === true,
+      }));
+    });
+
+    dom?.agentsGovernanceFilterResetButton?.addEventListener("click", () => {
+      void runSafely(resetGovernanceFilters);
+    });
+
+    dom?.agentsGovernanceSummaryGrid?.addEventListener("click", (event) => {
+      const summaryButton = event.target.closest("[data-agent-governance-preset]");
+
+      if (!summaryButton?.dataset.agentGovernancePreset) {
+        return;
+      }
+
+      void runSafely(() => applyGovernancePreset(summaryButton.dataset.agentGovernancePreset));
+    });
+
+    dom?.agentsGovernanceHotspotsList?.addEventListener("click", (event) => {
+      const filterButton = event.target.closest("[data-agent-governance-hotspot-filter]");
+
+      if (filterButton?.dataset.agentGovernanceHotspotFilter) {
+        void runSafely(() => applyGovernanceFilters({
+          managerAgentId: filterButton.dataset.agentGovernanceHotspotFilter,
+        }));
+        return;
+      }
+
+      const focusButton = event.target.closest("[data-agent-governance-hotspot-focus]");
+
+      if (!focusButton?.dataset.agentGovernanceHotspotFocus) {
+        return;
+      }
+
+      void runSafely(() => selectAgent(focusButton.dataset.agentGovernanceHotspotFocus));
+    });
+
     dom?.agentsWaitingList?.addEventListener("click", (event) => {
       const escalateButton = event.target.closest("[data-agent-waiting-escalate]");
 
@@ -344,6 +421,24 @@ export function createAgentsController(app) {
 
       if (respondButton?.dataset.agentWaitingRespond) {
         void runSafely(() => respondOrganizationWaitingWorkItem(respondButton.dataset.agentWaitingRespond));
+        return;
+      }
+
+      const parentButton = event.target.closest("[data-agent-waiting-parent-open]");
+
+      if (parentButton?.dataset.agentWaitingParentOpen) {
+        const targetAgentId = normalizeText(parentButton.dataset.agentWaitingParentAgentId);
+        const workItemId = normalizeText(parentButton.dataset.agentWaitingParentOpen);
+
+        if (!targetAgentId || !workItemId) {
+          return;
+        }
+
+        void runSafely(() => load({
+          preserveNoticeMessage: true,
+          selectAgentId: targetAgentId,
+          selectWorkItemId: workItemId,
+        }));
         return;
       }
 
@@ -407,11 +502,43 @@ export function createAgentsController(app) {
 
       const focusButton = event.target.closest("[data-agent-collaboration-focus]");
 
-      if (!focusButton?.dataset.agentCollaborationFocus) {
+      if (focusButton?.dataset.agentCollaborationFocus) {
+        void runSafely(() => selectAgent(focusButton.dataset.agentCollaborationFocus));
         return;
       }
 
-      void runSafely(() => selectAgent(focusButton.dataset.agentCollaborationFocus));
+      const waitingButton = event.target.closest("[data-agent-collaboration-waiting-open]");
+
+      if (waitingButton?.dataset.agentCollaborationWaitingOpen) {
+        const targetAgentId = normalizeText(waitingButton.dataset.agentCollaborationWaitingAgentId);
+        const workItemId = normalizeText(waitingButton.dataset.agentCollaborationWaitingOpen);
+
+        if (!targetAgentId || !workItemId) {
+          return;
+        }
+
+        void runSafely(() => load({
+          preserveNoticeMessage: true,
+          selectAgentId: targetAgentId,
+          selectWorkItemId: workItemId,
+        }));
+        return;
+      }
+
+      const lifecycleButton = event.target.closest("[data-agent-collaboration-lifecycle]");
+
+      if (!lifecycleButton?.dataset.agentCollaborationLifecycle) {
+        return;
+      }
+
+      const action = normalizeLifecycleAction(lifecycleButton.dataset.agentCollaborationLifecycle);
+      const agentId = normalizeText(lifecycleButton.dataset.agentCollaborationLifecycleAgentId);
+
+      if (!action || !agentId) {
+        return;
+      }
+
+      void runSafely(() => updateManagedAgentLifecycle(agentId, action));
     });
 
     dom?.agentsSpawnSuggestionsList?.addEventListener("click", (event) => {
@@ -670,6 +797,61 @@ export function createAgentsController(app) {
     render();
   }
 
+  function updateGovernanceFilters(patch) {
+    const state = app.runtime.agents ?? createDefaultAgentsState();
+
+    setState({
+      governanceFilters: {
+        ...syncGovernanceFilters(state.governanceFilters, state.organizations, state.agents),
+        ...patch,
+      },
+    });
+    render();
+  }
+
+  async function applyGovernanceFilters(patch) {
+    updateGovernanceFilters(patch);
+    await load({
+      preserveNoticeMessage: true,
+    });
+  }
+
+  async function resetGovernanceFilters() {
+    const state = app.runtime.agents ?? createDefaultAgentsState();
+    setState({
+      governanceFilters: syncGovernanceFilters(
+        createDefaultGovernanceFilters(),
+        state.organizations,
+        state.agents,
+      ),
+    });
+    render();
+    await load({
+      preserveNoticeMessage: true,
+    });
+  }
+
+  async function applyGovernancePreset(preset) {
+    const normalizedPreset = normalizeText(preset);
+    const nextFilters = {
+      ...createDefaultGovernanceFilters(),
+    };
+
+    if (normalizedPreset === "urgent") {
+      nextFilters.attentionLevel = "urgent";
+    } else if (normalizedPreset === "attention") {
+      nextFilters.attentionLevel = "attention";
+    } else if (normalizedPreset === "waiting_human") {
+      nextFilters.waitingFor = "human";
+    } else if (normalizedPreset === "waiting_agent") {
+      nextFilters.waitingFor = "agent";
+    } else if (normalizedPreset === "stale") {
+      nextFilters.staleOnly = true;
+    }
+
+    await applyGovernanceFilters(nextFilters);
+  }
+
   async function load(options = {}) {
     const requestId = ++loadRequestId;
     const state = app.runtime.agents ?? createDefaultAgentsState();
@@ -683,11 +865,8 @@ export function createAgentsController(app) {
     render();
 
     try {
-      const [data, waitingData, collaborationData, suggestionsData, idleRecoveryData] = await Promise.all([
+      const [data, suggestionsData, idleRecoveryData] = await Promise.all([
         postAgents("/api/agents/list", buildIdentityPayload(app)),
-        postAgents("/api/agents/waiting/list", buildIdentityPayload(app)),
-        postAgents("/api/agents/collaboration-dashboard", buildIdentityPayload(app))
-          .catch(() => createEmptyCollaborationDashboardResponse()),
         postAgents("/api/agents/spawn-suggestions", buildIdentityPayload(app)),
         postAgents("/api/agents/idle-suggestions", buildIdentityPayload(app)),
       ]);
@@ -698,6 +877,23 @@ export function createAgentsController(app) {
 
       const organizations = normalizeOrganizations(data.organizations);
       const agents = normalizeAgents(data.agents);
+      const governanceFilters = syncGovernanceFilters(state.governanceFilters, organizations, agents);
+      const governancePayload = {
+        ...buildIdentityPayload(app),
+        ...buildGovernanceFiltersPayload(governanceFilters),
+      };
+      const [overviewData, waitingData, collaborationData] = await Promise.all([
+        postAgents("/api/agents/governance-overview", governancePayload)
+          .catch(() => createEmptyGovernanceOverviewResponse()),
+        postAgents("/api/agents/waiting/list", governancePayload),
+        postAgents("/api/agents/collaboration-dashboard", governancePayload)
+          .catch(() => createEmptyCollaborationDashboardResponse()),
+      ]);
+
+      if (requestId !== loadRequestId) {
+        return app.runtime.agents;
+      }
+
       const waitingItems = normalizeWaitingItems(waitingData.items);
       const collaborationItems = normalizeCollaborationDashboardItems(collaborationData.items);
       const spawnPolicies = normalizeSpawnPolicies(suggestionsData.spawnPolicies);
@@ -723,6 +919,7 @@ export function createAgentsController(app) {
         loading: false,
         organizations,
         agents,
+        organizationGovernanceOverview: normalizeGovernanceOverview(overviewData.overview),
         organizationWaitingSummary: normalizeWaitingSummary(waitingData.summary),
         organizationWaitingItems: waitingItems,
         organizationCollaborationSummary: normalizeCollaborationDashboardSummary(collaborationData.summary),
@@ -734,6 +931,7 @@ export function createAgentsController(app) {
         idleRecoverySuggestions,
         idleRecoveryAuditLogs,
         spawnPolicyDraft,
+        governanceFilters,
         organizationWaitingResponseDrafts: syncOrganizationWaitingResponseDrafts(
           state.organizationWaitingResponseDrafts,
           waitingItems,
@@ -1994,6 +2192,26 @@ function normalizeWaitingItems(value) {
     : [];
 }
 
+function normalizeGovernanceOverview(value) {
+  const overview = isRecord(value) ? value : {};
+  const managerHotspots = Array.isArray(overview.managerHotspots)
+    ? overview.managerHotspots.filter((item) => isRecord(item) && isRecord(item.managerAgent))
+    : [];
+
+  return {
+    urgentParentCount: Number.isFinite(overview.urgentParentCount) ? Number(overview.urgentParentCount) : 0,
+    attentionParentCount: Number.isFinite(overview.attentionParentCount) ? Number(overview.attentionParentCount) : 0,
+    waitingHumanCount: Number.isFinite(overview.waitingHumanCount) ? Number(overview.waitingHumanCount) : 0,
+    waitingAgentCount: Number.isFinite(overview.waitingAgentCount) ? Number(overview.waitingAgentCount) : 0,
+    staleParentCount: Number.isFinite(overview.staleParentCount) ? Number(overview.staleParentCount) : 0,
+    failedChildCount: Number.isFinite(overview.failedChildCount) ? Number(overview.failedChildCount) : 0,
+    managersNeedingAttentionCount: Number.isFinite(overview.managersNeedingAttentionCount)
+      ? Number(overview.managersNeedingAttentionCount)
+      : 0,
+    managerHotspots,
+  };
+}
+
 function normalizeCollaborationDashboardSummary(value) {
   return isRecord(value)
     ? {
@@ -2086,6 +2304,83 @@ function createEmptyCollaborationDashboardResponse() {
     },
     items: [],
   };
+}
+
+function createEmptyGovernanceOverviewResponse() {
+  return {
+    overview: normalizeGovernanceOverview(null),
+  };
+}
+
+function normalizeGovernanceAttentionLevel(value) {
+  return ["all", "normal", "attention", "urgent"].includes(normalizeText(value))
+    ? normalizeText(value)
+    : "all";
+}
+
+function normalizeGovernanceWaitingFor(value) {
+  return ["any", "human", "agent"].includes(normalizeText(value))
+    ? normalizeText(value)
+    : "any";
+}
+
+function syncGovernanceFilters(value, organizations, agents) {
+  const safeValue = isRecord(value) ? value : createDefaultGovernanceFilters();
+  const organizationId = normalizeText(safeValue.organizationId) || normalizeText(organizations?.[0]?.organizationId);
+  const filteredAgents = Array.isArray(agents)
+    ? agents.filter((agent) => !organizationId || normalizeText(agent?.organizationId) === organizationId)
+    : [];
+  const managerAgentId = resolveGovernanceManagerAgentId(safeValue.managerAgentId, filteredAgents);
+  const limit = Number.isFinite(safeValue.limit) && Number(safeValue.limit) > 0
+    ? Math.floor(Number(safeValue.limit))
+    : 20;
+
+  return {
+    organizationId,
+    managerAgentId,
+    attentionLevel: normalizeGovernanceAttentionLevel(safeValue.attentionLevel),
+    waitingFor: normalizeGovernanceWaitingFor(safeValue.waitingFor),
+    staleOnly: safeValue.staleOnly === true,
+    failedOnly: safeValue.failedOnly === true,
+    limit,
+  };
+}
+
+function resolveGovernanceManagerAgentId(candidateId, agents) {
+  const normalizedCandidateId = normalizeText(candidateId);
+
+  if (!normalizedCandidateId) {
+    return "";
+  }
+
+  return Array.isArray(agents) && agents.some((agent) => normalizeText(agent?.agentId) === normalizedCandidateId)
+    ? normalizedCandidateId
+    : "";
+}
+
+function buildGovernanceFiltersPayload(filters) {
+  const safeFilters = isRecord(filters)
+    ? {
+        organizationId: normalizeText(filters.organizationId),
+        managerAgentId: normalizeText(filters.managerAgentId),
+        attentionLevel: normalizeGovernanceAttentionLevel(filters.attentionLevel),
+        waitingFor: normalizeGovernanceWaitingFor(filters.waitingFor),
+        staleOnly: filters.staleOnly === true,
+        failedOnly: filters.failedOnly === true,
+        limit: Number.isFinite(filters.limit) && Number(filters.limit) > 0 ? Math.floor(Number(filters.limit)) : 20,
+      }
+    : createDefaultGovernanceFilters();
+  const payload = {
+    ...(safeFilters.organizationId ? { organizationId: safeFilters.organizationId } : {}),
+    ...(safeFilters.managerAgentId ? { managerAgentId: safeFilters.managerAgentId } : {}),
+    ...(safeFilters.attentionLevel !== "all" ? { attentionLevels: [safeFilters.attentionLevel] } : {}),
+    ...(safeFilters.waitingFor !== "any" ? { waitingFor: safeFilters.waitingFor } : {}),
+    ...(safeFilters.staleOnly ? { staleOnly: true } : {}),
+    ...(safeFilters.failedOnly ? { failedOnly: true } : {}),
+    ...(safeFilters.limit ? { limit: safeFilters.limit } : {}),
+  };
+
+  return payload;
 }
 
 function resolveAgentId(candidateId, agents) {
