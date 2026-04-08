@@ -3,6 +3,7 @@ import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import {
   buildCodexProcessEnv,
   createCodexAuthStorageConfigOverrides,
+  ensureManagedAgentExecutionCodexHome,
   ensureAuthAccountCodexHome,
   type CodexCliConfigOverrides,
 } from "./auth-accounts.js";
@@ -262,8 +263,14 @@ export class AppServerTaskRuntime {
     }, hooks);
   }
 
-  private resolveSessionFactoryOptions(request: TaskRequest): AppServerSessionFactoryOptions {
+  private resolveSessionFactoryOptions(
+    request: TaskRequest,
+    principalId?: string,
+  ): AppServerSessionFactoryOptions {
     const accessMode = normalizeTextValue(request.options?.accessMode) === "third-party" ? "third-party" : "auth";
+    const managedAgent = normalizeTextValue(principalId)
+      ? this.runtimeStore.getManagedAgentByPrincipal(principalId as string)
+      : null;
 
     if (accessMode === "third-party") {
       const providerConfigs = readOpenAICompatibleProviderConfigs(this.workingDirectory, this.runtimeStore);
@@ -276,8 +283,14 @@ export class AppServerTaskRuntime {
         throw new Error("Third-party provider does not exist.");
       }
 
+      const env = createCodexProviderEnv(providerConfig);
+
+      if (managedAgent) {
+        env.CODEX_HOME = ensureManagedAgentExecutionCodexHome(this.workingDirectory, managedAgent.agentId);
+      }
+
       return {
-        env: createCodexProviderEnv(providerConfig),
+        env,
         configOverrides: createCodexProviderOverrides(providerConfig),
       };
     }
@@ -292,13 +305,27 @@ export class AppServerTaskRuntime {
     }
 
     if (!account) {
-      return {};
+      if (!managedAgent) {
+        return {};
+      }
+
+      return {
+        env: buildCodexProcessEnv(
+          ensureManagedAgentExecutionCodexHome(this.workingDirectory, managedAgent.agentId),
+        ),
+        configOverrides: createCodexAuthStorageConfigOverrides(),
+      };
     }
 
     ensureAuthAccountCodexHome(this.workingDirectory, account.codexHome);
+    const codexHome = managedAgent
+      ? ensureManagedAgentExecutionCodexHome(this.workingDirectory, managedAgent.agentId, {
+        sourceCodexHome: account.codexHome,
+      })
+      : account.codexHome;
 
     return {
-      env: buildCodexProcessEnv(account.codexHome),
+      env: buildCodexProcessEnv(codexHome),
       configOverrides: createCodexAuthStorageConfigOverrides(),
     };
   }
@@ -370,7 +397,7 @@ export class AppServerTaskRuntime {
         throw new Error(compiledInput.compileWarnings[0]?.message ?? "当前输入无法发送到 app-server。");
       }
 
-      session = await abortable(() => this.sessionFactory(this.resolveSessionFactoryOptions(request)), signal);
+      session = await abortable(() => this.sessionFactory(this.resolveSessionFactoryOptions(request, principalId)), signal);
       const activeSession = session;
       throwIfAborted(signal);
       await abortable(() => activeSession.initialize(), signal);

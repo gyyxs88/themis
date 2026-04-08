@@ -28,7 +28,12 @@
   - 边界非法时，run 会以 `MANAGED_AGENT_EXECUTION_BOUNDARY_INVALID` 失败收口，并降级非 bootstrap agent
   - HTTP 已新增 `POST /api/agents/execution-boundary/update`
   - Web `Agents` 面板已新增默认执行边界治理区
-- 当前下一步优先项：如果继续推进，优先评估更强的物理隔离或远端 websocket `app-server` 节点，而不是回头重复补已经收口的 manager 治理面或第一版执行边界。
+- “更强物理隔离首刀” 也已完成：
+  - 长期 agent 执行时会使用 `infra/local/managed-agents/<agentId>/codex-home` 作为独立 `CODEX_HOME`
+  - auth 模式会从认证账号 home 复制 `auth.json`，并复用技能目录
+  - third-party 模式也会使用 agent 独立 home
+  - 这意味着 app-server 的运行态、配置和本地历史现在已经按 agent 物理拆开
+- 当前下一步优先项：如果继续推进，优先评估远端 websocket `app-server` 节点，而不是回头重复补已经收口的 manager 治理面、执行边界或本地物理隔离首刀。
 
 ## 1. 设计目标
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -780,6 +780,142 @@ test("AppServerTaskRuntime 在 third-party 模式下会把 provider 隔离配置
           supports_websockets: true,
         },
       });
+    } finally {
+      fixture.cleanup();
+    }
+  });
+});
+
+test("AppServerTaskRuntime 在 managed agent 的 auth 模式下会使用 agent 独立 CODEX_HOME", async () => {
+  const { state, sessionFactory: baseSessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-managed-auth-1",
+  });
+  const delegateSessionFactory = baseSessionFactory as NonNullable<AppServerTaskRuntimeOptions["sessionFactory"]>;
+  const factoryOptionsHistory: AppServerSessionFactoryOptions[] = [];
+  const fixture = createRuntimeFixture({
+    sessionFactory: async (options) => {
+      factoryOptionsHistory.push(options ?? {});
+      return await delegateSessionFactory();
+    },
+  });
+
+  try {
+    fixture.runtimeStore.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "Owner",
+      kind: "human_user",
+      createdAt: "2026-04-08T10:00:00.000Z",
+      updatedAt: "2026-04-08T10:00:00.000Z",
+    });
+    const accountHome = join(fixture.root, "infra/local/codex-auth/acct-managed");
+    mkdirSync(join(accountHome, "skills"), { recursive: true });
+    writeFileSync(join(accountHome, "auth.json"), "{\"token\":\"acct-managed\"}", "utf8");
+    writeFileSync(join(accountHome, "skills/demo-skill.txt"), "demo", "utf8");
+    fixture.runtimeStore.saveAuthAccount({
+      accountId: "acct-managed",
+      label: "运行账号",
+      codexHome: accountHome,
+      isActive: true,
+      createdAt: "2026-04-08T10:00:00.000Z",
+      updatedAt: "2026-04-08T10:00:00.000Z",
+    });
+    const created = fixture.runtime.getManagedAgentsService().createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      departmentRole: "后端",
+      displayName: "后端·衡",
+      now: "2026-04-08T10:01:00.000Z",
+    });
+
+    await fixture.runtime.runTaskAsPrincipal({
+      requestId: "req-app-managed-auth-1",
+      taskId: "task-app-managed-auth-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "hello",
+      options: {
+        accessMode: "auth",
+        authAccountId: "acct-managed",
+      },
+      channelContext: { sessionId: "web-session-managed-auth-1" },
+      createdAt: "2026-04-08T10:02:00.000Z",
+    }, {
+      principalId: created.agent.principalId,
+      conversationId: "managed-conversation-auth-1",
+    });
+
+    const managedHome = join(fixture.root, "infra/local/managed-agents", created.agent.agentId, "codex-home");
+    assert.equal(state.started.length, 1);
+    assert.equal(factoryOptionsHistory.length, 1);
+    assert.equal(factoryOptionsHistory[0]?.env?.CODEX_HOME, managedHome);
+    assert.equal(factoryOptionsHistory[0]?.configOverrides?.cli_auth_credentials_store, "file");
+    assert.equal(readFileSync(join(managedHome, "auth.json"), "utf8"), "{\"token\":\"acct-managed\"}");
+    assert.equal(lstatSync(join(managedHome, "skills")).isSymbolicLink(), true);
+    assert.equal(readFileSync(join(managedHome, "config.toml"), "utf8").includes("managed-agent runtime isolation"), true);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 在 managed agent 的 third-party 模式下也会使用 agent 独立 CODEX_HOME", async () => {
+  await withClearedOpenAICompatEnv(async () => {
+    const { state, sessionFactory: baseSessionFactory } = createSessionFactory({
+      startThreadId: "thread-app-managed-provider-1",
+    });
+    const delegateSessionFactory = baseSessionFactory as NonNullable<AppServerTaskRuntimeOptions["sessionFactory"]>;
+    const factoryOptionsHistory: AppServerSessionFactoryOptions[] = [];
+    const fixture = createRuntimeFixture({
+      sessionFactory: async (options) => {
+        factoryOptionsHistory.push(options ?? {});
+        return await delegateSessionFactory();
+      },
+    });
+
+    try {
+      fixture.runtimeStore.savePrincipal({
+        principalId: "principal-owner",
+        displayName: "Owner",
+        kind: "human_user",
+        createdAt: "2026-04-08T10:10:00.000Z",
+        updatedAt: "2026-04-08T10:10:00.000Z",
+      });
+      addOpenAICompatibleProvider(fixture.root, {
+        id: "gateway-a",
+        name: "Gateway A",
+        baseUrl: "https://gateway.example.com/v1",
+        apiKey: "sk-gateway-a",
+        wireApi: "responses",
+        supportsWebsockets: true,
+      }, fixture.runtimeStore);
+      const created = fixture.runtime.getManagedAgentsService().createManagedAgent({
+        ownerPrincipalId: "principal-owner",
+        departmentRole: "运维",
+        displayName: "运维·砺",
+        now: "2026-04-08T10:11:00.000Z",
+      });
+
+      await fixture.runtime.runTaskAsPrincipal({
+        requestId: "req-app-managed-provider-1",
+        taskId: "task-app-managed-provider-1",
+        sourceChannel: "web",
+        user: { userId: "webui" },
+        goal: "hello",
+        options: {
+          accessMode: "third-party",
+          thirdPartyProviderId: "gateway-a",
+        },
+        channelContext: { sessionId: "web-session-managed-provider-1" },
+        createdAt: "2026-04-08T10:12:00.000Z",
+      }, {
+        principalId: created.agent.principalId,
+        conversationId: "managed-conversation-provider-1",
+      });
+
+      const managedHome = join(fixture.root, "infra/local/managed-agents", created.agent.agentId, "codex-home");
+      assert.equal(state.started.length, 1);
+      assert.equal(factoryOptionsHistory.length, 1);
+      assert.equal(factoryOptionsHistory[0]?.env?.CODEX_HOME, managedHome);
+      assert.equal(factoryOptionsHistory[0]?.env?.THEMIS_OPENAI_COMPAT_API_KEY, "sk-gateway-a");
+      assert.equal(readFileSync(join(managedHome, "config.toml"), "utf8").includes("managed-agent runtime isolation"), true);
     } finally {
       fixture.cleanup();
     }
