@@ -1,5 +1,6 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
-import type { EventHandles } from "@larksuiteoapi/node-sdk";
+import type { EventHandles, InteractiveCard, InteractiveCardActionEvent } from "@larksuiteoapi/node-sdk";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { InMemoryCommunicationRouter } from "../../communication/router.js";
 import { AppServerActionBridge } from "../../core/app-server-action-bridge.js";
@@ -54,6 +55,15 @@ import {
   type FeishuChatSessionScope,
   type FeishuChatSettings,
 } from "./chat-settings-store.js";
+import {
+  buildFeishuApprovalInteractiveCard,
+  renderFeishuApprovalCard,
+  type FeishuApprovalCardStatus,
+} from "./approval-card-renderer.js";
+import {
+  FeishuApprovalCardStateStore,
+  type FeishuApprovalCardRecord,
+} from "./approval-card-state-store.js";
 import { renderFeishuAssistantMessage, type FeishuRenderedMessageDraft } from "./message-renderer.js";
 import {
   extractFeishuPostContentItems,
@@ -143,10 +153,13 @@ export interface FeishuChannelServiceOptions {
   appSecret?: string;
   loggerLevel?: Lark.LoggerLevel;
   useEnvProxy?: boolean;
+  verificationToken?: string;
+  encryptKey?: string;
   progressFlushTimeoutMs?: number;
   sessionStore?: FeishuSessionStore;
   diagnosticsStateStore?: FeishuDiagnosticsStateStore;
   chatSettingsStore?: FeishuChatSettingsStore;
+  approvalCardStore?: FeishuApprovalCardStateStore;
   logger?: FeishuChannelLogger;
 }
 
@@ -168,12 +181,16 @@ export class FeishuChannelService {
   private readonly appSecret: string;
   private readonly loggerLevel: Lark.LoggerLevel;
   private readonly useEnvProxy: boolean;
+  private readonly verificationToken: string;
+  private readonly encryptKey: string;
   private readonly progressFlushTimeoutMs: number;
   private readonly sessionStore: FeishuSessionStore;
   private readonly diagnosticsStateStore: FeishuDiagnosticsStateStore;
   private readonly attachmentDraftStore: FeishuAttachmentDraftStore;
   private readonly chatSettingsStore: FeishuChatSettingsStore;
+  private readonly approvalCardStore: FeishuApprovalCardStateStore;
   private readonly logger: FeishuChannelLogger;
+  private readonly cardActionHandler: Lark.CardActionHandler;
   private readonly client: Lark.Client | null;
   private readonly wsClient: Lark.WSClient | null;
   private readonly eventDispatcher: Lark.EventDispatcher | null;
@@ -201,6 +218,8 @@ export class FeishuChannelService {
     this.appSecret = normalizeText(options.appSecret ?? process.env.FEISHU_APP_SECRET) ?? "";
     this.loggerLevel = options.loggerLevel ?? parseFeishuLoggerLevel(process.env.FEISHU_LOG_LEVEL);
     this.useEnvProxy = options.useEnvProxy ?? parseBooleanEnv(process.env.FEISHU_USE_ENV_PROXY);
+    this.verificationToken = normalizeText(options.verificationToken ?? process.env.FEISHU_VERIFICATION_TOKEN) ?? "";
+    this.encryptKey = normalizeText(options.encryptKey ?? process.env.FEISHU_ENCRYPT_KEY) ?? "";
     this.progressFlushTimeoutMs = normalizePositiveInteger(
       options.progressFlushTimeoutMs ?? parseIntegerEnv(process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS),
       DEFAULT_FEISHU_PROGRESS_FLUSH_TIMEOUT_MS,
@@ -212,10 +231,21 @@ export class FeishuChannelService {
     this.chatSettingsStore = options.chatSettingsStore ?? new FeishuChatSettingsStore({
       filePath: join(this.runtime.getWorkingDirectory(), "infra/local/feishu-chat-settings.json"),
     });
+    this.approvalCardStore = options.approvalCardStore ?? new FeishuApprovalCardStateStore({
+      filePath: join(this.runtime.getWorkingDirectory(), "infra/local/feishu-approval-cards.json"),
+    });
     this.attachmentDraftStore = new FeishuAttachmentDraftStore({
       filePath: join(this.runtime.getWorkingDirectory(), "infra/local/feishu-attachment-drafts.json"),
     });
     this.logger = options.logger ?? console;
+    this.cardActionHandler = new Lark.CardActionHandler({
+      ...(this.verificationToken ? { verificationToken: this.verificationToken } : {}),
+      ...(this.encryptKey ? { encryptKey: this.encryptKey } : {}),
+      loggerLevel: this.loggerLevel,
+      logger: createSilentFeishuSdkLogger() as never,
+    }, async (data: InteractiveCardActionEvent) => {
+      return await this.handleCardActionEvent(data);
+    });
 
     if (this.isConfigured()) {
       const httpInstance = buildFeishuHttpInstance({
@@ -278,6 +308,163 @@ export class FeishuChannelService {
 
     this.wsClient.close({ force: true });
     this.started = false;
+  }
+
+  async handleCardActionWebhook(request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean> {
+    if (url.pathname !== "/api/feishu/card-action") {
+      return false;
+    }
+
+    if (request.method !== "POST") {
+      writeJsonResponse(response, 405, {
+        error: {
+          code: "METHOD_NOT_ALLOWED",
+          message: "飞书审批卡回调只支持 POST。",
+        },
+      });
+      return true;
+    }
+
+    try {
+      const payload = await readJsonRequestBody(request);
+      const card = await this.cardActionHandler.invoke(payload);
+      writeJsonResponse(response, 200, card);
+    } catch (error) {
+      const message = toErrorMessage(error);
+      this.logger.error(`[themis/feishu] 处理审批卡回调失败：${message}`);
+      writeJsonResponse(response, 500, {
+        error: {
+          code: "FEISHU_CARD_ACTION_FAILED",
+          message,
+        },
+      });
+    }
+
+    return true;
+  }
+
+  private async handleCardActionEvent(event: unknown): Promise<InteractiveCard> {
+    const cardEvent = normalizeFeishuCardActionEvent(event);
+    const currentUserId = normalizeText(cardEvent?.user_id) ?? normalizeText(cardEvent?.open_id);
+    const cardKey = normalizeText(cardEvent?.action.value.cardKey);
+    const decision = normalizeApprovalDecision(cardEvent?.action.value.decision);
+    const fallbackActionId = normalizeText(cardEvent?.action.value.actionId) ?? "unknown-action";
+
+    if (!cardEvent || !cardKey || !decision) {
+      return buildFeishuApprovalInteractiveCard({
+        cardKey: cardKey ?? createId("feishu-approval-card-invalid"),
+        actionId: fallbackActionId,
+        prompt: "审批卡参数缺失",
+        status: "failed",
+        message: "审批卡回调参数不完整，请改用文本命令处理。",
+      });
+    }
+
+    const storedCard = this.approvalCardStore.get(cardKey);
+
+    if (!storedCard) {
+      return buildFeishuApprovalInteractiveCard({
+        cardKey,
+        actionId: fallbackActionId,
+        prompt: "审批卡状态已丢失",
+        status: "failed",
+        message: "未找到对应审批卡状态，请改用文本命令处理。",
+      });
+    }
+
+    if (storedCard.status !== "pending") {
+      return this.renderApprovalCardSnapshot(storedCard, storedCard.status, resolveApprovalCardTerminalMessage(storedCard));
+    }
+
+    if (!currentUserId) {
+      return this.renderApprovalCardSnapshot(
+        storedCard,
+        "failed",
+        "审批卡缺少触发用户信息，请改用文本命令处理。",
+      );
+    }
+
+    if (
+      storedCard.actionSourceChannel === "feishu"
+      && storedCard.actionOwnerUserId
+      && storedCard.actionOwnerUserId !== currentUserId
+    ) {
+      return this.renderApprovalCardSnapshot(
+        storedCard,
+        "pending",
+        "只有原飞书发起人可以处理这张审批卡，请切回对应账号操作。",
+      );
+    }
+
+    const principalId = this.runtime.getIdentityLinkService().ensureIdentity({
+      channel: "feishu",
+      channelUserId: currentUserId,
+    }).principalId;
+    const callbackOpenId = normalizeText(cardEvent.open_id);
+    const callbackTenantKey = normalizeText(cardEvent.tenant_key);
+
+    if (storedCard.actionPrincipalId && storedCard.actionPrincipalId !== principalId) {
+      return this.renderApprovalCardSnapshot(
+        storedCard,
+        "pending",
+        "当前账号还没有接管这张审批卡对应的 Themis 身份，请先完成身份绑定后重试。",
+      );
+    }
+
+    const callbackContext: FeishuIncomingContext = {
+      kind: "text",
+      chatId: storedCard.chatId,
+      messageId: storedCard.messageId,
+      userId: currentUserId,
+      text: "",
+      ...(callbackOpenId ? { openId: callbackOpenId } : {}),
+      ...(callbackTenantKey ? { tenantKey: callbackTenantKey } : {}),
+    };
+    const outcome = await this.submitPendingApprovalDecision({
+      actionId: storedCard.actionId,
+      decision,
+      context: callbackContext,
+      scope: {
+        sessionId: storedCard.sessionId,
+        principalId: storedCard.actionPrincipalId ?? principalId,
+        ...(normalizeText(storedCard.actionSourceChannel) ? { sourceChannel: storedCard.actionSourceChannel } : {}),
+        ...(storedCard.actionSourceChannel === "feishu" && storedCard.actionOwnerUserId
+          ? { userId: storedCard.actionOwnerUserId }
+          : {}),
+      },
+    });
+
+    const now = new Date().toISOString();
+
+    if (!outcome.ok) {
+      if (outcome.reason === "action_not_found" || outcome.reason === "expired") {
+        this.approvalCardStore.save({
+          ...storedCard,
+          status: "failed",
+          callbackToken: cardEvent.token,
+          openMessageId: cardEvent.open_message_id,
+          actorUserId: currentUserId,
+          lastError: outcome.message,
+          updatedAt: now,
+          resolvedAt: now,
+        });
+      }
+
+      return this.renderApprovalCardSnapshot(storedCard, "failed", outcome.message);
+    }
+
+    const nextStatus: FeishuApprovalCardStatus = decision === "approve" ? "approved" : "denied";
+    const updatedCard = this.approvalCardStore.save({
+      ...storedCard,
+      status: nextStatus,
+      callbackToken: cardEvent.token,
+      openMessageId: cardEvent.open_message_id,
+      actorUserId: currentUserId,
+      updatedAt: now,
+      resolvedAt: now,
+    });
+
+    return this.renderApprovalCardSnapshot(updatedCard, nextStatus, outcome.message);
   }
 
   private async acceptMessageReceiveEvent(event: FeishuMessageReceiveEvent): Promise<void> {
@@ -1059,6 +1246,8 @@ export class FeishuChannelService {
     const bridge = new FeishuTaskMessageBridge({
       createText: async (text) => this.createAssistantMessage(context.chatId, text),
       updateText: async (messageId, text) => this.updateAssistantMessage(messageId, text),
+      createDraft: async (draft) => this.createMessage(context.chatId, draft),
+      updateDraft: async (messageId, draft) => this.updateMessage(messageId, draft),
       sendText: async (text) => {
         await this.createAssistantMessage(context.chatId, text);
       },
@@ -1070,6 +1259,9 @@ export class FeishuChannelService {
       deliver: async (message) => {
         try {
           const enriched = await this.decorateDeliveryMessageForMobile(message, sessionId);
+          if (await this.tryDeliverApprovalCard(context, sessionId, bridge, enriched)) {
+            return;
+          }
           await bridge.deliver(enriched);
         } catch (error) {
           this.logger.error(`[themis/feishu] 推送任务消息失败：${toErrorMessage(error)}`);
@@ -1250,6 +1442,79 @@ export class FeishuChannelService {
     }
 
     return message;
+  }
+
+  private async tryDeliverApprovalCard(
+    context: Extract<FeishuIncomingContext, { kind: "text" }>,
+    sessionId: string,
+    bridge: FeishuTaskMessageBridge,
+    message: FeishuDeliveryMessage,
+  ): Promise<boolean> {
+    if (message.kind !== "event" || message.title !== "task.action_required") {
+      return false;
+    }
+
+    const metadata = asRecord(message.metadata);
+    const actionId = normalizeText(metadata?.actionId);
+    const actionType = normalizePendingActionType(metadata?.actionType);
+    const prompt = normalizeText(message.text) ?? normalizeText(metadata?.prompt);
+    const taskId = normalizeText(message.taskId);
+
+    if (!actionId || actionType !== "approval" || !prompt || !taskId) {
+      return false;
+    }
+
+    const cardKey = createId("feishu-approval-card");
+    const draft = renderFeishuApprovalCard({
+      cardKey,
+      actionId,
+      prompt,
+      status: "pending",
+    });
+    const principalId = this.ensurePrincipalIdentity(context).principalId;
+    const pendingAction = this.actionBridge.find(actionId);
+    const now = new Date().toISOString();
+
+    try {
+      const mutation = await bridge.replaceCurrentPlaceholderWithDraft(draft);
+      const storedMessageId = normalizeText(mutation.messageId) ?? createId("feishu-card-message");
+
+      this.approvalCardStore.save({
+        cardKey,
+        chatId: context.chatId,
+        messageId: storedMessageId,
+        sessionId,
+        taskId,
+        requestId: message.requestId,
+        actionId,
+        prompt,
+        status: "pending",
+        actionSourceChannel: pendingAction?.scope?.sourceChannel ?? "feishu",
+        actionOwnerUserId: pendingAction?.scope?.userId ?? context.userId,
+        actionPrincipalId: pendingAction?.scope?.principalId ?? principalId,
+        createdAt: now,
+        updatedAt: now,
+      });
+      return true;
+    } catch (error) {
+      this.logger.warn(`[themis/feishu] 审批卡发送失败，回退文本 waiting action：${toErrorMessage(error)}`);
+      return false;
+    }
+  }
+
+  private renderApprovalCardSnapshot(
+    record: Pick<FeishuApprovalCardRecord, "cardKey" | "actionId" | "prompt">,
+    status: FeishuApprovalCardStatus,
+    message?: string | null,
+  ): InteractiveCard {
+    const normalizedMessage = normalizeText(message ?? undefined);
+    return buildFeishuApprovalInteractiveCard({
+      cardKey: record.cardKey,
+      actionId: record.actionId,
+      prompt: record.prompt,
+      status,
+      ...(normalizedMessage ? { message: normalizedMessage } : {}),
+    });
   }
 
   private async readFeishuMobileSessionState(sessionId: string): Promise<{
@@ -3131,64 +3396,109 @@ export class FeishuChannelService {
     }
 
     const actionScope = this.resolvePendingActionScope(context);
+    const outcome = await this.submitPendingApprovalDecision({
+      actionId,
+      decision,
+      context,
+      scope: actionScope,
+    });
 
-    if (!actionScope) {
-      await this.safeSendText(context.chatId, "当前没有激活会话，请先切回对应会话后再提交 action。");
-      return;
+    await this.safeSendText(context.chatId, outcome.message);
+  }
+
+  private async submitPendingApprovalDecision(input: {
+    actionId: string;
+    decision: "approve" | "deny";
+    context: FeishuIncomingContext;
+    scope: {
+      sessionId: string;
+      principalId: string;
+      sourceChannel?: string;
+      userId?: string;
+    } | null;
+  }): Promise<
+    | {
+        ok: true;
+        message: string;
+      }
+    | {
+        ok: false;
+        reason: "scope_missing" | "action_not_found" | "wrong_action_type" | "expired";
+        message: string;
+      }
+  > {
+    if (!input.scope) {
+      return {
+        ok: false,
+        reason: "scope_missing",
+        message: "当前没有激活会话，请先切回对应会话后再提交 action。",
+      };
     }
 
-    const action = this.actionBridge.find(actionId, actionScope);
+    const action = this.actionBridge.find(input.actionId, input.scope);
 
     if (!action) {
-      await this.safeSendText(context.chatId, `未找到等待中的 action：${actionId}`);
-      return;
+      return {
+        ok: false,
+        reason: "action_not_found",
+        message: `未找到等待中的 action：${input.actionId}`,
+      };
     }
 
     if (action.actionType !== "approval") {
-      await this.safeSendText(context.chatId, `action ${actionId} 不是审批请求，请改用 /reply。`);
-      return;
+      return {
+        ok: false,
+        reason: "wrong_action_type",
+        message: `action ${input.actionId} 不是审批请求，请改用 /reply。`,
+      };
     }
 
     if (!this.actionBridge.resolve({
       taskId: action.taskId,
       requestId: action.requestId,
-      actionId,
-      decision,
+      actionId: input.actionId,
+      decision: input.decision,
     })) {
       this.recordFeishuDiagnosticsEvent({
         type: "approval.submit_failed",
-        context,
+        context: input.context,
         sessionId: action.scope?.sessionId ?? null,
         principalId: action.scope?.principalId ?? null,
         actionId: action.actionId,
         requestId: action.requestId,
-        summary: `审批提交失败：${actionId} 已失效。`,
-        lastMessageId: context.messageId,
+        summary: `审批提交失败：${input.actionId} 已失效。`,
+        lastMessageId: input.context.messageId,
         details: {
           matchedPendingActionCount: 1,
           ...(action.scope?.sessionId ? { sourceSessionId: action.scope.sessionId } : {}),
         },
       });
-      await this.safeSendText(context.chatId, `提交审批失败：${actionId} 已失效。`);
-      return;
+      return {
+        ok: false,
+        reason: "expired",
+        message: `提交审批失败：${input.actionId} 已失效。`,
+      };
     }
 
     this.recordFeishuDiagnosticsEvent({
       type: "approval.submitted",
-      context,
+      context: input.context,
       sessionId: action.scope?.sessionId ?? null,
       principalId: action.scope?.principalId ?? null,
       actionId: action.actionId,
       requestId: action.requestId,
-      summary: decision === "approve" ? "审批已通过提交。" : "审批已拒绝提交。",
-      lastMessageId: context.messageId,
+      summary: input.decision === "approve" ? "审批已通过提交。" : "审批已拒绝提交。",
+      lastMessageId: input.context.messageId,
       details: {
         matchedPendingActionCount: 1,
         ...(action.scope?.sessionId ? { sourceSessionId: action.scope.sessionId } : {}),
       },
     });
-    const message = decision === "approve" ? "已提交审批。" : "已提交拒绝。";
-    await this.safeSendText(context.chatId, message);
+
+    return {
+      ok: true,
+      message: input.decision === "approve" ? "已提交审批。" : "已提交拒绝。",
+    };
   }
 
   private async replyActivePendingInput(context: FeishuIncomingContext): Promise<boolean> {
@@ -4391,6 +4701,58 @@ function normalizePositiveInteger(value: number | undefined, fallback: number): 
   return Math.max(1, Math.round(value));
 }
 
+function normalizeApprovalDecision(value: unknown): "approve" | "deny" | null {
+  return value === "approve" || value === "deny" ? value : null;
+}
+
+function normalizeFeishuCardActionEvent(value: unknown): InteractiveCardActionEvent | null {
+  const topLevel = asRecord(value);
+  const event = asRecord(topLevel?.event);
+  const action = asRecord(event?.action);
+  const actionValue = asRecord(action?.value);
+  const openId = normalizeText(event?.open_id);
+  const tenantKey = normalizeText(event?.tenant_key);
+  const openMessageId = normalizeText(event?.open_message_id);
+  const token = normalizeText(event?.token);
+  const tag = normalizeText(action?.tag);
+
+  if (!topLevel || !event || !action || !actionValue || !openId || !tenantKey || !openMessageId || !token || !tag) {
+    return null;
+  }
+
+  return {
+    open_id: openId,
+    ...(normalizeText(event?.user_id) ? { user_id: normalizeText(event?.user_id) ?? "" } : {}),
+    tenant_key: tenantKey,
+    open_message_id: openMessageId,
+    token,
+    action: {
+      value: actionValue,
+      tag,
+      ...(normalizeText(action?.option) ? { option: normalizeText(action?.option) ?? "" } : {}),
+      ...(normalizeText(action?.timezone) ? { timezone: normalizeText(action?.timezone) ?? "" } : {}),
+    },
+  };
+}
+
+function resolveApprovalCardTerminalMessage(record: FeishuApprovalCardRecord): string {
+  if (record.lastError) {
+    return record.lastError;
+  }
+
+  switch (record.status) {
+    case "approved":
+      return "审批已经提交为批准。";
+    case "denied":
+      return "审批已经提交为拒绝。";
+    case "failed":
+      return "审批卡已经失效，请改用文本命令处理。";
+    case "pending":
+    default:
+      return "审批仍在等待处理中。";
+  }
+}
+
 function mapFeishuInteractiveActionErrorMessage(error: unknown): string {
   const message = toErrorMessage(error);
 
@@ -4481,6 +4843,48 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function readJsonRequestBody(request: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+
+    request.on("data", (chunk) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+    });
+    request.on("end", () => {
+      try {
+        const raw = Buffer.concat(chunks).toString("utf8").trim();
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch (error) {
+        reject(error);
+      }
+    });
+    request.on("error", reject);
+  });
+}
+
+function writeJsonResponse(response: ServerResponse, statusCode: number, payload: unknown): void {
+  response.statusCode = statusCode;
+  response.setHeader("Content-Type", "application/json; charset=utf-8");
+  response.end(`${JSON.stringify(payload)}\n`);
+}
+
+function createSilentFeishuSdkLogger(): {
+  trace: (...args: unknown[]) => void;
+  debug: (...args: unknown[]) => void;
+  info: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+} {
+  const noop = () => {};
+  return {
+    trace: noop,
+    debug: noop,
+    info: noop,
+    warn: noop,
+    error: noop,
+  };
 }
 
 function extractFeishuApiErrorDetail(error: unknown): { code: number | string | null; message: string | null } | null {

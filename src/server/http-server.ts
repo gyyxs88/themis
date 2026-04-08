@@ -1,4 +1,4 @@
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
 import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
@@ -118,6 +118,9 @@ export interface ThemisHttpServerOptions {
   createMcpInspector?: CreateMcpInspector;
   actionBridge?: AppServerActionBridge;
   managedAgentExecutionService?: ManagedAgentExecutionService;
+  feishuService?: {
+    handleCardActionWebhook(request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean>;
+  };
 }
 
 export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): Server {
@@ -161,6 +164,10 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
     try {
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
       const isHeadRequest = request.method === "HEAD";
+
+      if (options.feishuService && await options.feishuService.handleCardActionWebhook(request, response, url)) {
+        return;
+      }
 
       if (await maybeHandleWebAccessRoute(request, response, webAccessService)) {
         return;

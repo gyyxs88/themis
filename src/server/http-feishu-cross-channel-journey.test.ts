@@ -2842,6 +2842,17 @@ function extractFeishuRenderedText(content: string): string {
     zh_cn?: {
       content?: Array<Array<{ text?: string }>>;
     };
+    header?: {
+      title?: {
+        content?: string;
+      };
+    };
+    elements?: Array<{
+      tag?: string;
+      text?: { content?: string };
+      content?: string;
+      elements?: Array<{ content?: string }>;
+    }>;
   };
 
   if (typeof parsed.text === "string") {
@@ -2849,7 +2860,28 @@ function extractFeishuRenderedText(content: string): string {
   }
 
   const firstText = parsed.zh_cn?.content?.flat().find((item) => typeof item.text === "string")?.text;
-  return typeof firstText === "string" ? firstText : "";
+  if (typeof firstText === "string") {
+    return firstText;
+  }
+
+  const headerText = parsed.header?.title?.content;
+  const bodyText = parsed.elements?.flatMap((element) => {
+    if (typeof element.text?.content === "string") {
+      return [element.text.content];
+    }
+
+    if (typeof element.content === "string") {
+      return [element.content];
+    }
+
+    if (Array.isArray(element.elements)) {
+      return element.elements.map((item) => item.content).filter((item): item is string => typeof item === "string");
+    }
+
+    return [];
+  }) ?? [];
+
+  return [headerText, ...bodyText].filter((item): item is string => typeof item === "string" && item.length > 0).join("\n");
 }
 
 function parseNdjson(payload: string): Array<Record<string, unknown>> {

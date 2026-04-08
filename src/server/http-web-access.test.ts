@@ -136,6 +136,67 @@ test("HTTP Web 登录 cookie 与受保护 API 拦截主链路", async () => {
   });
 });
 
+test("飞书卡片回调路由会在 Web 鉴权前处理", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-http-feishu-card-action-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: root,
+    runtimeStore,
+  });
+  const service = new WebAccessService({ registry: runtimeStore });
+  service.createToken({
+    label: "owner-lan",
+    secret: "test-secret",
+    remoteIp: "127.0.0.1",
+  });
+  const routeHits: string[] = [];
+  const server = createThemisHttpServer({
+    runtime,
+    feishuService: {
+      async handleCardActionWebhook(_request: unknown, response: {
+        statusCode: number;
+        setHeader(name: string, value: string): void;
+        end(body: string): void;
+      }, url: URL) {
+        routeHits.push(url.pathname);
+        response.statusCode = 200;
+        response.setHeader("Content-Type", "application/json");
+        response.end(JSON.stringify({ ok: true }));
+        return true;
+      },
+    },
+  } as never);
+  const listeningServer = await listenServer(server);
+  const address = listeningServer.address();
+
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to resolve server address.");
+  }
+
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  try {
+    const callbackResponse = await fetch(`${baseUrl}/api/feishu/card-action`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        schema: "2.0",
+      }),
+    });
+
+    assert.equal(callbackResponse.status, 200);
+    assert.deepEqual(await callbackResponse.json(), { ok: true });
+    assert.deepEqual(routeHits, ["/api/feishu/card-action"]);
+  } finally {
+    await closeServer(listeningServer);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("Web 登录审计只使用 socket 来源 IP，不信任伪造的 X-Forwarded-For", async () => {
   await withHttpServer(async ({ baseUrl, runtimeStore }) => {
     const service = new WebAccessService({ registry: runtimeStore });

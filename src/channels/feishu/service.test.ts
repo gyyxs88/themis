@@ -3885,6 +3885,121 @@ test("飞书收到 task.action_required 时会提示命令式回复", async () =
   }
 });
 
+test("飞书 approval waiting action 会把占位消息升级成 interactive 审批卡", async () => {
+  const actionId = "approval-card-1";
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerEventsBuilder: (request) => [{
+      eventId: "event-feishu-approval-card-1",
+      taskId: "task-feishu-approval-card-1",
+      requestId: request.requestId,
+      type: "task.action_required",
+      status: "waiting",
+      message: "Allow card action?",
+      payload: {
+        actionId,
+        actionType: "approval",
+        prompt: "Allow card action?",
+        choices: ["approve", "deny"],
+      },
+      timestamp: new Date().toISOString(),
+    }],
+  });
+
+  try {
+    await harness.handleIncomingText("请执行一次审批卡测试");
+
+    const interactiveDraft = harness.peekRenderedMessages().find((entry) => entry.msgType === "interactive");
+    assert.ok(interactiveDraft);
+
+    const buttons = listInteractiveCardButtons(interactiveDraft.content);
+    assert.equal(buttons.length, 2);
+    assert.equal(buttons[0]?.value?.actionId, actionId);
+    assert.equal(buttons[0]?.value?.decision, "approve");
+    assert.equal(typeof buttons[0]?.value?.cardKey, "string");
+    assert.match(interactiveDraft.content, /\/approve approval-card-1/);
+    assert.match(interactiveDraft.content, /\/deny approval-card-1/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书审批卡回调会复用 approval 解析并同步返回终态卡", async () => {
+  const actionId = "approval-card-callback-1";
+  const taskId = "task-feishu-approval-card-callback-1";
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerEventsBuilder: (request) => [{
+      eventId: "event-feishu-approval-card-callback-1",
+      taskId,
+      requestId: request.requestId,
+      type: "task.action_required",
+      status: "waiting",
+      message: "Allow callback approval?",
+      payload: {
+        actionId,
+        actionType: "approval",
+        prompt: "Allow callback approval?",
+        choices: ["approve", "deny"],
+      },
+      timestamp: new Date().toISOString(),
+    }],
+  });
+
+  try {
+    await harness.handleIncomingText("请执行一次审批卡回调测试");
+
+    const taskRequest = harness.getTaskRequests().at(-1);
+    assert.ok(taskRequest?.requestId);
+    harness.injectPendingAction({
+      taskId,
+      requestId: taskRequest.requestId,
+      actionId,
+      actionType: "approval",
+      prompt: "Allow callback approval?",
+      choices: ["approve", "deny"],
+    });
+
+    const interactiveDraft = harness.peekRenderedMessages().find((entry) => entry.msgType === "interactive");
+    assert.ok(interactiveDraft);
+
+    const approveButton = listInteractiveCardButtons(interactiveDraft.content).find((button) => button.value?.decision === "approve");
+    assert.ok(approveButton?.value);
+
+    const callbackCard = await harness.handleCardActionEvent({
+      schema: "2.0",
+      header: {
+        event_type: "card.action.trigger",
+        token: "token",
+        create_time: String(Date.now()),
+        app_id: "cli_test",
+      },
+      event: {
+        open_id: "ou_user_1",
+        user_id: "user-1",
+        tenant_key: "tenant-card-test",
+        open_message_id: "om_card_callback_1",
+        token: "callback-token-1",
+        action: {
+          tag: "button",
+          value: approveButton.value,
+        },
+      },
+    });
+
+    assert.equal(harness.findPendingAction(actionId), null);
+    assert.deepEqual(harness.getResolvedActionSubmissions().at(-1), {
+      taskId,
+      requestId: taskRequest.requestId,
+      actionId,
+      decision: "approve",
+    });
+    assert.match(JSON.stringify(callbackCard), /已批准|已提交审批/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("/use 成功后会回显切换后的会话状态和线程摘要", async () => {
   const harness = createHarness({
     runtimeEngine: "app-server",
@@ -5697,6 +5812,12 @@ function createHarness(
     });
   const loggerState = createLogger();
   const resolvedActionSubmissions: TaskPendingActionSubmitRequest[] = [];
+  const renderedMessages: Array<{
+    action: "create" | "update";
+    msgType: string;
+    content: string;
+    messageId: string;
+  }> = [];
   const forcedResolveFailureActionIds = new Set(harnessConfig?.resolveFailureActionIds ?? []);
   const originalResolveAction = actionBridge.resolve.bind(actionBridge);
   actionBridge.resolve = (payload) => {
@@ -5792,15 +5913,28 @@ function createHarness(
     im: {
       v1: {
         message: {
-          create: async ({ data }: { data: { content: string } }) => {
+          create: async ({ data }: { data: { content: string; msg_type?: string } }) => {
+            const messageId = `msg-created-${nextMessageId++}`;
+            renderedMessages.push({
+              action: "create",
+              msgType: data.msg_type ?? "text",
+              content: data.content,
+              messageId,
+            });
             messages.push(extractFeishuRenderedText(data.content));
             return {
               data: {
-                message_id: `msg-created-${nextMessageId++}`,
+                message_id: messageId,
               },
             };
           },
-          update: async ({ path, data }: { path: { message_id: string }; data: { content: string } }) => {
+          update: async ({ path, data }: { path: { message_id: string }; data: { content: string; msg_type?: string } }) => {
+            renderedMessages.push({
+              action: "update",
+              msgType: data.msg_type ?? "text",
+              content: data.content,
+              messageId: path.message_id,
+            });
             messages.push(extractFeishuRenderedText(data.content));
             return {
               data: {
@@ -5883,6 +6017,11 @@ function createHarness(
         handleTaskMessage(incomingContext: typeof context): Promise<void>;
       }).handleTaskMessage({ ...context, text });
     },
+    async handleCardActionEvent(event: unknown) {
+      return await (service as unknown as {
+        handleCardActionEvent(event: unknown): Promise<unknown>;
+      }).handleCardActionEvent(event);
+    },
     takeMessages() {
       const current = [...messages];
       messages.length = 0;
@@ -5890,6 +6029,9 @@ function createHarness(
     },
     peekMessages() {
       return [...messages];
+    },
+    peekRenderedMessages() {
+      return [...renderedMessages];
     },
     takeSingleMessage() {
       assert.equal(messages.length, 1);
@@ -6146,6 +6288,17 @@ function extractFeishuRenderedText(content: string): string {
     zh_cn?: {
       content?: Array<Array<{ text?: string }>>;
     };
+    header?: {
+      title?: {
+        content?: string;
+      };
+    };
+    elements?: Array<{
+      tag?: string;
+      text?: { content?: string };
+      content?: string;
+      elements?: Array<{ content?: string }>;
+    }>;
   };
 
   if (typeof parsed.text === "string") {
@@ -6153,7 +6306,51 @@ function extractFeishuRenderedText(content: string): string {
   }
 
   const firstText = parsed.zh_cn?.content?.flat().find((item) => typeof item.text === "string")?.text;
-  return typeof firstText === "string" ? firstText : "";
+  if (typeof firstText === "string") {
+    return firstText;
+  }
+
+  const headerText = parsed.header?.title?.content;
+  const bodyText = parsed.elements?.flatMap((element) => {
+    if (typeof element.text?.content === "string") {
+      return [element.text.content];
+    }
+
+    if (typeof element.content === "string") {
+      return [element.content];
+    }
+
+    if (Array.isArray(element.elements)) {
+      return element.elements.map((item) => item.content).filter((item): item is string => typeof item === "string");
+    }
+
+    return [];
+  }) ?? [];
+
+  return [headerText, ...bodyText].filter((item): item is string => typeof item === "string" && item.length > 0).join("\n");
+}
+
+function listInteractiveCardButtons(content: string): Array<{
+  tag?: string;
+  text?: { content?: string };
+  type?: string;
+  value?: Record<string, unknown>;
+}> {
+  const parsed = JSON.parse(content) as {
+    elements?: Array<{
+      tag?: string;
+      actions?: Array<{
+        tag?: string;
+        text?: { content?: string };
+        type?: string;
+        value?: Record<string, unknown>;
+      }>;
+    }>;
+  };
+
+  return parsed.elements
+    ?.flatMap((element) => element.tag === "action" && Array.isArray(element.actions) ? element.actions : [])
+    ?? [];
 }
 
 async function waitFor(check: () => boolean, timeoutMs = 1_000): Promise<void> {

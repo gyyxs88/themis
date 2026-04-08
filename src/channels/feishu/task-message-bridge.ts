@@ -1,4 +1,5 @@
 import type { FeishuDeliveryMessage } from "./types.js";
+import type { FeishuRenderedMessageDraft } from "./message-renderer.js";
 
 export interface FeishuMessageMutationResponse {
   code?: number | undefined;
@@ -13,6 +14,8 @@ export interface FeishuTaskMessageBridgeOptions {
   updateText: (messageId: string, text: string) => Promise<FeishuMessageMutationResponse>;
   sendText: (text: string) => Promise<void>;
   splitText: (text: string) => string[];
+  createDraft?: (draft: FeishuRenderedMessageDraft) => Promise<FeishuMessageMutationResponse>;
+  updateDraft?: (messageId: string, draft: FeishuRenderedMessageDraft) => Promise<FeishuMessageMutationResponse>;
   progressFlushTimeoutMs?: number;
 }
 
@@ -26,6 +29,8 @@ export class FeishuTaskMessageBridge {
   private readonly updateText: (messageId: string, text: string) => Promise<FeishuMessageMutationResponse>;
   private readonly sendText: (text: string) => Promise<void>;
   private readonly splitText: (text: string) => string[];
+  private readonly createDraft: ((draft: FeishuRenderedMessageDraft) => Promise<FeishuMessageMutationResponse>) | null;
+  private readonly updateDraft: ((messageId: string, draft: FeishuRenderedMessageDraft) => Promise<FeishuMessageMutationResponse>) | null;
   private readonly progressFlushTimeoutMs: number;
   private currentPlaceholderMessageId: string | null = null;
   private currentPlaceholderUpdatable = false;
@@ -40,11 +45,44 @@ export class FeishuTaskMessageBridge {
     this.updateText = options.updateText;
     this.sendText = options.sendText;
     this.splitText = options.splitText;
+    this.createDraft = options.createDraft ?? null;
+    this.updateDraft = options.updateDraft ?? null;
     this.progressFlushTimeoutMs = normalizeProgressFlushTimeoutMs(options.progressFlushTimeoutMs);
   }
 
   async prepareResponseSlot(): Promise<void> {
     await this.ensureCurrentPlaceholder();
+  }
+
+  async replaceCurrentPlaceholderWithDraft(
+    draft: FeishuRenderedMessageDraft,
+  ): Promise<{ messageId: string | null; updatable: boolean }> {
+    if (!this.createDraft || !this.updateDraft) {
+      throw new Error("飞书 bridge 未配置 draft create/update 能力。");
+    }
+
+    await this.cancelScheduledPendingFlush();
+    this.pendingProgressItemId = null;
+    this.pendingProgressText = null;
+    await this.ensureCurrentPlaceholder();
+
+    if (!this.currentPlaceholderUpdatable || !this.currentPlaceholderMessageId) {
+      const created = await this.createDraft(draft);
+      const messageId = normalizeText(created.data?.message_id);
+      this.clearCurrentPlaceholder();
+      return {
+        messageId,
+        updatable: Boolean(messageId),
+      };
+    }
+
+    const response = await this.updateDraft(this.currentPlaceholderMessageId, draft);
+    const messageId = normalizeText(response.data?.message_id) ?? this.currentPlaceholderMessageId;
+    this.clearCurrentPlaceholder();
+    return {
+      messageId,
+      updatable: Boolean(messageId),
+    };
   }
 
   async deliver(message: FeishuDeliveryMessage): Promise<void> {

@@ -74,6 +74,7 @@ const server = createThemisHttpServer({
   taskTimeoutMs,
   actionBridge,
   managedAgentExecutionService,
+  feishuService,
 });
 
 let agentSchedulerTickRunning = false;

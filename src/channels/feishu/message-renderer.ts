@@ -1,5 +1,5 @@
 export interface FeishuRenderedMessageDraft {
-  msgType: "text" | "post";
+  msgType: "text" | "post" | "interactive";
   content: string;
 }
 

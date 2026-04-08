@@ -1,10 +1,13 @@
 # 飞书 Bot 调研与接入建议
 
-更新日期：2026-04-05
+更新日期：2026-04-08
 
 相关实现文档：
 
 - [Themis 飞书渠道说明](./themis-feishu-channel.md)
+- [Themis 飞书卡片交互 PoC 草案](./themis-feishu-card-poc-draft.md)
+- [Themis 飞书审批卡实施计划](./themis-feishu-approval-card-implementation-plan.md)
+- [飞书审批卡第一轮的 HTTP 回调约束](../memory/2026/04/feishu-approval-card-http-callback-route.md)
 - [飞书相关改动的固定复跑顺序](../memory/2026/04/feishu-stability-rerun-order.md)
 - [飞书群聊路由、共享会话与管理员控制](../memory/2026/04/feishu-group-routing-and-session-admin-controls.md)
 - [飞书与 Web 跨端 waiting action 恢复边界](../memory/2026/03/feishu-cross-channel-action-recovery-boundary.md)
@@ -18,11 +21,12 @@
 
 ## 当前落地状态
 
-- 飞书第二阶段第一刀已经完成；阶段 5、阶段 6、`结构化输出 / 自动化接口` 和 `云端 / 远程执行能力评估` 也都已收口。当前结论不是把远程执行或 `codex cloud` 混进飞书主链，而是继续守住现有群路由、shared 会话和诊断复验边界；`card.action.trigger` 仍保持 gated evaluation。
+- 飞书第二阶段第一刀已经完成；阶段 5、阶段 6、`结构化输出 / 自动化接口` 和 `云端 / 远程执行能力评估` 也都已收口。当前结论不是把远程执行或 `codex cloud` 混进飞书主链，而是继续守住现有群路由、shared 会话和诊断复验边界；除审批卡第一轮外，其余卡片化范围仍保持 gated evaluation。
 - Themis 已接入飞书长连接，`im.message.receive_v1` 能进入现有 runtime 主链路。
 - 当前已支持飞书文本收发、`/help`、`/sessions`、`/new`、`/use`、`/current`、`/review`、`/steer`、`/workspace`、`/group`、`/link`、`/settings` 命令树、`/msgupdate`、`/quota`，以及 `/account`、`/sandbox`、`/search`、`/network`、`/approval` 这些兼容入口。
 - Codex 在飞书里已改成“占位槽位 + 顺序延迟缓冲”体验：用户发消息后先立刻返回 `处理中...`；第一条中途回复先缓存；只有切到新的正文 item、静默超时或最终结果收口时，缓存才会真正发送；同一 `agent_message itemId` 的连续 delta 只会覆盖当前缓存，不会把半句增量一条条刷到飞书里。
 - 飞书移动端第一轮产品化表达已落地：`task.action_required` 会转成可直接执行的 waiting action 文本面，状态类 `task.progress` 会额外输出任务状态摘要，`/sessions`、`/use`、`/current` 会回显当前 native thread 摘要。
+- 飞书审批卡第一轮已经落地：仅覆盖 `task.action_required(approval)`，机器人会把审批等待面升级成 interactive 卡片；点击后通过 `POST /api/feishu/card-action` 回调复用现有审批提交流程，同时保留 `/approve` / `/deny` 文本降级链。
 - 飞书第二阶段第一刀已落地：群聊默认 `smart` 路由、可切换 `always` 路由、`personal / shared` 会话策略、`/group` 最小管理员控制，以及 shared 群会话下 `/new`、`/use`、`/workspace` 的管理员限制都已经接进主链路。
 - waiting `user-input` 现在优先走直接回复文本；只有当前 `sessionId + principalId` scope 里存在且仅存在一条 `user-input` pending action、并且没有 `approval` pending action 时，普通文本才会自动接管，同一 principal 下的 Web / 飞书入口共用这套范围。
 - 当当前 `sessionId + principalId` 作用域里仍有 `approval` pending action 时，普通文本不会被当成补充输入自动接管，而是继续走现有普通任务链；审批仍建议显式 `/approve` / `/deny`。
@@ -224,11 +228,14 @@
 - 已支持单聊和群里 @ 机器人进入任务链路。
 - 已把飞书消息转成 Themis 现有任务请求，并改成“处理中占位 -> 真实内容更新 -> 下一个处理中占位”的桥接策略。
 - 已为普通任务回复补上飞书专用 Markdown 渲染层，优先输出 `post` 富文本而不是裸 `text`。
-- 当前仍不做复杂卡片，主链路以文本/富文本消息与命令为主。
+- 当前已落地审批卡第一轮，但仍不把 `user-input`、状态卡、agent 卡或飞书内长任务卡片刷新拉进主链。
 
 ### 卡片交互的受控评估方向
 
 - 只有在 `docs/memory/2026/03/feishu-card-action-trigger-entry-criteria.md` 里的准入条件满足后，才再评估 `card.action.trigger` 的 PoC。
+- 当前已经补了一份面向未来 PoC 的收敛草案：优先级固定为“审批卡 -> 运行中 / 阻塞状态卡 -> agent 治理卡”，具体字段、按钮、回调和降级策略见 [`themis-feishu-card-poc-draft.md`](./themis-feishu-card-poc-draft.md)。
+- 其中第一张审批卡已经完成第一轮实现，实施与验收边界见 [`themis-feishu-approval-card-implementation-plan.md`](./themis-feishu-approval-card-implementation-plan.md)；当前范围仍只覆盖审批卡，不把 `user-input`、状态卡或 agent 卡一起拉进来。
+- 当前启用审批卡时，需要同时配置飞书应用凭据和卡片回调安全字段：`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_VERIFICATION_TOKEN`、`FEISHU_ENCRYPT_KEY`；回调入口固定为 `POST /api/feishu/card-action`。
 - 如果进入 PoC，优先看运行中状态卡片是否真的能补足文本态不擅长的场景，再决定要不要继续做“取消任务 / 新开会话 / 重试” 这类按钮。
 - 群会话与单聊会话的不同路由策略、以及最小管理员控制，已经进入当前实现；后续如要继续做更重的卡片化群协作体验，再单独评估是否值得扩面。
 
@@ -236,7 +243,7 @@
 
 1. 在保持 `doctor feishu -> doctor smoke web -> doctor smoke feishu -> 手工 A/B` 固定复跑顺序的前提下，主线切向 `路线图 / 阶段 5 / 兼容入口收敛`。
 2. 飞书侧继续围绕已落地的群路由、共享会话和管理员控制做低成本复验，不把主线重新拉回输入边界零碎补丁。
-3. 当前仍不进入 `card.action.trigger` 实现阶段；如果以后要追更重的交互引导，再单独评估卡片交互是否真的值得做。
+3. 审批卡之外的 `card.action.trigger` 扩面先不做；如果以后要追更重的交互引导，再单独评估状态卡、agent 卡和值不值得继续拉开。
 
 ## 本次实际验证记录
 
