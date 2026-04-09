@@ -1414,6 +1414,9 @@ test("/settings account 子树支持查看和切换 principal 默认认证账号
     assert.match(accountRoot, /\/settings account current/);
     assert.match(accountRoot, /\/settings account list/);
     assert.match(accountRoot, /\/settings account use/);
+    assert.match(accountRoot, /\/settings account login/);
+    assert.match(accountRoot, /\/settings account logout/);
+    assert.match(accountRoot, /\/settings account cancel/);
 
     await harness.handleCommand("settings", ["account", "use"]);
     const useHelp = harness.takeSingleMessage();
@@ -1434,6 +1437,83 @@ test("/settings account 子树支持查看和切换 principal 默认认证账号
     const cleared = harness.takeSingleMessage();
     assert.match(cleared, /默认认证账号已改为：跟随 Themis 系统默认账号 alpha@example\.com/);
     assert.equal(harness.getStoredPrincipalTaskSettings(), null);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/settings account login device 在跟随系统默认账号时会命中 default 认证入口", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("settings", ["account", "login"]);
+    const help = harness.takeSingleMessage();
+    assert.match(help, /账号登录：/);
+    assert.match(help, /\/settings account login device/);
+    assert.match(help, /浏览器登录请改用 Web/);
+    assert.match(help, /不带参数时：如果当前 principal 固定了账号，就操作该账号；否则操作 Themis 系统默认认证入口。/);
+
+    await harness.handleCommand("settings", ["account", "login", "device"]);
+    const loginMessage = harness.takeSingleMessage();
+    assert.match(loginMessage, /设备码登录已发起/);
+    assert.match(loginMessage, /目标账号：Themis 系统默认认证入口（默认 CODEX_HOME）/);
+    assert.match(loginMessage, /设备码：DEFA-0001/);
+    assert.match(loginMessage, /授权页：https:\/\/auth\.openai\.com\/codex\/device\/default/);
+
+    assert.deepEqual(harness.getAuthCalls(), [
+      {
+        method: "startChatgptDeviceLogin",
+        accountId: "default",
+      },
+    ]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/settings account logout、login device、cancel 支持显式操作指定认证账号", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("settings", ["account", "logout", "2"]);
+    const logoutMessage = harness.takeSingleMessage();
+    assert.match(logoutMessage, /已退出认证账号：beta@example\.com/);
+    assert.match(logoutMessage, /状态：未认证/);
+
+    await harness.handleCommand("settings", ["account", "login", "device", "2"]);
+    const loginMessage = harness.takeSingleMessage();
+    assert.match(loginMessage, /设备码登录已发起/);
+    assert.match(loginMessage, /目标账号：beta@example\.com/);
+    assert.match(loginMessage, /设备码：BETA-0002/);
+    assert.match(loginMessage, /授权页：https:\/\/auth\.openai\.com\/codex\/device\/acc-2/);
+
+    await harness.handleCommand("settings", ["account", "use", "2"]);
+    harness.takeSingleMessage();
+    await harness.handleCommand("settings", ["account", "current"]);
+    const currentMessage = harness.takeSingleMessage();
+    assert.match(currentMessage, /当前 principal 默认：固定使用 beta@example\.com/);
+    assert.match(currentMessage, /状态：设备码登录进行中/);
+    assert.match(currentMessage, /设备码：BETA-0002/);
+
+    await harness.handleCommand("settings", ["account", "cancel", "2"]);
+    const cancelMessage = harness.takeSingleMessage();
+    assert.match(cancelMessage, /已取消认证账号登录：beta@example\.com/);
+    assert.match(cancelMessage, /状态：未认证/);
+
+    assert.deepEqual(harness.getAuthCalls(), [
+      {
+        method: "logout",
+        accountId: "acc-2",
+      },
+      {
+        method: "startChatgptDeviceLogin",
+        accountId: "acc-2",
+      },
+      {
+        method: "cancelPendingLogin",
+        accountId: "acc-2",
+      },
+    ]);
   } finally {
     harness.cleanup();
   }
@@ -5485,6 +5565,11 @@ type FeishuHarnessSkillCall =
   | { method: "removeSkill"; principalId: string; skillName: string }
   | { method: "syncSkill"; principalId: string; skillName: string; force?: boolean };
 
+type FeishuHarnessAuthCall =
+  | { method: "startChatgptDeviceLogin"; accountId: string }
+  | { method: "logout"; accountId: string }
+  | { method: "cancelPendingLogin"; accountId: string };
+
 function createTaskRuntimeDouble(input: {
   engine: "sdk" | "app-server";
   runtimeStore: SqliteCodexSessionRegistry;
@@ -5691,6 +5776,98 @@ function createHarness(
       codexHome: "/tmp/codex-beta",
     },
   ];
+  const authCalls: FeishuHarnessAuthCall[] = [];
+  const authSnapshots = new Map<string, {
+    authenticated: boolean;
+    authMethod: "chatgpt" | null;
+    pendingLogin: {
+      provider: "chatgpt";
+      mode: "device";
+      verificationUri: string;
+      userCode: string;
+      startedAt: string;
+      expiresAt: string | null;
+    } | null;
+    lastError: string | null;
+    accountEmail: string | null;
+    planType: string | null;
+  }>();
+  authSnapshots.set("default", {
+    authenticated: false,
+    authMethod: null,
+    pendingLogin: null,
+    lastError: null,
+    accountEmail: null,
+    planType: null,
+  });
+  for (const account of accounts) {
+    authSnapshots.set(account.accountId, {
+      authenticated: true,
+      authMethod: "chatgpt",
+      pendingLogin: null,
+      lastError: null,
+      accountEmail: account.accountEmail,
+      planType: "plus",
+    });
+  }
+
+  function ensureAuthSnapshot(accountId: string) {
+    const existing = authSnapshots.get(accountId);
+
+    if (existing) {
+      return existing;
+    }
+
+    const account = accounts.find((entry) => entry.accountId === accountId) ?? null;
+    const created = {
+      authenticated: false,
+      authMethod: null as "chatgpt" | null,
+      pendingLogin: null,
+      lastError: null,
+      accountEmail: account?.accountEmail ?? null,
+      planType: account ? "plus" : null,
+    };
+    authSnapshots.set(accountId, created);
+    return created;
+  }
+
+  function buildAuthSnapshot(accountId: string) {
+    const auth = ensureAuthSnapshot(accountId);
+    const account = accounts.find((entry) => entry.accountId === accountId) ?? null;
+    return {
+      accountId,
+      accountLabel: account?.label ?? (accountId === "default" ? "默认账号" : accountId),
+      authenticated: auth.authenticated,
+      authMethod: auth.authMethod,
+      requiresOpenaiAuth: true,
+      pendingLogin: auth.pendingLogin,
+      lastError: auth.lastError,
+      providerProfile: null,
+      account: auth.accountEmail
+        ? {
+          email: auth.accountEmail,
+          planType: auth.planType ?? "plus",
+        }
+        : null,
+      rateLimits: null,
+    };
+  }
+
+  function resolveAuthCommandAccountId(accountId?: string) {
+    const normalized = accountId?.trim();
+    return normalized ? normalized : accounts[0]?.accountId ?? "default";
+  }
+
+  function createPendingDeviceLogin(accountId: string) {
+    return {
+      provider: "chatgpt" as const,
+      mode: "device" as const,
+      verificationUri: `https://auth.openai.com/codex/device/${accountId}`,
+      userCode: accountId === "default" ? "DEFA-0001" : accountId === "acc-2" ? "BETA-0002" : "ALPH-0001",
+      startedAt: "2026-04-09T07:45:00.000Z",
+      expiresAt: "2026-04-09T07:55:00.000Z",
+    };
+  }
   const skillsState = {
     listItems: normalizedSkillsOverrides?.listItems ?? [],
     curatedItems: normalizedSkillsOverrides?.curatedItems ?? [],
@@ -5940,40 +6117,45 @@ function createHarness(
       listAccounts: () => accounts,
       getActiveAccount: () => accounts[0] ?? null,
       readSnapshot: async (accountId?: string) => {
-        const resolved = accountId
-          ? accounts.find((account) => account.accountId === accountId) ?? null
-          : accounts[0] ?? null;
+        return buildAuthSnapshot(resolveAuthCommandAccountId(accountId));
+      },
+      startChatgptDeviceLogin: async (accountId?: string) => {
+        const resolvedAccountId = resolveAuthCommandAccountId(accountId);
+        authCalls.push({
+          method: "startChatgptDeviceLogin",
+          accountId: resolvedAccountId,
+        });
+        const auth = ensureAuthSnapshot(resolvedAccountId);
 
-        if (!resolved) {
-          return {
-            accountId: "",
-            accountLabel: "",
-            authenticated: false,
-            authMethod: null,
-            requiresOpenaiAuth: true,
-            pendingLogin: null,
-            lastError: null,
-            providerProfile: null,
-            account: null,
-            rateLimits: null,
-          };
+        if (!auth.authenticated && auth.pendingLogin?.mode !== "device") {
+          auth.pendingLogin = createPendingDeviceLogin(resolvedAccountId);
         }
 
-        return {
-          accountId: resolved.accountId,
-          accountLabel: resolved.label,
-          authenticated: true,
-          authMethod: "chatgpt",
-          requiresOpenaiAuth: true,
-          pendingLogin: null,
-          lastError: null,
-          providerProfile: null,
-          account: {
-            email: resolved.accountEmail,
-            planType: "plus",
-          },
-          rateLimits: null,
-        };
+        return buildAuthSnapshot(resolvedAccountId);
+      },
+      logout: async (accountId?: string) => {
+        const resolvedAccountId = resolveAuthCommandAccountId(accountId);
+        authCalls.push({
+          method: "logout",
+          accountId: resolvedAccountId,
+        });
+        const auth = ensureAuthSnapshot(resolvedAccountId);
+        auth.authenticated = false;
+        auth.authMethod = null;
+        auth.pendingLogin = null;
+        auth.lastError = null;
+        return buildAuthSnapshot(resolvedAccountId);
+      },
+      cancelPendingLogin: async (accountId?: string) => {
+        const resolvedAccountId = resolveAuthCommandAccountId(accountId);
+        authCalls.push({
+          method: "cancelPendingLogin",
+          accountId: resolvedAccountId,
+        });
+        const auth = ensureAuthSnapshot(resolvedAccountId);
+        auth.pendingLogin = null;
+        auth.lastError = null;
+        return buildAuthSnapshot(resolvedAccountId);
       },
     } as never,
     taskTimeoutMs: 5_000,
@@ -6220,6 +6402,9 @@ function createHarness(
     },
     getInfoLogs() {
       return [...loggerState.infoLogs];
+    },
+    getAuthCalls() {
+      return [...authCalls];
     },
     getStoredPrincipalTaskSettings() {
       return runtimeStore.getPrincipalTaskSettings(ensurePrincipalId())?.settings ?? null;

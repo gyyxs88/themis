@@ -139,6 +139,28 @@ interface FeishuSessionTaskLease {
   release: () => void;
 }
 
+type FeishuResolvedAccountCommandTarget =
+  | {
+    ok: true;
+    principalId: string;
+    targetAccountId: string;
+    targetAccount: { accountId: string; label?: string | null; accountEmail?: string | null } | null;
+    targetLabel: string;
+    targetKind: "system-default" | "visible-account";
+  }
+  | {
+    ok: false;
+    principalId: string;
+    reason: "missing_configured_account";
+    accountId: string;
+  }
+  | {
+    ok: false;
+    principalId: string;
+    reason: "invalid_target";
+    invalidValue: string;
+  };
+
 interface FeishuActiveSessionTask {
   token: symbol;
   abortController: AbortController;
@@ -169,6 +191,11 @@ const MAX_FEISHU_TEXT_CHARS = 3500;
 const FEISHU_MESSAGE_DEDUPE_TTL_MS = 10 * 60 * 1000;
 const FEISHU_SETTINGS_SCOPE_LINE = "作用范围：Themis 中间层长期默认配置，会同时影响 Web 和飞书后续新任务。";
 const FEISHU_SETTINGS_EFFECT_LINE = "生效规则：只影响之后新发起的任务，不会打断已经在运行中的任务。";
+const FEISHU_ACCOUNT_SETTINGS_SCOPE_LINE = "说明：/settings account use 修改当前 principal 默认账号；login/logout/cancel 修改账号本身的认证状态。";
+const FEISHU_ACCOUNT_SETTINGS_EFFECT_LINE = "生效规则：账号切换或登录状态变更只影响之后新发起的任务，不会打断已经在运行中的任务。";
+const FEISHU_ACCOUNT_AUTH_SCOPE_LINE = "作用范围：认证账号本身的登录状态；引用该账号的新任务都会受影响。";
+const FEISHU_ACCOUNT_AUTH_EFFECT_LINE = "生效规则：只影响之后新发起且使用该账号的任务，不会打断已经在运行中的任务。";
+const FEISHU_DEFAULT_AUTH_TARGET_LABEL = "Themis 系统默认认证入口（默认 CODEX_HOME）";
 const FEISHU_ATTACHMENT_DRAFT_CONFIRMATION = "请直接回复你的问题，我会和附件一起处理。";
 const SESSION_WORKSPACE_UNAVAILABLE_ERROR = "当前会话绑定的工作区不可用，请新建会话后重新设置。";
 const FEISHU_SHARED_GROUP_SCOPE_USER_ID = "__shared_group__";
@@ -1804,6 +1831,16 @@ export class FeishuChannelService {
       case "set":
         await this.useAccount(restArgs, context);
         return;
+      case "login":
+        await this.handleAccountLoginCommand(restArgs, context);
+        return;
+      case "logout":
+      case "signout":
+        await this.logoutAccount(restArgs, context);
+        return;
+      case "cancel":
+        await this.cancelAccountLogin(restArgs, context);
+        return;
       default:
         await this.sendAccountSettings(context.chatId, context, subcommand);
     }
@@ -1820,8 +1857,8 @@ export class FeishuChannelService {
     const lines = [
       invalidSegment ? `未识别的账号设置项：${invalidSegment}` : "账号设置：",
       `当前 principal：${principal.principalId}`,
-      FEISHU_SETTINGS_SCOPE_LINE,
-      FEISHU_SETTINGS_EFFECT_LINE,
+      FEISHU_ACCOUNT_SETTINGS_SCOPE_LINE,
+      FEISHU_ACCOUNT_SETTINGS_EFFECT_LINE,
       "",
       "/settings account current",
       `当前值：${describePrincipalAccountCurrentValue(accountState)}`,
@@ -1829,6 +1866,12 @@ export class FeishuChannelService {
       "查看可用认证账号列表。",
       "/settings account use",
       "查看切换方法并设置当前 principal 默认认证账号。",
+      "/settings account login",
+      "发起设备码登录；默认操作当前 principal 当前生效的认证入口。",
+      "/settings account logout",
+      "退出当前账号登录态；跟随系统默认时会同时清理默认认证入口。",
+      "/settings account cancel",
+      "取消当前账号仍在进行中的登录。",
     ];
 
     await this.safeSendText(chatId, lines.join("\n"));
@@ -1917,7 +1960,7 @@ export class FeishuChannelService {
       `认证方式：${snapshot.authMethod ?? "unknown"}`,
       snapshot.account?.email ? `账号：${snapshot.account.email}` : null,
       snapshot.account?.planType ? `套餐：${snapshot.account.planType}` : null,
-      snapshot.authenticated ? "状态：已认证" : "状态：未认证",
+      ...describeAuthSnapshotLines(snapshot),
     ].filter((line): line is string => Boolean(line));
 
     await this.safeSendText(chatId, lines.join("\n"));
@@ -2020,6 +2063,276 @@ export class FeishuChannelService {
     }
 
     await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async handleAccountLoginCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const subcommand = normalizeText(args[0])?.toLowerCase() ?? "";
+    const restArgs = args.slice(1);
+
+    switch (subcommand) {
+      case "":
+        await this.sendAccountLoginHelp(context.chatId, context);
+        return;
+      case "device":
+        await this.startDeviceLogin(restArgs, context);
+        return;
+      default:
+        await this.sendAccountLoginHelp(context.chatId, context, subcommand);
+        return;
+    }
+  }
+
+  private async sendAccountLoginHelp(
+    chatId: string,
+    context: FeishuIncomingContext,
+    invalidSegment?: string,
+  ): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const settings = this.readPrincipalTaskSettings(context);
+    const accounts = this.authRuntime.listAccounts();
+    const accountState = resolvePrincipalAccountState({
+      accounts,
+      activeAccount: this.authRuntime.getActiveAccount(),
+      principalAccountId: normalizeText(settings.authAccountId),
+    });
+    const lines = [
+      invalidSegment ? `未识别的账号登录方式：${invalidSegment}` : "账号登录：",
+      `当前 principal：${principal.principalId}`,
+      `当前值：${describePrincipalAccountCurrentValue(accountState)}`,
+      FEISHU_ACCOUNT_AUTH_SCOPE_LINE,
+      FEISHU_ACCOUNT_AUTH_EFFECT_LINE,
+      "飞书端当前只支持设备码登录；浏览器登录请改用 Web。",
+      "不带参数时：如果当前 principal 固定了账号，就操作该账号；否则操作 Themis 系统默认认证入口。",
+      "可选输入：<账号名|邮箱|序号|default>",
+      "示例：/settings account login device",
+      "示例：/settings account login device 2",
+      "示例：/settings account login device default",
+    ];
+
+    if (accounts.length) {
+      lines.push("", "可用账号：");
+      lines.push(...accounts.map((account, index) => `${index + 1}. ${formatAuthAccountLabel(account)}`));
+    }
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async startDeviceLogin(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const resolved = this.resolveAccountAuthCommandTarget(args, context);
+
+    if (!resolved.ok) {
+      await this.sendAccountCommandTargetError(context.chatId, context, resolved, "login");
+      return;
+    }
+
+    const snapshot = await this.authRuntime.startChatgptDeviceLogin(resolved.targetAccountId);
+    const lines = [
+      `当前 principal：${resolved.principalId}`,
+      `目标账号：${resolved.targetLabel}`,
+    ];
+
+    if (snapshot.authenticated) {
+      lines.push("当前账号已经处于已认证状态，无需重新发起设备码登录。");
+    } else if (snapshot.pendingLogin?.mode === "device") {
+      lines.push("设备码登录已发起。");
+    } else {
+      lines.push("设备码登录已发起，但当前还没读到完整设备码信息。");
+    }
+
+    lines.push(...describeAuthSnapshotLines(snapshot));
+    await this.safeSendText(context.chatId, dedupeLines(lines).join("\n"));
+  }
+
+  private async logoutAccount(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const resolved = this.resolveAccountAuthCommandTarget(args, context);
+
+    if (!resolved.ok) {
+      await this.sendAccountCommandTargetError(context.chatId, context, resolved, "logout");
+      return;
+    }
+
+    const lines = [
+      `当前 principal：${resolved.principalId}`,
+      `目标账号：${resolved.targetLabel}`,
+    ];
+
+    let snapshot;
+
+    if (resolved.targetKind === "system-default") {
+      const activeAccount = this.authRuntime.getActiveAccount();
+      snapshot = await this.authRuntime.logout("default");
+
+      if (activeAccount?.accountId) {
+        await this.authRuntime.logout(activeAccount.accountId);
+        lines.push(`已同时清理当前系统默认镜像账号：${formatAuthAccountLabel(activeAccount)}`);
+      }
+    } else {
+      snapshot = await this.authRuntime.logout(resolved.targetAccountId);
+    }
+
+    lines.push(`已退出认证账号：${resolved.targetLabel}`);
+    lines.push(...describeAuthSnapshotLines(snapshot));
+    await this.safeSendText(context.chatId, dedupeLines(lines).join("\n"));
+  }
+
+  private async cancelAccountLogin(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const resolved = this.resolveAccountAuthCommandTarget(args, context);
+
+    if (!resolved.ok) {
+      await this.sendAccountCommandTargetError(context.chatId, context, resolved, "cancel");
+      return;
+    }
+
+    const snapshot = await this.authRuntime.cancelPendingLogin(resolved.targetAccountId);
+    const lines = [
+      `当前 principal：${resolved.principalId}`,
+      `目标账号：${resolved.targetLabel}`,
+      `已取消认证账号登录：${resolved.targetLabel}`,
+      ...describeAuthSnapshotLines(snapshot),
+    ];
+    await this.safeSendText(context.chatId, dedupeLines(lines).join("\n"));
+  }
+
+  private async sendAccountCommandTargetError(
+    chatId: string,
+    context: FeishuIncomingContext,
+    resolved: Extract<FeishuResolvedAccountCommandTarget, { ok: false }>,
+    command: "login" | "logout" | "cancel",
+  ): Promise<void> {
+    if (resolved.reason === "missing_configured_account") {
+      await this.safeSendText(
+        chatId,
+        [
+          `当前 principal：${resolved.principalId}`,
+          `当前 principal 默认认证账号已失效：${resolved.accountId}`,
+          "请执行 /settings account list 查看可选账号，并重新设置，或在命令里显式指定目标账号。",
+        ].join("\n"),
+      );
+      return;
+    }
+
+    const help =
+      command === "login"
+        ? await this.sendAccountLoginHelp(chatId, context, resolved.invalidValue)
+        : await this.sendAccountAuthActionHelp(chatId, context, command, resolved.invalidValue);
+    return help;
+  }
+
+  private async sendAccountAuthActionHelp(
+    chatId: string,
+    context: FeishuIncomingContext,
+    command: "logout" | "cancel",
+    invalidValue?: string,
+  ): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const settings = this.readPrincipalTaskSettings(context);
+    const accounts = this.authRuntime.listAccounts();
+    const accountState = resolvePrincipalAccountState({
+      accounts,
+      activeAccount: this.authRuntime.getActiveAccount(),
+      principalAccountId: normalizeText(settings.authAccountId),
+    });
+    const commandLabel = `/settings account ${command}`;
+    const lines = [
+      invalidValue ? `没有找到对应认证账号：${invalidValue}` : `设置项：${commandLabel}`,
+      `当前 principal：${principal.principalId}`,
+      `当前值：${describePrincipalAccountCurrentValue(accountState)}`,
+      FEISHU_ACCOUNT_AUTH_SCOPE_LINE,
+      FEISHU_ACCOUNT_AUTH_EFFECT_LINE,
+      "不带参数时：如果当前 principal 固定了账号，就操作该账号；否则操作 Themis 系统默认认证入口。",
+      "可选输入：<账号名|邮箱|序号|default>",
+      `示例：${commandLabel}`,
+      `示例：${commandLabel} 2`,
+      `示例：${commandLabel} default`,
+    ];
+
+    if (accounts.length) {
+      lines.push("", "可用账号：");
+      lines.push(...accounts.map((account, index) => `${index + 1}. ${formatAuthAccountLabel(account)}`));
+    }
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private resolveAccountAuthCommandTarget(
+    args: string[],
+    context: FeishuIncomingContext,
+  ): FeishuResolvedAccountCommandTarget {
+    const principal = this.ensurePrincipalIdentity(context);
+    const settings = this.readPrincipalTaskSettings(context);
+    const accounts = this.authRuntime.listAccounts();
+    const accountState = resolvePrincipalAccountState({
+      accounts,
+      activeAccount: this.authRuntime.getActiveAccount(),
+      principalAccountId: normalizeText(settings.authAccountId),
+    });
+    const target = normalizeText(args.join(" "));
+
+    if (!target) {
+      if (accountState.principalAccountId && !accountState.configuredAccount) {
+        return {
+          ok: false,
+          reason: "missing_configured_account",
+          principalId: principal.principalId,
+          accountId: accountState.principalAccountId,
+        };
+      }
+
+      if (accountState.principalAccountId && accountState.configuredAccount) {
+        return {
+          ok: true,
+          principalId: principal.principalId,
+          targetAccountId: accountState.principalAccountId,
+          targetAccount: accountState.configuredAccount,
+          targetLabel: formatAuthAccountLabel(accountState.configuredAccount, accountState.principalAccountId),
+          targetKind: "visible-account",
+        };
+      }
+
+      return {
+        ok: true,
+        principalId: principal.principalId,
+        targetAccountId: "default",
+        targetAccount: null,
+        targetLabel: FEISHU_DEFAULT_AUTH_TARGET_LABEL,
+        targetKind: "system-default",
+      };
+    }
+
+    const normalizedTarget = target.toLowerCase();
+
+    if (["default", "active", "system", "follow"].includes(normalizedTarget)) {
+      return {
+        ok: true,
+        principalId: principal.principalId,
+        targetAccountId: "default",
+        targetAccount: null,
+        targetLabel: FEISHU_DEFAULT_AUTH_TARGET_LABEL,
+        targetKind: "system-default",
+      };
+    }
+
+    const account = /^\d+$/.test(target)
+      ? accounts[Number.parseInt(target, 10) - 1] ?? null
+      : findAuthAccountByQuery(accounts, target);
+
+    if (!account) {
+      return {
+        ok: false,
+        reason: "invalid_target",
+        principalId: principal.principalId,
+        invalidValue: target,
+      };
+    }
+
+    return {
+      ok: true,
+      principalId: principal.principalId,
+      targetAccountId: account.accountId,
+      targetAccount: account,
+      targetLabel: formatAuthAccountLabel(account, account.accountId),
+      targetKind: "visible-account",
+    };
   }
 
   private async sendSandboxSetting(chatId: string, context: FeishuIncomingContext, invalidValue?: string): Promise<void> {
@@ -4753,6 +5066,62 @@ function formatAuthAccountLabel(
   const normalizedEmail = normalizeText(account?.accountEmail ?? undefined) ?? "";
   const normalizedLabel = normalizeText(account?.label ?? undefined) ?? "";
   return normalizedEmail || normalizedLabel || normalizedAccountId || "当前账号";
+}
+
+function describeAuthSnapshotLines(snapshot: {
+  authenticated: boolean;
+  pendingLogin?: {
+    mode?: string | null;
+    authUrl?: string | null;
+    verificationUri?: string | null;
+    userCode?: string | null;
+    startedAt?: string | null;
+    expiresAt?: string | null;
+  } | null;
+  lastError?: string | null;
+}): string[] {
+  const pendingLogin = snapshot.pendingLogin;
+  const lines = [];
+
+  if (pendingLogin?.mode === "device") {
+    lines.push("状态：设备码登录进行中");
+    if (normalizeText(pendingLogin.verificationUri)) {
+      lines.push(`授权页：${pendingLogin.verificationUri}`);
+    }
+    if (normalizeText(pendingLogin.userCode)) {
+      lines.push(`设备码：${pendingLogin.userCode}`);
+    }
+    if (normalizeText(pendingLogin.startedAt)) {
+      lines.push(`开始时间：${formatTimestamp(pendingLogin.startedAt as string)}`);
+    }
+    if (normalizeText(pendingLogin.expiresAt)) {
+      lines.push(`过期时间：${formatTimestamp(pendingLogin.expiresAt as string)}`);
+    }
+  } else if (pendingLogin?.mode === "browser") {
+    lines.push("状态：浏览器登录进行中");
+    if (normalizeText(pendingLogin.authUrl)) {
+      lines.push(`登录链接：${pendingLogin.authUrl}`);
+    }
+    if (normalizeText(pendingLogin.startedAt)) {
+      lines.push(`开始时间：${formatTimestamp(pendingLogin.startedAt as string)}`);
+    }
+  } else {
+    lines.push(snapshot.authenticated ? "状态：已认证" : "状态：未认证");
+  }
+
+  if (normalizeText(snapshot.lastError ?? undefined)) {
+    lines.push(`最近错误：${snapshot.lastError}`);
+  }
+
+  return lines;
+}
+
+function dedupeLines(lines: Array<string | null | undefined>): string[] {
+  const normalized = lines
+    .map((line) => normalizeText(line ?? undefined))
+    .filter((line): line is string => Boolean(line));
+
+  return normalized.filter((line, index) => normalized.indexOf(line) === index);
 }
 
 function parseFeishuLoggerLevel(value: string | undefined): Lark.LoggerLevel {

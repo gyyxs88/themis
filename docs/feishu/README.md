@@ -23,7 +23,7 @@
 
 - 飞书第二阶段第一刀已经完成；阶段 5、阶段 6、`结构化输出 / 自动化接口` 和 `云端 / 远程执行能力评估` 也都已收口。当前结论不是把远程执行或 `codex cloud` 混进飞书主链，而是继续守住现有群路由、shared 会话和诊断复验边界；除审批卡第一轮外，其余卡片化范围仍保持 gated evaluation。
 - Themis 已接入飞书长连接，`im.message.receive_v1` 能进入现有 runtime 主链路。
-- 当前已支持飞书文本收发、`/help`、`/sessions`、`/new`、`/use`、`/current`、`/review`、`/steer`、`/workspace`、`/group`、`/link`、`/settings` 命令树、`/msgupdate`、`/quota`，以及 `/account`、`/sandbox`、`/search`、`/network`、`/approval` 这些兼容入口。
+- 当前已支持飞书文本收发、`/help`、`/sessions`、`/new`、`/use`、`/current`、`/review`、`/steer`、`/workspace`、`/group`、`/link`、`/settings` 命令树、`/msgupdate`、`/quota`，以及 `/account`、`/sandbox`、`/search`、`/network`、`/approval` 这些兼容入口；其中 `/settings account` 已支持设备码登录、退出账号和取消登录。
 - Codex 在飞书里已改成“占位槽位 + 顺序延迟缓冲”体验：用户发消息后先立刻返回 `处理中...`；第一条中途回复先缓存；只有切到新的正文 item、静默超时或最终结果收口时，缓存才会真正发送；同一 `agent_message itemId` 的连续 delta 只会覆盖当前缓存，不会把半句增量一条条刷到飞书里。
 - 飞书移动端第一轮产品化表达已落地：`task.action_required` 会转成可直接执行的 waiting action 文本面，状态类 `task.progress` 会额外输出任务状态摘要，`/sessions`、`/use`、`/current` 会回显当前 native thread 摘要。
 - 飞书审批卡第一轮已经落地：仅覆盖 `task.action_required(approval)`，机器人会把审批等待面升级成 interactive 卡片；点击后通过 `POST /api/feishu/card-action` 回调复用现有审批提交流程，同时保留 `/approve` / `/deny` 文本降级链。

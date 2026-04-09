@@ -376,6 +376,9 @@ infra/local/feishu-attachment-drafts.json
 - `/settings account current`
 - `/settings account list`
 - `/settings account use`
+- `/settings account login`
+- `/settings account logout`
+- `/settings account cancel`
 
 其中：
 
@@ -383,6 +386,10 @@ infra/local/feishu-attachment-drafts.json
 - `/settings account list` 查看可用认证账号列表
 - `/settings account use` 查看切换说明
 - `/settings account use <账号名|邮箱|序号|default>` 真正修改当前 principal 默认认证账号
+- `/settings account login` 查看账号登录帮助；飞书端当前只支持设备码登录
+- `/settings account login device [账号名|邮箱|序号|default]` 发起设备码登录
+- `/settings account logout [账号名|邮箱|序号|default]` 退出账号登录态
+- `/settings account cancel [账号名|邮箱|序号|default]` 取消仍在进行中的登录
 
 ### 兼容入口
 
