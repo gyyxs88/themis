@@ -19,6 +19,7 @@
 + /infra/
 + /infra/systemd/
 + /infra/systemd/themis-dev.service.example
++ /infra/systemd/themis-prod.service.example
 
 + /docs/
 + /docs/feishu/
@@ -29,5 +30,6 @@
 + /docs/repository/
 + /docs/repository/github-safe-publish.md
 + /docs/repository/themis-systemd-dev-service.md
++ /docs/repository/themis-systemd-prod-service.md
 
 - *

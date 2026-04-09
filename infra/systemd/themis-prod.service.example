@@ -1,0 +1,16 @@
+[Unit]
+Description=Themis production web service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/services/themis-prod
+ExecStart=/usr/bin/npm run start:web
+Restart=always
+RestartSec=2
+Environment=NODE_ENV=production
+KillSignal=SIGINT
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

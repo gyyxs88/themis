@@ -116,6 +116,7 @@ npm run themis -- config set FEISHU_APP_SECRET xxx
 - [飞书通道说明](./docs/feishu/themis-feishu-channel.md)
 - [持久化 agent 架构](./docs/product/themis-persistent-agent-architecture.md)
 - [公开发布边界与导出规则](./docs/repository/github-safe-publish.md)
+- [systemd 正式常驻示例](./docs/repository/themis-systemd-prod-service.md)
 - [systemd 开发常驻示例](./docs/repository/themis-systemd-dev-service.md)
 
 ## 许可证
@@ -160,3 +161,8 @@ git push origin main
 
 - [systemd service 示例](./infra/systemd/themis-dev.service.example)
 - [systemd 使用说明](./docs/repository/themis-systemd-dev-service.md)
+
+如果你要部署长期使用的正式实例，可参考：
+
+- [正式版 systemd service 示例](./infra/systemd/themis-prod.service.example)
+- [正式版部署说明](./docs/repository/themis-systemd-prod-service.md)
