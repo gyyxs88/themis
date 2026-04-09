@@ -56,6 +56,11 @@ import {
 import { PrincipalActorsService } from "./principal-actors-service.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
 import { buildTaskPrompt } from "./prompt.js";
+import { ScheduledTasksService } from "./scheduled-tasks-service.js";
+import {
+  buildThemisScheduledTaskMcpConfigOverrides,
+  buildThemisScheduledTaskPromptSection,
+} from "./themis-scheduled-task-tools.js";
 import { compileTaskInputForRuntime } from "./runtime-input-compiler.js";
 import { resolveStoredSessionThreadReference } from "./session-thread-reference.js";
 import { validateWorkspacePath } from "./session-workspace.js";
@@ -179,6 +184,7 @@ export class AppServerTaskRuntime {
   private readonly managedAgentSchedulerService: ManagedAgentSchedulerService;
   private readonly principalActorsService: PrincipalActorsService;
   private readonly principalSkillsService: PrincipalSkillsService;
+  private readonly scheduledTasksService: ScheduledTasksService;
   private readonly sessionFactory: (
     options?: AppServerSessionFactoryOptions,
   ) => Promise<AppServerTaskRuntimeSession>;
@@ -205,6 +211,9 @@ export class AppServerTaskRuntime {
     });
     this.principalSkillsService = options.principalSkillsService ?? new PrincipalSkillsService({
       workingDirectory: this.workingDirectory,
+      registry: this.runtimeStore,
+    });
+    this.scheduledTasksService = new ScheduledTasksService({
       registry: this.runtimeStore,
     });
     this.sessionFactory = async (factoryOptions = {}) =>
@@ -289,10 +298,10 @@ export class AppServerTaskRuntime {
         env.CODEX_HOME = ensureManagedAgentExecutionCodexHome(this.workingDirectory, managedAgent.agentId);
       }
 
-      return {
+      return withThemisScheduledTaskMcpSessionOptions({
         env,
         configOverrides: createCodexProviderOverrides(providerConfig),
-      };
+      }, this.workingDirectory, request);
     }
 
     const requestedAuthAccountId = normalizeTextValue(request.options?.authAccountId);
@@ -306,15 +315,15 @@ export class AppServerTaskRuntime {
 
     if (!account) {
       if (!managedAgent) {
-        return {};
+        return withThemisScheduledTaskMcpSessionOptions({}, this.workingDirectory, request);
       }
 
-      return {
+      return withThemisScheduledTaskMcpSessionOptions({
         env: buildCodexProcessEnv(
           ensureManagedAgentExecutionCodexHome(this.workingDirectory, managedAgent.agentId),
         ),
         configOverrides: createCodexAuthStorageConfigOverrides(),
-      };
+      }, this.workingDirectory, request);
     }
 
     ensureAuthAccountCodexHome(this.workingDirectory, account.codexHome);
@@ -324,10 +333,10 @@ export class AppServerTaskRuntime {
       })
       : account.codexHome;
 
-    return {
+    return withThemisScheduledTaskMcpSessionOptions({
       env: buildCodexProcessEnv(codexHome),
       configOverrides: createCodexAuthStorageConfigOverrides(),
-    };
+    }, this.workingDirectory, request);
   }
 
   private async executeTask(
@@ -463,7 +472,10 @@ export class AppServerTaskRuntime {
 
       const promptRequest = compiledInput ? withoutTaskAttachments(request) : request;
       const prompt = buildTaskPrompt(promptRequest, {
-        fallbackPromptSections: compiledInput?.fallbackPromptSections ?? [],
+        fallbackPromptSections: [
+          ...(compiledInput?.fallbackPromptSections ?? []),
+          buildThemisScheduledTaskPromptSection(request),
+        ],
       });
       const turnInput = compiledInput?.nativeInputParts.length
         ? [
@@ -708,6 +720,10 @@ export class AppServerTaskRuntime {
 
   getPrincipalSkillsService(): PrincipalSkillsService {
     return this.principalSkillsService;
+  }
+
+  getScheduledTasksService(): ScheduledTasksService {
+    return this.scheduledTasksService;
   }
 
   async forkThread(request: TaskRuntimeForkThreadRequest): Promise<TaskRuntimeForkedThread | null> {
@@ -1639,6 +1655,26 @@ function createCodexProviderOverrides(providerConfig: OpenAICompatibleProviderCo
       },
     },
     ...(providerConfig.modelCatalogPath ? { model_catalog_json: providerConfig.modelCatalogPath } : {}),
+  };
+}
+
+function withThemisScheduledTaskMcpSessionOptions(
+  base: AppServerSessionFactoryOptions,
+  workingDirectory: string,
+  request: TaskRequest,
+): AppServerSessionFactoryOptions {
+  const internalMcpOverrides = buildThemisScheduledTaskMcpConfigOverrides(workingDirectory, request);
+
+  if (!Object.keys(internalMcpOverrides).length) {
+    return base;
+  }
+
+  return {
+    ...base,
+    configOverrides: {
+      ...(base.configOverrides ?? {}),
+      ...internalMcpOverrides,
+    },
   };
 }
 

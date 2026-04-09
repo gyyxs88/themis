@@ -84,6 +84,11 @@ import {
   handleSkillsRemove,
   handleSkillsSync,
 } from "./http-skills.js";
+import {
+  handleScheduledTaskCancel,
+  handleScheduledTaskCreate,
+  handleScheduledTaskList,
+} from "./http-scheduled-tasks.js";
 import { writeJson } from "./http-responses.js";
 import { maybeHandleWebAccessRoute, requireWebAccess } from "./http-web-access.js";
 import {
@@ -431,6 +436,18 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/skills/catalog/curated") {
         return handleSkillsCuratedCatalog(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/scheduled-tasks/create") {
+        return handleScheduledTaskCreate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/scheduled-tasks/list") {
+        return handleScheduledTaskList(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/scheduled-tasks/cancel") {
+        return handleScheduledTaskCancel(request, response, runtime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/login") {

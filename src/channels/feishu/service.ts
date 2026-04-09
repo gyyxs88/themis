@@ -23,6 +23,8 @@ import {
   APPROVAL_POLICIES,
   type PrincipalTaskSettings,
   type SessionTaskSettings,
+  type StoredScheduledTaskRecord,
+  type StoredScheduledTaskRunRecord,
   type TaskActionDescriptor,
   type TaskInputEnvelope,
   SANDBOX_MODES,
@@ -299,6 +301,31 @@ export class FeishuChannelService {
 
     this.started = true;
     this.logger.info("[themis/feishu] 飞书长连接客户端已启动，实际连通性请结合后续 SDK 日志确认。");
+  }
+
+  async notifyScheduledTaskResult(input: {
+    task: StoredScheduledTaskRecord;
+    run: StoredScheduledTaskRunRecord;
+    outcome: "completed" | "failed" | "cancelled";
+    failureMessage?: string;
+  }): Promise<boolean> {
+    const conversation = this.resolveScheduledTaskConversation(input.task);
+
+    if (!conversation) {
+      this.logger.warn(
+        `[themis/feishu] 定时任务回执丢失会话映射：task=${input.task.scheduledTaskId} session=${input.task.sessionId ?? input.task.channelSessionKey ?? "-"}`,
+      );
+      return false;
+    }
+
+    const text = buildScheduledTaskResultText(input);
+
+    if (!text) {
+      return false;
+    }
+
+    await this.safeSendTaggedText(conversation.chatId, text, "定时任务回执");
+    return true;
   }
 
   stop(): void {
@@ -3382,6 +3409,16 @@ export class FeishuChannelService {
     }
   }
 
+  private resolveScheduledTaskConversation(task: StoredScheduledTaskRecord): FeishuConversationKey | null {
+    const sessionId = normalizeText(task.sessionId) ?? normalizeText(task.channelSessionKey);
+
+    if (!sessionId) {
+      return null;
+    }
+
+    return this.sessionStore.findConversationBySessionId(sessionId);
+  }
+
   private async resolvePendingApproval(
     rawActionId: string | undefined,
     decision: "approve" | "deny",
@@ -4254,6 +4291,65 @@ function decorateTaggedChunks(text: string, tag: string): string[] {
   }
 
   return chunks.map((chunk, index) => `${chunk}\n\n[${tag} ${index + 1}/${chunks.length}]`);
+}
+
+function buildScheduledTaskResultText(input: {
+  task: StoredScheduledTaskRecord;
+  run: StoredScheduledTaskRunRecord;
+  outcome: "completed" | "failed" | "cancelled";
+  failureMessage?: string;
+}): string {
+  const summary = normalizeText(
+    input.run.resultSummary
+      ?? input.failureMessage
+      ?? input.task.lastError
+      ?? undefined,
+  );
+  const output = normalizeScheduledTaskResultOutput(input.run.resultOutput);
+  const lines = [
+    `状态：${describeScheduledTaskOutcome(input.outcome)}`,
+    `任务：${input.task.goal}`,
+    `计划时间：${input.task.scheduledAt} (${input.task.timezone})`,
+    `任务 ID：${input.task.scheduledTaskId}`,
+  ];
+
+  if (summary) {
+    lines.push(`结果摘要：${summary}`);
+  }
+
+  if (output && output !== summary) {
+    lines.push("结果内容：");
+    lines.push(output);
+  }
+
+  return lines.join("\n");
+}
+
+function describeScheduledTaskOutcome(outcome: "completed" | "failed" | "cancelled"): string {
+  switch (outcome) {
+    case "completed":
+      return "已完成";
+    case "failed":
+      return "执行失败";
+    case "cancelled":
+      return "已取消";
+    default:
+      return outcome;
+  }
+}
+
+function normalizeScheduledTaskResultOutput(value: string | undefined): string | null {
+  const normalized = normalizeText(value);
+
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized.length <= 1200) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 1200).trimEnd()}\n…（结果过长，已截断）`;
 }
 
 function splitForFeishuText(text: string, reservedChars = 0): string[] {

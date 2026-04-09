@@ -5,6 +5,7 @@ import {
   CodexAuthRuntime,
   CodexTaskRuntime,
   ManagedAgentExecutionService,
+  ScheduledTaskExecutionService,
 } from "../core/index.js";
 import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { createThemisHttpServer, resolveListenAddresses } from "./http-server.js";
@@ -17,6 +18,7 @@ const host = process.env.THEMIS_HOST ?? "0.0.0.0";
 const port = Number.parseInt(process.env.THEMIS_PORT ?? "3100", 10);
 const taskTimeoutMs = Number.parseInt(process.env.THEMIS_TASK_TIMEOUT_MS ?? "300000", 10);
 const agentSchedulerIntervalMs = Number.parseInt(process.env.THEMIS_AGENT_SCHEDULER_INTERVAL_MS ?? "5000", 10);
+const scheduledTaskSchedulerIntervalMs = Number.parseInt(process.env.THEMIS_SCHEDULED_TASK_SCHEDULER_INTERVAL_MS ?? "5000", 10);
 const runtime = new CodexTaskRuntime();
 const actionBridge = new AppServerActionBridge();
 const appServerRuntime = new AppServerTaskRuntime({
@@ -29,6 +31,23 @@ const managedAgentExecutionService = new ManagedAgentExecutionService({
   runtime: appServerRuntime,
   schedulerService: appServerRuntime.getManagedAgentSchedulerService(),
   coordinationService: appServerRuntime.getManagedAgentCoordinationService(),
+});
+let feishuService: FeishuChannelService | null = null;
+const scheduledTaskExecutionService = new ScheduledTaskExecutionService({
+  registry: runtime.getRuntimeStore(),
+  runtime: appServerRuntime,
+  onExecutionFinished: async (notification) => {
+    if (notification.task.sourceChannel !== "feishu" || !feishuService) {
+      return;
+    }
+
+    await feishuService.notifyScheduledTaskResult({
+      task: notification.task,
+      run: notification.run,
+      outcome: notification.outcome.result,
+      ...(notification.outcome.failureMessage ? { failureMessage: notification.outcome.failureMessage } : {}),
+    });
+  },
 });
 const sharedRuntimes = {
   sdk: runtime,
@@ -58,7 +77,7 @@ const authRuntime = new CodexAuthRuntime({
     }
   },
 });
-const feishuService = new FeishuChannelService({
+feishuService = new FeishuChannelService({
   runtime,
   runtimeRegistry: feishuRuntimeRegistry,
   actionBridge,
@@ -78,6 +97,7 @@ const server = createThemisHttpServer({
 });
 
 let agentSchedulerTickRunning = false;
+let scheduledTaskSchedulerTickRunning = false;
 
 const runManagedAgentSchedulerTick = async (): Promise<void> => {
   if (agentSchedulerTickRunning) {
@@ -102,6 +122,29 @@ const runManagedAgentSchedulerTick = async (): Promise<void> => {
   }
 };
 
+const runScheduledTaskSchedulerTick = async (): Promise<void> => {
+  if (scheduledTaskSchedulerTickRunning) {
+    return;
+  }
+
+  scheduledTaskSchedulerTickRunning = true;
+
+  try {
+    const tick = await scheduledTaskExecutionService.runNext({
+      schedulerId: "scheduler-scheduled-main",
+    });
+
+    if (tick.execution?.result === "failed") {
+      console.error(`[themis/scheduled] 执行失败：${tick.execution.failureMessage ?? "unknown error"}`);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[themis/scheduled] scheduler tick 失败：${message}`);
+  } finally {
+    scheduledTaskSchedulerTickRunning = false;
+  }
+};
+
 if (Number.isFinite(agentSchedulerIntervalMs) && agentSchedulerIntervalMs > 0) {
   const timer = setInterval(() => {
     void runManagedAgentSchedulerTick();
@@ -110,11 +153,20 @@ if (Number.isFinite(agentSchedulerIntervalMs) && agentSchedulerIntervalMs > 0) {
   void runManagedAgentSchedulerTick();
 }
 
+if (Number.isFinite(scheduledTaskSchedulerIntervalMs) && scheduledTaskSchedulerIntervalMs > 0) {
+  const timer = setInterval(() => {
+    void runScheduledTaskSchedulerTick();
+  }, scheduledTaskSchedulerIntervalMs);
+  timer.unref?.();
+  void runScheduledTaskSchedulerTick();
+}
+
 server.listen(port, host, () => {
   console.log("[themis] LAN web UI is ready.");
   console.log(`[themis] Bound to ${host}:${port}`);
   console.log(`[themis] Task timeout ${Math.max(1, Math.round(taskTimeoutMs / 1000))}s`);
   console.log(`[themis] Managed-agent scheduler interval ${Math.max(1, Math.round(agentSchedulerIntervalMs / 1000))}s`);
+  console.log(`[themis] Scheduled-task scheduler interval ${Math.max(1, Math.round(scheduledTaskSchedulerIntervalMs / 1000))}s`);
   console.log(`[themis] If LAN access times out, verify your firewall allows TCP port ${port} (for example: sudo ufw allow ${port}/tcp).`);
 
   for (const address of resolveListenAddresses(host, port)) {

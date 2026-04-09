@@ -12,6 +12,8 @@ import type { CodexTaskRuntime } from "../../core/codex-runtime.js";
 import type {
   PrincipalTaskSettings,
   SessionTaskSettings,
+  StoredScheduledTaskRecord,
+  StoredScheduledTaskRunRecord,
   TaskPendingActionSubmitRequest,
   TaskEvent,
   TaskRequest,
@@ -328,6 +330,57 @@ test("/current 会显示当前会话的 native thread 摘要", async () => {
     assert.match(message, /thread-current-1/);
     assert.match(message, /ship mobile session summary/);
     assert.match(message, /任务状态：completed/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("定时任务回执会在飞书切换会话后仍发回原 chat", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.setCurrentSession("session-feishu-scheduled-old-1");
+    harness.setCurrentSession("session-feishu-scheduled-new-1");
+
+    const delivered = await harness.notifyScheduledTaskResult({
+      task: {
+        scheduledTaskId: "scheduled-task-feishu-1",
+        principalId: harness.getCurrentPrincipalId(),
+        sourceChannel: "feishu",
+        channelUserId: "user-1",
+        sessionId: "session-feishu-scheduled-old-1",
+        channelSessionKey: "session-feishu-scheduled-old-1",
+        goal: "检查生产告警",
+        timezone: "Asia/Shanghai",
+        scheduledAt: "2026-04-09T09:00:00.000Z",
+        status: "completed",
+        createdAt: "2026-04-09T08:00:00.000Z",
+        updatedAt: "2026-04-09T09:00:10.000Z",
+        completedAt: "2026-04-09T09:00:10.000Z",
+      } satisfies StoredScheduledTaskRecord,
+      run: {
+        runId: "scheduled-run-feishu-1",
+        scheduledTaskId: "scheduled-task-feishu-1",
+        principalId: harness.getCurrentPrincipalId(),
+        schedulerId: "scheduler-scheduled-main",
+        leaseToken: "lease-feishu-1",
+        leaseExpiresAt: "2026-04-09T09:05:00.000Z",
+        status: "completed",
+        triggeredAt: "2026-04-09T09:00:00.000Z",
+        completedAt: "2026-04-09T09:00:10.000Z",
+        resultSummary: "检查完成，没有发现新的高优先级告警。",
+        createdAt: "2026-04-09T09:00:00.000Z",
+        updatedAt: "2026-04-09T09:00:10.000Z",
+      } satisfies StoredScheduledTaskRunRecord,
+      outcome: "completed",
+    });
+
+    assert.equal(delivered, true);
+    const message = harness.takeSingleMessage();
+    assert.match(message, /状态：已完成/);
+    assert.match(message, /任务：检查生产告警/);
+    assert.match(message, /结果摘要：检查完成，没有发现新的高优先级告警。/);
+    assert.match(message, /\[定时任务回执\]/);
   } finally {
     harness.cleanup();
   }
@@ -6139,6 +6192,14 @@ function createHarness(
       return await (service as unknown as {
         createTextMessage(targetChatId: string, value: string): Promise<unknown>;
       }).createTextMessage(chatId, text);
+    },
+    async notifyScheduledTaskResult(input: {
+      task: StoredScheduledTaskRecord;
+      run: StoredScheduledTaskRunRecord;
+      outcome: "completed" | "failed" | "cancelled";
+      failureMessage?: string;
+    }) {
+      return await service.notifyScheduledTaskResult(input);
     },
     setClient(client: unknown) {
       (service as unknown as { client: unknown }).client = client;

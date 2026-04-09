@@ -19,6 +19,7 @@ import {
 } from "../diagnostics/feishu-diagnostics.js";
 import { RuntimeSmokeService, type RuntimeSmokeProgressEvent } from "../diagnostics/runtime-smoke.js";
 import { McpInspector } from "../mcp/mcp-inspector.js";
+import { runThemisMcpServer } from "../mcp/themis-mcp-server.js";
 import { PrincipalSkillsService } from "../core/principal-skills-service.js";
 import { WebAccessService } from "../core/web-access.js";
 import { readOpenAICompatibleProviderConfigs } from "../core/openai-compatible-provider.js";
@@ -100,8 +101,11 @@ async function main(args: string[]): Promise<void> {
     case "skill":
       await handleSkill(subcommand, rest);
       return;
+    case "mcp-server":
+      await handleMcpServer([...(subcommand ? [subcommand] : []), ...rest]);
+      return;
     default:
-      throw new Error(`不支持的命令：${command}。可用命令：init / status / check / doctor / config / auth / skill / help。`);
+      throw new Error(`不支持的命令：${command}。可用命令：init / status / check / doctor / config / auth / skill / mcp-server / help。`);
   }
 }
 
@@ -514,6 +518,42 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
   }
 }
 
+async function handleMcpServer(args: string[]): Promise<void> {
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log("用法：themis mcp-server [--channel <channel>] [--user <channelUserId>] [--name <displayName>] [--session <sessionId>] [--channel-session-key <key>]");
+    console.log("说明：通过 stdio 启动 Themis MCP server，暴露定时任务工具给 Codex 调用。");
+    return;
+  }
+
+  const unknownArgs = args.filter((value, index) => {
+    if (!value.startsWith("-")) {
+      return index === 0;
+    }
+
+    if (["--channel", "--user", "--name", "--session", "--channel-session-key"].includes(value)) {
+      return false;
+    }
+
+    const previous = args[index - 1];
+    return !["--channel", "--user", "--name", "--session", "--channel-session-key"].includes(previous ?? "");
+  });
+
+  if (unknownArgs.length > 0) {
+    throw new Error(`mcp-server 不支持这些参数：${unknownArgs.join(", ")}`);
+  }
+
+  await runThemisMcpServer({
+    workingDirectory: cwd,
+    identity: {
+      channel: readOptionValue(args, "--channel") ?? "cli",
+      channelUserId: readOptionValue(args, "--user") ?? "codex",
+      ...(readOptionValue(args, "--name") ? { displayName: readOptionValue(args, "--name") as string } : {}),
+    },
+    ...(readOptionValue(args, "--session") ? { sessionId: readOptionValue(args, "--session") as string } : {}),
+    ...(readOptionValue(args, "--channel-session-key") ? { channelSessionKey: readOptionValue(args, "--channel-session-key") as string } : {}),
+  });
+}
+
 async function handleDoctorSmoke(args: string[]): Promise<number> {
   if (args.length !== 1) {
     throw new Error("用法：themis doctor smoke <web|feishu|all>");
@@ -747,6 +787,7 @@ function printHelp(): void {
   console.log("- ./themis skill install curated <SKILL_NAME>");
   console.log("- ./themis skill remove <SKILL_NAME>");
   console.log("- ./themis skill sync <SKILL_NAME> [--force]");
+  console.log("- ./themis mcp-server [--channel <channel>] [--user <channelUserId>] [--name <displayName>] [--session <sessionId>] [--channel-session-key <key>]");
   console.log("");
   console.log("如果希望像 codex/openclaw 一样直接输入 `themis`，建议执行 `./themis install`。");
 }

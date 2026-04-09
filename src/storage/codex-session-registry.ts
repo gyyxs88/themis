@@ -45,6 +45,8 @@ import {
   PRINCIPAL_MAIN_MEMORY_STATUSES,
   REASONING_LEVELS,
   SANDBOX_MODES,
+  SCHEDULED_TASK_RUN_STATUSES,
+  SCHEDULED_TASK_STATUSES,
   TASK_ACCESS_MODES,
   WEB_SEARCH_MODES,
 } from "../types/index.js";
@@ -80,6 +82,8 @@ import type {
   PrincipalMainMemoryStatus,
   ReasoningLevel,
   SandboxMode,
+  ScheduledTaskRunStatus,
+  ScheduledTaskStatus,
   SessionTaskSettings,
   StoredAgentMailboxEntryRecord,
   StoredAgentHandoffRecord,
@@ -105,9 +109,11 @@ import type {
   StoredPrincipalActorRecord,
   StoredPrincipalMainMemoryCandidateRecord,
   StoredPrincipalMainMemoryRecord,
+  StoredScheduledTaskRecord,
+  StoredScheduledTaskRunRecord,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 26;
+const DATABASE_SCHEMA_VERSION = 27;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -730,6 +736,51 @@ interface AgentRunRow {
   completed_at: string | null;
   failure_code: string | null;
   failure_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ScheduledTaskRow {
+  scheduled_task_id: string;
+  principal_id: string;
+  source_channel: string;
+  channel_user_id: string;
+  display_name: string | null;
+  session_id: string | null;
+  channel_session_key: string | null;
+  goal: string;
+  input_text: string | null;
+  options_json: string | null;
+  automation_json: string | null;
+  timezone: string;
+  scheduled_at: string;
+  status: string;
+  last_run_id: string | null;
+  created_at: string;
+  updated_at: string;
+  cancelled_at: string | null;
+  completed_at: string | null;
+  last_error: string | null;
+}
+
+interface ScheduledTaskRunRow {
+  run_id: string;
+  scheduled_task_id: string;
+  principal_id: string;
+  scheduler_id: string;
+  lease_token: string;
+  lease_expires_at: string;
+  status: string;
+  request_id: string | null;
+  task_id: string | null;
+  triggered_at: string;
+  started_at: string | null;
+  last_heartbeat_at: string | null;
+  completed_at: string | null;
+  result_summary: string | null;
+  result_output: string | null;
+  structured_output_json: string | null;
+  error_json: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -3594,6 +3645,599 @@ export class SqliteCodexSessionRegistry {
       return {
         workItem,
         run: this.getAgentRun(run.runId) ?? run,
+      };
+    });
+
+    return claim();
+  }
+
+  getScheduledTask(scheduledTaskId: string): StoredScheduledTaskRecord | null {
+    const normalizedScheduledTaskId = scheduledTaskId.trim();
+
+    if (!normalizedScheduledTaskId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            scheduled_task_id,
+            principal_id,
+            source_channel,
+            channel_user_id,
+            display_name,
+            session_id,
+            channel_session_key,
+            goal,
+            input_text,
+            options_json,
+            automation_json,
+            timezone,
+            scheduled_at,
+            status,
+            last_run_id,
+            created_at,
+            updated_at,
+            cancelled_at,
+            completed_at,
+            last_error
+          FROM themis_scheduled_tasks
+          WHERE scheduled_task_id = ?
+        `,
+      )
+      .get(normalizedScheduledTaskId) as ScheduledTaskRow | undefined;
+
+    return row ? mapScheduledTaskRow(row) : null;
+  }
+
+  listScheduledTasksByPrincipal(principalId: string): StoredScheduledTaskRecord[] {
+    const normalizedPrincipalId = principalId.trim();
+
+    if (!normalizedPrincipalId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            scheduled_task_id,
+            principal_id,
+            source_channel,
+            channel_user_id,
+            display_name,
+            session_id,
+            channel_session_key,
+            goal,
+            input_text,
+            options_json,
+            automation_json,
+            timezone,
+            scheduled_at,
+            status,
+            last_run_id,
+            created_at,
+            updated_at,
+            cancelled_at,
+            completed_at,
+            last_error
+          FROM themis_scheduled_tasks
+          WHERE principal_id = ?
+          ORDER BY
+            CASE status
+              WHEN 'scheduled' THEN 0
+              WHEN 'running' THEN 1
+              WHEN 'failed' THEN 2
+              WHEN 'completed' THEN 3
+              ELSE 4
+            END ASC,
+            scheduled_at ASC,
+            updated_at DESC,
+            scheduled_task_id ASC
+        `,
+      )
+      .all(normalizedPrincipalId) as ScheduledTaskRow[];
+
+    return rows.map(mapScheduledTaskRow);
+  }
+
+  saveScheduledTask(record: StoredScheduledTaskRecord): void {
+    const scheduledTaskId = record.scheduledTaskId.trim();
+    const principalId = record.principalId.trim();
+    const sourceChannel = record.sourceChannel.trim();
+    const channelUserId = record.channelUserId.trim();
+    const goal = normalizeOptionalMultilineText(record.goal);
+    const timezone = normalizeOptionalText(record.timezone);
+    const scheduledAt = normalizeOptionalText(record.scheduledAt);
+    const status = normalizeOptionalText(record.status);
+    const displayName = normalizeOptionalText(record.displayName);
+    const sessionId = normalizeOptionalText(record.sessionId);
+    const channelSessionKey = normalizeOptionalText(record.channelSessionKey);
+    const inputText = normalizeOptionalMultilineText(record.inputText);
+    const lastRunId = normalizeOptionalText(record.lastRunId);
+    const cancelledAt = normalizeOptionalText(record.cancelledAt);
+    const completedAt = normalizeOptionalText(record.completedAt);
+    const lastError = normalizeOptionalMultilineText(record.lastError);
+
+    if (
+      !scheduledTaskId ||
+      !principalId ||
+      !sourceChannel ||
+      !channelUserId ||
+      !goal ||
+      !timezone ||
+      !scheduledAt ||
+      !status ||
+      !SCHEDULED_TASK_STATUSES.includes(status as ScheduledTaskStatus)
+    ) {
+      throw new Error("Scheduled task record is incomplete.");
+    }
+
+    const existing = this.db
+      .prepare(
+        `
+          SELECT principal_id
+          FROM themis_scheduled_tasks
+          WHERE scheduled_task_id = ?
+        `,
+      )
+      .get(scheduledTaskId) as { principal_id: string } | undefined;
+
+    if (existing && existing.principal_id !== principalId) {
+      throw new Error("Scheduled task belongs to another principal.");
+    }
+
+    const writeResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_scheduled_tasks (
+            scheduled_task_id,
+            principal_id,
+            source_channel,
+            channel_user_id,
+            display_name,
+            session_id,
+            channel_session_key,
+            goal,
+            input_text,
+            options_json,
+            automation_json,
+            timezone,
+            scheduled_at,
+            status,
+            last_run_id,
+            created_at,
+            updated_at,
+            cancelled_at,
+            completed_at,
+            last_error
+          ) VALUES (
+            @scheduled_task_id,
+            @principal_id,
+            @source_channel,
+            @channel_user_id,
+            @display_name,
+            @session_id,
+            @channel_session_key,
+            @goal,
+            @input_text,
+            @options_json,
+            @automation_json,
+            @timezone,
+            @scheduled_at,
+            @status,
+            @last_run_id,
+            @created_at,
+            @updated_at,
+            @cancelled_at,
+            @completed_at,
+            @last_error
+          )
+          ON CONFLICT(scheduled_task_id) DO UPDATE SET
+            source_channel = excluded.source_channel,
+            channel_user_id = excluded.channel_user_id,
+            display_name = excluded.display_name,
+            session_id = excluded.session_id,
+            channel_session_key = excluded.channel_session_key,
+            goal = excluded.goal,
+            input_text = excluded.input_text,
+            options_json = excluded.options_json,
+            automation_json = excluded.automation_json,
+            timezone = excluded.timezone,
+            scheduled_at = excluded.scheduled_at,
+            status = excluded.status,
+            last_run_id = excluded.last_run_id,
+            updated_at = excluded.updated_at,
+            cancelled_at = excluded.cancelled_at,
+            completed_at = excluded.completed_at,
+            last_error = excluded.last_error
+          WHERE themis_scheduled_tasks.principal_id = excluded.principal_id
+        `,
+      )
+      .run({
+        scheduled_task_id: scheduledTaskId,
+        principal_id: principalId,
+        source_channel: sourceChannel,
+        channel_user_id: channelUserId,
+        display_name: displayName ?? null,
+        session_id: sessionId ?? null,
+        channel_session_key: channelSessionKey ?? null,
+        goal,
+        input_text: inputText ?? null,
+        options_json: stringifyJson(record.options),
+        automation_json: stringifyJson(record.automation),
+        timezone,
+        scheduled_at: scheduledAt,
+        status,
+        last_run_id: lastRunId ?? null,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+        cancelled_at: cancelledAt ?? null,
+        completed_at: completedAt ?? null,
+        last_error: lastError ?? null,
+      });
+
+    if (writeResult.changes === 0) {
+      throw new Error("Scheduled task write did not apply.");
+    }
+  }
+
+  getScheduledTaskRun(runId: string): StoredScheduledTaskRunRecord | null {
+    const normalizedRunId = runId.trim();
+
+    if (!normalizedRunId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            run_id,
+            scheduled_task_id,
+            principal_id,
+            scheduler_id,
+            lease_token,
+            lease_expires_at,
+            status,
+            request_id,
+            task_id,
+            triggered_at,
+            started_at,
+            last_heartbeat_at,
+            completed_at,
+            result_summary,
+            result_output,
+            structured_output_json,
+            error_json,
+            created_at,
+            updated_at
+          FROM themis_scheduled_task_runs
+          WHERE run_id = ?
+        `,
+      )
+      .get(normalizedRunId) as ScheduledTaskRunRow | undefined;
+
+    return row ? mapScheduledTaskRunRow(row) : null;
+  }
+
+  listScheduledTaskRunsByTask(scheduledTaskId: string): StoredScheduledTaskRunRecord[] {
+    const normalizedScheduledTaskId = scheduledTaskId.trim();
+
+    if (!normalizedScheduledTaskId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            run_id,
+            scheduled_task_id,
+            principal_id,
+            scheduler_id,
+            lease_token,
+            lease_expires_at,
+            status,
+            request_id,
+            task_id,
+            triggered_at,
+            started_at,
+            last_heartbeat_at,
+            completed_at,
+            result_summary,
+            result_output,
+            structured_output_json,
+            error_json,
+            created_at,
+            updated_at
+          FROM themis_scheduled_task_runs
+          WHERE scheduled_task_id = ?
+          ORDER BY created_at DESC, run_id ASC
+        `,
+      )
+      .all(normalizedScheduledTaskId) as ScheduledTaskRunRow[];
+
+    return rows.map(mapScheduledTaskRunRow);
+  }
+
+  listStaleActiveScheduledTaskRuns(leaseExpiresBefore: string): StoredScheduledTaskRunRecord[] {
+    const normalizedLeaseExpiresBefore = leaseExpiresBefore.trim();
+
+    if (!normalizedLeaseExpiresBefore) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            run_id,
+            scheduled_task_id,
+            principal_id,
+            scheduler_id,
+            lease_token,
+            lease_expires_at,
+            status,
+            request_id,
+            task_id,
+            triggered_at,
+            started_at,
+            last_heartbeat_at,
+            completed_at,
+            result_summary,
+            result_output,
+            structured_output_json,
+            error_json,
+            created_at,
+            updated_at
+          FROM themis_scheduled_task_runs
+          WHERE status IN ('created', 'running')
+            AND lease_expires_at <= ?
+          ORDER BY lease_expires_at ASC, run_id ASC
+        `,
+      )
+      .all(normalizedLeaseExpiresBefore) as ScheduledTaskRunRow[];
+
+    return rows.map(mapScheduledTaskRunRow);
+  }
+
+  saveScheduledTaskRun(record: StoredScheduledTaskRunRecord): void {
+    const runId = record.runId.trim();
+    const scheduledTaskId = record.scheduledTaskId.trim();
+    const principalId = record.principalId.trim();
+    const schedulerId = record.schedulerId.trim();
+    const leaseToken = record.leaseToken.trim();
+    const leaseExpiresAt = record.leaseExpiresAt.trim();
+    const status = normalizeOptionalText(record.status);
+    const requestId = normalizeOptionalText(record.requestId);
+    const taskId = normalizeOptionalText(record.taskId);
+    const triggeredAt = normalizeOptionalText(record.triggeredAt);
+    const startedAt = normalizeOptionalText(record.startedAt);
+    const lastHeartbeatAt = normalizeOptionalText(record.lastHeartbeatAt);
+    const completedAt = normalizeOptionalText(record.completedAt);
+    const resultSummary = normalizeOptionalMultilineText(record.resultSummary);
+    const resultOutput = normalizeOptionalMultilineText(record.resultOutput);
+
+    if (
+      !runId ||
+      !scheduledTaskId ||
+      !principalId ||
+      !schedulerId ||
+      !leaseToken ||
+      !leaseExpiresAt ||
+      !status ||
+      !triggeredAt ||
+      !SCHEDULED_TASK_RUN_STATUSES.includes(status as ScheduledTaskRunStatus)
+    ) {
+      throw new Error("Scheduled task run record is incomplete.");
+    }
+
+    const existing = this.db
+      .prepare(
+        `
+          SELECT scheduled_task_id, principal_id
+          FROM themis_scheduled_task_runs
+          WHERE run_id = ?
+        `,
+      )
+      .get(runId) as { scheduled_task_id: string; principal_id: string } | undefined;
+
+    if (existing && (existing.scheduled_task_id !== scheduledTaskId || existing.principal_id !== principalId)) {
+      throw new Error("Scheduled task run belongs to another task or principal.");
+    }
+
+    const writeResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_scheduled_task_runs (
+            run_id,
+            scheduled_task_id,
+            principal_id,
+            scheduler_id,
+            lease_token,
+            lease_expires_at,
+            status,
+            request_id,
+            task_id,
+            triggered_at,
+            started_at,
+            last_heartbeat_at,
+            completed_at,
+            result_summary,
+            result_output,
+            structured_output_json,
+            error_json,
+            created_at,
+            updated_at
+          ) VALUES (
+            @run_id,
+            @scheduled_task_id,
+            @principal_id,
+            @scheduler_id,
+            @lease_token,
+            @lease_expires_at,
+            @status,
+            @request_id,
+            @task_id,
+            @triggered_at,
+            @started_at,
+            @last_heartbeat_at,
+            @completed_at,
+            @result_summary,
+            @result_output,
+            @structured_output_json,
+            @error_json,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(run_id) DO UPDATE SET
+            scheduler_id = excluded.scheduler_id,
+            lease_token = excluded.lease_token,
+            lease_expires_at = excluded.lease_expires_at,
+            status = excluded.status,
+            request_id = excluded.request_id,
+            task_id = excluded.task_id,
+            started_at = excluded.started_at,
+            last_heartbeat_at = excluded.last_heartbeat_at,
+            completed_at = excluded.completed_at,
+            result_summary = excluded.result_summary,
+            result_output = excluded.result_output,
+            structured_output_json = excluded.structured_output_json,
+            error_json = excluded.error_json,
+            updated_at = excluded.updated_at
+          WHERE themis_scheduled_task_runs.scheduled_task_id = excluded.scheduled_task_id
+            AND themis_scheduled_task_runs.principal_id = excluded.principal_id
+        `,
+      )
+      .run({
+        run_id: runId,
+        scheduled_task_id: scheduledTaskId,
+        principal_id: principalId,
+        scheduler_id: schedulerId,
+        lease_token: leaseToken,
+        lease_expires_at: leaseExpiresAt,
+        status,
+        request_id: requestId ?? null,
+        task_id: taskId ?? null,
+        triggered_at: triggeredAt,
+        started_at: startedAt ?? null,
+        last_heartbeat_at: lastHeartbeatAt ?? null,
+        completed_at: completedAt ?? null,
+        result_summary: resultSummary ?? null,
+        result_output: resultOutput ?? null,
+        structured_output_json: stringifyJson(record.structuredOutput),
+        error_json: stringifyJson(record.error),
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+
+    if (writeResult.changes === 0) {
+      throw new Error("Scheduled task run write did not apply.");
+    }
+  }
+
+  claimNextDueScheduledTask(input: {
+    schedulerId: string;
+    leaseToken: string;
+    leaseExpiresAt: string;
+    now: string;
+    principalId?: string;
+  }): { task: StoredScheduledTaskRecord; run: StoredScheduledTaskRunRecord } | null {
+    const schedulerId = input.schedulerId.trim();
+    const leaseToken = input.leaseToken.trim();
+    const leaseExpiresAt = input.leaseExpiresAt.trim();
+    const now = input.now.trim();
+    const principalId = normalizeOptionalText(input.principalId);
+
+    if (!schedulerId || !leaseToken || !leaseExpiresAt || !now) {
+      throw new Error("Scheduled task claim input is incomplete.");
+    }
+
+    const claim = this.db.transaction(() => {
+      const filters = [
+        "task.status = 'scheduled'",
+        "task.scheduled_at <= @now",
+        `
+        NOT EXISTS (
+          SELECT 1
+          FROM themis_scheduled_task_runs active_run
+          WHERE active_run.scheduled_task_id = task.scheduled_task_id
+            AND active_run.status IN ('created', 'running')
+        )
+        `,
+      ];
+      const params: Record<string, string> = { now };
+
+      if (principalId) {
+        filters.push("task.principal_id = @principal_id");
+        params.principal_id = principalId;
+      }
+
+      const candidate = this.db
+        .prepare(
+          `
+            SELECT task.scheduled_task_id
+            FROM themis_scheduled_tasks task
+            WHERE ${filters.join("\n              AND ")}
+            ORDER BY task.scheduled_at ASC, task.created_at ASC, task.scheduled_task_id ASC
+            LIMIT 1
+          `,
+        )
+        .get(params) as { scheduled_task_id: string } | undefined;
+
+      if (!candidate?.scheduled_task_id) {
+        return null;
+      }
+
+      const runId = createId("scheduled-run");
+      const updateResult = this.db
+        .prepare(
+          `
+            UPDATE themis_scheduled_tasks
+            SET
+              status = 'running',
+              last_run_id = @last_run_id,
+              updated_at = @updated_at,
+              last_error = NULL
+            WHERE scheduled_task_id = @scheduled_task_id
+              AND status = 'scheduled'
+          `,
+        )
+        .run({
+          scheduled_task_id: candidate.scheduled_task_id,
+          last_run_id: runId,
+          updated_at: now,
+        });
+
+      if (updateResult.changes === 0) {
+        return null;
+      }
+
+      const task = this.getScheduledTask(candidate.scheduled_task_id);
+
+      if (!task) {
+        throw new Error("Claimed scheduled task disappeared.");
+      }
+
+      const run: StoredScheduledTaskRunRecord = {
+        runId,
+        scheduledTaskId: task.scheduledTaskId,
+        principalId: task.principalId,
+        schedulerId,
+        leaseToken,
+        leaseExpiresAt,
+        status: "created",
+        triggeredAt: now,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      this.saveScheduledTaskRun(run);
+      return {
+        task,
+        run: this.getScheduledTaskRun(run.runId) ?? run,
       };
     });
 
@@ -8377,6 +9021,76 @@ export class SqliteCodexSessionRegistry {
     return row?.sql ?? null;
   }
 
+  private createScheduledTaskTables(database: Database.Database): void {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS themis_scheduled_tasks (
+        scheduled_task_id TEXT PRIMARY KEY,
+        principal_id TEXT NOT NULL,
+        source_channel TEXT NOT NULL,
+        channel_user_id TEXT NOT NULL,
+        display_name TEXT,
+        session_id TEXT,
+        channel_session_key TEXT,
+        goal TEXT NOT NULL,
+        input_text TEXT,
+        options_json TEXT,
+        automation_json TEXT,
+        timezone TEXT NOT NULL,
+        scheduled_at TEXT NOT NULL,
+        status TEXT NOT NULL,
+        last_run_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        cancelled_at TEXT,
+        completed_at TEXT,
+        last_error TEXT,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_scheduled_tasks_principal_idx
+      ON themis_scheduled_tasks(principal_id, updated_at DESC, scheduled_task_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_scheduled_tasks_due_idx
+      ON themis_scheduled_tasks(status, scheduled_at ASC, scheduled_task_id ASC);
+
+      CREATE TABLE IF NOT EXISTS themis_scheduled_task_runs (
+        run_id TEXT PRIMARY KEY,
+        scheduled_task_id TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        scheduler_id TEXT NOT NULL,
+        lease_token TEXT NOT NULL,
+        lease_expires_at TEXT NOT NULL,
+        status TEXT NOT NULL,
+        request_id TEXT,
+        task_id TEXT,
+        triggered_at TEXT NOT NULL,
+        started_at TEXT,
+        last_heartbeat_at TEXT,
+        completed_at TEXT,
+        result_summary TEXT,
+        result_output TEXT,
+        structured_output_json TEXT,
+        error_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (scheduled_task_id) REFERENCES themis_scheduled_tasks(scheduled_task_id) ON DELETE CASCADE,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_scheduled_task_runs_task_idx
+      ON themis_scheduled_task_runs(scheduled_task_id, created_at DESC, run_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_scheduled_task_runs_principal_idx
+      ON themis_scheduled_task_runs(principal_id, created_at DESC, run_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_scheduled_task_runs_scheduler_idx
+      ON themis_scheduled_task_runs(scheduler_id, status, updated_at DESC, run_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_scheduled_task_runs_lease_idx
+      ON themis_scheduled_task_runs(status, lease_expires_at ASC, run_id ASC);
+    `);
+  }
+
   private migrateSchema(database: Database.Database): void {
     database.exec(`
       CREATE TABLE IF NOT EXISTS themis_principal_task_settings (
@@ -8507,6 +9221,7 @@ export class SqliteCodexSessionRegistry {
     this.createSessionHistoryMetadataTables(database);
     this.createTurnInputTables(database);
     this.createManagedAgentTables(database);
+    this.createScheduledTaskTables(database);
 
     const agentWorkItemColumns = database
       .prepare(`PRAGMA table_info(themis_agent_work_items)`)
@@ -9149,6 +9864,64 @@ function mapAgentRunRow(row: AgentRunRow): StoredAgentRunRecord {
     ...(row.completed_at ? { completedAt: row.completed_at } : {}),
     ...(row.failure_code ? { failureCode: row.failure_code } : {}),
     ...(row.failure_message ? { failureMessage: row.failure_message } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapScheduledTaskRow(row: ScheduledTaskRow): StoredScheduledTaskRecord {
+  const options = row.options_json ? safeParseJson(row.options_json) : null;
+  const automation = row.automation_json ? safeParseJson(row.automation_json) : null;
+
+  return {
+    scheduledTaskId: row.scheduled_task_id,
+    principalId: row.principal_id,
+    sourceChannel: row.source_channel,
+    channelUserId: row.channel_user_id,
+    ...(row.display_name ? { displayName: row.display_name } : {}),
+    ...(row.session_id ? { sessionId: row.session_id } : {}),
+    ...(row.channel_session_key ? { channelSessionKey: row.channel_session_key } : {}),
+    goal: row.goal,
+    ...(row.input_text ? { inputText: row.input_text } : {}),
+    ...(options && typeof options === "object"
+      ? { options: options as NonNullable<StoredScheduledTaskRecord["options"]> }
+      : {}),
+    ...(automation && typeof automation === "object"
+      ? { automation: automation as NonNullable<StoredScheduledTaskRecord["automation"]> }
+      : {}),
+    timezone: row.timezone,
+    scheduledAt: row.scheduled_at,
+    status: row.status as ScheduledTaskStatus,
+    ...(row.last_run_id ? { lastRunId: row.last_run_id } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.cancelled_at ? { cancelledAt: row.cancelled_at } : {}),
+    ...(row.completed_at ? { completedAt: row.completed_at } : {}),
+    ...(row.last_error ? { lastError: row.last_error } : {}),
+  };
+}
+
+function mapScheduledTaskRunRow(row: ScheduledTaskRunRow): StoredScheduledTaskRunRecord {
+  return {
+    runId: row.run_id,
+    scheduledTaskId: row.scheduled_task_id,
+    principalId: row.principal_id,
+    schedulerId: row.scheduler_id,
+    leaseToken: row.lease_token,
+    leaseExpiresAt: row.lease_expires_at,
+    status: row.status as ScheduledTaskRunStatus,
+    ...(row.request_id ? { requestId: row.request_id } : {}),
+    ...(row.task_id ? { taskId: row.task_id } : {}),
+    triggeredAt: row.triggered_at,
+    ...(row.started_at ? { startedAt: row.started_at } : {}),
+    ...(row.last_heartbeat_at ? { lastHeartbeatAt: row.last_heartbeat_at } : {}),
+    ...(row.completed_at ? { completedAt: row.completed_at } : {}),
+    ...(row.result_summary ? { resultSummary: row.result_summary } : {}),
+    ...(row.result_output ? { resultOutput: row.result_output } : {}),
+    ...(row.structured_output_json
+      ? { structuredOutput: safeParseJson(row.structured_output_json) as Record<string, unknown> }
+      : {}),
+    ...(row.error_json ? { error: safeParseJson(row.error_json) as Record<string, unknown> } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

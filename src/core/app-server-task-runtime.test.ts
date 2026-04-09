@@ -728,6 +728,95 @@ test("AppServerTaskRuntime 在 auth 模式下会把账号隔离环境传给 sess
   }
 });
 
+test("AppServerTaskRuntime 会把 Themis 定时任务 MCP server 注入 sessionFactory 配置", async () => {
+  const { state, sessionFactory: baseSessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-mcp-scheduled-1",
+  });
+  const delegateSessionFactory = baseSessionFactory as NonNullable<AppServerTaskRuntimeOptions["sessionFactory"]>;
+  const factoryOptionsHistory: AppServerSessionFactoryOptions[] = [];
+  const fixture = createRuntimeFixture({
+    sessionFactory: async (options) => {
+      factoryOptionsHistory.push(options ?? {});
+      return await delegateSessionFactory();
+    },
+  });
+
+  try {
+    await fixture.runtime.runTask({
+      requestId: "req-app-mcp-scheduled-1",
+      taskId: "task-app-mcp-scheduled-1",
+      sourceChannel: "web",
+      user: {
+        userId: "browser-user-1",
+        displayName: "Owner",
+      },
+      goal: "请帮我安排一个定时任务",
+      channelContext: {
+        sessionId: "session-web-mcp-scheduled-1",
+        channelSessionKey: "session-web-mcp-scheduled-1",
+      },
+      createdAt: "2026-04-09T12:00:00.000Z",
+    });
+
+    assert.equal(state.started.length, 1);
+    assert.equal(factoryOptionsHistory.length, 1);
+    const scheduledMcpConfig = factoryOptionsHistory[0]?.configOverrides?.["mcp_servers.themis_scheduled_tasks"] as {
+      command?: string;
+      args?: string[];
+    } | undefined;
+    assert.match(scheduledMcpConfig?.command ?? "", /\/themis$/);
+    assert.deepEqual(scheduledMcpConfig?.args, [
+      "mcp-server",
+      "--channel",
+      "web",
+      "--user",
+      "browser-user-1",
+      "--name",
+      "Owner",
+      "--session",
+      "session-web-mcp-scheduled-1",
+      "--channel-session-key",
+      "session-web-mcp-scheduled-1",
+    ]);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 会在 prompt 里明确注入定时任务工具使用说明", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-scheduled-prompt-1",
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    await fixture.runtime.runTask({
+      requestId: "req-app-scheduled-prompt-1",
+      taskId: "task-app-scheduled-prompt-1",
+      sourceChannel: "feishu",
+      user: {
+        userId: "feishu-user-1",
+        displayName: "飞书用户",
+      },
+      goal: "明天早上提醒我检查发布状态",
+      channelContext: {
+        sessionId: "session-feishu-scheduled-prompt-1",
+        channelSessionKey: "session-feishu-scheduled-prompt-1",
+      },
+      createdAt: "2026-04-09T12:05:00.000Z",
+    });
+
+    assert.equal(state.turns.length, 1);
+    assert.match(state.turns[0]?.prompt ?? "", /Themis scheduled task tools are available in this session/);
+    assert.match(state.turns[0]?.prompt ?? "", /use the scheduled task tools instead of saying you cannot do it/);
+    assert.match(state.turns[0]?.prompt ?? "", /sourceChannel=feishu/);
+    assert.match(state.turns[0]?.prompt ?? "", /channelUserId=feishu-user-1/);
+    assert.match(state.turns[0]?.prompt ?? "", /sessionId=session-feishu-scheduled-prompt-1/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("AppServerTaskRuntime 在 third-party 模式下会把 provider 隔离配置传给 sessionFactory", async () => {
   await withClearedOpenAICompatEnv(async () => {
     const { state, sessionFactory: baseSessionFactory } = createSessionFactory({

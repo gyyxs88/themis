@@ -9,9 +9,18 @@ interface FeishuConversationBinding {
   updatedAt: string;
 }
 
+interface FeishuSessionBinding {
+  sessionId: string;
+  chatId: string;
+  userId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface FeishuSessionStoreData {
-  version: 1;
+  version: 2;
   bindings: FeishuConversationBinding[];
+  sessions: FeishuSessionBinding[];
 }
 
 export interface FeishuConversationKey {
@@ -24,8 +33,9 @@ export interface FeishuSessionStoreOptions {
 }
 
 const EMPTY_STORE: FeishuSessionStoreData = {
-  version: 1,
+  version: 2,
   bindings: [],
+  sessions: [],
 };
 
 export class FeishuSessionStore {
@@ -68,6 +78,26 @@ export class FeishuSessionStore {
     return sessionId;
   }
 
+  findConversationBySessionId(sessionId: string): FeishuConversationKey | null {
+    const normalizedSessionId = normalizeText(sessionId);
+
+    if (!normalizedSessionId) {
+      return null;
+    }
+
+    const store = this.readStore();
+    const binding = store.sessions.find((entry) => entry.sessionId === normalizedSessionId);
+
+    if (!binding) {
+      return null;
+    }
+
+    return {
+      chatId: binding.chatId,
+      userId: binding.userId,
+    };
+  }
+
   setActiveSessionId(key: FeishuConversationKey, sessionId: string): void {
     const normalizedKey = createBindingKey(key);
     const normalizedSessionId = sessionId.trim();
@@ -93,33 +123,59 @@ export class FeishuSessionStore {
       });
     }
 
+    upsertSessionBinding(store.sessions, {
+      sessionId: normalizedSessionId,
+      chatId: key.chatId.trim(),
+      userId: key.userId.trim(),
+      createdAt: now,
+      updatedAt: now,
+    });
     store.bindings.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    store.sessions.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
     this.writeStore(store);
   }
 
   private readStore(): FeishuSessionStoreData {
     try {
       const raw = readFileSync(this.filePath, "utf8");
-      const parsed = JSON.parse(raw) as Partial<FeishuSessionStoreData> | null;
+      const parsed = JSON.parse(raw) as Partial<FeishuSessionStoreData> | {
+        version?: 1;
+        bindings?: unknown[];
+        sessions?: unknown[];
+      } | null;
 
-      if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.bindings)) {
-        return { ...EMPTY_STORE, bindings: [] };
+      if (!parsed || !Array.isArray(parsed.bindings)) {
+        return { ...EMPTY_STORE, bindings: [], sessions: [] };
       }
 
+      const bindings = parsed.bindings
+        .map(normalizeBinding)
+        .filter((entry): entry is FeishuConversationBinding => entry !== null);
+      const sessions = Array.isArray(parsed.sessions)
+        ? parsed.sessions
+          .map(normalizeSessionBinding)
+          .filter((entry: FeishuSessionBinding | null): entry is FeishuSessionBinding => entry !== null)
+        : bindings.map((binding) => ({
+          sessionId: binding.activeSessionId,
+          chatId: binding.chatId,
+          userId: binding.userId,
+          createdAt: binding.updatedAt,
+          updatedAt: binding.updatedAt,
+        }));
+
       return {
-        version: 1,
-        bindings: parsed.bindings
-          .map(normalizeBinding)
-          .filter((entry): entry is FeishuConversationBinding => entry !== null),
+        version: 2,
+        bindings,
+        sessions,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
 
       if (/ENOENT/i.test(message)) {
-        return { ...EMPTY_STORE, bindings: [] };
+        return { ...EMPTY_STORE, bindings: [], sessions: [] };
       }
 
-      return { ...EMPTY_STORE, bindings: [] };
+      return { ...EMPTY_STORE, bindings: [], sessions: [] };
     }
   }
 
@@ -149,6 +205,43 @@ function normalizeBinding(value: unknown): FeishuConversationBinding | null {
     activeSessionId,
     updatedAt,
   };
+}
+
+function normalizeSessionBinding(value: unknown): FeishuSessionBinding | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const sessionId = normalizeText(value.sessionId);
+  const chatId = normalizeText(value.chatId);
+  const userId = normalizeText(value.userId);
+  const createdAt = normalizeText(value.createdAt) ?? new Date().toISOString();
+  const updatedAt = normalizeText(value.updatedAt) ?? createdAt;
+
+  if (!sessionId || !chatId || !userId) {
+    return null;
+  }
+
+  return {
+    sessionId,
+    chatId,
+    userId,
+    createdAt,
+    updatedAt,
+  };
+}
+
+function upsertSessionBinding(store: FeishuSessionBinding[], next: FeishuSessionBinding): void {
+  const existing = store.find((entry) => entry.sessionId === next.sessionId);
+
+  if (existing) {
+    existing.chatId = next.chatId;
+    existing.userId = next.userId;
+    existing.updatedAt = next.updatedAt;
+    return;
+  }
+
+  store.push(next);
 }
 
 function createBindingKey(key: FeishuConversationKey): string {

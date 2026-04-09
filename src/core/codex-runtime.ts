@@ -29,6 +29,7 @@ import { ManagedAgentsService } from "./managed-agents-service.js";
 import { ManagedAgentSchedulerService } from "./managed-agent-scheduler-service.js";
 import { PrincipalActorsService } from "./principal-actors-service.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
+import { ScheduledTasksService } from "./scheduled-tasks-service.js";
 import { buildBootstrapPrompt, buildTaskPrompt } from "./prompt.js";
 import { compileTaskInputForRuntime, type CompiledTaskInput } from "./runtime-input-compiler.js";
 import { MemoryService } from "../memory/memory-service.js";
@@ -117,6 +118,7 @@ export class CodexTaskRuntime {
   private readonly managedAgentSchedulerService: ManagedAgentSchedulerService;
   private readonly principalActorsService: PrincipalActorsService;
   private readonly principalSkillsService: PrincipalSkillsService;
+  private readonly scheduledTasksService: ScheduledTasksService;
   private readonly createContextBuilder: (workingDirectory: string) => ContextBuilder;
   private readonly createMemoryService: (workingDirectory: string) => MemoryService;
   private readonly createSessionStore: (options: CodexThreadSessionStoreOptions) => CodexThreadSessionStore;
@@ -151,6 +153,9 @@ export class CodexTaskRuntime {
     });
     this.principalSkillsService = options.principalSkillsService ?? new PrincipalSkillsService({
       workingDirectory: this.workingDirectory,
+      registry: this.runtimeStore,
+    });
+    this.scheduledTasksService = new ScheduledTasksService({
       registry: this.runtimeStore,
     });
     this.createContextBuilder = options.createContextBuilder ?? ((workingDirectory) => new ContextBuilder({
@@ -677,6 +682,10 @@ export class CodexTaskRuntime {
 
   getPrincipalSkillsService(): PrincipalSkillsService {
     return this.principalSkillsService;
+  }
+
+  getScheduledTasksService(): ScheduledTasksService {
+    return this.scheduledTasksService;
   }
 
   resetPrincipalState(principalId: string, resetAt: string) {
