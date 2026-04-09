@@ -191,10 +191,10 @@ const MAX_FEISHU_TEXT_CHARS = 3500;
 const FEISHU_MESSAGE_DEDUPE_TTL_MS = 10 * 60 * 1000;
 const FEISHU_SETTINGS_SCOPE_LINE = "作用范围：Themis 中间层长期默认配置，会同时影响 Web 和飞书后续新任务。";
 const FEISHU_SETTINGS_EFFECT_LINE = "生效规则：只影响之后新发起的任务，不会打断已经在运行中的任务。";
-const FEISHU_ACCOUNT_SETTINGS_SCOPE_LINE = "说明：/settings account use 修改当前 principal 默认账号；login/logout/cancel 修改账号本身的认证状态。";
-const FEISHU_ACCOUNT_SETTINGS_EFFECT_LINE = "生效规则：账号切换或登录状态变更只影响之后新发起的任务，不会打断已经在运行中的任务。";
-const FEISHU_ACCOUNT_AUTH_SCOPE_LINE = "作用范围：认证账号本身的登录状态；引用该账号的新任务都会受影响。";
-const FEISHU_ACCOUNT_AUTH_EFFECT_LINE = "生效规则：只影响之后新发起且使用该账号的任务，不会打断已经在运行中的任务。";
+const FEISHU_ACCOUNT_SETTINGS_SCOPE_LINE = "这里分两类操作：`use` 管默认账号，`login/logout/cancel` 管账号本身的登录状态。";
+const FEISHU_ACCOUNT_SETTINGS_EFFECT_LINE = "这些改动都只影响之后新发起的任务，不会打断已经在运行中的任务。";
+const FEISHU_ACCOUNT_AUTH_SCOPE_LINE = "这会修改账号本身的登录状态；之后引用这个账号的新任务都会受影响。";
+const FEISHU_ACCOUNT_AUTH_EFFECT_LINE = "不会打断已经在运行中的任务。";
 const FEISHU_DEFAULT_AUTH_TARGET_LABEL = "Themis 系统默认认证入口（默认 CODEX_HOME）";
 const FEISHU_ATTACHMENT_DRAFT_CONFIRMATION = "请直接回复你的问题，我会和附件一起处理。";
 const SESSION_WORKSPACE_UNAVAILABLE_ERROR = "当前会话绑定的工作区不可用，请新建会话后重新设置。";
@@ -1855,23 +1855,21 @@ export class FeishuChannelService {
       principalAccountId: normalizeText(settings.authAccountId),
     });
     const lines = [
-      invalidSegment ? `未识别的账号设置项：${invalidSegment}` : "账号设置：",
+      invalidSegment ? `未识别的账号设置项：${invalidSegment}` : "认证与账号：",
       `当前 principal：${principal.principalId}`,
+      `当前默认：${describePrincipalAccountCurrentValue(accountState)}`,
       FEISHU_ACCOUNT_SETTINGS_SCOPE_LINE,
       FEISHU_ACCOUNT_SETTINGS_EFFECT_LINE,
       "",
-      "/settings account current",
-      `当前值：${describePrincipalAccountCurrentValue(accountState)}`,
-      "/settings account list",
-      "查看可用认证账号列表。",
-      "/settings account use",
-      "查看切换方法并设置当前 principal 默认认证账号。",
-      "/settings account login",
-      "发起设备码登录；默认操作当前 principal 当前生效的认证入口。",
-      "/settings account logout",
-      "退出当前账号登录态；跟随系统默认时会同时清理默认认证入口。",
-      "/settings account cancel",
-      "取消当前账号仍在进行中的登录。",
+      "默认账号",
+      "/settings account current 查看当前默认账号和认证状态",
+      "/settings account list 查看可用账号列表",
+      "/settings account use <账号名|邮箱|序号|default> 切换默认账号",
+      "",
+      "登录状态",
+      "/settings account login device [目标] 发起设备码登录",
+      "/settings account logout [目标] 退出账号登录",
+      "/settings account cancel [目标] 取消进行中的登录",
     ];
 
     await this.safeSendText(chatId, lines.join("\n"));
@@ -1898,11 +1896,7 @@ export class FeishuChannelService {
 
     const lines = [
       `当前 principal：${principal.principalId}`,
-      accountState.principalAccountId
-        ? `当前 principal 默认：固定使用 ${formatAuthAccountLabel(accountState.configuredAccount, accountState.principalAccountId)}`
-        : accountState.effectiveAccountId
-          ? `当前 principal 默认：跟随 Themis 系统默认账号 ${formatAuthAccountLabel(accountState.activeAccount, accountState.effectiveAccountId)}`
-          : "当前 principal 默认：跟随 Themis 系统默认账号",
+      `当前默认：${describePrincipalAccountCurrentValue(accountState)}`,
       "",
       "认证账号：",
       ...accounts.map((account, index) => {
@@ -1912,10 +1906,10 @@ export class FeishuChannelService {
           !accountState.principalAccountId && account.accountId === activeAccount?.accountId ? "当前生效" : "",
         ].filter(Boolean);
         const markerText = markers.length ? `（${markers.join("｜")}）` : "";
-        return `${index + 1}. ${formatAuthAccountLabel(account)}${markerText}\n   CODEX_HOME：${account.codexHome}`;
+        return `${index + 1}. ${formatAuthAccountLabel(account)}${markerText}`;
       }),
       "",
-      "使用 /settings account use <账号名|邮箱|序号|default> 切换当前 principal 默认认证账号。",
+      "切换默认账号：/settings account use <账号名|邮箱|序号|default>",
     ];
 
     await this.safeSendText(chatId, lines.join("\n"));
@@ -1953,10 +1947,10 @@ export class FeishuChannelService {
     const snapshot = await this.authRuntime.readSnapshot(accountState.principalAccountId ?? undefined);
     const account = findAuthAccountById(accounts, snapshot.accountId || resolvedAccountId) ?? accountState.configuredAccount;
     const lines = [
+      "认证状态：",
       `当前 principal：${principal.principalId}`,
-      accountState.principalAccountId
-        ? `当前 principal 默认：固定使用 ${formatAuthAccountLabel(account, resolvedAccountId)}`
-        : `当前 principal 默认：跟随 Themis 系统默认账号 ${formatAuthAccountLabel(account, resolvedAccountId)}`,
+      `当前默认：${describePrincipalAccountCurrentValue(accountState)}`,
+      resolvedAccountId ? `当前生效账号：${formatAuthAccountLabel(account, resolvedAccountId)}` : null,
       `认证方式：${snapshot.authMethod ?? "unknown"}`,
       snapshot.account?.email ? `账号：${snapshot.account.email}` : null,
       snapshot.account?.planType ? `套餐：${snapshot.account.planType}` : null,
@@ -2039,11 +2033,11 @@ export class FeishuChannelService {
     const lines = [
       invalidValue ? `没有找到对应认证账号：${invalidValue}` : "设置项：/settings account use",
       `当前 principal：${principal.principalId}`,
-      `当前值：${describePrincipalAccountCurrentValue(accountState)}`,
-      `来源：${accountState.principalAccountId ? "当前 principal 默认配置" : "Themis 系统默认账号"}`,
+      `当前默认：${describePrincipalAccountCurrentValue(accountState)}`,
+      "说明：这里只改默认账号，不会直接变更登录状态。",
       FEISHU_SETTINGS_SCOPE_LINE,
       FEISHU_SETTINGS_EFFECT_LINE,
-      "可选输入：<账号名|邮箱|序号|default>",
+      "用法：/settings account use <账号名|邮箱|序号|default>",
       "示例：/settings account use 2",
       "示例：/settings account use default",
     ];
@@ -2098,12 +2092,12 @@ export class FeishuChannelService {
     const lines = [
       invalidSegment ? `未识别的账号登录方式：${invalidSegment}` : "账号登录：",
       `当前 principal：${principal.principalId}`,
-      `当前值：${describePrincipalAccountCurrentValue(accountState)}`,
+      `当前默认：${describePrincipalAccountCurrentValue(accountState)}`,
       FEISHU_ACCOUNT_AUTH_SCOPE_LINE,
       FEISHU_ACCOUNT_AUTH_EFFECT_LINE,
       "飞书端当前只支持设备码登录；浏览器登录请改用 Web。",
-      "不带参数时：如果当前 principal 固定了账号，就操作该账号；否则操作 Themis 系统默认认证入口。",
-      "可选输入：<账号名|邮箱|序号|default>",
+      "默认目标：如果当前 principal 固定了账号，就操作该账号；否则操作 Themis 系统默认认证入口。",
+      "用法：/settings account login device [账号名|邮箱|序号|default]",
       "示例：/settings account login device",
       "示例：/settings account login device 2",
       "示例：/settings account login device default",
@@ -2127,8 +2121,9 @@ export class FeishuChannelService {
 
     const snapshot = await this.authRuntime.startChatgptDeviceLogin(resolved.targetAccountId);
     const lines = [
+      "设备码登录：",
       `当前 principal：${resolved.principalId}`,
-      `目标账号：${resolved.targetLabel}`,
+      `操作目标：${resolved.targetLabel}`,
     ];
 
     if (snapshot.authenticated) {
@@ -2170,6 +2165,7 @@ export class FeishuChannelService {
       snapshot = await this.authRuntime.logout(resolved.targetAccountId);
     }
 
+    lines.unshift("账号已退出：");
     lines.push(`已退出认证账号：${resolved.targetLabel}`);
     lines.push(...describeAuthSnapshotLines(snapshot));
     await this.safeSendText(context.chatId, dedupeLines(lines).join("\n"));
@@ -2185,8 +2181,9 @@ export class FeishuChannelService {
 
     const snapshot = await this.authRuntime.cancelPendingLogin(resolved.targetAccountId);
     const lines = [
+      "已取消登录：",
       `当前 principal：${resolved.principalId}`,
-      `目标账号：${resolved.targetLabel}`,
+      `操作目标：${resolved.targetLabel}`,
       `已取消认证账号登录：${resolved.targetLabel}`,
       ...describeAuthSnapshotLines(snapshot),
     ];
@@ -2236,11 +2233,11 @@ export class FeishuChannelService {
     const lines = [
       invalidValue ? `没有找到对应认证账号：${invalidValue}` : `设置项：${commandLabel}`,
       `当前 principal：${principal.principalId}`,
-      `当前值：${describePrincipalAccountCurrentValue(accountState)}`,
+      `当前默认：${describePrincipalAccountCurrentValue(accountState)}`,
       FEISHU_ACCOUNT_AUTH_SCOPE_LINE,
       FEISHU_ACCOUNT_AUTH_EFFECT_LINE,
-      "不带参数时：如果当前 principal 固定了账号，就操作该账号；否则操作 Themis 系统默认认证入口。",
-      "可选输入：<账号名|邮箱|序号|default>",
+      "默认目标：如果当前 principal 固定了账号，就操作该账号；否则操作 Themis 系统默认认证入口。",
+      `用法：${commandLabel} [账号名|邮箱|序号|default]`,
       `示例：${commandLabel}`,
       `示例：${commandLabel} 2`,
       `示例：${commandLabel} default`,
@@ -5084,7 +5081,8 @@ function describeAuthSnapshotLines(snapshot: {
   const lines = [];
 
   if (pendingLogin?.mode === "device") {
-    lines.push("状态：设备码登录进行中");
+    lines.push("状态：等待完成设备码授权");
+    lines.push("下一步：打开授权页，输入设备码，完成一次授权。");
     if (normalizeText(pendingLogin.verificationUri)) {
       lines.push(`授权页：${pendingLogin.verificationUri}`);
     }
@@ -5098,7 +5096,8 @@ function describeAuthSnapshotLines(snapshot: {
       lines.push(`过期时间：${formatTimestamp(pendingLogin.expiresAt as string)}`);
     }
   } else if (pendingLogin?.mode === "browser") {
-    lines.push("状态：浏览器登录进行中");
+    lines.push("状态：等待完成浏览器登录");
+    lines.push("下一步：请改到 Web 端继续完成浏览器登录。");
     if (normalizeText(pendingLogin.authUrl)) {
       lines.push(`登录链接：${pendingLogin.authUrl}`);
     }
@@ -5107,10 +5106,15 @@ function describeAuthSnapshotLines(snapshot: {
     }
   } else {
     lines.push(snapshot.authenticated ? "状态：已认证" : "状态：未认证");
+    lines.push(
+      snapshot.authenticated
+        ? "下一步：可以直接开始聊天。"
+        : "下一步：发送 /settings account login device 发起设备码登录。",
+    );
   }
 
   if (normalizeText(snapshot.lastError ?? undefined)) {
-    lines.push(`最近错误：${snapshot.lastError}`);
+    lines.push(`最近一次失败：${snapshot.lastError}`);
   }
 
   return lines;
