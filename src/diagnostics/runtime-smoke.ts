@@ -182,6 +182,7 @@ const WEB_SMOKE_PROMPT = `你接下来要继续做当前仓库里的一个具体
 5. 当我回复文件路径后，你只需确认“已收到路径”，然后结束本轮，不要继续分析代码，不要继续提出新的问题。`;
 
 const FEISHU_DOC_PATH = "docs/feishu/themis-feishu-real-journey-smoke.md";
+const WEB_SMOKE_USER_ID = "themis-probe";
 
 export class RuntimeSmokeService {
   private readonly workingDirectory: string;
@@ -750,6 +751,7 @@ export class RuntimeSmokeService {
         requestId: input.requestId,
         taskId: input.taskId,
         sessionId: input.sessionId,
+        userId: WEB_SMOKE_USER_ID,
         goal: WEB_SMOKE_PROMPT,
         ...(input.inputEnvelope ? { inputEnvelope: input.inputEnvelope } : {}),
         options: {

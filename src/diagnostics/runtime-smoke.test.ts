@@ -60,6 +60,10 @@ test("RuntimeSmokeService.runWebSmoke 在 action_required -> completed 的真实
     assert.match(result.message, /附件异常 \/ MIME 边界 compile smoke/);
     assert.ok(fetchCalls.some((call) => call.input.endsWith("/api/web-auth/login")));
     assert.equal(fetchCalls.filter((call) => call.input.endsWith("/api/tasks/stream")).length, 2);
+    for (const call of fetchCalls.filter((entry) => entry.input.endsWith("/api/tasks/stream"))) {
+      const payload = JSON.parse(String(call.init?.body ?? "{}")) as { userId?: string };
+      assert.equal(payload.userId, "themis-probe");
+    }
     assert.ok(fetchCalls.some((call) => call.input.endsWith("/api/tasks/actions")));
     assert.equal(fetchCalls.filter((call) => call.input.includes("/api/history/sessions/")).length, 2);
   } finally {
