@@ -3,6 +3,7 @@ import { lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import type { TaskEvent } from "../types/index.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { AppServerActionBridge } from "./app-server-action-bridge.js";
 import type {
@@ -80,6 +81,7 @@ function withClearedOpenAICompatEnv<T>(fn: () => T): T {
 function createRuntimeFixture(overrides: {
   sessionFactory?: AppServerTaskRuntimeOptions["sessionFactory"];
   runtimeCatalogReader?: AppServerTaskRuntimeOptions["runtimeCatalogReader"];
+  createContextBuilder?: AppServerTaskRuntimeOptions["createContextBuilder"];
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "themis-app-server-runtime-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
@@ -90,6 +92,7 @@ function createRuntimeFixture(overrides: {
     runtimeStore,
     ...(overrides.sessionFactory ? { sessionFactory: overrides.sessionFactory } : {}),
     ...(overrides.runtimeCatalogReader ? { runtimeCatalogReader: overrides.runtimeCatalogReader } : {}),
+    ...(overrides.createContextBuilder ? { createContextBuilder: overrides.createContextBuilder } : {}),
   });
 
   return {
@@ -794,6 +797,105 @@ test("AppServerTaskRuntime 会把模型和关键运行参数透传给 thread/sta
     assert.equal(threadConfig?.sandbox_workspace_write?.network_access, false);
     assert.deepEqual(threadConfig?.sandbox_workspace_write?.writable_roots, ["/shared/a", "/shared/b"]);
     assert.equal(state.started[0]?.persistExtendedHistory, true);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 会在 task.started 前发出单次 task.context_built，并把结构化上下文注入 prompt", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-context-1",
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    mkdirSync(join(fixture.root, "memory", "architecture"), { recursive: true });
+    mkdirSync(join(fixture.root, "docs", "memory", "2026", "03"), { recursive: true });
+    writeFileSync(join(fixture.root, "AGENTS.md"), "始终使用中文回复。", "utf8");
+    writeFileSync(join(fixture.root, "README.md"), "# Demo\n\n```ts\nconst provider = true;\n```", "utf8");
+    writeFileSync(join(fixture.root, "memory", "architecture", "overview.md"), "# 架构", "utf8");
+    writeFileSync(join(fixture.root, "docs", "memory", "2026", "03", "provider-search.md"), "# Provider Search\n\nsearch tool 约束", "utf8");
+
+    const events: TaskEvent[] = [];
+    await fixture.runtime.runTask({
+      requestId: "req-app-context-1",
+      taskId: "task-app-context-1",
+      sourceChannel: "web",
+      user: { userId: "browser-user-context" },
+      goal: "请检查 provider search 支持",
+      channelContext: { sessionId: "web-session-context-1" },
+      createdAt: "2026-04-09T10:00:00.000Z",
+    }, {
+      onEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    const contextBuiltEvents = events.filter((event) => event.type === "task.context_built");
+
+    assert.equal(contextBuiltEvents.length, 1);
+    assert.equal(contextBuiltEvents[0]?.payload?.blockCount, 4);
+    assert.equal(typeof contextBuiltEvents[0]?.payload?.warningCount, "number");
+    assert.ok(Array.isArray(contextBuiltEvents[0]?.payload?.sourceStats));
+
+    const contextBuiltIndex = events.findIndex((event) => event.type === "task.context_built");
+    const startedIndex = events.findIndex((event) => event.type === "task.started");
+    assert.ok(contextBuiltIndex >= 0);
+    assert.ok(startedIndex >= 0);
+    assert.equal(contextBuiltIndex < startedIndex, true);
+
+    assert.equal(state.turns.length, 1);
+    assert.match(state.turns[0]?.prompt ?? "", /Task context blocks:/);
+    assert.match(state.turns[0]?.prompt ?? "", /kind: repoRules/);
+    assert.match(state.turns[0]?.prompt ?? "", /source: AGENTS\.md/);
+    assert.match(state.turns[0]?.prompt ?? "", /title: Repository rules/);
+    assert.match(state.turns[0]?.prompt ?? "", /\| ```ts/);
+    assert.match(state.turns[0]?.prompt ?? "", /Response guidance:/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 在 context build 阶段收到 abort 会尽快取消且不初始化 session", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-context-abort-1",
+  });
+  const fixture = createRuntimeFixture({
+    sessionFactory,
+    createContextBuilder: () => ({
+      build: async (input: { signal?: AbortSignal }) => {
+        while (!input.signal?.aborted) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+
+        const abortError = new Error("aborted during context build");
+        abortError.name = "AbortError";
+        throw abortError;
+      },
+    }) as never,
+  });
+
+  const abortController = new AbortController();
+  setTimeout(() => {
+    abortController.abort(new Error("manual abort"));
+  }, 10);
+
+  try {
+    const result = await fixture.runtime.runTask({
+      requestId: "req-app-context-abort-1",
+      taskId: "task-app-context-abort-1",
+      sourceChannel: "web",
+      user: { userId: "browser-user-context-abort" },
+      goal: "hello",
+      channelContext: { sessionId: "web-session-context-abort-1" },
+      createdAt: "2026-04-09T10:05:00.000Z",
+    }, {
+      signal: abortController.signal,
+    });
+
+    assert.equal(result.status, "cancelled");
+    assert.equal(state.factoryCalls, 0);
+    assert.equal(state.initialized, 0);
   } finally {
     fixture.cleanup();
   }
@@ -2420,7 +2522,9 @@ test("AppServerTaskRuntime 在 onEvent 阻塞时也会响应外部 abort", { tim
 
     assert.equal(result.status, "cancelled");
     assert.equal(result.summary, "任务已被取消。");
-    assert.equal(state.closed, 1);
+    assert.equal(state.factoryCalls, 0);
+    assert.equal(state.initialized, 0);
+    assert.equal(state.closed, 0);
   } finally {
     fixture.cleanup();
   }
@@ -2452,7 +2556,9 @@ test("AppServerTaskRuntime 的 timeoutMs 会打断 event queue 阻塞", { timeou
 
     assert.equal(result.status, "cancelled");
     assert.match(result.summary, /任务因超时被取消/);
-    assert.equal(state.closed, 1);
+    assert.equal(state.factoryCalls, 0);
+    assert.equal(state.initialized, 0);
+    assert.equal(state.closed, 0);
   } finally {
     fixture.cleanup();
   }

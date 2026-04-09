@@ -70,6 +70,7 @@ import {
 import { compileTaskInputForRuntime } from "./runtime-input-compiler.js";
 import { resolveStoredSessionThreadReference } from "./session-thread-reference.js";
 import { validateWorkspacePath } from "./session-workspace.js";
+import { ContextBuilder } from "../context/context-builder.js";
 
 const SESSION_WORKSPACE_UNAVAILABLE_ERROR = "当前会话绑定的工作区不可用，请新建会话后重新设置。";
 const APP_SERVER_AUX_TIMEOUT_MS = 15_000;
@@ -125,6 +126,7 @@ export interface AppServerTaskRuntimeOptions {
   workingDirectory?: string;
   runtimeStore?: SqliteCodexSessionRegistry;
   principalSkillsService?: PrincipalSkillsService;
+  createContextBuilder?: (workingDirectory: string) => ContextBuilder;
   sessionFactory?: (
     options?: AppServerSessionFactoryOptions,
   ) => Promise<AppServerTaskRuntimeSession> | AppServerTaskRuntimeSession;
@@ -192,6 +194,7 @@ export class AppServerTaskRuntime {
   private readonly principalActorsService: PrincipalActorsService;
   private readonly principalSkillsService: PrincipalSkillsService;
   private readonly scheduledTasksService: ScheduledTasksService;
+  private readonly createContextBuilder: (workingDirectory: string) => ContextBuilder;
   private readonly sessionFactory: (
     options?: AppServerSessionFactoryOptions,
   ) => Promise<AppServerTaskRuntimeSession>;
@@ -224,6 +227,9 @@ export class AppServerTaskRuntime {
     this.scheduledTasksService = new ScheduledTasksService({
       registry: this.runtimeStore,
     });
+    this.createContextBuilder = options.createContextBuilder ?? ((workingDirectory) => new ContextBuilder({
+      workingDirectory,
+    }));
     this.sessionFactory = async (factoryOptions = {}) =>
       await options.sessionFactory?.(factoryOptions)
       ?? new CodexAppServerSession(this.workingDirectory, {
@@ -434,6 +440,37 @@ export class AppServerTaskRuntime {
         });
       }
 
+      await emit(createTaskEvent(
+        taskId,
+        request.requestId,
+        "task.received",
+        "queued",
+        "Themis accepted the web request.",
+      ));
+      throwIfAborted(signal);
+
+      const executionWorkingDirectory = this.resolveExecutionWorkingDirectory(request);
+      const taskContext = await this.buildTaskContext(executionWorkingDirectory, {
+        request,
+        principalId,
+        conversationId: resolvedRequest.conversationId,
+        signal,
+      });
+      throwIfAborted(signal);
+      await emit(createTaskEvent(
+        taskId,
+        request.requestId,
+        "task.context_built",
+        "running",
+        "Task context built.",
+        {
+          blockCount: taskContext.blocks.length,
+          warningCount: taskContext.warnings.length,
+          sourceStats: taskContext.sourceStats,
+        },
+      ));
+      throwIfAborted(signal);
+
       if (compiledInput?.degradationLevel === "blocked") {
         throw new Error(compiledInput.compileWarnings[0]?.message ?? "当前输入无法发送到 app-server。");
       }
@@ -472,16 +509,6 @@ export class AppServerTaskRuntime {
         pendingServerRequests.add(pendingServerRequest);
       }));
 
-      await emit(createTaskEvent(
-        taskId,
-        request.requestId,
-        "task.received",
-        "queued",
-        "Themis accepted the web request.",
-      ));
-      throwIfAborted(signal);
-
-      const executionWorkingDirectory = this.resolveExecutionWorkingDirectory(request);
       const resumableThreadId = sessionId ? resolveAppServerThreadId(this.runtimeStore, sessionId) : null;
       sessionMode = resolveSessionMode(sessionId, resumableThreadId);
       const threadStartParams = createAppServerThreadStartParams(request, executionWorkingDirectory);
@@ -500,13 +527,13 @@ export class AppServerTaskRuntime {
         "running",
         onboardingIntercept ? "Persona bootstrap turn started." : "Codex task started.",
         {
-        sessionMode,
-        threadId,
-        sessionId: sessionId || null,
-        conversationId: sessionId || null,
-        runtimeEngine: "app-server",
-        ...(onboardingIntercept ? { personaOnboarding: createPersonaOnboardingPayload(onboardingIntercept) } : {}),
-      },
+          sessionMode,
+          threadId,
+          sessionId: sessionId || null,
+          conversationId: sessionId || null,
+          runtimeEngine: "app-server",
+          ...(onboardingIntercept ? { personaOnboarding: createPersonaOnboardingPayload(onboardingIntercept) } : {}),
+        },
       ));
       throwIfAborted(signal);
 
@@ -515,6 +542,7 @@ export class AppServerTaskRuntime {
       const prompt = onboardingIntercept
         ? buildBootstrapPrompt(promptRequest, onboardingIntercept, {
           personalizedProfileContext,
+          taskContext,
           fallbackPromptSections: [
             ...(compiledInput?.fallbackPromptSections ?? []),
             buildThemisScheduledTaskPromptSection(request),
@@ -522,6 +550,7 @@ export class AppServerTaskRuntime {
         })
         : buildTaskPrompt(promptRequest, {
           personalizedProfileContext,
+          taskContext,
           fallbackPromptSections: [
             ...(compiledInput?.fallbackPromptSections ?? []),
             buildThemisScheduledTaskPromptSection(request),
@@ -748,6 +777,25 @@ export class AppServerTaskRuntime {
 
   getIdentityLinkService(): IdentityLinkService {
     return this.identityLinkService;
+  }
+
+  private async buildTaskContext(
+    executionWorkingDirectory: string,
+    input: {
+      request: TaskRequest;
+      principalId: string | undefined;
+      conversationId: string | undefined;
+      signal: AbortSignal;
+    },
+  ) {
+    const builder = this.createContextBuilder(executionWorkingDirectory);
+
+    return builder.build({
+      request: input.request,
+      ...(input.principalId ? { principalId: input.principalId } : {}),
+      ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+      signal: input.signal,
+    });
   }
 
   private readPrincipalTaskSettings(principalId?: string): PrincipalTaskSettings | null {
