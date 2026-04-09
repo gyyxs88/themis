@@ -12,6 +12,7 @@ import {
   type StoredTurnInputCompileCapabilityMatrix,
   type StoredTurnInputRecord,
 } from "../storage/index.js";
+import { resolveThemisBaseUrl } from "./themis-base-url.js";
 
 export interface FeishuDiagnosticFileStatus {
   path: string;
@@ -190,7 +191,7 @@ export async function readFeishuDiagnosticsSnapshot(
 ): Promise<FeishuDiagnosticsSummary> {
   const env = options.env ?? process.env;
   const workingDirectory = options.workingDirectory;
-  const baseUrl = normalizeText(options.baseUrl ?? env.THEMIS_BASE_URL ?? "http://127.0.0.1:3100") ?? "http://127.0.0.1:3100";
+  const baseUrl = resolveThemisBaseUrl(env, options.baseUrl);
   const fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
   const serviceProbeTimeoutMs = normalizePositiveInteger(options.serviceProbeTimeoutMs, 1_000);
   const sessionStorePath = join(workingDirectory, FEISHU_SESSION_STORE_PATH);

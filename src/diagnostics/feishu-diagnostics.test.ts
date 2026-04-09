@@ -943,6 +943,35 @@ test("readFeishuDiagnosticsSnapshot 在健康场景下返回固定推荐顺序",
   }
 });
 
+test("readFeishuDiagnosticsSnapshot 会根据 THEMIS_PORT 探测当前服务", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-feishu-diagnostics-port-"));
+
+  try {
+    const fetchCalls: string[] = [];
+    const result = await readFeishuDiagnosticsSnapshot({
+      workingDirectory: root,
+      env: {
+        FEISHU_APP_ID: "cli_xxx",
+        FEISHU_APP_SECRET: "secret_xxx",
+        THEMIS_HOST: "0.0.0.0",
+        THEMIS_PORT: "3210",
+      },
+      fetchImpl: async (input) => {
+        const url = normalizeFetchInput(input);
+        fetchCalls.push(url);
+        return new Response(null, {
+          status: 200,
+        });
+      },
+    });
+
+    assert.equal(result.service.statusCode, 200);
+    assert.deepEqual(fetchCalls, ["http://127.0.0.1:3210/"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("readFeishuDiagnosticsSnapshot 会返回 diagnostics store 状态、currentConversation summary 和最近 5 条事件", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-feishu-diagnostics-store-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
@@ -1464,6 +1493,18 @@ test("readFeishuDiagnosticsSnapshot 会返回 diagnostics store 状态、current
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+function normalizeFetchInput(input: string | URL | Request): string {
+  if (typeof input === "string") {
+    return input;
+  }
+
+  if (input instanceof URL) {
+    return input.toString();
+  }
+
+  return input.url;
+}
 
 test("readFeishuDiagnosticsSnapshot 在没有 runtimeStore 时会在 sqlite 文件存在时读取 thread summary", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-feishu-diagnostics-sqlite-fallback-"));

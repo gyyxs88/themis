@@ -67,6 +67,38 @@ test("RuntimeSmokeService.runWebSmoke 在 action_required -> completed 的真实
   }
 });
 
+test("RuntimeSmokeService.runWebSmoke 会根据 THEMIS_PORT 推导 baseUrl", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-smoke-web-port-"));
+
+  try {
+    const fetchCalls: string[] = [];
+    const webSmokeFetch = createSuccessfulWebSmokeFetch();
+    const service = new RuntimeSmokeService({
+      workingDirectory: root,
+      env: {
+        THEMIS_HOST: "0.0.0.0",
+        THEMIS_PORT: "3210",
+      },
+      fetchImpl: async (input, init) => {
+        const url = normalizeUrl(input);
+        fetchCalls.push(url);
+        return await webSmokeFetch(input, init);
+      },
+      clock: () => 1_710_000_000_000,
+      randomHex: (bytes) => "f".repeat(bytes * 2),
+      registryFactory: (databaseFile) => new SqliteCodexSessionRegistry({ databaseFile }),
+    });
+
+    const result = await service.runWebSmoke();
+
+    assert.equal(result.ok, true);
+    assert.equal(result.baseUrl, "http://127.0.0.1:3210");
+    assert.ok(fetchCalls.every((url) => url.startsWith("http://127.0.0.1:3210/")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("RuntimeSmokeService.runWebSmoke 会按阶段回报进度", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-runtime-smoke-web-progress-"));
 
@@ -589,6 +621,46 @@ test("RuntimeSmokeService.runFeishuSmoke 会复用快照里的配置就绪状态
     assert.equal(result.attachmentDraftCount, 1);
     assert.equal(result.diagnosisId, "healthy");
     assert.equal(env.getAccessCount(), 2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("RuntimeSmokeService.runFeishuSmoke 会根据 THEMIS_PORT 探测当前服务", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-smoke-feishu-port-"));
+
+  try {
+    const fetchCalls: string[] = [];
+    const result = await new RuntimeSmokeService({
+      workingDirectory: root,
+      env: {
+        FEISHU_APP_ID: "cli_xxx",
+        FEISHU_APP_SECRET: "secret_xxx",
+        THEMIS_HOST: "0.0.0.0",
+        THEMIS_PORT: "3210",
+      },
+      fetchImpl: async (input) => {
+        const url = normalizeUrl(input);
+        fetchCalls.push(url);
+
+        if (url === "http://127.0.0.1:3210/") {
+          return new Response(null, {
+            status: 302,
+            headers: {
+              location: "/login",
+            },
+          });
+        }
+
+        throw new Error(`unexpected fetch: ${url}`);
+      },
+      clock: () => 1_710_000_000_000,
+      randomHex: (bytes) => "f".repeat(bytes * 2),
+      registryFactory: (databaseFile) => new SqliteCodexSessionRegistry({ databaseFile }),
+    }).runFeishuSmoke();
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(fetchCalls, ["http://127.0.0.1:3210/"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

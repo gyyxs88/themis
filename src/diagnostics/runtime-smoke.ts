@@ -7,6 +7,7 @@ import { readFeishuDiagnosticsSnapshot } from "./feishu-diagnostics.js";
 import { buildFeishuSmokeNextSteps } from "./feishu-verification-guide.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import type { RuntimeInputCapabilities, TaskInputEnvelope } from "../types/index.js";
+import { resolveThemisBaseUrl } from "./themis-base-url.js";
 
 export interface WebSmokeSharedBoundaryResult {
   ok: boolean;
@@ -194,7 +195,7 @@ export class RuntimeSmokeService {
   constructor(options: RuntimeSmokeServiceOptions) {
     this.workingDirectory = options.workingDirectory;
     this.env = options.env ?? process.env;
-    this.baseUrl = normalizeBaseUrl(options.baseUrl ?? this.env.THEMIS_BASE_URL ?? "http://127.0.0.1:3100");
+    this.baseUrl = normalizeBaseUrl(resolveThemisBaseUrl(this.env, options.baseUrl));
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
     this.clock = () => normalizeClockMillis(options.clock ?? (() => Date.now()));
     this.randomHex = options.randomHex ?? ((bytes) => randomBytes(bytes).toString("hex"));
