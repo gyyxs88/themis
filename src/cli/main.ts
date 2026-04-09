@@ -17,6 +17,7 @@ import {
   describeFeishuTakeoverGuidance,
   type FeishuDiagnosticsSummary,
 } from "../diagnostics/feishu-diagnostics.js";
+import { checkThemisUpdates, formatShortCommitHash } from "../diagnostics/update-check.js";
 import { RuntimeSmokeService, type RuntimeSmokeProgressEvent } from "../diagnostics/runtime-smoke.js";
 import { McpInspector } from "../mcp/mcp-inspector.js";
 import { runThemisMcpServer } from "../mcp/themis-mcp-server.js";
@@ -204,6 +205,11 @@ async function handleStatus(): Promise<void> {
     providerReadError = error instanceof Error ? error.message : String(error);
   }
 
+  const updateCheck = await checkThemisUpdates({
+    workingDirectory: cwd,
+    env: process.env,
+  });
+
   const authReady = Boolean(apiKey.value || hasDefaultAuth || accountsWithAuthFile.length);
   const feishuReady = Boolean(feishuAppId.value && feishuAppSecret.value);
 
@@ -246,6 +252,28 @@ async function handleStatus(): Promise<void> {
   }
 
   console.log("");
+  console.log("版本更新");
+  console.log(`- package.json 版本：${updateCheck.packageVersion ?? "未知"}`);
+  console.log(
+    `- 当前提交：${formatShortCommitHash(updateCheck.currentCommit)} (${formatCurrentCommitSource(updateCheck.currentCommitSource)})`,
+  );
+  console.log(`- 当前分支：${updateCheck.currentBranch ?? "未知"}`);
+  console.log(`- 更新源：${updateCheck.updateSourceRepo}`);
+  console.log(`- 更新源默认分支：${updateCheck.updateSourceDefaultBranch ?? "未知"}`);
+  console.log(
+    `- GitHub 最新提交：${formatShortCommitHash(updateCheck.latestCommit)}${updateCheck.latestCommitDate ? ` (${updateCheck.latestCommitDate})` : ""}`,
+  );
+  console.log(`- 判断：${updateCheck.summary}`);
+  if (updateCheck.comparisonStatus) {
+    console.log(`- 对比结果：${updateCheck.comparisonStatus}`);
+  }
+  if (updateCheck.latestCommitUrl) {
+    console.log(`- 最新提交地址：${updateCheck.latestCommitUrl}`);
+  }
+  if (updateCheck.errorMessage) {
+    console.log(`- 检查详情：${updateCheck.errorMessage}`);
+  }
+  console.log("");
   console.log("建议下一步");
 
   const nextSteps = [
@@ -253,6 +281,12 @@ async function handleStatus(): Promise<void> {
     !authReady ? "启动后在 Web 完成 ChatGPT 浏览器登录、设备码登录，或先写入 CODEX_API_KEY。" : null,
     !feishuReady ? "如果需要飞书 bot，请补齐 FEISHU_APP_ID 和 FEISHU_APP_SECRET。" : null,
     !envProviderReady && !dbProviders.length ? "如果需要第三方模型，可在 Web 设置页添加供应商，或先写入 THEMIS_OPENAI_COMPAT_*。" : null,
+    updateCheck.outcome === "update_available"
+      ? "检测到 GitHub 有新提交；正式实例可执行 `git pull && npm install && npm run build` 后重启服务。"
+      : null,
+    updateCheck.outcome === "comparison_unavailable"
+      ? "如果希望稳定比较版本，正式部署建议保留 git clone，或在启动环境写入 THEMIS_BUILD_COMMIT。"
+      : null,
     "运行 `npm run dev:web` 启动服务。",
   ].filter((item): item is string => Boolean(item));
 
@@ -1270,6 +1304,17 @@ function formatDisplayValue(
 ): string {
   const value = secret ? maskSecretValue(resolved.value) : (resolved.value || "未配置");
   return `${value} (${resolved.sourceLabel})`;
+}
+
+function formatCurrentCommitSource(source: "git" | "env" | "unknown"): string {
+  switch (source) {
+    case "git":
+      return "git HEAD";
+    case "env":
+      return "THEMIS_BUILD_COMMIT";
+    default:
+      return "未知来源";
+  }
 }
 
 function maskSecretValue(value: string | null): string {
