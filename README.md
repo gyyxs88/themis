@@ -118,6 +118,10 @@ npm run themis -- config set FEISHU_APP_SECRET xxx
 - [公开发布边界与导出规则](./docs/repository/github-safe-publish.md)
 - [systemd 开发常驻示例](./docs/repository/themis-systemd-dev-service.md)
 
+## 许可证
+
+本项目采用 [Apache-2.0](./LICENSE) 许可证。
+
 ## 发布与更新
 
 当前公开发布采用“双仓”方式：
