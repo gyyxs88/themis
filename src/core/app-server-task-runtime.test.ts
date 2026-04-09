@@ -774,6 +774,7 @@ test("AppServerTaskRuntime 会把模型和关键运行参数透传给 thread/sta
     });
 
     const threadConfig = state.started[0]?.config as {
+      "features.default_mode_request_user_input"?: boolean;
       model_reasoning_effort?: string;
       web_search?: string;
       sandbox_workspace_write?: {
@@ -787,6 +788,7 @@ test("AppServerTaskRuntime 会把模型和关键运行参数透传给 thread/sta
     assert.equal(state.started[0]?.model, "gpt-5.4");
     assert.equal(state.started[0]?.approvalPolicy, "on-failure");
     assert.equal(state.started[0]?.sandbox, "danger-full-access");
+    assert.equal(threadConfig?.["features.default_mode_request_user_input"], true);
     assert.equal(threadConfig?.model_reasoning_effort, "high");
     assert.equal(threadConfig?.web_search, "live");
     assert.equal(threadConfig?.sandbox_workspace_write?.network_access, false);
@@ -849,6 +851,7 @@ test("AppServerTaskRuntime 会在 app-server 主链路合并请求参数、princ
     });
 
     const threadConfig = state.started[0]?.config as {
+      "features.default_mode_request_user_input"?: boolean;
       web_search?: string;
       sandbox_workspace_write?: {
         network_access?: boolean;
@@ -858,6 +861,7 @@ test("AppServerTaskRuntime 会在 app-server 主链路合并请求参数、princ
     assert.equal(state.started.length, 1);
     assert.equal(state.started[0]?.approvalPolicy, "on-failure");
     assert.equal(state.started[0]?.sandbox, "danger-full-access");
+    assert.equal(threadConfig?.["features.default_mode_request_user_input"], true);
     assert.equal(threadConfig?.web_search, "live");
     assert.equal(threadConfig?.sandbox_workspace_write?.network_access, true);
     assert.equal(factoryOptionsHistory.length, 1);

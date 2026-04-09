@@ -1770,7 +1770,13 @@ function createAppServerThreadConfig(request: TaskRequest): CodexCliConfigOverri
     network_access?: boolean;
     writable_roots?: string[];
   } = {};
-  const config: CodexCliConfigOverrides = {};
+  const hasThreadConfigOverrides = Boolean(reasoning)
+    || Boolean(webSearchMode)
+    || typeof networkAccessEnabled === "boolean"
+    || additionalDirectories.length > 0;
+  const config: CodexCliConfigOverrides = hasThreadConfigOverrides
+    ? { ...APP_SERVER_TASK_CONFIG_OVERRIDES }
+    : {};
 
   if (reasoning) {
     config.model_reasoning_effort = reasoning;
