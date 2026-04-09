@@ -335,13 +335,25 @@ function createRuntimeCatalog(overrides: {
 
 function readSessionPayload(result: Awaited<ReturnType<AppServerTaskRuntime["runTask"]>>): {
   sessionId: string | null;
+  conversationId?: string | null;
   threadId: string;
   engine: string;
+  mode?: string;
+  accessMode?: string;
+  authAccountId?: string;
+  thirdPartyProviderId?: string;
+  assistantStyle?: Record<string, string>;
 } {
   return result.structuredOutput?.session as {
     sessionId: string | null;
+    conversationId?: string | null;
     threadId: string;
     engine: string;
+    mode?: string;
+    accessMode?: string;
+    authAccountId?: string;
+    thirdPartyProviderId?: string;
+    assistantStyle?: Record<string, string>;
   };
 }
 
@@ -407,8 +419,46 @@ test("AppServerTaskRuntime 会按真实 Web channelSessionKey 解析 conversatio
     assert.equal(state.started.length, 1);
     assert.equal(state.resumed.length, 0);
     assert.equal(readSessionPayload(result).sessionId, "web-session-created-1");
+    assert.equal(readSessionPayload(result).conversationId, "web-session-created-1");
     assert.equal(readSessionPayload(result).threadId, "thread-app-created");
+    assert.equal(readSessionPayload(result).engine, "app-server");
+    assert.equal(readSessionPayload(result).mode, "created");
+    assert.equal(readSessionPayload(result).accessMode, "auth");
     assert.equal(fixture.runtimeStore.resolveThreadId("web-session-created-1"), "thread-app-created");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 会把 assistant style 写进 structuredOutput.session", async () => {
+  const { sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-structured-style-1",
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    const result = await fixture.runtime.runTask({
+      requestId: "req-app-structured-style-1",
+      taskId: "task-app-structured-style-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "hello",
+      options: {
+        profile: "mentor",
+        languageStyle: "直接",
+        assistantMbti: "INTJ",
+        styleNotes: "先给结论",
+      },
+      channelContext: { sessionId: "web-session-structured-style-1" },
+      createdAt: "2026-04-09T10:20:00.000Z",
+    });
+
+    assert.deepEqual(readSessionPayload(result).assistantStyle, {
+      legacyProfile: "mentor",
+      languageStyle: "直接",
+      assistantMbti: "INTJ",
+      styleNotes: "先给结论",
+    });
   } finally {
     fixture.cleanup();
   }
@@ -1156,7 +1206,7 @@ test("AppServerTaskRuntime 在 auth 模式下会把账号隔离环境传给 sess
       updatedAt: "2026-04-07T12:20:00.000Z",
     });
 
-    await fixture.runtime.runTask({
+    const result = await fixture.runtime.runTask({
       requestId: "req-app-auth-boundary-1",
       taskId: "task-app-auth-boundary-1",
       sourceChannel: "web",
@@ -1177,6 +1227,8 @@ test("AppServerTaskRuntime 在 auth 模式下会把账号隔离环境传给 sess
       join(fixture.root, "infra/local/codex-auth/acct-runtime"),
     );
     assert.equal(factoryOptionsHistory[0]?.configOverrides?.cli_auth_credentials_store, "file");
+    assert.equal(readSessionPayload(result).accessMode, "auth");
+    assert.equal(readSessionPayload(result).authAccountId, "acct-runtime");
   } finally {
     fixture.cleanup();
   }
@@ -1301,7 +1353,7 @@ test("AppServerTaskRuntime 在 third-party 模式下会把 provider 隔离配置
         supportsWebsockets: true,
       }, fixture.runtimeStore);
 
-      await fixture.runtime.runTask({
+      const result = await fixture.runtime.runTask({
         requestId: "req-app-provider-boundary-1",
         taskId: "task-app-provider-boundary-1",
         sourceChannel: "web",
@@ -1329,6 +1381,8 @@ test("AppServerTaskRuntime 在 third-party 模式下会把 provider 隔离配置
           supports_websockets: true,
         },
       });
+      assert.equal(readSessionPayload(result).accessMode, "third-party");
+      assert.equal(readSessionPayload(result).thirdPartyProviderId, "gateway-a");
     } finally {
       fixture.cleanup();
     }

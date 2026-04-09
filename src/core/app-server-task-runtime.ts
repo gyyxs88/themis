@@ -11,6 +11,7 @@ import type {
   PrincipalTaskSettings,
   RuntimeEngine,
   RuntimeInputCapabilities,
+  TaskAccessMode,
   TaskActionDescriptor,
   TaskActionScope,
   TaskEvent,
@@ -72,6 +73,7 @@ import { resolveStoredSessionThreadReference } from "./session-thread-reference.
 import { validateWorkspacePath } from "./session-workspace.js";
 import { ContextBuilder } from "../context/context-builder.js";
 import { MemoryService } from "../memory/memory-service.js";
+import { buildAssistantStyleSessionPayload } from "./assistant-style.js";
 
 const SESSION_WORKSPACE_UNAVAILABLE_ERROR = "当前会话绑定的工作区不可用，请新建会话后重新设置。";
 const APP_SERVER_AUX_TIMEOUT_MS = 15_000;
@@ -151,6 +153,13 @@ interface AppServerResolvedExecutionRequest {
   request: TaskRequest;
   principalId?: string;
   conversationId?: string;
+}
+
+interface AppServerResolvedSessionAccess {
+  sessionFactoryOptions: AppServerSessionFactoryOptions;
+  accessMode: TaskAccessMode;
+  authAccountId: string | null;
+  thirdPartyProviderId: string | null;
 }
 
 interface AppServerInternalTaskRunHooks extends TaskRuntimeRunHooks {
@@ -316,7 +325,7 @@ export class AppServerTaskRuntime {
   private resolveSessionFactoryOptions(
     request: TaskRequest,
     principalId?: string,
-  ): AppServerSessionFactoryOptions {
+  ): AppServerResolvedSessionAccess {
     const accessMode = normalizeTextValue(request.options?.accessMode) === "third-party" ? "third-party" : "auth";
     const managedAgent = normalizeTextValue(principalId)
       ? this.runtimeStore.getManagedAgentByPrincipal(principalId as string)
@@ -339,10 +348,15 @@ export class AppServerTaskRuntime {
         env.CODEX_HOME = ensureManagedAgentExecutionCodexHome(this.workingDirectory, managedAgent.agentId);
       }
 
-      return withThemisScheduledTaskMcpSessionOptions({
-        env,
-        configOverrides: createCodexProviderOverrides(providerConfig),
-      }, this.workingDirectory, request);
+      return {
+        sessionFactoryOptions: withThemisScheduledTaskMcpSessionOptions({
+          env,
+          configOverrides: createCodexProviderOverrides(providerConfig),
+        }, this.workingDirectory, request),
+        accessMode: "third-party",
+        authAccountId: null,
+        thirdPartyProviderId: providerConfig.id,
+      };
     }
 
     const requestedAuthAccountId = normalizeTextValue(request.options?.authAccountId);
@@ -356,15 +370,25 @@ export class AppServerTaskRuntime {
 
     if (!account) {
       if (!managedAgent) {
-        return withThemisScheduledTaskMcpSessionOptions({}, this.workingDirectory, request);
+        return {
+          sessionFactoryOptions: withThemisScheduledTaskMcpSessionOptions({}, this.workingDirectory, request),
+          accessMode: "auth",
+          authAccountId: null,
+          thirdPartyProviderId: null,
+        };
       }
 
-      return withThemisScheduledTaskMcpSessionOptions({
-        env: buildCodexProcessEnv(
-          ensureManagedAgentExecutionCodexHome(this.workingDirectory, managedAgent.agentId),
-        ),
-        configOverrides: createCodexAuthStorageConfigOverrides(),
-      }, this.workingDirectory, request);
+      return {
+        sessionFactoryOptions: withThemisScheduledTaskMcpSessionOptions({
+          env: buildCodexProcessEnv(
+            ensureManagedAgentExecutionCodexHome(this.workingDirectory, managedAgent.agentId),
+          ),
+          configOverrides: createCodexAuthStorageConfigOverrides(),
+        }, this.workingDirectory, request),
+        accessMode: "auth",
+        authAccountId: null,
+        thirdPartyProviderId: null,
+      };
     }
 
     ensureAuthAccountCodexHome(this.workingDirectory, account.codexHome);
@@ -374,10 +398,15 @@ export class AppServerTaskRuntime {
       })
       : account.codexHome;
 
-    return withThemisScheduledTaskMcpSessionOptions({
-      env: buildCodexProcessEnv(codexHome),
-      configOverrides: createCodexAuthStorageConfigOverrides(),
-    }, this.workingDirectory, request);
+    return {
+      sessionFactoryOptions: withThemisScheduledTaskMcpSessionOptions({
+        env: buildCodexProcessEnv(codexHome),
+        configOverrides: createCodexAuthStorageConfigOverrides(),
+      }, this.workingDirectory, request),
+      accessMode: "auth",
+      authAccountId: account.accountId,
+      thirdPartyProviderId: null,
+    };
   }
 
   private async executeTask(
@@ -410,6 +439,7 @@ export class AppServerTaskRuntime {
     const pendingServerRequests = new Set<Promise<void>>();
     const sessionId = normalizeSessionId(request.channelContext.sessionId);
     let skipFinalEventFlush = false;
+    const sessionAccess = this.resolveSessionFactoryOptions(request, principalId);
 
     const emit = async (event: TaskEvent): Promise<void> => {
       await abortable(() => eventDelivery.deliver(event), signal);
@@ -485,7 +515,7 @@ export class AppServerTaskRuntime {
         throw new Error(compiledInput.compileWarnings[0]?.message ?? "当前输入无法发送到 app-server。");
       }
 
-      session = await abortable(() => this.sessionFactory(this.resolveSessionFactoryOptions(request, principalId)), signal);
+      session = await abortable(() => this.sessionFactory(sessionAccess.sessionFactoryOptions), signal);
       const activeSession = session;
       throwIfAborted(signal);
       await abortable(() => activeSession.initialize(), signal);
@@ -639,7 +669,14 @@ export class AppServerTaskRuntime {
         status: "completed",
         summary: summarizeAppServerResponse(output),
         ...(output ? { output } : {}),
-        structuredOutput: createAppServerStructuredOutput(sessionId, threadId, onboardingIntercept),
+        structuredOutput: createAppServerStructuredOutput(
+          sessionId,
+          threadId,
+          sessionMode,
+          sessionAccess,
+          request.options,
+          onboardingIntercept,
+        ),
         completedAt: new Date().toISOString(),
       };
       const result = await abortable(
@@ -805,13 +842,14 @@ export class AppServerTaskRuntime {
           summary: message,
           ...(resolvedThreadId
             ? {
-                structuredOutput: {
-                  session: {
-                    sessionId: sessionId || null,
-                    threadId: resolvedThreadId,
-                    engine: "app-server",
-                  },
-                },
+                structuredOutput: createAppServerStructuredOutput(
+                  sessionId,
+                  resolvedThreadId,
+                  sessionMode,
+                  sessionAccess,
+                  request.options,
+                  null,
+                ),
               }
             : {}),
           completedAt: new Date().toISOString(),
@@ -875,13 +913,14 @@ export class AppServerTaskRuntime {
           sessionMode,
           ...(resolvedThreadId
             ? {
-                structuredOutput: {
-                  session: {
-                    sessionId: sessionId || null,
-                    threadId: resolvedThreadId,
-                    engine: "app-server",
-                  },
-                },
+                structuredOutput: createAppServerStructuredOutput(
+                  sessionId,
+                  resolvedThreadId,
+                  sessionMode,
+                  sessionAccess,
+                  request.options,
+                  null,
+                ),
               }
             : {}),
           ...(resolvedThreadId ? { threadId: resolvedThreadId } : {}),
@@ -1579,13 +1618,24 @@ function summarizeAppServerResponse(finalResponse: string): string {
 function createAppServerStructuredOutput(
   sessionId: string | undefined,
   threadId: string,
+  sessionMode: "created" | "resumed" | "ephemeral",
+  sessionAccess: AppServerResolvedSessionAccess,
+  options: TaskRequest["options"] | undefined,
   onboardingIntercept: PrincipalPersonaOnboardingInterceptResult | null,
 ): Record<string, unknown> {
+  const assistantStyle = buildAssistantStyleSessionPayload(options);
+
   return {
     session: {
       sessionId: sessionId || null,
+      conversationId: sessionId || null,
       threadId,
       engine: "app-server",
+      mode: sessionMode,
+      accessMode: sessionAccess.accessMode,
+      ...(sessionAccess.authAccountId ? { authAccountId: sessionAccess.authAccountId } : {}),
+      ...(sessionAccess.thirdPartyProviderId ? { thirdPartyProviderId: sessionAccess.thirdPartyProviderId } : {}),
+      ...(assistantStyle ? { assistantStyle } : {}),
     },
     ...(onboardingIntercept ? { personaOnboarding: createPersonaOnboardingPayload(onboardingIntercept) } : {}),
   };
