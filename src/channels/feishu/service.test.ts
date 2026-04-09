@@ -1541,6 +1541,45 @@ test("飞书普通任务在 app-server runtime 下仍保持占位、顺序缓冲
   }
 });
 
+test("飞书普通任务在认证缺失时报错时，会用可更新的文本占位消息收口", async () => {
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      taskRuntimeCalls,
+    }) => ({
+      ...createTaskRuntimeDouble({
+        engine: "app-server",
+        runtimeStore,
+        identityService,
+        principalSkillsService,
+        taskRuntimeCalls,
+      }),
+      async runTask() {
+        taskRuntimeCalls.appServer += 1;
+        throw new Error("Not logged in");
+      },
+    }),
+  });
+
+  try {
+    await harness.handleIncomingText("你好");
+
+    const rendered = harness.peekRenderedMessages().filter((entry) => entry.action === "create" || entry.action === "update");
+    assert.equal(rendered.length >= 2, true);
+    assert.equal(rendered[0]?.msgType, "text");
+    assert.equal(rendered[1]?.msgType, "text");
+
+    const messages = harness.takeMessages();
+    assert.ok(messages.some((message) => message.includes("处理中...")));
+    assert.ok(messages.some((message) => message.includes("Codex 当前没有可用认证")));
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("飞书真实 app-server delta 正文不会被渲染成任务状态更新", async () => {
   const harness = createHarness({
     runtimeEngine: "app-server",

@@ -1271,8 +1271,8 @@ export class FeishuChannelService {
       }
       : null;
     const bridge = new FeishuTaskMessageBridge({
-      createText: async (text) => this.createAssistantMessage(context.chatId, text),
-      updateText: async (messageId, text) => this.updateAssistantMessage(messageId, text),
+      createText: async (text) => this.createTextMessage(context.chatId, text),
+      updateText: async (messageId, text) => this.updateTextMessage(messageId, text),
       createDraft: async (draft) => this.createMessage(context.chatId, draft),
       updateDraft: async (messageId, draft) => this.updateMessage(messageId, draft),
       sendText: async (text) => {
