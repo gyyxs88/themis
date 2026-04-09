@@ -1383,6 +1383,30 @@ test("AppServerTaskRuntime 在 third-party 模式下会把 provider 隔离配置
       });
       assert.equal(readSessionPayload(result).accessMode, "third-party");
       assert.equal(readSessionPayload(result).thirdPartyProviderId, "gateway-a");
+      const storedStartedEvent = fixture.runtimeStore
+        .listTurnEvents("req-app-provider-boundary-1")
+        .find((event) => event.type === "task.started");
+      assert.ok(storedStartedEvent);
+      const startedPayload = JSON.parse(storedStartedEvent?.payloadJson ?? "{}");
+      assert.equal(startedPayload.sessionMode, "created");
+      assert.equal(startedPayload.accessMode, "third-party");
+      assert.equal(startedPayload.threadId, "thread-app-provider-boundary-1");
+      assert.equal(startedPayload.sessionId, "web-session-provider-boundary-1");
+      assert.equal(startedPayload.conversationId, "web-session-provider-boundary-1");
+      assert.equal(startedPayload.runtimeEngine, "app-server");
+      assert.equal(startedPayload.thirdPartyProviderId, "gateway-a");
+      const storedTerminalEvent = [...fixture.runtimeStore.listTurnEvents("req-app-provider-boundary-1")]
+        .reverse()
+        .find((event) => event.type === "task.completed" || event.type === "task.action_required");
+      assert.ok(storedTerminalEvent);
+      const completedPayload = JSON.parse(storedTerminalEvent?.payloadJson ?? "{}");
+      assert.equal(completedPayload.sessionMode, "created");
+      assert.equal(completedPayload.accessMode, "third-party");
+      assert.equal(completedPayload.threadId, "thread-app-provider-boundary-1");
+      assert.equal(completedPayload.sessionId, "web-session-provider-boundary-1");
+      assert.equal(completedPayload.conversationId, "web-session-provider-boundary-1");
+      assert.equal(completedPayload.runtimeEngine, "app-server");
+      assert.equal(completedPayload.thirdPartyProviderId, "gateway-a");
     } finally {
       fixture.cleanup();
     }

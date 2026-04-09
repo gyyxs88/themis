@@ -605,11 +605,7 @@ export class AppServerTaskRuntime {
         "running",
         onboardingIntercept ? "Persona bootstrap turn started." : "Codex task started.",
         {
-          sessionMode,
-          threadId,
-          sessionId: sessionId || null,
-          conversationId: sessionId || null,
-          runtimeEngine: "app-server",
+          ...createAppServerSessionEventPayload(sessionId, threadId, sessionMode, sessionAccess),
           ...(onboardingIntercept ? { personaOnboarding: createPersonaOnboardingPayload(onboardingIntercept) } : {}),
         },
       ));
@@ -693,7 +689,15 @@ export class AppServerTaskRuntime {
       persistThreadSession(this.runtimeStore, sessionId, resolvedThreadId, result.completedAt);
 
       await emit(
-        createAppServerCompletionEvent(taskId, request.requestId, sessionId, threadId, onboardingIntercept),
+        createAppServerCompletionEvent(
+          taskId,
+          request.requestId,
+          sessionId,
+          threadId,
+          sessionMode,
+          sessionAccess,
+          onboardingIntercept,
+        ),
       );
 
       let completionMemoryUpdates: TaskResult["memoryUpdates"] = [];
@@ -1641,18 +1645,34 @@ function createAppServerStructuredOutput(
   };
 }
 
+function createAppServerSessionEventPayload(
+  sessionId: string | undefined,
+  threadId: string,
+  sessionMode: "created" | "resumed" | "ephemeral",
+  sessionAccess: AppServerResolvedSessionAccess,
+): Record<string, unknown> {
+  return {
+    sessionMode,
+    accessMode: sessionAccess.accessMode,
+    threadId,
+    sessionId: sessionId || null,
+    conversationId: sessionId || null,
+    runtimeEngine: "app-server",
+    ...(sessionAccess.thirdPartyProviderId ? { thirdPartyProviderId: sessionAccess.thirdPartyProviderId } : {}),
+  };
+}
+
 function createAppServerCompletionEvent(
   taskId: string,
   requestId: string,
   sessionId: string | undefined,
   threadId: string,
+  sessionMode: "created" | "resumed" | "ephemeral",
+  sessionAccess: AppServerResolvedSessionAccess,
   onboardingIntercept: PrincipalPersonaOnboardingInterceptResult | null,
 ): TaskEvent {
   const payload = {
-    threadId,
-    sessionId: sessionId || null,
-    conversationId: sessionId || null,
-    runtimeEngine: "app-server",
+    ...createAppServerSessionEventPayload(sessionId, threadId, sessionMode, sessionAccess),
     ...(onboardingIntercept ? { personaOnboarding: createPersonaOnboardingPayload(onboardingIntercept) } : {}),
   };
 
