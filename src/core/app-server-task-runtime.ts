@@ -71,6 +71,7 @@ import { compileTaskInputForRuntime } from "./runtime-input-compiler.js";
 import { resolveStoredSessionThreadReference } from "./session-thread-reference.js";
 import { validateWorkspacePath } from "./session-workspace.js";
 import { ContextBuilder } from "../context/context-builder.js";
+import { MemoryService } from "../memory/memory-service.js";
 
 const SESSION_WORKSPACE_UNAVAILABLE_ERROR = "当前会话绑定的工作区不可用，请新建会话后重新设置。";
 const APP_SERVER_AUX_TIMEOUT_MS = 15_000;
@@ -127,6 +128,7 @@ export interface AppServerTaskRuntimeOptions {
   runtimeStore?: SqliteCodexSessionRegistry;
   principalSkillsService?: PrincipalSkillsService;
   createContextBuilder?: (workingDirectory: string) => ContextBuilder;
+  createMemoryService?: (workingDirectory: string) => MemoryService;
   sessionFactory?: (
     options?: AppServerSessionFactoryOptions,
   ) => Promise<AppServerTaskRuntimeSession> | AppServerTaskRuntimeSession;
@@ -195,6 +197,7 @@ export class AppServerTaskRuntime {
   private readonly principalSkillsService: PrincipalSkillsService;
   private readonly scheduledTasksService: ScheduledTasksService;
   private readonly createContextBuilder: (workingDirectory: string) => ContextBuilder;
+  private readonly createMemoryService: (workingDirectory: string) => MemoryService;
   private readonly sessionFactory: (
     options?: AppServerSessionFactoryOptions,
   ) => Promise<AppServerTaskRuntimeSession>;
@@ -228,6 +231,9 @@ export class AppServerTaskRuntime {
       registry: this.runtimeStore,
     });
     this.createContextBuilder = options.createContextBuilder ?? ((workingDirectory) => new ContextBuilder({
+      workingDirectory,
+    }));
+    this.createMemoryService = options.createMemoryService ?? ((workingDirectory) => new MemoryService({
       workingDirectory,
     }));
     this.sessionFactory = async (factoryOptions = {}) =>
@@ -392,6 +398,9 @@ export class AppServerTaskRuntime {
     let unsubscribeServerRequest: (() => void) | undefined;
     let sessionMode: "created" | "resumed" | "ephemeral" = "ephemeral";
     let resolvedThreadId: string | undefined;
+    const memoryEnabled = request.options?.memoryMode !== "off";
+    let memoryService: MemoryService | null = null;
+    let memoryStartRecorded = false;
     const responseArtifacts: AppServerResponseArtifacts = {
       latestAssistantMessage: "",
       finalAnswer: "",
@@ -450,6 +459,7 @@ export class AppServerTaskRuntime {
       throwIfAborted(signal);
 
       const executionWorkingDirectory = this.resolveExecutionWorkingDirectory(request);
+      memoryService = memoryEnabled ? this.createMemoryService(executionWorkingDirectory) : null;
       const taskContext = await this.buildTaskContext(executionWorkingDirectory, {
         request,
         principalId,
@@ -519,6 +529,44 @@ export class AppServerTaskRuntime {
       const threadId = thread.threadId;
       resolvedThreadId = threadId;
       persistThreadSession(this.runtimeStore, sessionId, threadId, request.createdAt);
+
+      if (memoryService) {
+        try {
+          const startUpdates = memoryService.recordTaskStart({
+            request,
+            taskId,
+            ...(principalId ? { principalId } : {}),
+            ...(resolvedRequest.conversationId ? { conversationId: resolvedRequest.conversationId } : {}),
+          });
+          memoryStartRecorded = true;
+          if (startUpdates.length > 0) {
+            await emit(
+              createTaskEvent(
+                taskId,
+                request.requestId,
+                "task.memory_updated",
+                "running",
+                "Memory updated at task start.",
+                { updates: startUpdates },
+              ),
+            );
+          }
+        } catch (error) {
+          await emit(
+            createTaskEvent(
+              taskId,
+              request.requestId,
+              "task.memory_updated",
+              "failed",
+              toErrorMessage(error),
+              {
+                updates: [],
+                errorCode: "MEMORY_UPDATE_FAILED",
+              },
+            ),
+          );
+        }
+      }
 
       await emit(createTaskEvent(
         taskId,
@@ -612,15 +660,16 @@ export class AppServerTaskRuntime {
       );
 
       let completionMemoryUpdates: TaskResult["memoryUpdates"] = [];
-      if (principalId) {
+      if (memoryService && memoryStartRecorded) {
         try {
-          completionMemoryUpdates = this.principalActorsService.suggestMainMemoryCandidatesFromTask({
-            principalId,
+          completionMemoryUpdates = memoryService.recordTaskCompletion({
             request,
             result,
+            taskId,
+            ...(principalId ? { principalId } : {}),
             ...(resolvedRequest.conversationId ? { conversationId: resolvedRequest.conversationId } : {}),
-          }).updates;
-
+            verified: true,
+          });
           if (completionMemoryUpdates.length > 0) {
             await emit(
               createTaskEvent(
@@ -630,6 +679,45 @@ export class AppServerTaskRuntime {
                 "completed",
                 "Memory updated at task completion.",
                 { updates: completionMemoryUpdates },
+              ),
+            );
+          }
+        } catch (error) {
+          completionMemoryUpdates = [];
+          await emit(
+            createTaskEvent(
+              taskId,
+              request.requestId,
+              "task.memory_updated",
+              "failed",
+              toErrorMessage(error),
+              {
+                updates: [],
+                errorCode: "MEMORY_UPDATE_FAILED",
+              },
+            ),
+          );
+        }
+      }
+      if (principalId) {
+        try {
+          const candidateUpdates = this.principalActorsService.suggestMainMemoryCandidatesFromTask({
+            principalId,
+            request,
+            result,
+            ...(resolvedRequest.conversationId ? { conversationId: resolvedRequest.conversationId } : {}),
+          }).updates;
+
+          if (candidateUpdates.length > 0) {
+            completionMemoryUpdates = [...completionMemoryUpdates, ...candidateUpdates];
+            await emit(
+              createTaskEvent(
+                taskId,
+                request.requestId,
+                "task.memory_updated",
+                "completed",
+                "Memory updated at task completion.",
+                { updates: candidateUpdates },
               ),
             );
           }
@@ -676,6 +764,40 @@ export class AppServerTaskRuntime {
 
       if (cancelledError) {
         skipFinalEventFlush = true;
+        if (memoryService && memoryStartRecorded) {
+          try {
+            const updates = memoryService.recordTaskTerminal({
+              request,
+              taskId,
+              ...(principalId ? { principalId } : {}),
+              ...(resolvedRequest.conversationId ? { conversationId: resolvedRequest.conversationId } : {}),
+              terminalStatus: "cancelled",
+              summary: message,
+            });
+            if (updates.length > 0) {
+              this.runtimeStore.appendTaskEvent(createTaskEvent(
+                taskId,
+                request.requestId,
+                "task.memory_updated",
+                "cancelled",
+                "Memory updated after task cancelled.",
+                { updates },
+              ));
+            }
+          } catch (memoryError) {
+            this.runtimeStore.appendTaskEvent(createTaskEvent(
+              taskId,
+              request.requestId,
+              "task.memory_updated",
+              "failed",
+              toErrorMessage(memoryError),
+              {
+                updates: [],
+                errorCode: "MEMORY_UPDATE_FAILED",
+              },
+            ));
+          }
+        }
         const result: TaskResult = {
           taskId,
           requestId: request.requestId,
@@ -708,6 +830,44 @@ export class AppServerTaskRuntime {
       }
 
       if (!waitingError) {
+        if (memoryService && memoryStartRecorded) {
+          try {
+            const updates = memoryService.recordTaskTerminal({
+              request,
+              taskId,
+              ...(principalId ? { principalId } : {}),
+              ...(resolvedRequest.conversationId ? { conversationId: resolvedRequest.conversationId } : {}),
+              terminalStatus: "failed",
+              summary: message,
+            });
+            if (updates.length > 0) {
+              await emit(
+                createTaskEvent(
+                  taskId,
+                  request.requestId,
+                  "task.memory_updated",
+                  "failed",
+                  "Memory updated after task failed.",
+                  { updates },
+                ),
+              );
+            }
+          } catch (memoryError) {
+            await emit(
+              createTaskEvent(
+                taskId,
+                request.requestId,
+                "task.memory_updated",
+                "failed",
+                toErrorMessage(memoryError),
+                {
+                  updates: [],
+                  errorCode: "MEMORY_UPDATE_FAILED",
+                },
+              ),
+            );
+          }
+        }
         this.runtimeStore.failTaskTurn({
           request,
           taskId,

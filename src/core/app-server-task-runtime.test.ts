@@ -82,6 +82,7 @@ function createRuntimeFixture(overrides: {
   sessionFactory?: AppServerTaskRuntimeOptions["sessionFactory"];
   runtimeCatalogReader?: AppServerTaskRuntimeOptions["runtimeCatalogReader"];
   createContextBuilder?: AppServerTaskRuntimeOptions["createContextBuilder"];
+  createMemoryService?: AppServerTaskRuntimeOptions["createMemoryService"];
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "themis-app-server-runtime-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
@@ -93,6 +94,7 @@ function createRuntimeFixture(overrides: {
     ...(overrides.sessionFactory ? { sessionFactory: overrides.sessionFactory } : {}),
     ...(overrides.runtimeCatalogReader ? { runtimeCatalogReader: overrides.runtimeCatalogReader } : {}),
     ...(overrides.createContextBuilder ? { createContextBuilder: overrides.createContextBuilder } : {}),
+    ...(overrides.createMemoryService ? { createMemoryService: overrides.createMemoryService } : {}),
   });
 
   return {
@@ -463,9 +465,10 @@ test("AppServerTaskRuntime 会在首轮 principal 任务时进入 persona onboar
       questionPrompt: "先认识一下。以后我怎么称呼你比较顺手？如果你也想顺手给我起个名字，可以一起告诉我。",
     });
     assert.equal(fixture.runtimeStore.getPrincipalPersonaOnboarding(principalId ?? "")?.state.stepIndex, 0);
-    assert.equal(emittedEvents.at(-1)?.type, "task.action_required");
-    assert.equal(emittedEvents.at(-1)?.status, "waiting");
-    assert.deepEqual(emittedEvents.at(-1)?.payload?.personaOnboarding, {
+    const actionRequiredEvent = [...emittedEvents].reverse().find((event) => event.type === "task.action_required");
+    assert.equal(actionRequiredEvent?.type, "task.action_required");
+    assert.equal(actionRequiredEvent?.status, "waiting");
+    assert.deepEqual(actionRequiredEvent?.payload?.personaOnboarding, {
       status: "question",
       phase: "started",
       stepIndex: 0,
@@ -501,6 +504,9 @@ test("AppServerTaskRuntime 完成后会自动提炼长期记忆候选，并返�
         displayName: "Owner",
       },
       goal: "以后默认中文回复。以后先给结论再展开。",
+      options: {
+        memoryMode: "off",
+      },
       channelContext: { sessionId: "web-session-memory-candidate-1" },
       createdAt: "2026-04-06T09:00:00.000Z",
     }, {
@@ -525,6 +531,157 @@ test("AppServerTaskRuntime 完成后会自动提炼长期记忆候选，并返�
       && Array.isArray(event.payload?.updates)
       && event.payload.updates.length === 2
     ));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 成功时会写 memory updates、发 task.memory_updated，并落到 execution workspace", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-memory-runtime-1",
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+  const workspace = join(fixture.root, "workspace-memory-runtime-1");
+
+  mkdirSync(join(fixture.root, "memory", "architecture"), { recursive: true });
+  mkdirSync(join(workspace, "memory", "architecture"), { recursive: true });
+  writeFileSync(join(fixture.root, "AGENTS.md"), "control-rule", "utf8");
+  writeFileSync(join(fixture.root, "README.md"), "# control", "utf8");
+  writeFileSync(join(fixture.root, "memory", "architecture", "overview.md"), "# control architecture", "utf8");
+  writeFileSync(join(workspace, "AGENTS.md"), "session-rule", "utf8");
+  writeFileSync(join(workspace, "README.md"), "# session", "utf8");
+  writeFileSync(join(workspace, "memory", "architecture", "overview.md"), "# session architecture", "utf8");
+
+  try {
+    fixture.runtimeStore.saveSessionTaskSettings({
+      sessionId: "web-session-memory-runtime-1",
+      settings: {
+        workspacePath: workspace,
+      },
+      createdAt: "2026-04-09T10:10:00.000Z",
+      updatedAt: "2026-04-09T10:10:00.000Z",
+    });
+
+    const events: TaskEvent[] = [];
+    const result = await fixture.runtime.runTask({
+      requestId: "req-app-memory-runtime-1",
+      taskId: "task-app-memory-runtime-1",
+      sourceChannel: "web",
+      user: {
+        userId: "web-memory-runtime",
+        displayName: "Owner",
+      },
+      goal: "实现 app-server memory runtime 集成",
+      channelContext: { sessionId: "web-session-memory-runtime-1" },
+      createdAt: "2026-04-09T10:11:00.000Z",
+    }, {
+      onEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    assert.equal(state.started.length, 1);
+    assert.equal(result.status, "completed");
+    assert.ok((result.memoryUpdates?.length ?? 0) > 0);
+    const memoryEvents = events.filter((event) => event.type === "task.memory_updated");
+    assert.ok(memoryEvents.length >= 2);
+    assert.ok(memoryEvents.some((event) => event.status === "running"));
+    assert.ok(memoryEvents.some((event) => event.status === "completed"));
+    assert.ok(memoryEvents.some((event) => Array.isArray(event.payload?.updates)));
+
+    const workspaceDone = readFileSync(join(workspace, "memory", "tasks", "done.md"), "utf8");
+    assert.match(workspaceDone, /task-app-memory-runtime-1/);
+    assert.match(workspaceDone, /当前已完成模块/);
+    assert.equal(lstatSync(join(fixture.root, "memory")).isDirectory(), true);
+    assert.equal(lstatSync(join(workspace, "memory")).isDirectory(), true);
+    assert.equal(readFileSync(join(workspace, "memory", "sessions", "active.md"), "utf8").includes("状态：completed"), true);
+    assert.equal(join(fixture.root, "memory", "tasks", "done.md") !== join(workspace, "memory", "tasks", "done.md"), true);
+    assert.equal(
+      (() => {
+        try {
+          return readFileSync(join(fixture.root, "memory", "tasks", "done.md"), "utf8").includes("task-app-memory-runtime-1");
+        } catch {
+          return false;
+        }
+      })(),
+      false,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime memory 写回失败时任务仍 completed，并发 task.memory_updated failed 事件", async () => {
+  const { sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-memory-write-failed-1",
+  });
+  const fixture = createRuntimeFixture({
+    sessionFactory,
+    createMemoryService: () => ({
+      recordTaskStart: () => [],
+      recordTaskCompletion: () => {
+        throw new Error("memory completion failed");
+      },
+    }) as never,
+  });
+
+  try {
+    const events: TaskEvent[] = [];
+    const result = await fixture.runtime.runTask({
+      requestId: "req-app-memory-write-failed-1",
+      taskId: "task-app-memory-write-failed-1",
+      sourceChannel: "web",
+      user: { userId: "web-memory-write-failed" },
+      goal: "hello",
+      channelContext: { sessionId: "web-session-memory-write-failed-1" },
+      createdAt: "2026-04-09T10:12:00.000Z",
+    }, {
+      onEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    assert.equal(result.status, "completed");
+    const failedEvent = events.find((event) =>
+      event.type === "task.memory_updated" && event.status === "failed"
+    );
+    assert.ok(failedEvent);
+    assert.equal(failedEvent?.payload?.errorCode, "MEMORY_UPDATE_FAILED");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime start 已写回后任务普通失败，不会残留 running active 与 in-progress", async () => {
+  const { sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-memory-terminal-failed-1",
+    startTurn: async () => {
+      throw new Error("模拟失败");
+    },
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  mkdirSync(join(fixture.root, "memory", "architecture"), { recursive: true });
+  writeFileSync(join(fixture.root, "AGENTS.md"), "rule", "utf8");
+  writeFileSync(join(fixture.root, "README.md"), "# control", "utf8");
+  writeFileSync(join(fixture.root, "memory", "architecture", "overview.md"), "# architecture", "utf8");
+
+  try {
+    await assert.rejects(async () => await fixture.runtime.runTask({
+      requestId: "req-app-memory-terminal-failed-1",
+      taskId: "task-app-memory-terminal-failed-1",
+      sourceChannel: "web",
+      user: { userId: "web-memory-terminal-failed" },
+      goal: "故意失败任务",
+      channelContext: { sessionId: "web-session-memory-terminal-failed-1" },
+      createdAt: "2026-04-09T10:13:00.000Z",
+    }), /模拟失败/);
+
+    const active = readFileSync(join(fixture.root, "memory", "sessions", "active.md"), "utf8");
+    const inProgress = readFileSync(join(fixture.root, "memory", "tasks", "in-progress.md"), "utf8");
+    assert.match(active, /状态：failed/);
+    assert.doesNotMatch(active, /状态：running/);
+    assert.doesNotMatch(inProgress, /task-app-memory-terminal-failed-1/);
   } finally {
     fixture.cleanup();
   }
