@@ -102,6 +102,37 @@ function createRuntimeFixture(overrides: {
   };
 }
 
+function seedCompletedPrincipalPersona(
+  runtime: AppServerTaskRuntime,
+  input: {
+    channel: string;
+    channelUserId: string;
+    displayName?: string;
+  },
+): string {
+  const now = "2026-04-09T00:00:00.000Z";
+  const identity = runtime.getIdentityLinkService().ensureIdentity({
+    channel: input.channel,
+    channelUserId: input.channelUserId,
+    ...(input.displayName ? { displayName: input.displayName } : {}),
+  });
+
+  runtime.getRuntimeStore().savePrincipalPersonaProfile({
+    principalId: identity.principalId,
+    profile: {
+      preferredAddress: input.displayName ?? input.channelUserId,
+      workSummary: "在做长期协作开发。",
+      collaborationStyle: "先给结论，再补关键细节。",
+      assistantLanguageStyle: "直接、清楚、不过度客套。",
+    },
+    createdAt: now,
+    updatedAt: now,
+    completedAt: now,
+  });
+
+  return identity.principalId;
+}
+
 function createSessionFactory(overrides: {
   startThreadId?: string;
   startThread?: (
@@ -378,6 +409,73 @@ test("AppServerTaskRuntime 会按真实 Web channelSessionKey 解析 conversatio
   }
 });
 
+test("AppServerTaskRuntime 会在首轮 principal 任务时进入 persona onboarding，并把等待状态写入结果", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-onboarding",
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+  const emittedEvents: Array<{ type: string; status: string; payload?: Record<string, unknown> }> = [];
+
+  try {
+    const result = await fixture.runtime.runTask({
+      requestId: "req-app-onboarding-1",
+      taskId: "task-app-onboarding-1",
+      sourceChannel: "feishu",
+      user: {
+        userId: "feishu-user-onboarding-1",
+        displayName: "小段",
+      },
+      goal: "帮我整理今天的计划",
+      channelContext: {
+        sessionId: "feishu-session-onboarding-1",
+      },
+      createdAt: "2026-04-09T15:40:00.000Z",
+    }, {
+      onEvent: async (event) => {
+        emittedEvents.push({
+          type: event.type,
+          status: event.status,
+          ...(event.payload ? { payload: event.payload } : {}),
+        });
+      },
+    });
+
+    const promptInput = state.turns[0]?.input;
+    const promptText = typeof promptInput === "string"
+      ? promptInput
+      : (promptInput?.find((part) => part.type === "text")?.text ?? "");
+    const principalId = fixture.runtimeStore.getChannelIdentity("feishu", "feishu-user-onboarding-1")?.principalId;
+
+    assert.equal(state.started.length, 1);
+    assert.ok(principalId);
+    assert.match(promptText, /first-run persona bootstrap mode/);
+    assert.match(promptText, /Latest user message:\n帮我整理今天的计划/);
+    assert.deepEqual(result.structuredOutput?.personaOnboarding, {
+      status: "question",
+      phase: "started",
+      stepIndex: 0,
+      stepNumber: 1,
+      totalSteps: 4,
+      questionKey: "identity",
+      questionPrompt: "先认识一下。以后我怎么称呼你比较顺手？如果你也想顺手给我起个名字，可以一起告诉我。",
+    });
+    assert.equal(fixture.runtimeStore.getPrincipalPersonaOnboarding(principalId ?? "")?.state.stepIndex, 0);
+    assert.equal(emittedEvents.at(-1)?.type, "task.action_required");
+    assert.equal(emittedEvents.at(-1)?.status, "waiting");
+    assert.deepEqual(emittedEvents.at(-1)?.payload?.personaOnboarding, {
+      status: "question",
+      phase: "started",
+      stepIndex: 0,
+      stepNumber: 1,
+      totalSteps: 4,
+      questionKey: "identity",
+      questionPrompt: "先认识一下。以后我怎么称呼你比较顺手？如果你也想顺手给我起个名字，可以一起告诉我。",
+    });
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("AppServerTaskRuntime 完成后会自动提炼长期记忆候选，并返回 memoryUpdates", async () => {
   const { state, sessionFactory } = createSessionFactory({
     startThreadId: "thread-app-memory-candidate",
@@ -436,6 +534,11 @@ test("AppServerTaskRuntime 会把图片附件写进 startTurn prompt", async () 
   const fixture = createRuntimeFixture({ sessionFactory });
 
   try {
+    seedCompletedPrincipalPersona(fixture.runtime, {
+      channel: "feishu",
+      channelUserId: "feishu-user-1",
+    });
+
     await fixture.runtime.runTask({
       requestId: "req-app-image-1",
       taskId: "task-app-image-1",
@@ -790,6 +893,12 @@ test("AppServerTaskRuntime 会在 prompt 里明确注入定时任务工具使用
   const fixture = createRuntimeFixture({ sessionFactory });
 
   try {
+    seedCompletedPrincipalPersona(fixture.runtime, {
+      channel: "feishu",
+      channelUserId: "feishu-user-1",
+      displayName: "飞书用户",
+    });
+
     await fixture.runtime.runTask({
       requestId: "req-app-scheduled-prompt-1",
       taskId: "task-app-scheduled-prompt-1",
@@ -1018,6 +1127,11 @@ test("AppServerTaskRuntime 会把 document envelope 的路径 fallback 持久化
   const fixture = createRuntimeFixture({ sessionFactory });
 
   try {
+    seedCompletedPrincipalPersona(fixture.runtime, {
+      channel: "feishu",
+      channelUserId: "feishu-user-1",
+    });
+
     const documentDirectory = join(fixture.root, "temp", "input-assets");
     mkdirSync(documentDirectory, { recursive: true });
     const documentPath = join(documentDirectory, "brief.md");
@@ -1092,6 +1206,11 @@ test("AppServerTaskRuntime 即使模型声明 nativeDocumentInput 也会按 app-
   });
 
   try {
+    seedCompletedPrincipalPersona(fixture.runtime, {
+      channel: "feishu",
+      channelUserId: "feishu-user-1",
+    });
+
     const documentDirectory = join(fixture.root, "temp", "input-assets");
     mkdirSync(documentDirectory, { recursive: true });
     const documentPath = join(documentDirectory, "capability-brief.md");

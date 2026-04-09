@@ -132,6 +132,32 @@ test("状态类 progress 会单独发出状态摘要，不打断处理中占位"
   ]);
 });
 
+test("persona onboarding 的无 actionId waiting 事件会静默，让最终问题直接替换占位", async () => {
+  const operations: string[] = [];
+  let nextMessageId = 1;
+  const bridge = createBridge(operations, () => `message-${nextMessageId++}`);
+
+  await bridge.prepareResponseSlot();
+  await bridge.deliver({
+    kind: "event",
+    requestId: "req-persona-onboarding-1",
+    title: "task.action_required",
+    text: "Persona bootstrap is waiting for the next answer.",
+    metadata: {
+      personaOnboarding: {
+        status: "question",
+        phase: "started",
+      },
+    },
+  });
+  await bridge.deliver(createResultMessage("req-persona-onboarding-1", "先认识一下。以后我怎么称呼你比较顺手？"));
+
+  assert.deepEqual(operations, [
+    "create:处理中...",
+    "update:message-1:先认识一下。以后我怎么称呼你比较顺手？",
+  ]);
+});
+
 test("normalizeComparableReply 会忽略尾部额度信息", () => {
   assert.equal(
     normalizeComparableReply("正文\n\n额度剩余：5h 87%｜1w 95%"),

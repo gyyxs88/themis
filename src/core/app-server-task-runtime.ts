@@ -54,8 +54,12 @@ import {
   type OpenAICompatibleProviderConfig,
 } from "./openai-compatible-provider.js";
 import { PrincipalActorsService } from "./principal-actors-service.js";
+import {
+  PrincipalPersonaService,
+  type PrincipalPersonaOnboardingInterceptResult,
+} from "./principal-persona-service.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
-import { buildTaskPrompt } from "./prompt.js";
+import { buildBootstrapPrompt, buildTaskPrompt } from "./prompt.js";
 import { ScheduledTasksService } from "./scheduled-tasks-service.js";
 import {
   buildThemisScheduledTaskMcpConfigOverrides,
@@ -179,6 +183,7 @@ export class AppServerTaskRuntime {
   private readonly runtimeStore: SqliteCodexSessionRegistry;
   private readonly identityLinkService: IdentityLinkService;
   private readonly conversationService: ConversationService;
+  private readonly principalPersonaService: PrincipalPersonaService;
   private readonly managedAgentCoordinationService: ManagedAgentCoordinationService;
   private readonly managedAgentsService: ManagedAgentsService;
   private readonly managedAgentSchedulerService: ManagedAgentSchedulerService;
@@ -196,6 +201,7 @@ export class AppServerTaskRuntime {
     this.runtimeStore = options.runtimeStore ?? new SqliteCodexSessionRegistry();
     this.identityLinkService = new IdentityLinkService(this.runtimeStore);
     this.conversationService = new ConversationService(this.runtimeStore, this.identityLinkService);
+    this.principalPersonaService = new PrincipalPersonaService(this.runtimeStore);
     this.managedAgentCoordinationService = new ManagedAgentCoordinationService({
       registry: this.runtimeStore,
     });
@@ -345,6 +351,9 @@ export class AppServerTaskRuntime {
   ): Promise<TaskResult> {
     let request = resolvedRequest.request;
     const principalId = resolvedRequest.principalId;
+    const onboardingIntercept = principalId && this.principalPersonaService.shouldRunOnboarding(request, principalId)
+      ? this.principalPersonaService.maybeHandleOnboardingTurn(principalId, request)
+      : null;
 
     const taskId = request.taskId ?? request.requestId;
     const { signal, cleanup } = createExecutionSignal(hooks.signal, hooks.timeoutMs);
@@ -461,22 +470,40 @@ export class AppServerTaskRuntime {
       resolvedThreadId = threadId;
       persistThreadSession(this.runtimeStore, sessionId, threadId, request.createdAt);
 
-      await emit(createTaskEvent(taskId, request.requestId, "task.started", "running", "Codex task started.", {
+      await emit(createTaskEvent(
+        taskId,
+        request.requestId,
+        "task.started",
+        "running",
+        onboardingIntercept ? "Persona bootstrap turn started." : "Codex task started.",
+        {
         sessionMode,
         threadId,
         sessionId: sessionId || null,
         conversationId: sessionId || null,
         runtimeEngine: "app-server",
-      }));
+        ...(onboardingIntercept ? { personaOnboarding: createPersonaOnboardingPayload(onboardingIntercept) } : {}),
+      },
+      ));
       throwIfAborted(signal);
 
       const promptRequest = compiledInput ? withoutTaskAttachments(request) : request;
-      const prompt = buildTaskPrompt(promptRequest, {
-        fallbackPromptSections: [
-          ...(compiledInput?.fallbackPromptSections ?? []),
-          buildThemisScheduledTaskPromptSection(request),
-        ],
-      });
+      const personalizedProfileContext = this.principalPersonaService.buildPromptContext(principalId);
+      const prompt = onboardingIntercept
+        ? buildBootstrapPrompt(promptRequest, onboardingIntercept, {
+          personalizedProfileContext,
+          fallbackPromptSections: [
+            ...(compiledInput?.fallbackPromptSections ?? []),
+            buildThemisScheduledTaskPromptSection(request),
+          ],
+        })
+        : buildTaskPrompt(promptRequest, {
+          personalizedProfileContext,
+          fallbackPromptSections: [
+            ...(compiledInput?.fallbackPromptSections ?? []),
+            buildThemisScheduledTaskPromptSection(request),
+          ],
+        });
       const turnInput = compiledInput?.nativeInputParts.length
         ? [
           {
@@ -505,20 +532,14 @@ export class AppServerTaskRuntime {
       await abortable(() => eventDelivery.flush(), signal);
       throwIfAborted(signal);
 
-      const output = resolveAppServerFinalOutput(responseArtifacts);
+      const output = resolveAppServerFinalOutput(responseArtifacts, onboardingIntercept);
       const baseResult: TaskResult = {
         taskId,
         requestId: request.requestId,
         status: "completed",
         summary: summarizeAppServerResponse(output),
         ...(output ? { output } : {}),
-        structuredOutput: {
-          session: {
-            sessionId: sessionId || null,
-            threadId,
-            engine: "app-server",
-          },
-        },
+        structuredOutput: createAppServerStructuredOutput(sessionId, threadId, onboardingIntercept),
         completedAt: new Date().toISOString(),
       };
       const result = await abortable(
@@ -533,6 +554,10 @@ export class AppServerTaskRuntime {
         ...(resolvedThreadId ? { threadId: resolvedThreadId } : {}),
       });
       persistThreadSession(this.runtimeStore, sessionId, resolvedThreadId, result.completedAt);
+
+      await emit(
+        createAppServerCompletionEvent(taskId, request.requestId, sessionId, threadId, onboardingIntercept),
+      );
 
       let completionMemoryUpdates: TaskResult["memoryUpdates"] = [];
       if (principalId) {
@@ -1292,8 +1317,11 @@ function collectAppServerResponseArtifacts(
   }
 }
 
-function resolveAppServerFinalOutput(artifacts: AppServerResponseArtifacts): string {
-  return artifacts.finalAnswer || artifacts.latestAssistantMessage;
+function resolveAppServerFinalOutput(
+  artifacts: AppServerResponseArtifacts,
+  onboardingIntercept: PrincipalPersonaOnboardingInterceptResult | null,
+): string {
+  return artifacts.finalAnswer || artifacts.latestAssistantMessage || onboardingIntercept?.message || "";
 }
 
 function summarizeAppServerResponse(finalResponse: string): string {
@@ -1305,6 +1333,70 @@ function summarizeAppServerResponse(finalResponse: string): string {
 
   const [firstLine] = normalized.split("\n");
   return firstLine ? firstLine.slice(0, 200) : normalized.slice(0, 200);
+}
+
+function createAppServerStructuredOutput(
+  sessionId: string | undefined,
+  threadId: string,
+  onboardingIntercept: PrincipalPersonaOnboardingInterceptResult | null,
+): Record<string, unknown> {
+  return {
+    session: {
+      sessionId: sessionId || null,
+      threadId,
+      engine: "app-server",
+    },
+    ...(onboardingIntercept ? { personaOnboarding: createPersonaOnboardingPayload(onboardingIntercept) } : {}),
+  };
+}
+
+function createAppServerCompletionEvent(
+  taskId: string,
+  requestId: string,
+  sessionId: string | undefined,
+  threadId: string,
+  onboardingIntercept: PrincipalPersonaOnboardingInterceptResult | null,
+): TaskEvent {
+  const payload = {
+    threadId,
+    sessionId: sessionId || null,
+    conversationId: sessionId || null,
+    runtimeEngine: "app-server",
+    ...(onboardingIntercept ? { personaOnboarding: createPersonaOnboardingPayload(onboardingIntercept) } : {}),
+  };
+
+  if (!onboardingIntercept) {
+    return createTaskEvent(taskId, requestId, "task.completed", "completed", "Codex task completed.", payload);
+  }
+
+  if (onboardingIntercept.status === "completed") {
+    return createTaskEvent(taskId, requestId, "task.completed", "completed", "Persona bootstrap completed.", payload);
+  }
+
+  return createTaskEvent(
+    taskId,
+    requestId,
+    "task.action_required",
+    "waiting",
+    "Persona bootstrap is waiting for the next answer.",
+    payload,
+  );
+}
+
+function createPersonaOnboardingPayload(
+  onboardingIntercept: PrincipalPersonaOnboardingInterceptResult,
+): Record<string, unknown> {
+  return {
+    status: onboardingIntercept.status,
+    phase: onboardingIntercept.phase,
+    stepIndex: onboardingIntercept.stepIndex,
+    stepNumber: onboardingIntercept.status === "completed"
+      ? onboardingIntercept.totalSteps
+      : onboardingIntercept.stepIndex + 1,
+    totalSteps: onboardingIntercept.totalSteps,
+    ...(onboardingIntercept.questionKey ? { questionKey: onboardingIntercept.questionKey } : {}),
+    ...(onboardingIntercept.questionPrompt ? { questionPrompt: onboardingIntercept.questionPrompt } : {}),
+  };
 }
 
 function createAppServerTurnCompletionState(): AppServerTurnCompletionState {

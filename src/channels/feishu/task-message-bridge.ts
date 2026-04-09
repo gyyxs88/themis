@@ -89,6 +89,9 @@ export class FeishuTaskMessageBridge {
     switch (message.kind) {
       case "event":
         if (message.title === "task.action_required") {
+          if (shouldSuppressPersonaOnboardingWaitingEvent(message)) {
+            return;
+          }
           await this.deliverWaitingAction(message);
           return;
         }
@@ -438,6 +441,18 @@ function buildFeishuTerminalStateText(label: string, text: string | null): strin
   }
 
   return `${normalizedText}\n\n${label}`;
+}
+
+function shouldSuppressPersonaOnboardingWaitingEvent(message: FeishuDeliveryMessage): boolean {
+  if (message.title !== "task.action_required") {
+    return false;
+  }
+
+  const metadata = asRecord(message.metadata);
+  const actionId = normalizeText(metadata?.actionId);
+  const personaOnboarding = asRecord(metadata?.personaOnboarding);
+
+  return !actionId && Boolean(personaOnboarding);
 }
 
 function normalizeProgressFlushTimeoutMs(value: number | undefined): number {
