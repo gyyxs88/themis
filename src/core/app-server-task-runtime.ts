@@ -8,6 +8,7 @@ import {
   type CodexCliConfigOverrides,
 } from "./auth-accounts.js";
 import type {
+  PrincipalTaskSettings,
   RuntimeEngine,
   RuntimeInputCapabilities,
   TaskActionDescriptor,
@@ -61,6 +62,7 @@ import {
 import { PrincipalSkillsService } from "./principal-skills-service.js";
 import { buildBootstrapPrompt, buildTaskPrompt } from "./prompt.js";
 import { ScheduledTasksService } from "./scheduled-tasks-service.js";
+import { applyThemisGlobalDefaultsToTaskOptions } from "./task-defaults.js";
 import {
   buildThemisScheduledTaskMcpConfigOverrides,
   buildThemisScheduledTaskPromptSection,
@@ -241,7 +243,7 @@ export class AppServerTaskRuntime {
   }
 
   async runTask(request: TaskRequest, hooks: TaskRuntimeRunHooks = {}): Promise<TaskResult> {
-    return await this.executeTask(this.conversationService.resolveRequest(request), hooks);
+    return await this.executeTask(this.resolveExecutionRequest(request), hooks);
   }
 
   async runTaskAsPrincipal(
@@ -271,11 +273,32 @@ export class AppServerTaskRuntime {
       }
       : request;
 
-    return await this.executeTask({
+    return await this.executeTask(this.applyPrincipalTaskSettings({
       request: normalizedRequest,
       principalId,
       ...(conversationId ? { conversationId } : {}),
-    }, hooks);
+    }), hooks);
+  }
+
+  private resolveExecutionRequest(request: TaskRequest): AppServerResolvedExecutionRequest {
+    return this.applyPrincipalTaskSettings(this.conversationService.resolveRequest(request));
+  }
+
+  private applyPrincipalTaskSettings(
+    resolvedRequest: AppServerResolvedExecutionRequest,
+  ): AppServerResolvedExecutionRequest {
+    const principalDefaults = this.readPrincipalTaskSettings(resolvedRequest.principalId) ?? {};
+
+    return {
+      ...resolvedRequest,
+      request: {
+        ...resolvedRequest.request,
+        options: applyThemisGlobalDefaultsToTaskOptions({
+          ...principalDefaults,
+          ...(resolvedRequest.request.options ?? {}),
+        }),
+      },
+    };
   }
 
   private resolveSessionFactoryOptions(
@@ -725,6 +748,16 @@ export class AppServerTaskRuntime {
 
   getIdentityLinkService(): IdentityLinkService {
     return this.identityLinkService;
+  }
+
+  private readPrincipalTaskSettings(principalId?: string): PrincipalTaskSettings | null {
+    const normalizedPrincipalId = normalizeTextValue(principalId);
+
+    if (!normalizedPrincipalId) {
+      return null;
+    }
+
+    return this.runtimeStore.getPrincipalTaskSettings(normalizedPrincipalId)?.settings ?? null;
   }
 
   getPrincipalActorsService(): PrincipalActorsService {

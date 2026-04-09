@@ -782,6 +782,71 @@ test("AppServerTaskRuntime 会把模型和关键运行参数透传给 thread/sta
   }
 });
 
+test("AppServerTaskRuntime 会在 app-server 主链路合并请求参数、principal 默认和 Themis 全局默认", async () => {
+  const { state, sessionFactory: baseSessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-principal-defaults-1",
+  });
+  const delegateSessionFactory = baseSessionFactory as NonNullable<AppServerTaskRuntimeOptions["sessionFactory"]>;
+  const factoryOptionsHistory: AppServerSessionFactoryOptions[] = [];
+  const fixture = createRuntimeFixture({
+    sessionFactory: async (options) => {
+      factoryOptionsHistory.push(options ?? {});
+      return await delegateSessionFactory();
+    },
+  });
+
+  try {
+    fixture.runtimeStore.saveAuthAccount({
+      accountId: "acct-principal-defaults",
+      label: "默认账号",
+      codexHome: join(fixture.root, "infra/local/codex-auth/acct-principal-defaults"),
+      isActive: false,
+      createdAt: "2026-04-09T09:00:00.000Z",
+      updatedAt: "2026-04-09T09:00:00.000Z",
+    });
+
+    const identity = fixture.runtime.getIdentityLinkService().ensureIdentity({
+      channel: "web",
+      channelUserId: "browser-user-principal-defaults",
+    });
+
+    fixture.runtimeStore.savePrincipalTaskSettings({
+      principalId: identity.principalId,
+      settings: {
+        authAccountId: "acct-principal-defaults",
+        sandboxMode: "danger-full-access",
+      },
+      createdAt: "2026-04-09T09:01:00.000Z",
+      updatedAt: "2026-04-09T09:01:00.000Z",
+    });
+
+    await fixture.runtime.runTask({
+      requestId: "req-app-principal-defaults-1",
+      taskId: "task-app-principal-defaults-1",
+      sourceChannel: "web",
+      user: { userId: "browser-user-principal-defaults" },
+      goal: "hello",
+      options: {
+        approvalPolicy: "on-failure",
+      },
+      channelContext: { sessionId: "web-session-principal-defaults-1" },
+      createdAt: "2026-04-09T09:02:00.000Z",
+    });
+
+    assert.equal(state.started.length, 1);
+    assert.equal(state.started[0]?.approvalPolicy, "on-failure");
+    assert.equal(state.started[0]?.sandbox, "danger-full-access");
+    assert.equal(state.started[0]?.webSearchMode, "live");
+    assert.equal(factoryOptionsHistory.length, 1);
+    assert.equal(
+      factoryOptionsHistory[0]?.env?.CODEX_HOME,
+      join(fixture.root, "infra/local/codex-auth/acct-principal-defaults"),
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("AppServerTaskRuntime 在 auth 模式下会把账号隔离环境传给 sessionFactory", async () => {
   const { state, sessionFactory: baseSessionFactory } = createSessionFactory({
     startThreadId: "thread-app-auth-boundary-1",
