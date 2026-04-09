@@ -762,20 +762,35 @@ test("AppServerTaskRuntime 会把模型和关键运行参数透传给 thread/sta
       goal: "hello",
       options: {
         model: "gpt-5.4",
+        reasoning: "high",
         approvalPolicy: "on-failure",
         sandboxMode: "danger-full-access",
         webSearchMode: "live",
+        networkAccessEnabled: false,
+        additionalDirectories: ["/shared/a", "/shared/b"],
       },
       channelContext: { sessionId: "web-session-request-options-1" },
       createdAt: "2026-04-03T16:20:00.000Z",
     });
+
+    const threadConfig = state.started[0]?.config as {
+      model_reasoning_effort?: string;
+      web_search?: string;
+      sandbox_workspace_write?: {
+        network_access?: boolean;
+        writable_roots?: string[];
+      };
+    } | undefined;
 
     assert.equal(state.started.length, 1);
     assert.equal(state.started[0]?.cwd?.length ? true : false, true);
     assert.equal(state.started[0]?.model, "gpt-5.4");
     assert.equal(state.started[0]?.approvalPolicy, "on-failure");
     assert.equal(state.started[0]?.sandbox, "danger-full-access");
-    assert.equal(state.started[0]?.webSearchMode, "live");
+    assert.equal(threadConfig?.model_reasoning_effort, "high");
+    assert.equal(threadConfig?.web_search, "live");
+    assert.equal(threadConfig?.sandbox_workspace_write?.network_access, false);
+    assert.deepEqual(threadConfig?.sandbox_workspace_write?.writable_roots, ["/shared/a", "/shared/b"]);
     assert.equal(state.started[0]?.persistExtendedHistory, true);
   } finally {
     fixture.cleanup();
@@ -833,10 +848,18 @@ test("AppServerTaskRuntime 会在 app-server 主链路合并请求参数、princ
       createdAt: "2026-04-09T09:02:00.000Z",
     });
 
+    const threadConfig = state.started[0]?.config as {
+      web_search?: string;
+      sandbox_workspace_write?: {
+        network_access?: boolean;
+      };
+    } | undefined;
+
     assert.equal(state.started.length, 1);
     assert.equal(state.started[0]?.approvalPolicy, "on-failure");
     assert.equal(state.started[0]?.sandbox, "danger-full-access");
-    assert.equal(state.started[0]?.webSearchMode, "live");
+    assert.equal(threadConfig?.web_search, "live");
+    assert.equal(threadConfig?.sandbox_workspace_write?.network_access, true);
     assert.equal(factoryOptionsHistory.length, 1);
     assert.equal(
       factoryOptionsHistory[0]?.env?.CODEX_HOME,
@@ -1089,7 +1112,7 @@ test("AppServerTaskRuntime 在 managed agent 的 auth 模式下会使用 agent �
       now: "2026-04-08T10:01:00.000Z",
     });
 
-    await fixture.runtime.runTaskAsPrincipal({
+    const result = await fixture.runtime.runTaskAsPrincipal({
       requestId: "req-app-managed-auth-1",
       taskId: "task-app-managed-auth-1",
       sourceChannel: "web",
@@ -1107,6 +1130,8 @@ test("AppServerTaskRuntime 在 managed agent 的 auth 模式下会使用 agent �
     });
 
     const managedHome = join(fixture.root, "infra/local/managed-agents", created.agent.agentId, "codex-home");
+    assert.equal(result.status, "completed");
+    assert.equal(result.structuredOutput?.personaOnboarding, undefined);
     assert.equal(state.started.length, 1);
     assert.equal(factoryOptionsHistory.length, 1);
     assert.equal(factoryOptionsHistory[0]?.env?.CODEX_HOME, managedHome);

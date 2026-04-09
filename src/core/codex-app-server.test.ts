@@ -282,6 +282,57 @@ test("startThread 和 resumeThread 会补齐持久化扩展历史所需参数", 
   ]);
 });
 
+test("startThread 和 resumeThread 会原样透传 thread config", async () => {
+  const { session } = createSessionStub();
+  const calls: Array<{ method: string; params: unknown }> = [];
+
+  session.request = async (method: string, params: unknown) => {
+    calls.push({ method, params });
+    return {
+      threadId: "thread-config-1",
+    };
+  };
+
+  const config = {
+    model_reasoning_effort: "high",
+    web_search: "live",
+    sandbox_workspace_write: {
+      network_access: false,
+      writable_roots: ["/shared/a", "/shared/b"],
+    },
+  };
+
+  await session.startThread({
+    cwd: "/workspace/demo",
+    config,
+  });
+  await session.resumeThread("thread-config-1", {
+    cwd: "/workspace/demo",
+    config,
+  });
+
+  assert.deepEqual(calls, [
+    {
+      method: "thread/start",
+      params: {
+        cwd: "/workspace/demo",
+        config,
+        experimentalRawEvents: false,
+        persistExtendedHistory: true,
+      },
+    },
+    {
+      method: "thread/resume",
+      params: {
+        threadId: "thread-config-1",
+        cwd: "/workspace/demo",
+        config,
+        persistExtendedHistory: true,
+      },
+    },
+  ]);
+});
+
 test("startThread 和 resumeThread 会兼容当前 app-server 返回的 thread.id 结构", async () => {
   const { session } = createSessionStub();
 

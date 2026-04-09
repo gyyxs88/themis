@@ -137,11 +137,19 @@ export class PrincipalPersonaService {
   }
 
   shouldRunOnboarding(request: TaskRequest, principalId?: string): boolean {
-    if (!principalId?.trim()) {
+    const normalizedPrincipalId = principalId?.trim();
+
+    if (!normalizedPrincipalId) {
       return false;
     }
 
     if (SYSTEM_PERSONA_USER_IDS.has(request.user.userId.trim())) {
+      return false;
+    }
+
+    const principal = this.store.getPrincipal(normalizedPrincipalId);
+
+    if (principal?.kind && principal.kind !== "human_user") {
       return false;
     }
 

@@ -161,7 +161,7 @@ export interface AppServerThreadStartParams {
   model?: string;
   approvalPolicy?: string;
   sandbox?: string;
-  webSearchMode?: string;
+  config?: CodexCliConfigOverrides;
   experimentalRawEvents?: boolean;
   persistExtendedHistory?: boolean;
 }

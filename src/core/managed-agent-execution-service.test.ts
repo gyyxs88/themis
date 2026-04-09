@@ -405,7 +405,10 @@ test("ManagedAgentExecutionService 会把 work item 执行边界写入 runtime r
     assert.equal(state.started[0]?.model, "gpt-5.4-mini");
     assert.equal(state.started[0]?.approvalPolicy, "on-request");
     assert.equal(state.started[0]?.sandbox, "danger-full-access");
-    assert.equal(state.started[0]?.webSearchMode, "disabled");
+    assert.equal(
+      (state.started[0]?.config as { web_search?: string } | undefined)?.web_search,
+      "disabled",
+    );
     assert.ok(options);
     assert.equal(options?.accessMode, "auth");
     assert.equal(options?.authAccountId, "acct-boundary");

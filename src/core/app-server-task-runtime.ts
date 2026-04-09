@@ -1745,7 +1745,7 @@ function createAppServerThreadStartParams(
   const model = normalizeTextValue(request.options?.model);
   const approvalPolicy = normalizeTextValue(request.options?.approvalPolicy);
   const sandboxMode = normalizeTextValue(request.options?.sandboxMode);
-  const webSearchMode = normalizeTextValue(request.options?.webSearchMode);
+  const config = createAppServerThreadConfig(request);
 
   return {
     cwd,
@@ -1753,8 +1753,46 @@ function createAppServerThreadStartParams(
     ...(model ? { model } : {}),
     ...(approvalPolicy ? { approvalPolicy } : {}),
     ...(sandboxMode ? { sandbox: sandboxMode } : {}),
-    ...(webSearchMode ? { webSearchMode } : {}),
+    ...(config ? { config } : {}),
   };
+}
+
+function createAppServerThreadConfig(request: TaskRequest): CodexCliConfigOverrides | undefined {
+  const reasoning = normalizeTextValue(request.options?.reasoning);
+  const webSearchMode = normalizeTextValue(request.options?.webSearchMode);
+  const networkAccessEnabled = request.options?.networkAccessEnabled;
+  const additionalDirectories = Array.isArray(request.options?.additionalDirectories)
+    ? request.options.additionalDirectories
+      .map((value) => normalizeTextValue(value))
+      .filter((value): value is string => Boolean(value))
+    : [];
+  const sandboxWorkspaceWrite: {
+    network_access?: boolean;
+    writable_roots?: string[];
+  } = {};
+  const config: CodexCliConfigOverrides = {};
+
+  if (reasoning) {
+    config.model_reasoning_effort = reasoning;
+  }
+
+  if (webSearchMode) {
+    config.web_search = webSearchMode;
+  }
+
+  if (typeof networkAccessEnabled === "boolean") {
+    sandboxWorkspaceWrite.network_access = networkAccessEnabled;
+  }
+
+  if (additionalDirectories.length > 0) {
+    sandboxWorkspaceWrite.writable_roots = additionalDirectories;
+  }
+
+  if (sandboxWorkspaceWrite.network_access !== undefined || sandboxWorkspaceWrite.writable_roots?.length) {
+    config.sandbox_workspace_write = sandboxWorkspaceWrite;
+  }
+
+  return Object.keys(config).length > 0 ? config : undefined;
 }
 
 function createCodexProviderEnv(providerConfig: OpenAICompatibleProviderConfig): Record<string, string> {
