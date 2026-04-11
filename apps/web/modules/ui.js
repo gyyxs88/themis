@@ -135,6 +135,8 @@ export function createRenderer(app) {
     renderAgentsState();
     renderMemoryCandidatesState();
     renderSkillsState();
+    renderMcpState();
+    renderPluginsState();
     renderThirdPartyNotes(settings, effectiveSettings);
     renderThirdPartyEndpointProbeState(settings);
     renderThirdPartyProbeState(settings);
@@ -281,6 +283,10 @@ export function createRenderer(app) {
     dom.settingsAuthSection.setAttribute("aria-hidden", String(activeSection !== "auth"));
     dom.settingsSkillsSection.classList.toggle("hidden", activeSection !== "skills");
     dom.settingsSkillsSection.setAttribute("aria-hidden", String(activeSection !== "skills"));
+    dom.settingsMcpSection.classList.toggle("hidden", activeSection !== "mcp");
+    dom.settingsMcpSection.setAttribute("aria-hidden", String(activeSection !== "mcp"));
+    dom.settingsPluginsSection.classList.toggle("hidden", activeSection !== "plugins");
+    dom.settingsPluginsSection.setAttribute("aria-hidden", String(activeSection !== "plugins"));
     dom.settingsAgentsSection.classList.toggle("hidden", activeSection !== "agents");
     dom.settingsAgentsSection.setAttribute("aria-hidden", String(activeSection !== "agents"));
     dom.settingsMemoryCandidatesSection.classList.toggle("hidden", activeSection !== "memory-candidates");
@@ -929,6 +935,103 @@ export function createRenderer(app) {
     dom.skillsCuratedList.innerHTML = curated
       .map((item) => renderCuratedSkillCard(item, {
         busy,
+        escapeHtml: utils.escapeHtml,
+      }))
+      .join("");
+  }
+
+  function renderMcpState() {
+    const mcpState = app.runtime.mcp ?? {};
+    const servers = Array.isArray(mcpState.servers) ? mcpState.servers : [];
+    const busy = Boolean(mcpState.loading || mcpState.mutating);
+    const statusMessage = resolveMcpStatusMessage(mcpState);
+    const statusTone = mcpState.errorMessage
+      ? "error"
+      : busy
+        ? "loading"
+        : mcpState.noticeMessage
+          ? "inconclusive"
+          : "supported";
+
+    dom.mcpStatusNote.classList.toggle("hidden", !statusMessage);
+    dom.mcpStatusNote.textContent = statusMessage;
+    if (statusMessage) {
+      dom.mcpStatusNote.dataset.state = statusTone;
+    } else {
+      delete dom.mcpStatusNote.dataset.state;
+    }
+
+    dom.mcpRefreshButton.disabled = busy;
+    dom.mcpReloadButton.disabled = busy;
+    dom.mcpSaveButton.disabled = busy;
+    dom.mcpResetButton.disabled = busy;
+    dom.mcpServerNameInput.disabled = busy;
+    dom.mcpCommandInput.disabled = busy;
+    dom.mcpArgsInput.disabled = busy;
+    dom.mcpCwdInput.disabled = busy;
+    dom.mcpEnvInput.disabled = busy;
+    dom.mcpEnabledInput.disabled = busy;
+
+    dom.mcpListEmpty.classList.toggle("hidden", servers.length > 0);
+    dom.mcpList.innerHTML = servers
+      .map((server) => renderMcpCard(server, {
+        busy,
+        escapeHtml: utils.escapeHtml,
+        formatRelativeTime: utils.formatRelativeTime,
+      }))
+      .join("");
+  }
+
+  function renderPluginsState() {
+    const pluginsState = app.runtime.plugins ?? {};
+    const marketplaces = Array.isArray(pluginsState.marketplaces) ? pluginsState.marketplaces : [];
+    const detailsById = pluginsState.detailsById && typeof pluginsState.detailsById === "object"
+      ? pluginsState.detailsById
+      : {};
+    const featuredPluginIds = new Set(
+      Array.isArray(pluginsState.featuredPluginIds)
+        ? pluginsState.featuredPluginIds.filter((item) => typeof item === "string" && item.trim().length > 0)
+        : [],
+    );
+    const busy = Boolean(pluginsState.loading || pluginsState.mutating);
+    const statusMessage = resolvePluginsStatusMessage(pluginsState);
+    const thread = store.getActiveThread();
+    const workspacePath = normalizeWorkspacePath(thread?.settings?.workspacePath);
+    const statusTone = pluginsState.errorMessage
+      ? "error"
+      : busy
+        ? "loading"
+        : pluginsState.noticeMessage
+          ? "inconclusive"
+          : pluginsState.remoteSyncError || (pluginsState.marketplaceLoadErrors?.length ?? 0) > 0
+            ? "inconclusive"
+          : "supported";
+
+    dom.pluginsNote.textContent = workspacePath
+      ? `这里展示当前 Codex 运行环境可见的 plugin marketplaces。当前优先按会话工作区 ${workspacePath} 发现 repo marketplace，并叠加 home / curated marketplaces；切换工作区后，可见列表和安装状态可能变化。`
+      : "这里展示当前 Codex 运行环境可见的 plugin marketplaces。当前默认按 Themis 服务所在工作区发现 repo marketplace，并叠加 home / curated marketplaces；如果后续切换认证槽位或服务工作区，可见列表和安装状态可能变化。";
+
+    dom.pluginsStatusNote.classList.toggle("hidden", !statusMessage);
+    dom.pluginsStatusNote.textContent = statusMessage;
+    if (statusMessage) {
+      dom.pluginsStatusNote.dataset.state = statusTone;
+    } else {
+      delete dom.pluginsStatusNote.dataset.state;
+    }
+
+    dom.pluginsRefreshButton.disabled = busy;
+    dom.pluginsRemoteSyncButton.disabled = busy;
+
+    dom.pluginsListEmpty.classList.toggle("hidden", marketplaces.length > 0);
+    dom.pluginsList.innerHTML = marketplaces
+      .map((marketplace) => renderPluginMarketplaceCard(marketplace, {
+        busy,
+        detailsById,
+        expandedPluginId: typeof pluginsState.expandedPluginId === "string" ? pluginsState.expandedPluginId : "",
+        detailLoadingPluginId: typeof pluginsState.detailLoadingPluginId === "string"
+          ? pluginsState.detailLoadingPluginId
+          : "",
+        featuredPluginIds,
         escapeHtml: utils.escapeHtml,
       }))
       .join("");
@@ -1811,6 +1914,25 @@ export function createRenderer(app) {
         || app.runtime.skills.syncing
         || (button.dataset.skillAction === "install-curated" && installed);
     });
+    const mcpBusy = controlsBusy || app.runtime.mcp.loading || app.runtime.mcp.mutating;
+    dom.mcpServerNameInput.disabled = mcpBusy || dom.mcpServerNameInput.dataset.locked === "true";
+    dom.mcpCommandInput.disabled = mcpBusy;
+    dom.mcpArgsInput.disabled = mcpBusy;
+    dom.mcpCwdInput.disabled = mcpBusy;
+    dom.mcpEnvInput.disabled = mcpBusy;
+    dom.mcpEnabledInput.disabled = mcpBusy;
+    dom.mcpSaveButton.disabled = mcpBusy;
+    dom.mcpResetButton.disabled = mcpBusy;
+    dom.mcpRefreshButton.disabled = mcpBusy;
+    dom.mcpPanelActions?.querySelectorAll("[data-mcp-action]").forEach((button) => {
+      button.disabled = mcpBusy;
+    });
+    const pluginsBusy = controlsBusy || app.runtime.plugins.loading || app.runtime.plugins.mutating;
+    dom.pluginsRefreshButton.disabled = pluginsBusy;
+    dom.pluginsRemoteSyncButton.disabled = pluginsBusy;
+    dom.pluginsPanelActions?.querySelectorAll("[data-plugin-action]").forEach((button) => {
+      button.disabled = pluginsBusy;
+    });
     dom.accessModeSelect.disabled = controlsBusy || !app.runtime.runtimeConfig.accessModes?.length;
     dom.modeSwitchAuthAccountSelect.disabled = controlsBusy
       || app.runtime.identity?.savingTaskSettings
@@ -2008,6 +2130,58 @@ function resolveSkillsStatusMessage(skillsState) {
   return "";
 }
 
+function resolveMcpStatusMessage(mcpState) {
+  if (mcpState.errorMessage) {
+    return mcpState.errorMessage;
+  }
+
+  if (mcpState.mutating && mcpState.busyMessage) {
+    return mcpState.busyMessage;
+  }
+
+  if (mcpState.loading) {
+    return "正在读取当前 principal 的 MCP 列表。";
+  }
+
+  if (mcpState.noticeMessage) {
+    return mcpState.noticeMessage;
+  }
+
+  return "";
+}
+
+function resolvePluginsStatusMessage(pluginsState) {
+  if (pluginsState.errorMessage) {
+    return pluginsState.errorMessage;
+  }
+
+  if (pluginsState.mutating && pluginsState.busyMessage) {
+    return pluginsState.busyMessage;
+  }
+
+  if (pluginsState.loading) {
+    return "正在读取当前 Codex 运行环境的 plugin marketplaces。";
+  }
+
+  if (pluginsState.noticeMessage) {
+    return pluginsState.noticeMessage;
+  }
+
+  if (pluginsState.remoteSyncError) {
+    return `远程同步失败：${pluginsState.remoteSyncError}`;
+  }
+
+  const loadErrorCount = Array.isArray(pluginsState.marketplaceLoadErrors)
+    ? pluginsState.marketplaceLoadErrors.length
+    : 0;
+
+  if (loadErrorCount > 0) {
+    return `当前有 ${loadErrorCount} 个 marketplace 读取失败，可先刷新确认。`;
+  }
+
+  return "";
+}
+
 function renderSkillCard(skill, options) {
   const busyAttr = options.busy ? " disabled" : "";
   const summary = skill.summary ?? {};
@@ -2050,6 +2224,12 @@ function renderSkillCard(skill, options) {
           <p class="skill-card-copy">${options.escapeHtml(skill.description || "暂无描述")}</p>
         </div>
         <div class="skill-card-actions">
+          <button
+            type="button"
+            class="toolbar-button subtle"
+            data-mcp-action="oauth"
+            data-mcp-server-name="${options.escapeHtml(server.serverName || "")}"${busyAttr}
+          >OAuth</button>
           <button
             type="button"
             class="toolbar-button subtle"
@@ -2104,6 +2284,223 @@ function renderCuratedSkillCard(item, options) {
   `;
 }
 
+function renderMcpCard(server, options) {
+  const busyAttr = options.busy ? " disabled" : "";
+  const materializations = Array.isArray(server.materializations) ? server.materializations : [];
+  const summary = server.summary ?? {};
+  const totalTargets = typeof summary.totalTargets === "number" ? summary.totalTargets : 0;
+  const readyCount = typeof summary.readyCount === "number" ? summary.readyCount : 0;
+  const authRequiredCount = typeof summary.authRequiredCount === "number" ? summary.authRequiredCount : 0;
+  const failedCount = typeof summary.failedCount === "number" ? summary.failedCount : 0;
+  const args = Array.isArray(server.args) ? server.args : [];
+  const env = server.env && typeof server.env === "object" ? server.env : {};
+  const commandCopy = [server.command, ...args]
+    .filter((item) => typeof item === "string" && item.trim().length > 0)
+    .join(" ");
+  const summaryCopy = totalTargets > 0
+    ? `当前有 ${totalTargets} 个运行槽位记录，已就绪 ${readyCount} 个，待认证 ${authRequiredCount} 个，失败 ${failedCount} 个。`
+    : "当前还没有 runtime 槽位状态记录。";
+  const cwdMarkup = server.cwd
+    ? `<p class="skill-card-copy">cwd：<code>${options.escapeHtml(server.cwd)}</code></p>`
+    : "";
+  const envMarkup = Object.keys(env).length > 0
+    ? `<p class="skill-card-copy">env keys：${options.escapeHtml(Object.keys(env).join(", "))}</p>`
+    : "";
+  const materializationMarkup = materializations.length
+    ? `<div class="skill-materialization-list">${materializations.map((item) => {
+      const syncedAt = item.lastSyncedAt
+        ? options.formatRelativeTime(item.lastSyncedAt)
+        : "待同步";
+      const authLabel = formatMcpAuthStateLabel(item.authState);
+      const errorCopy = item.lastError
+        ? `<span class="skill-materialization-error">${options.escapeHtml(item.lastError)}</span>`
+        : "";
+
+      return `
+        <div class="skill-materialization-item">
+          <span>${options.escapeHtml(item.targetId || "未命名槽位")}</span>
+          <span class="skill-materialization-state" data-state="${options.escapeHtml(item.state || "missing")}">
+            ${options.escapeHtml(formatMaterializationStateLabel(item.state))}
+          </span>
+          <span class="skill-materialization-time">${options.escapeHtml(`${authLabel}｜${syncedAt}`)}</span>
+          ${errorCopy}
+        </div>
+      `;
+    }).join("")}</div>`
+    : "";
+
+  return `
+    <article class="skill-card">
+      <div class="skill-card-head">
+        <div>
+          <h4>${options.escapeHtml(server.serverName || "未命名 MCP")}</h4>
+          <p class="skill-card-copy"><code>${options.escapeHtml(commandCopy || server.command || "")}</code></p>
+          ${cwdMarkup}
+          ${envMarkup}
+        </div>
+        <div class="skill-card-actions">
+          <button
+            type="button"
+            class="toolbar-button subtle"
+            data-mcp-action="edit"
+            data-mcp-server-name="${options.escapeHtml(server.serverName || "")}"${busyAttr}
+          >编辑</button>
+          <button
+            type="button"
+            class="toolbar-button subtle"
+            data-mcp-action="${server.enabled === false ? "enable" : "disable"}"
+            data-mcp-server-name="${options.escapeHtml(server.serverName || "")}"${busyAttr}
+          >${options.escapeHtml(server.enabled === false ? "启用" : "停用")}</button>
+          <button
+            type="button"
+            class="ghost-button"
+            data-mcp-action="remove"
+            data-mcp-server-name="${options.escapeHtml(server.serverName || "")}"${busyAttr}
+          >删除</button>
+        </div>
+      </div>
+      <div class="skill-pill-row">
+        <span class="skill-pill">${options.escapeHtml(formatMcpSourceLabel(server.sourceType))}</span>
+        <span class="skill-pill"${server.enabled === false ? "" : ' data-tone="ready"'}>
+          ${options.escapeHtml(server.enabled === false ? "已停用" : "已启用")}
+        </span>
+      </div>
+      <p class="skill-card-summary">${options.escapeHtml(summaryCopy)}</p>
+      ${materializationMarkup}
+    </article>
+  `;
+}
+
+function renderPluginMarketplaceCard(marketplace, options) {
+  const plugins = Array.isArray(marketplace.plugins) ? marketplace.plugins : [];
+  const displayName = marketplace.interface?.displayName || marketplace.name || "未命名 marketplace";
+  const marketplacePath = marketplace.path || "";
+
+  return `
+    <article class="skill-card">
+      <div class="skill-card-head">
+        <div>
+          <h4>${options.escapeHtml(displayName)}</h4>
+          <p class="skill-card-copy"><code>${options.escapeHtml(marketplacePath)}</code></p>
+        </div>
+        <div class="skill-card-actions">
+          <span class="skill-pill">${options.escapeHtml(`${plugins.length} 个 plugins`)}</span>
+        </div>
+      </div>
+      <div class="settings-stack">
+        ${plugins.length > 0
+          ? plugins.map((plugin) => renderPluginCard(plugin, marketplace, options)).join("")
+          : '<p class="skill-card-summary">当前 marketplace 没有可见 plugin。</p>'}
+      </div>
+    </article>
+  `;
+}
+
+function renderPluginCard(plugin, marketplace, options) {
+  const pluginId = plugin.id || plugin.name || "";
+  const pluginName = plugin.name || pluginId || "未命名 plugin";
+  const pluginKey = createPluginCardKey(marketplace.path, pluginId || pluginName);
+  const detail = pluginKey ? options.detailsById[pluginKey] ?? null : null;
+  const expanded = pluginKey && options.expandedPluginId === pluginKey;
+  const detailLoading = pluginKey && options.detailLoadingPluginId === pluginKey;
+  const capabilities = Array.isArray(plugin.interface?.capabilities) ? plugin.interface.capabilities : [];
+  const capabilityCopy = capabilities.length > 0 ? capabilities.join(", ") : "暂无能力标签";
+  const description = plugin.interface?.shortDescription || "暂无说明";
+  const featured = options.featuredPluginIds.has(pluginId);
+  const installUnavailable = plugin.installPolicy === "NOT_AVAILABLE";
+  const primaryActionLabel = plugin.installed ? "卸载" : installUnavailable ? "不可安装" : "安装";
+  const primaryAction = plugin.installed ? "uninstall" : "install";
+  const primaryDisabled = options.busy || (!plugin.installed && installUnavailable);
+  const detailMarkup = expanded
+    ? detailLoading
+      ? '<p class="skill-card-summary">正在读取 plugin 详情。</p>'
+      : detail
+        ? renderPluginDetail(detail, options)
+        : '<p class="skill-card-summary">当前没有更多详情。</p>'
+    : "";
+
+  return `
+    <article class="skill-card skill-card-curated">
+      <div class="skill-card-head">
+        <div>
+          <h4>${options.escapeHtml(plugin.interface?.displayName || pluginName)}</h4>
+          <p class="skill-card-copy">${options.escapeHtml(description)}</p>
+        </div>
+        <div class="skill-card-actions">
+          <button
+            type="button"
+            class="toolbar-button subtle"
+            data-plugin-action="detail"
+            data-marketplace-path="${options.escapeHtml(marketplace.path || "")}"
+            data-plugin-name="${options.escapeHtml(pluginName)}"
+            data-plugin-id="${options.escapeHtml(pluginId)}"${options.busy ? " disabled" : ""}
+          >${options.escapeHtml(detailLoading ? "读取中..." : expanded ? "收起" : "详情")}</button>
+          <button
+            type="button"
+            class="${plugin.installed ? "ghost-button" : "toolbar-button subtle"}"
+            data-plugin-action="${options.escapeHtml(primaryAction)}"
+            data-marketplace-path="${options.escapeHtml(marketplace.path || "")}"
+            data-plugin-name="${options.escapeHtml(pluginName)}"
+            data-plugin-id="${options.escapeHtml(pluginId)}"${primaryDisabled ? " disabled" : ""}
+          >${options.escapeHtml(primaryActionLabel)}</button>
+        </div>
+      </div>
+      <div class="skill-pill-row">
+        <span class="skill-pill"${plugin.installed ? ' data-tone="ready"' : ""}>
+          ${options.escapeHtml(plugin.installed ? "已安装" : "未安装")}
+        </span>
+        <span class="skill-pill">${options.escapeHtml(formatPluginInstallPolicyLabel(plugin.installPolicy))}</span>
+        <span class="skill-pill">${options.escapeHtml(formatPluginAuthPolicyLabel(plugin.authPolicy))}</span>
+        ${featured ? '<span class="skill-pill" data-tone="ready">featured</span>' : ""}
+      </div>
+      <p class="skill-card-summary">${options.escapeHtml(capabilityCopy)}</p>
+      ${plugin.sourcePath ? `<p class="skill-card-copy">source：<code>${options.escapeHtml(plugin.sourcePath)}</code></p>` : ""}
+      ${detailMarkup}
+    </article>
+  `;
+}
+
+function renderPluginDetail(detail, options) {
+  const skills = Array.isArray(detail.skills) ? detail.skills : [];
+  const apps = Array.isArray(detail.apps) ? detail.apps : [];
+  const mcpServers = Array.isArray(detail.mcpServers) ? detail.mcpServers : [];
+  const description = detail.description || detail.summary?.interface?.longDescription || "暂无额外说明";
+  const skillsMarkup = skills.length > 0
+    ? `<div class="skill-materialization-list">${skills.map((skill) => `
+        <div class="skill-materialization-item">
+          <span>${options.escapeHtml(skill.name || "未命名 skill")}</span>
+          <span class="skill-materialization-state" data-state="${options.escapeHtml(skill.enabled ? "synced" : "missing")}">
+            ${options.escapeHtml(skill.enabled ? "已启用" : "未启用")}
+          </span>
+          <span class="skill-materialization-time">${options.escapeHtml(skill.shortDescription || skill.description || "")}</span>
+        </div>
+      `).join("")}</div>`
+    : '<p class="skill-card-copy">无附带 skills。</p>';
+  const appsMarkup = apps.length > 0
+    ? `<div class="skill-materialization-list">${apps.map((pluginApp) => `
+        <div class="skill-materialization-item">
+          <span>${options.escapeHtml(pluginApp.name || pluginApp.id || "未命名 app")}</span>
+          <span class="skill-materialization-state" data-state="${options.escapeHtml(pluginApp.needsAuth ? "missing" : "synced")}">
+            ${options.escapeHtml(pluginApp.needsAuth ? "需认证" : "可直接用")}
+          </span>
+          <span class="skill-materialization-time">${options.escapeHtml(pluginApp.description || "")}</span>
+        </div>
+      `).join("")}</div>`
+    : '<p class="skill-card-copy">无附带 apps。</p>';
+  const mcpMarkup = mcpServers.length > 0
+    ? `<p class="skill-card-copy">MCP：${options.escapeHtml(mcpServers.join(", "))}</p>`
+    : '<p class="skill-card-copy">无附带 MCP server。</p>';
+
+  return `
+    <div class="settings-stack">
+      <p class="skill-card-copy">${options.escapeHtml(description)}</p>
+      ${skillsMarkup}
+      ${appsMarkup}
+      ${mcpMarkup}
+    </div>
+  `;
+}
+
 function buildModelOptionLabel(model, defaultModel) {
   if (model.model === defaultModel) {
     return `${model.displayName}（默认）`;
@@ -2129,9 +2526,44 @@ function resolveModelFallbackLabel(runtimeConfig) {
 }
 
 function resolveWorkspaceToolsSection(section) {
-  return ["runtime", "auth", "skills", "agents", "memory-candidates", "third-party", "mode-switch"].includes(section)
+  return ["runtime", "auth", "skills", "mcp", "plugins", "agents", "memory-candidates", "third-party", "mode-switch"].includes(section)
     ? section
     : "runtime";
+}
+
+function createPluginCardKey(marketplacePath, pluginKey) {
+  const normalizedMarketplacePath = typeof marketplacePath === "string" ? marketplacePath.trim() : "";
+  const normalizedPluginKey = typeof pluginKey === "string" ? pluginKey.trim() : "";
+
+  if (!normalizedMarketplacePath || !normalizedPluginKey) {
+    return "";
+  }
+
+  return `${normalizedMarketplacePath}::${normalizedPluginKey}`;
+}
+
+function formatPluginInstallPolicyLabel(value) {
+  switch (value) {
+    case "AVAILABLE":
+      return "可安装";
+    case "INSTALLED_BY_DEFAULT":
+      return "默认安装";
+    case "NOT_AVAILABLE":
+      return "不可安装";
+    default:
+      return "安装策略未知";
+  }
+}
+
+function formatPluginAuthPolicyLabel(value) {
+  switch (value) {
+    case "ON_INSTALL":
+      return "安装时认证";
+    case "ON_USE":
+      return "使用时认证";
+    default:
+      return "认证策略未知";
+  }
 }
 
 function resolveMemoryCandidatesFilterValue(filterStatus) {
@@ -4233,6 +4665,17 @@ function formatSkillSourceLabel(sourceType) {
   }
 }
 
+function formatMcpSourceLabel(sourceType) {
+  switch (sourceType) {
+    case "manual":
+      return "手工";
+    case "themis-managed":
+      return "Themis 注入";
+    default:
+      return "未知来源";
+  }
+}
+
 function formatInstallStatusLabel(status) {
   switch (status) {
     case "ready":
@@ -4260,6 +4703,19 @@ function formatMaterializationStateLabel(state) {
       return "失败";
     default:
       return "未知";
+  }
+}
+
+function formatMcpAuthStateLabel(state) {
+  switch (state) {
+    case "authenticated":
+      return "已认证";
+    case "auth_required":
+      return "待认证";
+    case "unsupported":
+      return "未支持";
+    default:
+      return "认证未知";
   }
 }
 

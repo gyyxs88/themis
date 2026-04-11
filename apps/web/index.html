@@ -297,6 +297,30 @@
                 </button>
 
                 <button
+                  id="settings-mcp-tab"
+                  type="button"
+                  class="settings-nav-button"
+                  data-settings-section="mcp"
+                  role="tab"
+                  aria-controls="settings-mcp-section"
+                  aria-selected="false"
+                >
+                  <span class="settings-nav-title">MCP</span>
+                </button>
+
+                <button
+                  id="settings-plugins-tab"
+                  type="button"
+                  class="settings-nav-button"
+                  data-settings-section="plugins"
+                  role="tab"
+                  aria-controls="settings-plugins-section"
+                  aria-selected="false"
+                >
+                  <span class="settings-nav-title">Plugins</span>
+                </button>
+
+                <button
                   id="settings-agents-tab"
                   type="button"
                   class="settings-nav-button"
@@ -896,6 +920,128 @@
                     <p class="settings-section-copy">这里展示 OpenAI curated catalog，并标记当前 principal 是否已经安装。</p>
                     <div id="skills-curated-empty" class="settings-section-copy hidden">暂时还没有拿到 curated skills 列表，可以稍后刷新重试。</div>
                     <div id="skills-curated-list" class="settings-stack"></div>
+                  </section>
+                </div>
+              </section>
+
+              <section
+                id="settings-mcp-section"
+                class="settings-panel hidden"
+                role="tabpanel"
+                aria-labelledby="settings-mcp-tab"
+              >
+                <div id="mcp-panel-actions" class="settings-panel">
+                  <section class="workspace-tool-group">
+                    <div class="tool-group-head">
+                      <h3>MCP</h3>
+                      <span class="meta-label">当前 principal</span>
+                    </div>
+                    <p id="mcp-note" class="settings-section-copy">这些 MCP server 属于当前 principal。切换认证账号只影响额度与认证来源，不改变 MCP 集合；实际运行时会按当前槽位注入，并单独展示该槽位的可用状态。</p>
+
+                    <div class="settings-stack">
+                      <div class="settings-inline-actions">
+                        <button id="mcp-refresh-button" type="button" class="toolbar-button subtle">刷新</button>
+                        <button id="mcp-reload-button" type="button" class="toolbar-button subtle">同步到当前 runtime</button>
+                        <p class="settings-inline-copy">第一版支持 `stdio` 型 MCP server。名称只支持字母、数字、下划线和短横线。</p>
+                      </div>
+
+                      <label class="settings-field">
+                        <span>Server 名称</span>
+                        <input
+                          id="mcp-server-name-input"
+                          type="text"
+                          placeholder="例如：github"
+                          autocomplete="off"
+                          spellcheck="false"
+                        />
+                      </label>
+
+                      <label class="settings-field">
+                        <span>Command</span>
+                        <input
+                          id="mcp-command-input"
+                          type="text"
+                          placeholder="例如：npx"
+                          autocomplete="off"
+                          spellcheck="false"
+                        />
+                      </label>
+
+                      <label class="settings-field">
+                        <span>Args JSON</span>
+                        <textarea
+                          id="mcp-args-input"
+                          rows="3"
+                          placeholder='例如：["-y", "@modelcontextprotocol/server-github"]'
+                          spellcheck="false"
+                        ></textarea>
+                      </label>
+
+                      <label class="settings-field">
+                        <span>可选 cwd</span>
+                        <input
+                          id="mcp-cwd-input"
+                          type="text"
+                          placeholder="例如：/home/abner/services/tools"
+                          autocomplete="off"
+                          spellcheck="false"
+                        />
+                      </label>
+
+                      <label class="settings-field">
+                        <span>Env JSON</span>
+                        <textarea
+                          id="mcp-env-input"
+                          rows="4"
+                          placeholder='例如：{"GITHUB_TOKEN":"<token>"}'
+                          spellcheck="false"
+                        ></textarea>
+                      </label>
+
+                      <label class="settings-checkbox">
+                        <input id="mcp-enabled-input" type="checkbox" checked />
+                        <span>保存后默认启用</span>
+                      </label>
+
+                      <div class="toolbar-row">
+                        <button id="mcp-save-button" type="button" class="toolbar-button subtle">保存 MCP</button>
+                        <button id="mcp-reset-button" type="button" class="ghost-button">清空表单</button>
+                      </div>
+
+                      <p id="mcp-editor-mode-note" class="settings-section-copy">当前是新建模式。编辑已有 MCP 时，server 名称会锁定，若要改名请删除后重建。</p>
+                      <p id="mcp-status-note" class="settings-section-copy settings-probe-note hidden" aria-live="polite"></p>
+                      <div id="mcp-list-empty" class="settings-section-copy hidden">当前 principal 还没有已定义的 MCP server。</div>
+                      <div id="mcp-list" class="settings-stack"></div>
+                    </div>
+                  </section>
+                </div>
+              </section>
+
+              <section
+                id="settings-plugins-section"
+                class="settings-panel hidden"
+                role="tabpanel"
+                aria-labelledby="settings-plugins-tab"
+              >
+                <div id="plugins-panel-actions" class="settings-panel">
+                  <section class="workspace-tool-group">
+                    <div class="tool-group-head">
+                      <h3>Plugins</h3>
+                      <span class="meta-label">当前 Codex 运行环境</span>
+                    </div>
+                    <p id="plugins-note" class="settings-section-copy">这里展示当前 Codex 运行环境可见的 plugin marketplaces。第一版直接复用 Codex 原生 marketplace / pluginId 模型，不额外做 principal 持久化抽象；如果后续切换认证槽位或服务工作区，可见列表和安装状态可能变化。</p>
+
+                    <div class="settings-stack">
+                      <div class="settings-inline-actions">
+                        <button id="plugins-refresh-button" type="button" class="toolbar-button subtle">刷新</button>
+                        <button id="plugins-remote-sync-button" type="button" class="toolbar-button subtle">远程同步后刷新</button>
+                        <p class="settings-inline-copy">当前默认按 Themis 服务所在工作区发现 repo marketplace，并叠加 home / curated marketplaces。</p>
+                      </div>
+
+                      <p id="plugins-status-note" class="settings-section-copy settings-probe-note hidden" aria-live="polite"></p>
+                      <div id="plugins-list-empty" class="settings-section-copy hidden">当前运行环境还没有可见的 plugin marketplace。</div>
+                      <div id="plugins-list" class="settings-stack"></div>
+                    </div>
                   </section>
                 </div>
               </section>

@@ -1221,6 +1221,13 @@ export class FeishuChannelService {
       case "skills":
         await this.handleSkillsCommand(command.args, context);
         return;
+      case "mcp":
+        await this.handleMcpCommand(command.args, context);
+        return;
+      case "plugins":
+      case "plugin":
+        await this.handlePluginsCommand(command.args, context);
+        return;
       case "current":
         await this.sendCurrentSession(context.chatId, context);
         return;
@@ -2538,6 +2545,8 @@ export class FeishuChannelService {
       "/settings 查看设置树",
       "/group 查看当前群聊设置、路由和管理员控制",
       "/skills 查看和维护当前 principal 的 skills",
+      "/mcp 查看和维护当前 principal 的 MCP server",
+      "/plugins 查看和维护当前 Codex 运行环境的 plugins",
       "/link <绑定码> 可选：认领一个旧 Web 浏览器身份",
       "/reset confirm 清空当前 principal 的人格档案、历史和默认配置，并重新开始",
       "/msgupdate 测试机器人是否能原地更新自己刚发出的文本消息",
@@ -2579,6 +2588,60 @@ export class FeishuChannelService {
     }
   }
 
+  private async handleMcpCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const subcommand = normalizeText(args[0])?.toLowerCase() ?? "";
+
+    switch (subcommand) {
+      case "":
+      case "list":
+        await this.sendMcpList(context.chatId, context);
+        return;
+      case "reload":
+        await this.handleMcpReloadCommand(args.slice(1), context);
+        return;
+      case "enable":
+        await this.handleMcpEnableCommand(args.slice(1), context);
+        return;
+      case "disable":
+        await this.handleMcpDisableCommand(args.slice(1), context);
+        return;
+      case "remove":
+        await this.handleMcpRemoveCommand(args.slice(1), context);
+        return;
+      case "oauth":
+        await this.handleMcpOauthCommand(args.slice(1), context);
+        return;
+      default:
+        await this.sendMcpHelp(context.chatId, context, subcommand);
+        return;
+    }
+  }
+
+  private async handlePluginsCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const subcommand = normalizeText(args[0])?.toLowerCase() ?? "";
+
+    switch (subcommand) {
+      case "":
+      case "list":
+        await this.sendPluginsList(context.chatId, context);
+        return;
+      case "read":
+      case "show":
+        await this.handlePluginsReadCommand(args.slice(1), context);
+        return;
+      case "install":
+        await this.handlePluginsInstallCommand(args.slice(1), context);
+        return;
+      case "uninstall":
+      case "remove":
+        await this.handlePluginsUninstallCommand(args.slice(1), context);
+        return;
+      default:
+        await this.sendPluginsHelp(context.chatId, context, subcommand);
+        return;
+    }
+  }
+
   private async handleSkillsInstallCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
     const mode = normalizeText(args[0])?.toLowerCase() ?? "";
 
@@ -2604,6 +2667,220 @@ export class FeishuChannelService {
         });
         return;
     }
+  }
+
+  private async handleMcpReloadCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    if (args.length > 0) {
+      await this.sendMcpReloadHelp(context.chatId, context, args.join(" "));
+      return;
+    }
+
+    const principal = this.ensurePrincipalIdentity(context);
+    const result = await this.runtime.getPrincipalMcpService().reloadPrincipalMcpServers(principal.principalId, {
+      workingDirectory: this.runtime.getWorkingDirectory(),
+      activeAuthAccount: this.authRuntime.getActiveAccount(),
+    });
+    const summary = summarizePrincipalMcpList(result.servers);
+
+    await this.safeSendText(
+      context.chatId,
+      [
+        `当前 principal：${principal.principalId}`,
+        "已重新读取当前 runtime 槽位的 MCP 状态。",
+        `当前槽位：${result.target.targetId}`,
+        `runtime 返回：${result.runtimeServers.length} 个 server`,
+        `当前定义：${result.servers.length} 个`,
+        `就绪 ${summary.readyCount}｜待认证 ${summary.authRequiredCount}｜失败 ${summary.failedCount}`,
+        "查看：/mcp list",
+      ].join("\n"),
+    );
+  }
+
+  private async handleMcpEnableCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const serverName = normalizeText(args[0]);
+
+    if (!serverName || args.length !== 1) {
+      await this.sendMcpToggleHelp(context.chatId, context, "enable", args.join(" ") || undefined);
+      return;
+    }
+
+    const principal = this.ensurePrincipalIdentity(context);
+    const server = this.runtime.getPrincipalMcpService().setPrincipalMcpServerEnabled(
+      principal.principalId,
+      serverName,
+      true,
+    );
+
+    await this.safeSendText(
+      context.chatId,
+      [
+        `当前 principal：${principal.principalId}`,
+        `已启用 MCP server：${server.serverName}`,
+        "查看：/mcp list",
+      ].join("\n"),
+    );
+  }
+
+  private async handleMcpDisableCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const serverName = normalizeText(args[0]);
+
+    if (!serverName || args.length !== 1) {
+      await this.sendMcpToggleHelp(context.chatId, context, "disable", args.join(" ") || undefined);
+      return;
+    }
+
+    const principal = this.ensurePrincipalIdentity(context);
+    const server = this.runtime.getPrincipalMcpService().setPrincipalMcpServerEnabled(
+      principal.principalId,
+      serverName,
+      false,
+    );
+
+    await this.safeSendText(
+      context.chatId,
+      [
+        `当前 principal：${principal.principalId}`,
+        `已停用 MCP server：${server.serverName}`,
+        "查看：/mcp list",
+      ].join("\n"),
+    );
+  }
+
+  private async handleMcpRemoveCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const serverName = normalizeText(args[0]);
+
+    if (!serverName || args.length !== 1) {
+      await this.sendMcpRemoveHelp(context.chatId, context, args.join(" ") || undefined);
+      return;
+    }
+
+    const principal = this.ensurePrincipalIdentity(context);
+    const result = this.runtime.getPrincipalMcpService().removePrincipalMcpServer(principal.principalId, serverName);
+
+    await this.safeSendText(
+      context.chatId,
+      [
+        `当前 principal：${principal.principalId}`,
+        `已删除 MCP server：${result.serverName}`,
+        `已清理 runtime 物化状态：${result.removedMaterializations}`,
+        "查看：/mcp list",
+      ].join("\n"),
+    );
+  }
+
+  private async handleMcpOauthCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const serverName = normalizeText(args[0]);
+
+    if (!serverName || args.length !== 1) {
+      await this.sendMcpOauthHelp(context.chatId, context, args.join(" ") || undefined);
+      return;
+    }
+
+    const principal = this.ensurePrincipalIdentity(context);
+    const result = await this.runtime.getPrincipalMcpService().startPrincipalMcpOauthLogin(
+      principal.principalId,
+      serverName,
+      {
+        workingDirectory: this.runtime.getWorkingDirectory(),
+        activeAuthAccount: this.authRuntime.getActiveAccount(),
+      },
+    );
+
+    await this.safeSendText(
+      context.chatId,
+      [
+        `当前 principal：${principal.principalId}`,
+        `已发起 MCP OAuth 登录：${result.server.serverName}`,
+        `当前槽位：${result.target.targetId}`,
+        `授权链接：${result.authorizationUrl}`,
+        "完成授权后建议执行：/mcp reload",
+      ].join("\n"),
+    );
+  }
+
+  private async handlePluginsReadCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const marketplaceToken = normalizeText(args[0]);
+    const pluginName = normalizeText(args[1]);
+
+    if (!marketplaceToken || !pluginName || args.length !== 2) {
+      await this.sendPluginsReadHelp(context.chatId, context, args.join(" ") || undefined);
+      return;
+    }
+
+    const { marketplaceName, marketplacePath } = await this.resolvePluginMarketplaceReference(marketplaceToken, context);
+    const result = await this.runtime.getPluginService().readPlugin({
+      marketplacePath,
+      pluginName,
+    }, this.buildPluginRuntimeOptions(context));
+    const lines = [
+      "Plugin 详情：",
+      `当前槽位：${result.target.targetId}`,
+      `marketplace：${marketplaceName}`,
+      `plugin：${result.plugin.summary.name}`,
+      `pluginId：${result.plugin.summary.id}`,
+      `安装状态：${result.plugin.summary.installed ? "已安装" : "未安装"}`,
+      `安装策略：${formatPluginInstallPolicy(result.plugin.summary.installPolicy)}`,
+      `认证策略：${formatPluginAuthPolicy(result.plugin.summary.authPolicy)}`,
+      `说明：${result.plugin.description || result.plugin.summary.interface?.shortDescription || "暂无说明"}`,
+      result.plugin.skills.length > 0 ? `附带 skills：${result.plugin.skills.map((item) => item.name).join(", ")}` : "附带 skills：无",
+      result.plugin.apps.length > 0 ? `附带 apps：${result.plugin.apps.map((item) => item.name).join(", ")}` : "附带 apps：无",
+      result.plugin.mcpServers.length > 0 ? `附带 MCP：${result.plugin.mcpServers.join(", ")}` : "附带 MCP：无",
+      "查看：/plugins list",
+    ];
+
+    await this.safeSendText(context.chatId, lines.join("\n"));
+  }
+
+  private async handlePluginsInstallCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const marketplaceToken = normalizeText(args[0]);
+    const pluginName = normalizeText(args[1]);
+
+    if (!marketplaceToken || !pluginName || args.length !== 2) {
+      await this.sendPluginsInstallHelp(context.chatId, context, args.join(" ") || undefined);
+      return;
+    }
+
+    const { marketplaceName, marketplacePath } = await this.resolvePluginMarketplaceReference(marketplaceToken, context);
+    const result = await this.runtime.getPluginService().installPlugin({
+      marketplacePath,
+      pluginName,
+    }, this.buildPluginRuntimeOptions(context));
+    const lines = [
+      "Plugin 已安装：",
+      `当前槽位：${result.target.targetId}`,
+      `marketplace：${marketplaceName}`,
+      `plugin：${result.pluginName}`,
+      `认证策略：${formatPluginAuthPolicy(result.authPolicy)}`,
+      result.appsNeedingAuth.length > 0
+        ? `待补认证 apps：${result.appsNeedingAuth.map((item) => item.name).join(", ")}`
+        : "待补认证 apps：无",
+      "查看：/plugins list",
+    ];
+
+    await this.safeSendText(context.chatId, lines.join("\n"));
+  }
+
+  private async handlePluginsUninstallCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const pluginId = normalizeText(args[0]);
+
+    if (!pluginId || args.length !== 1) {
+      await this.sendPluginsUninstallHelp(context.chatId, context, args.join(" ") || undefined);
+      return;
+    }
+
+    const result = await this.runtime.getPluginService().uninstallPlugin({
+      pluginId,
+    }, this.buildPluginRuntimeOptions(context));
+
+    await this.safeSendText(
+      context.chatId,
+      [
+        "Plugin 已卸载：",
+        `当前槽位：${result.target.targetId}`,
+        `pluginId：${result.pluginId}`,
+        "查看：/plugins list",
+      ].join("\n"),
+    );
   }
 
   private async handleSkillsRemoveCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
@@ -2989,6 +3266,358 @@ export class FeishuChannelService {
     ];
 
     await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendMcpHelp(
+    chatId: string,
+    context: FeishuIncomingContext,
+    invalidSegment?: string,
+  ): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const lines = [
+      "MCP 管理：",
+      `当前 principal：${principal.principalId}`,
+      invalidSegment ? `未识别的 MCP 子命令：${invalidSegment}` : null,
+      "/mcp 查看和维护当前 principal 的 MCP server",
+      "/mcp list 查看当前 principal 已定义的 MCP server",
+      "/mcp reload 重新读取当前 runtime 槽位的 MCP 状态",
+      "/mcp enable <NAME> 启用 MCP server",
+      "/mcp disable <NAME> 停用 MCP server",
+      "/mcp remove <NAME> 删除 MCP server",
+      "/mcp oauth <NAME> 发起 MCP server OAuth 登录",
+      "",
+      "如果想先看当前列表，请发送 /mcp list。",
+    ].filter((line): line is string => line !== null);
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendMcpList(chatId: string, context: FeishuIncomingContext): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const servers = this.runtime.getPrincipalMcpService().listPrincipalMcpServers(principal.principalId);
+
+    if (!servers.length) {
+      await this.safeSendText(
+        chatId,
+        [
+          `当前 principal：${principal.principalId}`,
+          "MCP servers",
+          "已定义总数：0",
+          "暂无 MCP server。",
+          "查看：/mcp reload",
+        ].join("\n"),
+      );
+      return;
+    }
+
+    const lines = [
+      `当前 principal：${principal.principalId}`,
+      "MCP servers",
+      `已定义总数：${servers.length}`,
+      "",
+      ...servers.flatMap((server, index) => {
+        const args = safeParseMcpArgs(server.argsJson);
+        const env = safeParseMcpEnv(server.envJson);
+        const commandCopy = [server.command, ...args].join(" ").trim();
+        const linesForServer = [
+          `${index + 1}. ${server.serverName} ${server.enabled ? "[已启用]" : "[已停用]"}`,
+          `   command：${commandCopy || server.command}`,
+          `   来源：${describeMcpSource(server.sourceType)}`,
+          server.cwd ? `   cwd：${server.cwd}` : null,
+          Object.keys(env).length > 0 ? `   env keys：${Object.keys(env).join(", ")}` : null,
+          `   ${formatMcpSummary(server.summary)}`,
+        ].filter((line): line is string => line !== null);
+
+        for (const materialization of server.materializations) {
+          const detail = materialization.lastError ? `：${materialization.lastError}` : "";
+          linesForServer.push(
+            `   槽位 ${materialization.targetId} [${materialization.state}/${materialization.authState}]${detail}`,
+          );
+        }
+
+        if (index < servers.length - 1) {
+          linesForServer.push("");
+        }
+
+        return linesForServer;
+      }),
+      "",
+      "查看：/mcp reload",
+    ];
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendMcpReloadHelp(
+    chatId: string,
+    context: FeishuIncomingContext,
+    invalidValue?: string,
+  ): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const lines = [
+      "用法：/mcp reload",
+      `当前 principal：${principal.principalId}`,
+      invalidValue ? `reload 不需要额外参数：${invalidValue}` : null,
+      "/mcp reload 重新读取当前 runtime 槽位的 MCP 状态",
+      "如果想先看当前定义，请发送 /mcp list。",
+    ].filter((line): line is string => line !== null);
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendMcpToggleHelp(
+    chatId: string,
+    context: FeishuIncomingContext,
+    command: "enable" | "disable",
+    invalidValue?: string,
+  ): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const lines = [
+      `用法：/mcp ${command} <NAME>`,
+      `当前 principal：${principal.principalId}`,
+      invalidValue ? `缺少或无法识别 MCP server 名称：${invalidValue}` : null,
+      `/mcp ${command} <NAME> ${command === "enable" ? "启用" : "停用"} MCP server`,
+      "如果想查看当前定义，请发送 /mcp list。",
+    ].filter((line): line is string => line !== null);
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendMcpRemoveHelp(
+    chatId: string,
+    context: FeishuIncomingContext,
+    invalidValue?: string,
+  ): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const lines = [
+      "用法：/mcp remove <NAME>",
+      `当前 principal：${principal.principalId}`,
+      invalidValue ? `缺少或无法识别 MCP server 名称：${invalidValue}` : null,
+      "/mcp remove <NAME> 删除 MCP server",
+      "如果想查看当前定义，请发送 /mcp list。",
+    ].filter((line): line is string => line !== null);
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendMcpOauthHelp(
+    chatId: string,
+    context: FeishuIncomingContext,
+    invalidValue?: string,
+  ): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const lines = [
+      "用法：/mcp oauth <NAME>",
+      `当前 principal：${principal.principalId}`,
+      invalidValue ? `缺少或无法识别 MCP server 名称：${invalidValue}` : null,
+      "/mcp oauth <NAME> 发起 MCP server OAuth 登录",
+      "完成授权后建议执行 /mcp reload。",
+    ].filter((line): line is string => line !== null);
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendPluginsHelp(
+    chatId: string,
+    context: FeishuIncomingContext,
+    invalidSegment?: string,
+  ): Promise<void> {
+    const result = await this.runtime.getPluginService().listPlugins({
+      ...this.buildPluginRuntimeOptions(context),
+    });
+    const lines = [
+      "Plugins 管理：",
+      `当前槽位：${result.target.targetId}`,
+      invalidSegment ? `未识别的 plugins 子命令：${invalidSegment}` : null,
+      "当前这组 plugins 属于 Codex 运行环境，不属于 principal 长期资产。",
+      "/plugins 查看当前环境可见的 plugin marketplace",
+      "/plugins list 查看当前环境里的 marketplaces 和 plugins",
+      "/plugins read <MARKETPLACE> <PLUGIN_NAME> 查看 plugin 详情",
+      "/plugins install <MARKETPLACE> <PLUGIN_NAME> 安装 plugin",
+      "/plugins uninstall <PLUGIN_ID> 卸载 plugin",
+      "",
+      "第一版支持用 marketplace 名称或 marketplacePath 指向 marketplace。",
+      "如果想先看当前列表，请发送 /plugins list。",
+    ].filter((line): line is string => line !== null);
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendPluginsList(chatId: string, _context: FeishuIncomingContext): Promise<void> {
+    const context = _context;
+    const result = await this.runtime.getPluginService().listPlugins({
+      ...this.buildPluginRuntimeOptions(context),
+    });
+
+    if (!result.marketplaces.length) {
+      await this.safeSendText(
+        chatId,
+        [
+          `当前槽位：${result.target.targetId}`,
+          "Plugins",
+          "marketplaces：0",
+          "当前运行环境还没有可见 plugin marketplace。",
+        ].join("\n"),
+      );
+      return;
+    }
+
+    const lines = [
+      `当前槽位：${result.target.targetId}`,
+      "Plugins",
+      `marketplaces：${result.marketplaces.length}`,
+      result.remoteSyncError ? `远程同步异常：${result.remoteSyncError}` : null,
+      result.marketplaceLoadErrors.length > 0 ? `读取失败的 marketplace：${result.marketplaceLoadErrors.length}` : null,
+      "",
+      ...result.marketplaces.flatMap((marketplace, marketplaceIndex) => {
+        const marketplaceLines = [
+          `${marketplaceIndex + 1}. ${marketplace.interface?.displayName || marketplace.name}`,
+          `   name：${marketplace.name}`,
+          `   path：${marketplace.path}`,
+        ];
+
+        if (!marketplace.plugins.length) {
+          marketplaceLines.push("   当前没有可见 plugin。");
+          if (marketplaceIndex < result.marketplaces.length - 1) {
+            marketplaceLines.push("");
+          }
+          return marketplaceLines;
+        }
+
+        for (const plugin of marketplace.plugins) {
+          const capabilityCopy = plugin.interface?.capabilities?.length
+            ? plugin.interface.capabilities.join(", ")
+            : "暂无能力标签";
+          marketplaceLines.push(`   - ${plugin.name} ${plugin.installed ? "[已安装]" : "[未安装]"}`);
+          marketplaceLines.push(`     pluginId：${plugin.id}`);
+          marketplaceLines.push(`     安装策略：${formatPluginInstallPolicy(plugin.installPolicy)}`);
+          marketplaceLines.push(`     认证策略：${formatPluginAuthPolicy(plugin.authPolicy)}`);
+          marketplaceLines.push(`     能力：${capabilityCopy}`);
+        }
+
+        if (marketplaceIndex < result.marketplaces.length - 1) {
+          marketplaceLines.push("");
+        }
+
+        return marketplaceLines;
+      }),
+      "",
+      "查看详情：/plugins read <MARKETPLACE> <PLUGIN_NAME>",
+    ].filter((line): line is string => line !== null);
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendPluginsReadHelp(
+    chatId: string,
+    context: FeishuIncomingContext,
+    invalidValue?: string,
+  ): Promise<void> {
+    const result = await this.runtime.getPluginService().listPlugins({
+      ...this.buildPluginRuntimeOptions(context),
+    });
+    const lines = [
+      "用法：/plugins read <MARKETPLACE> <PLUGIN_NAME>",
+      `当前槽位：${result.target.targetId}`,
+      invalidValue ? `参数不完整或格式不正确：${invalidValue}` : null,
+      "MARKETPLACE 支持 marketplace 名称或完整 marketplacePath。",
+      "如果想先看当前列表，请发送 /plugins list。",
+    ].filter((line): line is string => line !== null);
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendPluginsInstallHelp(
+    chatId: string,
+    context: FeishuIncomingContext,
+    invalidValue?: string,
+  ): Promise<void> {
+    const result = await this.runtime.getPluginService().listPlugins({
+      ...this.buildPluginRuntimeOptions(context),
+    });
+    const lines = [
+      "用法：/plugins install <MARKETPLACE> <PLUGIN_NAME>",
+      `当前槽位：${result.target.targetId}`,
+      invalidValue ? `参数不完整或格式不正确：${invalidValue}` : null,
+      "MARKETPLACE 支持 marketplace 名称或完整 marketplacePath。",
+      "如果想先看当前列表，请发送 /plugins list。",
+    ].filter((line): line is string => line !== null);
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendPluginsUninstallHelp(
+    chatId: string,
+    context: FeishuIncomingContext,
+    invalidValue?: string,
+  ): Promise<void> {
+    const result = await this.runtime.getPluginService().listPlugins({
+      ...this.buildPluginRuntimeOptions(context),
+    });
+    const lines = [
+      "用法：/plugins uninstall <PLUGIN_ID>",
+      `当前槽位：${result.target.targetId}`,
+      invalidValue ? `参数不完整或格式不正确：${invalidValue}` : null,
+      "pluginId 可先通过 /plugins list 查看。",
+    ].filter((line): line is string => line !== null);
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async resolvePluginMarketplaceReference(
+    marketplaceToken: string,
+    context: FeishuIncomingContext,
+  ): Promise<{
+    marketplaceName: string;
+    marketplacePath: string;
+  }> {
+    const normalizedToken = normalizeText(marketplaceToken);
+
+    if (!normalizedToken) {
+      throw new Error("plugin marketplace 不能为空。");
+    }
+
+    const result = await this.runtime.getPluginService().listPlugins({
+      ...this.buildPluginRuntimeOptions(context),
+    });
+    const matched = result.marketplaces.filter((marketplace) =>
+      marketplace.path === normalizedToken || marketplace.name === normalizedToken
+    );
+
+    if (matched.length === 1) {
+      return {
+        marketplaceName: matched[0]?.name ?? normalizedToken,
+        marketplacePath: matched[0]?.path ?? normalizedToken,
+      };
+    }
+
+    if (matched.length > 1) {
+      throw new Error(`找到多个同名 marketplace：${normalizedToken}，请改用完整 marketplacePath。`);
+    }
+
+    throw new Error(`未找到 marketplace：${normalizedToken}。请先执行 /plugins list。`);
+  }
+
+  private buildPluginRuntimeOptions(
+    context: FeishuIncomingContext,
+    options: {
+      forceRemoteSync?: boolean;
+    } = {},
+  ): {
+    activeAuthAccount: ReturnType<CodexAuthRuntime["getActiveAccount"]>;
+    cwd?: string;
+    forceRemoteSync?: boolean;
+  } {
+    const sessionId = this.sessionStore.getActiveSessionId(this.resolveConversationKey(context));
+    const workspacePath = sessionId
+      ? normalizeText(this.readSessionTaskSettings(sessionId).workspacePath)
+      : null;
+
+    return {
+      activeAuthAccount: this.authRuntime.getActiveAccount(),
+      ...(workspacePath ? { cwd: workspacePath } : {}),
+      ...(options.forceRemoteSync === true ? { forceRemoteSync: true } : {}),
+    };
   }
 
   private async sendSessionList(chatId: string, context: FeishuIncomingContext): Promise<void> {
@@ -4921,6 +5550,109 @@ function formatSkillSyncSummary(summary: {
   failedCount: number;
 }): string {
   return `已同步 ${summary.syncedCount}/${summary.totalAccounts}，冲突 ${summary.conflictCount}，失败 ${summary.failedCount}`;
+}
+
+function formatMcpSummary(summary: {
+  totalTargets: number;
+  readyCount: number;
+  authRequiredCount: number;
+  failedCount: number;
+}): string {
+  return `runtime 槽位 ${summary.totalTargets} 个，已就绪 ${summary.readyCount}，待认证 ${summary.authRequiredCount}，失败 ${summary.failedCount}`;
+}
+
+function summarizePrincipalMcpList(servers: Array<{
+  summary: {
+    readyCount: number;
+    authRequiredCount: number;
+    failedCount: number;
+  };
+}>): {
+  readyCount: number;
+  authRequiredCount: number;
+  failedCount: number;
+} {
+  return servers.reduce((accumulator, server) => ({
+    readyCount: accumulator.readyCount + (server.summary?.readyCount ?? 0),
+    authRequiredCount: accumulator.authRequiredCount + (server.summary?.authRequiredCount ?? 0),
+    failedCount: accumulator.failedCount + (server.summary?.failedCount ?? 0),
+  }), {
+    readyCount: 0,
+    authRequiredCount: 0,
+    failedCount: 0,
+  });
+}
+
+function describeMcpSource(sourceType: string): string {
+  switch (normalizeText(sourceType)?.toLowerCase()) {
+    case "manual":
+      return "手工";
+    case "themis-managed":
+      return "Themis 注入";
+    default:
+      return sourceType || "未知来源";
+  }
+}
+
+function formatPluginInstallPolicy(value: string): string {
+  switch (normalizeText(value)?.toUpperCase()) {
+    case "AVAILABLE":
+      return "可安装";
+    case "INSTALLED_BY_DEFAULT":
+      return "默认安装";
+    case "NOT_AVAILABLE":
+      return "不可安装";
+    default:
+      return value || "未知";
+  }
+}
+
+function formatPluginAuthPolicy(value: string): string {
+  switch (normalizeText(value)?.toUpperCase()) {
+    case "ON_INSTALL":
+      return "安装时认证";
+    case "ON_USE":
+      return "使用时认证";
+    default:
+      return value || "未知";
+  }
+}
+
+function safeParseMcpArgs(argsJson: string): string[] {
+  try {
+    const parsed = JSON.parse(argsJson);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function safeParseMcpEnv(envJson: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(envJson);
+
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+
+    const normalized: Record<string, string> = {};
+
+    for (const [key, value] of Object.entries(parsed)) {
+      const normalizedKey = key.trim();
+
+      if (!normalizedKey || typeof value !== "string") {
+        continue;
+      }
+
+      normalized[normalizedKey] = value;
+    }
+
+    return normalized;
+  } catch {
+    return {};
+  }
 }
 
 function describeSkillSource(sourceType: string, sourceRefJson: string): string {

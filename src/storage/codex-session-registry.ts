@@ -6,6 +6,17 @@ import {
   normalizePrincipalTaskSettings,
 } from "../core/principal-task-settings.js";
 import {
+  normalizePrincipalMcpAuthState,
+  normalizePrincipalMcpMaterializationRecordInput,
+  normalizePrincipalMcpMaterializationState,
+  normalizePrincipalMcpMaterializationTargetKind,
+  normalizePrincipalMcpServerRecordInput,
+  normalizePrincipalMcpSourceType,
+  normalizePrincipalMcpTransportType,
+  type StoredPrincipalMcpMaterializationRecord,
+  type StoredPrincipalMcpServerRecord,
+} from "../core/principal-mcp.js";
+import {
   normalizePrincipalSkillInstallStatus,
   normalizePrincipalSkillMaterializationRecordInput,
   normalizePrincipalSkillMaterializationState,
@@ -113,7 +124,7 @@ import type {
   StoredScheduledTaskRunRecord,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 27;
+const DATABASE_SCHEMA_VERSION = 28;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -408,6 +419,31 @@ interface PrincipalSkillMaterializationRow {
   target_id: string;
   target_path: string;
   state: string;
+  last_synced_at: string | null;
+  last_error: string | null;
+}
+
+interface PrincipalMcpServerRow {
+  principal_id: string;
+  server_name: string;
+  transport_type: string;
+  command: string;
+  args_json: string;
+  env_json: string;
+  cwd: string | null;
+  enabled: number;
+  source_type: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PrincipalMcpMaterializationRow {
+  principal_id: string;
+  server_name: string;
+  target_kind: string;
+  target_id: string;
+  state: string;
+  auth_state: string;
   last_synced_at: string | null;
   last_error: string | null;
 }
@@ -6167,6 +6203,315 @@ export class SqliteCodexSessionRegistry {
     return result.changes;
   }
 
+  getPrincipalMcpServer(principalId: string, serverName: string): StoredPrincipalMcpServerRecord | null {
+    const normalizedPrincipalId = principalId.trim();
+    const normalizedServerName = serverName.trim();
+
+    if (!normalizedPrincipalId || !normalizedServerName) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            principal_id,
+            server_name,
+            transport_type,
+            command,
+            args_json,
+            env_json,
+            cwd,
+            enabled,
+            source_type,
+            created_at,
+            updated_at
+          FROM themis_principal_mcp_servers
+          WHERE principal_id = ?
+            AND server_name = ?
+        `,
+      )
+      .get(normalizedPrincipalId, normalizedServerName) as PrincipalMcpServerRow | undefined;
+
+    return row ? mapPrincipalMcpServerRow(row) : null;
+  }
+
+  listPrincipalMcpServers(principalId: string): StoredPrincipalMcpServerRecord[] {
+    const normalizedPrincipalId = principalId.trim();
+
+    if (!normalizedPrincipalId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            principal_id,
+            server_name,
+            transport_type,
+            command,
+            args_json,
+            env_json,
+            cwd,
+            enabled,
+            source_type,
+            created_at,
+            updated_at
+          FROM themis_principal_mcp_servers
+          WHERE principal_id = ?
+          ORDER BY server_name ASC
+        `,
+      )
+      .all(normalizedPrincipalId) as PrincipalMcpServerRow[];
+
+    return rows.map(mapPrincipalMcpServerRow);
+  }
+
+  savePrincipalMcpServer(record: StoredPrincipalMcpServerRecord): void {
+    const normalizedRecord = normalizePrincipalMcpServerRecordInput(record);
+    const transportType = normalizePrincipalMcpTransportType(normalizedRecord.transportType);
+    const sourceType = normalizePrincipalMcpSourceType(normalizedRecord.sourceType);
+
+    if (
+      !normalizedRecord.principalId ||
+      !normalizedRecord.serverName ||
+      !transportType ||
+      !normalizedRecord.command ||
+      !normalizedRecord.argsJson ||
+      !normalizedRecord.envJson ||
+      typeof normalizedRecord.enabled !== "boolean" ||
+      !sourceType ||
+      !normalizedRecord.createdAt ||
+      !normalizedRecord.updatedAt
+    ) {
+      throw new Error("Principal MCP server record is incomplete.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_principal_mcp_servers (
+            principal_id,
+            server_name,
+            transport_type,
+            command,
+            args_json,
+            env_json,
+            cwd,
+            enabled,
+            source_type,
+            created_at,
+            updated_at
+          ) VALUES (
+            @principal_id,
+            @server_name,
+            @transport_type,
+            @command,
+            @args_json,
+            @env_json,
+            @cwd,
+            @enabled,
+            @source_type,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(principal_id, server_name) DO UPDATE SET
+            transport_type = excluded.transport_type,
+            command = excluded.command,
+            args_json = excluded.args_json,
+            env_json = excluded.env_json,
+            cwd = excluded.cwd,
+            enabled = excluded.enabled,
+            source_type = excluded.source_type,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        principal_id: normalizedRecord.principalId,
+        server_name: normalizedRecord.serverName,
+        transport_type: transportType,
+        command: normalizedRecord.command,
+        args_json: normalizedRecord.argsJson,
+        env_json: normalizedRecord.envJson,
+        cwd: normalizedRecord.cwd ?? null,
+        enabled: normalizedRecord.enabled ? 1 : 0,
+        source_type: sourceType,
+        created_at: normalizedRecord.createdAt,
+        updated_at: normalizedRecord.updatedAt,
+      });
+  }
+
+  deletePrincipalMcpServer(principalId: string, serverName: string): boolean {
+    const normalizedPrincipalId = principalId.trim();
+    const normalizedServerName = serverName.trim();
+
+    if (!normalizedPrincipalId || !normalizedServerName) {
+      return false;
+    }
+
+    const result = this.db
+      .prepare(
+        `
+          DELETE FROM themis_principal_mcp_servers
+          WHERE principal_id = ?
+            AND server_name = ?
+        `,
+      )
+      .run(normalizedPrincipalId, normalizedServerName);
+
+    return result.changes > 0;
+  }
+
+  savePrincipalMcpMaterialization(record: StoredPrincipalMcpMaterializationRecord): void {
+    const normalizedRecord = normalizePrincipalMcpMaterializationRecordInput(record);
+    const targetKind = normalizePrincipalMcpMaterializationTargetKind(normalizedRecord.targetKind);
+    const state = normalizePrincipalMcpMaterializationState(normalizedRecord.state);
+    const authState = normalizePrincipalMcpAuthState(normalizedRecord.authState);
+
+    if (
+      !normalizedRecord.principalId ||
+      !normalizedRecord.serverName ||
+      !targetKind ||
+      !normalizedRecord.targetId ||
+      !state ||
+      !authState
+    ) {
+      throw new Error("Principal MCP materialization record is incomplete.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_principal_mcp_materializations (
+            principal_id,
+            server_name,
+            target_kind,
+            target_id,
+            state,
+            auth_state,
+            last_synced_at,
+            last_error
+          ) VALUES (
+            @principal_id,
+            @server_name,
+            @target_kind,
+            @target_id,
+            @state,
+            @auth_state,
+            @last_synced_at,
+            @last_error
+          )
+          ON CONFLICT(principal_id, server_name, target_kind, target_id) DO UPDATE SET
+            state = excluded.state,
+            auth_state = excluded.auth_state,
+            last_synced_at = excluded.last_synced_at,
+            last_error = excluded.last_error
+        `,
+      )
+      .run({
+        principal_id: normalizedRecord.principalId,
+        server_name: normalizedRecord.serverName,
+        target_kind: targetKind,
+        target_id: normalizedRecord.targetId,
+        state,
+        auth_state: authState,
+        last_synced_at: normalizedRecord.lastSyncedAt ?? null,
+        last_error: normalizedRecord.lastError ?? null,
+      });
+  }
+
+  listPrincipalMcpMaterializations(
+    principalId: string,
+    serverName?: string,
+  ): StoredPrincipalMcpMaterializationRecord[] {
+    const normalizedPrincipalId = principalId.trim();
+
+    if (!normalizedPrincipalId) {
+      return [];
+    }
+
+    if (typeof serverName === "string" && serverName.trim()) {
+      const normalizedServerName = serverName.trim();
+      const rows = this.db
+        .prepare(
+          `
+            SELECT
+              principal_id,
+              server_name,
+              target_kind,
+              target_id,
+              state,
+              auth_state,
+              last_synced_at,
+              last_error
+            FROM themis_principal_mcp_materializations
+            WHERE principal_id = ?
+              AND server_name = ?
+            ORDER BY target_kind ASC, target_id ASC
+          `,
+        )
+        .all(normalizedPrincipalId, normalizedServerName) as PrincipalMcpMaterializationRow[];
+
+      return rows.map(mapPrincipalMcpMaterializationRow);
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            principal_id,
+            server_name,
+            target_kind,
+            target_id,
+            state,
+            auth_state,
+            last_synced_at,
+            last_error
+          FROM themis_principal_mcp_materializations
+          WHERE principal_id = ?
+          ORDER BY server_name ASC, target_kind ASC, target_id ASC
+        `,
+      )
+      .all(normalizedPrincipalId) as PrincipalMcpMaterializationRow[];
+
+    return rows.map(mapPrincipalMcpMaterializationRow);
+  }
+
+  deletePrincipalMcpMaterializations(principalId: string, serverName?: string): number {
+    const normalizedPrincipalId = principalId.trim();
+
+    if (!normalizedPrincipalId) {
+      return 0;
+    }
+
+    if (typeof serverName === "string" && serverName.trim()) {
+      const normalizedServerName = serverName.trim();
+      const result = this.db
+        .prepare(
+          `
+            DELETE FROM themis_principal_mcp_materializations
+            WHERE principal_id = ?
+              AND server_name = ?
+          `,
+        )
+        .run(normalizedPrincipalId, normalizedServerName);
+
+      return result.changes;
+    }
+
+    const result = this.db
+      .prepare(
+        `
+          DELETE FROM themis_principal_mcp_materializations
+          WHERE principal_id = ?
+        `,
+      )
+      .run(normalizedPrincipalId);
+
+    return result.changes;
+  }
+
   getPrincipalPersonaProfile(principalId: string): StoredPrincipalPersonaProfileRecord | null {
     const normalized = principalId.trim();
 
@@ -6856,6 +7201,24 @@ export class SqliteCodexSessionRegistry {
         )
         .run(normalizedPrincipalId);
 
+      this.db
+        .prepare(
+          `
+            DELETE FROM themis_principal_mcp_materializations
+            WHERE principal_id = ?
+          `,
+        )
+        .run(normalizedPrincipalId);
+
+      this.db
+        .prepare(
+          `
+            DELETE FROM themis_principal_mcp_servers
+            WHERE principal_id = ?
+          `,
+        )
+        .run(normalizedPrincipalId);
+
       const clearedLinkCodeCount = this.db
         .prepare(
           `
@@ -7096,6 +7459,32 @@ export class SqliteCodexSessionRegistry {
 
         for (const materialization of sourceMaterializations) {
           this.savePrincipalSkillMaterialization({
+            ...materialization,
+            principalId: targetId,
+          });
+        }
+      }
+
+      const sourceMcpServers = this.listPrincipalMcpServers(sourceId);
+      const targetMcpServerNames = new Set(
+        this.listPrincipalMcpServers(targetId).map((server) => server.serverName),
+      );
+
+      for (const server of sourceMcpServers) {
+        if (targetMcpServerNames.has(server.serverName)) {
+          continue;
+        }
+
+        this.savePrincipalMcpServer({
+          ...server,
+          principalId: targetId,
+          updatedAt,
+        });
+
+        const sourceMaterializations = this.listPrincipalMcpMaterializations(sourceId, server.serverName);
+
+        for (const materialization of sourceMaterializations) {
+          this.savePrincipalMcpMaterialization({
             ...materialization,
             principalId: targetId,
           });
@@ -8174,6 +8563,37 @@ export class SqliteCodexSessionRegistry {
           ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS themis_principal_mcp_servers (
+        principal_id TEXT NOT NULL,
+        server_name TEXT NOT NULL,
+        transport_type TEXT NOT NULL,
+        command TEXT NOT NULL,
+        args_json TEXT NOT NULL,
+        env_json TEXT NOT NULL,
+        cwd TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        source_type TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (principal_id, server_name),
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS themis_principal_mcp_materializations (
+        principal_id TEXT NOT NULL,
+        server_name TEXT NOT NULL,
+        target_kind TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        state TEXT NOT NULL,
+        auth_state TEXT NOT NULL,
+        last_synced_at TEXT,
+        last_error TEXT,
+        PRIMARY KEY (principal_id, server_name, target_kind, target_id),
+        FOREIGN KEY (principal_id, server_name)
+          REFERENCES themis_principal_mcp_servers(principal_id, server_name)
+          ON DELETE CASCADE
+      );
+
       CREATE TABLE IF NOT EXISTS themis_principal_persona_profiles (
         principal_id TEXT PRIMARY KEY,
         profile_json TEXT NOT NULL,
@@ -9131,6 +9551,37 @@ export class SqliteCodexSessionRegistry {
         PRIMARY KEY (principal_id, skill_name, target_kind, target_id),
         FOREIGN KEY (principal_id, skill_name)
           REFERENCES themis_principal_skills(principal_id, skill_name)
+          ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS themis_principal_mcp_servers (
+        principal_id TEXT NOT NULL,
+        server_name TEXT NOT NULL,
+        transport_type TEXT NOT NULL,
+        command TEXT NOT NULL,
+        args_json TEXT NOT NULL,
+        env_json TEXT NOT NULL,
+        cwd TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        source_type TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (principal_id, server_name),
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS themis_principal_mcp_materializations (
+        principal_id TEXT NOT NULL,
+        server_name TEXT NOT NULL,
+        target_kind TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        state TEXT NOT NULL,
+        auth_state TEXT NOT NULL,
+        last_synced_at TEXT,
+        last_error TEXT,
+        PRIMARY KEY (principal_id, server_name, target_kind, target_id),
+        FOREIGN KEY (principal_id, server_name)
+          REFERENCES themis_principal_mcp_servers(principal_id, server_name)
           ON DELETE CASCADE
       );
 
@@ -10113,6 +10564,37 @@ function mapPrincipalSkillMaterializationRow(
     targetId: row.target_id,
     targetPath: row.target_path,
     state: row.state as StoredPrincipalSkillMaterializationRecord["state"],
+    ...(row.last_synced_at ? { lastSyncedAt: row.last_synced_at } : {}),
+    ...(row.last_error ? { lastError: row.last_error } : {}),
+  };
+}
+
+function mapPrincipalMcpServerRow(row: PrincipalMcpServerRow): StoredPrincipalMcpServerRecord {
+  return {
+    principalId: row.principal_id,
+    serverName: row.server_name,
+    transportType: row.transport_type as StoredPrincipalMcpServerRecord["transportType"],
+    command: row.command,
+    argsJson: row.args_json,
+    envJson: row.env_json,
+    ...(row.cwd ? { cwd: row.cwd } : {}),
+    enabled: row.enabled === 1,
+    sourceType: row.source_type as StoredPrincipalMcpServerRecord["sourceType"],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapPrincipalMcpMaterializationRow(
+  row: PrincipalMcpMaterializationRow,
+): StoredPrincipalMcpMaterializationRecord {
+  return {
+    principalId: row.principal_id,
+    serverName: row.server_name,
+    targetKind: row.target_kind as StoredPrincipalMcpMaterializationRecord["targetKind"],
+    targetId: row.target_id,
+    state: row.state as StoredPrincipalMcpMaterializationRecord["state"],
+    authState: row.auth_state as StoredPrincipalMcpMaterializationRecord["authState"],
     ...(row.last_synced_at ? { lastSyncedAt: row.last_synced_at } : {}),
     ...(row.last_error ? { lastError: row.last_error } : {}),
   };

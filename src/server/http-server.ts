@@ -85,6 +85,21 @@ import {
   handleSkillsSync,
 } from "./http-skills.js";
 import {
+  handleMcpDisable,
+  handleMcpEnable,
+  handleMcpList,
+  handleMcpOauthLogin,
+  handleMcpRemove,
+  handleMcpReload,
+  handleMcpUpsert,
+} from "./http-mcp.js";
+import {
+  handlePluginsInstall,
+  handlePluginsList,
+  handlePluginsRead,
+  handlePluginsUninstall,
+} from "./http-plugins.js";
+import {
   handleScheduledTaskCancel,
   handleScheduledTaskCreate,
   handleScheduledTaskList,
@@ -436,6 +451,50 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/skills/catalog/curated") {
         return handleSkillsCuratedCatalog(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/mcp/list") {
+        return handleMcpList(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/mcp/reload") {
+        return handleMcpReload(request, response, runtime, authRuntime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/mcp/upsert") {
+        return handleMcpUpsert(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/mcp/remove") {
+        return handleMcpRemove(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/mcp/oauth/login") {
+        return handleMcpOauthLogin(request, response, runtime, authRuntime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/mcp/enable") {
+        return handleMcpEnable(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/mcp/disable") {
+        return handleMcpDisable(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/plugins/list") {
+        return handlePluginsList(request, response, runtime, authRuntime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/plugins/read") {
+        return handlePluginsRead(request, response, runtime, authRuntime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/plugins/install") {
+        return handlePluginsInstall(request, response, runtime, authRuntime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/plugins/uninstall") {
+        return handlePluginsUninstall(request, response, runtime, authRuntime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/scheduled-tasks/create") {

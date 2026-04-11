@@ -47,7 +47,7 @@ export class McpInspector {
       const response = await session.request<{ data?: unknown }>("mcpServerStatus/list", {});
 
       return {
-        servers: normalizeServerList(response.data),
+        servers: normalizeMcpServerList(response.data),
       };
     } finally {
       await session.close();
@@ -80,7 +80,7 @@ export class McpInspector {
   }
 }
 
-function normalizeServerList(data: unknown): McpServerSummary[] {
+export function normalizeMcpServerList(data: unknown): McpServerSummary[] {
   if (!Array.isArray(data)) {
     return [];
   }

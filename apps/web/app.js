@@ -8,7 +8,9 @@ import { createIdentityController } from "./modules/identity.js";
 import { createInputAssetsApi } from "./modules/input-assets.js";
 import { createLayoutController } from "./modules/layout.js";
 import { createDefaultMemoryCandidatesState, createMemoryCandidatesController } from "./modules/memory-candidates.js";
+import { createDefaultMcpState, createMcpController } from "./modules/mcp.js";
 import { createDefaultModeSwitchDraftState, createModeSwitchController } from "./modules/mode-switch.js";
+import { createDefaultPluginsState, createPluginsController } from "./modules/plugins.js";
 import { createDefaultRuntimeConfigState, createRuntimeConfigController } from "./modules/runtime-config.js";
 import { createSessionSettingsController } from "./modules/session-settings.js";
 import { createDefaultSkillsState, createSkillsController } from "./modules/skills.js";
@@ -52,6 +54,8 @@ const app = {
     workspaceToolsSection: "runtime",
     agents: createDefaultAgentsState(),
     memoryCandidates: createDefaultMemoryCandidatesState(),
+    mcp: createDefaultMcpState(),
+    plugins: createDefaultPluginsState(),
     skills: createDefaultSkillsState(),
     runtimeConfig: createDefaultRuntimeConfigState(),
     modeSwitchDraft: createDefaultModeSwitchDraftState(),
@@ -70,9 +74,13 @@ app.auth = createAuthController(app);
 app.identity = createIdentityController(app);
 app.agents = createAgentsController(app);
 app.memoryCandidates = createMemoryCandidatesController(app);
+app.mcp = createMcpController(app);
+app.plugins = createPluginsController(app);
 app.runtimeConfig = createRuntimeConfigController(app);
 app.sessionSettings = createSessionSettingsController(app);
 app.skills = createSkillsController(app);
+app.mcp.bindControls();
+app.plugins.bindControls();
 app.skills.bindControls();
 app.agents.bindControls();
 app.memoryCandidates.bindControls();

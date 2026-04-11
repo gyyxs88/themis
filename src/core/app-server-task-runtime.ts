@@ -56,6 +56,7 @@ import {
   type OpenAICompatibleProviderConfig,
 } from "./openai-compatible-provider.js";
 import { PrincipalActorsService } from "./principal-actors-service.js";
+import { PrincipalMcpService } from "./principal-mcp-service.js";
 import {
   PrincipalPersonaService,
   type PrincipalPersonaOnboardingInterceptResult,
@@ -128,6 +129,7 @@ export interface AppServerSessionFactoryOptions {
 export interface AppServerTaskRuntimeOptions {
   workingDirectory?: string;
   runtimeStore?: SqliteCodexSessionRegistry;
+  principalMcpService?: PrincipalMcpService;
   principalSkillsService?: PrincipalSkillsService;
   createContextBuilder?: (workingDirectory: string) => ContextBuilder;
   createMemoryService?: (workingDirectory: string) => MemoryService;
@@ -203,6 +205,7 @@ export class AppServerTaskRuntime {
   private readonly managedAgentsService: ManagedAgentsService;
   private readonly managedAgentSchedulerService: ManagedAgentSchedulerService;
   private readonly principalActorsService: PrincipalActorsService;
+  private readonly principalMcpService: PrincipalMcpService;
   private readonly principalSkillsService: PrincipalSkillsService;
   private readonly scheduledTasksService: ScheduledTasksService;
   private readonly createContextBuilder: (workingDirectory: string) => ContextBuilder;
@@ -230,6 +233,9 @@ export class AppServerTaskRuntime {
       registry: this.runtimeStore,
     });
     this.principalActorsService = new PrincipalActorsService({
+      registry: this.runtimeStore,
+    });
+    this.principalMcpService = options.principalMcpService ?? new PrincipalMcpService({
       registry: this.runtimeStore,
     });
     this.principalSkillsService = options.principalSkillsService ?? new PrincipalSkillsService({
@@ -349,10 +355,14 @@ export class AppServerTaskRuntime {
       }
 
       return {
-        sessionFactoryOptions: withThemisScheduledTaskMcpSessionOptions({
-          env,
-          configOverrides: createCodexProviderOverrides(providerConfig),
-        }, this.workingDirectory, request),
+        sessionFactoryOptions: withThemisScheduledTaskMcpSessionOptions(
+          withPrincipalMcpSessionOptions({
+            env,
+            configOverrides: createCodexProviderOverrides(providerConfig),
+          }, principalId, this.principalMcpService),
+          this.workingDirectory,
+          request,
+        ),
         accessMode: "third-party",
         authAccountId: null,
         thirdPartyProviderId: providerConfig.id,
@@ -371,7 +381,11 @@ export class AppServerTaskRuntime {
     if (!account) {
       if (!managedAgent) {
         return {
-          sessionFactoryOptions: withThemisScheduledTaskMcpSessionOptions({}, this.workingDirectory, request),
+          sessionFactoryOptions: withThemisScheduledTaskMcpSessionOptions(
+            withPrincipalMcpSessionOptions({}, principalId, this.principalMcpService),
+            this.workingDirectory,
+            request,
+          ),
           accessMode: "auth",
           authAccountId: null,
           thirdPartyProviderId: null,
@@ -379,12 +393,16 @@ export class AppServerTaskRuntime {
       }
 
       return {
-        sessionFactoryOptions: withThemisScheduledTaskMcpSessionOptions({
-          env: buildCodexProcessEnv(
-            ensureManagedAgentExecutionCodexHome(this.workingDirectory, managedAgent.agentId),
-          ),
-          configOverrides: createCodexAuthStorageConfigOverrides(),
-        }, this.workingDirectory, request),
+        sessionFactoryOptions: withThemisScheduledTaskMcpSessionOptions(
+          withPrincipalMcpSessionOptions({
+            env: buildCodexProcessEnv(
+              ensureManagedAgentExecutionCodexHome(this.workingDirectory, managedAgent.agentId),
+            ),
+            configOverrides: createCodexAuthStorageConfigOverrides(),
+          }, principalId, this.principalMcpService),
+          this.workingDirectory,
+          request,
+        ),
         accessMode: "auth",
         authAccountId: null,
         thirdPartyProviderId: null,
@@ -399,10 +417,14 @@ export class AppServerTaskRuntime {
       : account.codexHome;
 
     return {
-      sessionFactoryOptions: withThemisScheduledTaskMcpSessionOptions({
-        env: buildCodexProcessEnv(codexHome),
-        configOverrides: createCodexAuthStorageConfigOverrides(),
-      }, this.workingDirectory, request),
+      sessionFactoryOptions: withThemisScheduledTaskMcpSessionOptions(
+        withPrincipalMcpSessionOptions({
+          env: buildCodexProcessEnv(codexHome),
+          configOverrides: createCodexAuthStorageConfigOverrides(),
+        }, principalId, this.principalMcpService),
+        this.workingDirectory,
+        request,
+      ),
       accessMode: "auth",
       authAccountId: account.accountId,
       thirdPartyProviderId: null,
@@ -1029,6 +1051,10 @@ export class AppServerTaskRuntime {
 
   getPrincipalSkillsService(): PrincipalSkillsService {
     return this.principalSkillsService;
+  }
+
+  getPrincipalMcpService(): PrincipalMcpService {
+    return this.principalMcpService;
   }
 
   getScheduledTasksService(): ScheduledTasksService {
@@ -2121,6 +2147,32 @@ function withThemisScheduledTaskMcpSessionOptions(
     configOverrides: {
       ...(base.configOverrides ?? {}),
       ...internalMcpOverrides,
+    },
+  };
+}
+
+function withPrincipalMcpSessionOptions(
+  base: AppServerSessionFactoryOptions,
+  principalId: string | undefined,
+  principalMcpService: PrincipalMcpService,
+): AppServerSessionFactoryOptions {
+  const normalizedPrincipalId = normalizeTextValue(principalId);
+
+  if (!normalizedPrincipalId) {
+    return base;
+  }
+
+  const principalMcpOverrides = principalMcpService.buildRuntimeConfigOverrides(normalizedPrincipalId);
+
+  if (!Object.keys(principalMcpOverrides).length) {
+    return base;
+  }
+
+  return {
+    ...base,
+    configOverrides: {
+      ...(base.configOverrides ?? {}),
+      ...principalMcpOverrides,
     },
   };
 }

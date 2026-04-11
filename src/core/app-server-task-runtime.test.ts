@@ -1289,6 +1289,75 @@ test("AppServerTaskRuntime 会把 Themis 定时任务 MCP server 注入 sessionF
   }
 });
 
+test("AppServerTaskRuntime 会把当前 principal 已启用的 MCP 注入 sessionFactory 配置", async () => {
+  const { state, sessionFactory: baseSessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-principal-mcp-1",
+  });
+  const delegateSessionFactory = baseSessionFactory as NonNullable<AppServerTaskRuntimeOptions["sessionFactory"]>;
+  const factoryOptionsHistory: AppServerSessionFactoryOptions[] = [];
+  const fixture = createRuntimeFixture({
+    sessionFactory: async (options) => {
+      factoryOptionsHistory.push(options ?? {});
+      return await delegateSessionFactory();
+    },
+  });
+  const principalId = seedCompletedPrincipalPersona(fixture.runtime, {
+    channel: "web",
+    channelUserId: "browser-user-principal-mcp-1",
+    displayName: "Owner",
+  });
+
+  fixture.runtime.getPrincipalMcpService().upsertPrincipalMcpServer({
+    principalId,
+    serverName: "github",
+    command: "npx",
+    args: ["-y", "@modelcontextprotocol/server-github"],
+    cwd: "/srv/github",
+    env: {
+      GITHUB_TOKEN: "secret",
+    },
+  });
+
+  try {
+    await fixture.runtime.runTaskAsPrincipal({
+      requestId: "req-app-principal-mcp-1",
+      taskId: "task-app-principal-mcp-1",
+      sourceChannel: "web",
+      user: {
+        userId: "browser-user-principal-mcp-1",
+        displayName: "Owner",
+      },
+      goal: "请正常执行这次任务",
+      channelContext: {
+        sessionId: "session-web-principal-mcp-1",
+        channelSessionKey: "session-web-principal-mcp-1",
+      },
+      createdAt: "2026-04-11T00:00:00.000Z",
+    }, {
+      principalId,
+      conversationId: "session-web-principal-mcp-1",
+    });
+
+    assert.equal(state.started.length, 1);
+    assert.equal(factoryOptionsHistory.length, 1);
+    const principalMcpConfig = factoryOptionsHistory[0]?.configOverrides?.["mcp_servers.github"] as {
+      command?: string;
+      args?: string[];
+      cwd?: string;
+      env?: Record<string, string>;
+    } | undefined;
+
+    assert.equal(principalMcpConfig?.command, "npx");
+    assert.deepEqual(principalMcpConfig?.args, ["-y", "@modelcontextprotocol/server-github"]);
+    assert.equal(principalMcpConfig?.cwd, "/srv/github");
+    assert.deepEqual(principalMcpConfig?.env, {
+      GITHUB_TOKEN: "secret",
+    });
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("AppServerTaskRuntime 会在 prompt 里明确注入定时任务工具使用说明", async () => {
   const { state, sessionFactory } = createSessionFactory({
     startThreadId: "thread-app-scheduled-prompt-1",

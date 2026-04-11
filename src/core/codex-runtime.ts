@@ -28,7 +28,9 @@ import { ManagedAgentCoordinationService } from "./managed-agent-coordination-se
 import { ManagedAgentsService } from "./managed-agents-service.js";
 import { ManagedAgentSchedulerService } from "./managed-agent-scheduler-service.js";
 import { PrincipalActorsService } from "./principal-actors-service.js";
+import { PrincipalMcpService } from "./principal-mcp-service.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
+import { PluginService } from "./plugin-service.js";
 import { ScheduledTasksService } from "./scheduled-tasks-service.js";
 import { buildBootstrapPrompt, buildTaskPrompt } from "./prompt.js";
 import { compileTaskInputForRuntime, type CompiledTaskInput } from "./runtime-input-compiler.js";
@@ -86,7 +88,9 @@ export interface CodexTaskRuntimeOptions {
   runtimeStore?: SqliteCodexSessionRegistry;
   providerConfigs?: OpenAICompatibleProviderConfig[] | null;
   providerConfig?: OpenAICompatibleProviderConfig | null;
+  principalMcpService?: PrincipalMcpService;
   principalSkillsService?: PrincipalSkillsService;
+  pluginService?: PluginService;
   createContextBuilder?: (workingDirectory: string) => ContextBuilder;
   createMemoryService?: (workingDirectory: string) => MemoryService;
   createSessionStore?: (options: CodexThreadSessionStoreOptions) => CodexThreadSessionStore;
@@ -117,7 +121,9 @@ export class CodexTaskRuntime {
   private readonly managedAgentsService: ManagedAgentsService;
   private readonly managedAgentSchedulerService: ManagedAgentSchedulerService;
   private readonly principalActorsService: PrincipalActorsService;
+  private readonly principalMcpService: PrincipalMcpService;
   private readonly principalSkillsService: PrincipalSkillsService;
+  private readonly pluginService: PluginService;
   private readonly scheduledTasksService: ScheduledTasksService;
   private readonly createContextBuilder: (workingDirectory: string) => ContextBuilder;
   private readonly createMemoryService: (workingDirectory: string) => MemoryService;
@@ -151,7 +157,14 @@ export class CodexTaskRuntime {
     this.principalActorsService = new PrincipalActorsService({
       registry: this.runtimeStore,
     });
+    this.principalMcpService = options.principalMcpService ?? new PrincipalMcpService({
+      registry: this.runtimeStore,
+    });
     this.principalSkillsService = options.principalSkillsService ?? new PrincipalSkillsService({
+      workingDirectory: this.workingDirectory,
+      registry: this.runtimeStore,
+    });
+    this.pluginService = options.pluginService ?? new PluginService({
       workingDirectory: this.workingDirectory,
       registry: this.runtimeStore,
     });
@@ -684,8 +697,16 @@ export class CodexTaskRuntime {
     return this.principalSkillsService;
   }
 
+  getPrincipalMcpService(): PrincipalMcpService {
+    return this.principalMcpService;
+  }
+
   getScheduledTasksService(): ScheduledTasksService {
     return this.scheduledTasksService;
+  }
+
+  getPluginService(): PluginService {
+    return this.pluginService;
   }
 
   resetPrincipalState(principalId: string, resetAt: string) {

@@ -7,6 +7,7 @@ import type { CodexAppServerNotification, CodexRuntimeCatalog } from "../../core
 import { AppServerActionBridge } from "../../core/app-server-action-bridge.js";
 import { AppServerTaskRuntime } from "../../core/app-server-task-runtime.js";
 import { IdentityLinkService } from "../../core/identity-link-service.js";
+import { PrincipalMcpService } from "../../core/principal-mcp-service.js";
 import { SESSION_WORKSPACE_LOCKED_ERROR } from "../../core/session-settings-service.js";
 import type { CodexTaskRuntime } from "../../core/codex-runtime.js";
 import type {
@@ -1014,6 +1015,357 @@ test("/help 会展示 /skills 第一层入口", async () => {
 
     const message = harness.takeSingleMessage();
     assert.match(message, /\/skills 查看和维护当前 principal 的 skills/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/help 会展示 /mcp 第一层入口", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("help", []);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /\/mcp 查看和维护当前 principal 的 MCP server/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/help 会展示 /plugins 第一层入口", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("help", []);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /\/plugins 查看和维护当前 Codex 运行环境的 plugins/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/plugins foo 会回退到 /plugins 自己的帮助", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("plugins", ["foo"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /Plugins 管理：/);
+    assert.match(message, /\/plugins read <MARKETPLACE> <PLUGIN_NAME>/);
+    assert.match(message, /\/plugins uninstall <PLUGIN_ID>/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/plugins list 会展示当前环境的 marketplace 和 plugin 摘要", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("plugins", ["list"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /当前槽位：acc-1/);
+    assert.match(message, /1\. OpenAI Curated/);
+    assert.match(message, /name：openai-curated/);
+    assert.match(message, /- github \[未安装\]/);
+    assert.match(message, /pluginId：github@openai-curated/);
+    assert.match(message, /安装策略：可安装/);
+    assert.match(message, /认证策略：安装时认证/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/plugins list 会优先按当前会话工作区发现 marketplace", async () => {
+  let receivedOptions: FeishuHarnessPluginRuntimeOptions | undefined;
+  const harness = createHarness({
+    pluginService: {
+      listPlugins: async (options) => {
+        receivedOptions = options;
+        return {
+          target: {
+            targetKind: "auth-account",
+            targetId: "acc-1",
+          },
+          marketplaces: [],
+          marketplaceLoadErrors: [],
+          remoteSyncError: null,
+          featuredPluginIds: [],
+        };
+      },
+      readPlugin: async () => {
+        throw new Error("unexpected readPlugin");
+      },
+      installPlugin: async () => {
+        throw new Error("unexpected installPlugin");
+      },
+      uninstallPlugin: async () => {
+        throw new Error("unexpected uninstallPlugin");
+      },
+    },
+  });
+
+  try {
+    const sessionId = "session-plugins-workspace";
+    harness.setCurrentSession(sessionId);
+    harness.writeSessionSettings(sessionId, {
+      workspacePath: "/srv/repos/demo",
+    });
+
+    await harness.handleCommand("plugins", ["list"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /当前槽位：acc-1/);
+    assert.equal(receivedOptions?.cwd, "/srv/repos/demo");
+    assert.equal(receivedOptions?.activeAuthAccount?.accountId, "acc-1");
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/plugins read <marketplace> <name> 会返回 plugin 详情", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("plugins", ["read", "openai-curated", "github"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /Plugin 详情：/);
+    assert.match(message, /marketplace：openai-curated/);
+    assert.match(message, /plugin：github/);
+    assert.match(message, /pluginId：github@openai-curated/);
+    assert.match(message, /附带 skills：github-review/);
+    assert.match(message, /附带 apps：GitHub/);
+    assert.match(message, /附带 MCP：github/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/plugins install 和 /plugins uninstall 会调用对应写操作", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("plugins", ["install", "openai-curated", "github"]);
+    const installed = harness.takeSingleMessage();
+    assert.match(installed, /Plugin 已安装：/);
+    assert.match(installed, /plugin：github/);
+    assert.match(installed, /待补认证 apps：GitHub/);
+
+    await harness.handleCommand("plugins", ["uninstall", "github@openai-curated"]);
+    const removed = harness.takeSingleMessage();
+    assert.match(removed, /Plugin 已卸载：/);
+    assert.match(removed, /pluginId：github@openai-curated/);
+
+    assert.deepEqual(harness.getPluginWriteCalls(), [
+      {
+        method: "installPlugin",
+        marketplacePath: "/tmp/openai-curated/marketplace.json",
+        pluginName: "github",
+      },
+      {
+        method: "uninstallPlugin",
+        pluginId: "github@openai-curated",
+      },
+    ]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/mcp foo 会回退到 /mcp 自己的帮助", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("mcp", ["foo"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /MCP 管理：/);
+    assert.match(message, /\/mcp reload/);
+    assert.match(message, /\/mcp oauth <NAME>/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/mcp 在无定义时返回空列表提示", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("mcp", []);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /当前 principal：principal-local-owner/);
+    assert.match(message, /暂无 MCP server/);
+    assert.match(message, /查看：\/mcp reload/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/mcp list 会展示定义、状态和 runtime 槽位摘要", async () => {
+  const harness = createHarness();
+
+  try {
+    const service = harness.getPrincipalMcpService();
+    service.upsertPrincipalMcpServer({
+      principalId: harness.getCurrentPrincipalId(),
+      serverName: "github",
+      command: "npx",
+      args: ["-y", "@modelcontextprotocol/server-github"],
+      env: { GITHUB_TOKEN: "secret" },
+      enabled: true,
+    });
+    service.savePrincipalMcpMaterialization({
+      principalId: harness.getCurrentPrincipalId(),
+      serverName: "github",
+      targetKind: "auth-account",
+      targetId: "acc-1",
+      state: "synced",
+      authState: "authenticated",
+      lastError: "none",
+    });
+
+    await harness.handleCommand("mcp", ["list"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /1\. github \[已启用\]/);
+    assert.match(message, /command：npx -y @modelcontextprotocol\/server-github/);
+    assert.match(message, /env keys：GITHUB_TOKEN/);
+    assert.match(message, /runtime 槽位 1 个，已就绪 1，待认证 0，失败 0/);
+    assert.match(message, /槽位 acc-1 \[synced\/authenticated\]：none/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/mcp enable disable remove 会调用 principal MCP 写操作", async () => {
+  const harness = createHarness();
+
+  try {
+    const service = harness.getPrincipalMcpService();
+    service.upsertPrincipalMcpServer({
+      principalId: harness.getCurrentPrincipalId(),
+      serverName: "github",
+      command: "npx",
+      enabled: true,
+    });
+
+    await harness.handleCommand("mcp", ["disable", "github"]);
+    const disabled = harness.takeSingleMessage();
+    assert.match(disabled, /已停用 MCP server：github/);
+    assert.equal(service.getPrincipalMcpServer(harness.getCurrentPrincipalId(), "github")?.enabled, false);
+
+    await harness.handleCommand("mcp", ["enable", "github"]);
+    const enabled = harness.takeSingleMessage();
+    assert.match(enabled, /已启用 MCP server：github/);
+    assert.equal(service.getPrincipalMcpServer(harness.getCurrentPrincipalId(), "github")?.enabled, true);
+
+    await harness.handleCommand("mcp", ["remove", "github"]);
+    const removed = harness.takeSingleMessage();
+    assert.match(removed, /已删除 MCP server：github/);
+    assert.equal(service.getPrincipalMcpServer(harness.getCurrentPrincipalId(), "github"), null);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/mcp reload 会调用 runtime reload 并返回槽位摘要", async () => {
+  const harness = createHarness();
+
+  try {
+    const service = harness.getPrincipalMcpService() as PrincipalMcpService & {
+      reloadPrincipalMcpServers: PrincipalMcpService["reloadPrincipalMcpServers"];
+    };
+
+    service.reloadPrincipalMcpServers = async () => ({
+      target: {
+        targetKind: "auth-account",
+        targetId: "acc-1",
+      },
+      runtimeServers: [{
+        id: "github",
+        name: "github",
+        status: "available",
+        args: [],
+      }],
+      servers: [{
+        principalId: harness.getCurrentPrincipalId(),
+        serverName: "github",
+        transportType: "stdio",
+        command: "npx",
+        argsJson: "[]",
+        envJson: "{}",
+        enabled: true,
+        sourceType: "manual",
+        createdAt: "2026-04-11T00:00:00.000Z",
+        updatedAt: "2026-04-11T00:00:00.000Z",
+        materializations: [],
+        summary: {
+          totalTargets: 1,
+          readyCount: 1,
+          authRequiredCount: 0,
+          failedCount: 0,
+        },
+      }],
+    });
+
+    await harness.handleCommand("mcp", ["reload"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /已重新读取当前 runtime 槽位的 MCP 状态/);
+    assert.match(message, /当前槽位：acc-1/);
+    assert.match(message, /runtime 返回：1 个 server/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/mcp oauth <name> 会返回授权链接", async () => {
+  const harness = createHarness();
+
+  try {
+    const service = harness.getPrincipalMcpService() as PrincipalMcpService & {
+      startPrincipalMcpOauthLogin: PrincipalMcpService["startPrincipalMcpOauthLogin"];
+    };
+
+    service.startPrincipalMcpOauthLogin = async () => ({
+      target: {
+        targetKind: "auth-account",
+        targetId: "acc-1",
+      },
+      authorizationUrl: "https://example.com/oauth/github",
+      server: {
+        principalId: harness.getCurrentPrincipalId(),
+        serverName: "github",
+        transportType: "stdio",
+        command: "npx",
+        argsJson: "[]",
+        envJson: "{}",
+        enabled: true,
+        sourceType: "manual",
+        createdAt: "2026-04-11T00:00:00.000Z",
+        updatedAt: "2026-04-11T00:00:00.000Z",
+        materializations: [],
+        summary: {
+          totalTargets: 0,
+          readyCount: 0,
+          authRequiredCount: 0,
+          failedCount: 0,
+        },
+      },
+    });
+
+    await harness.handleCommand("mcp", ["oauth", "github"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /已发起 MCP OAuth 登录：github/);
+    assert.match(message, /授权链接：https:\/\/example\.com\/oauth\/github/);
+    assert.match(message, /完成授权后建议执行：\/mcp reload/);
   } finally {
     harness.cleanup();
   }
@@ -5518,6 +5870,105 @@ type FeishuHarnessSkillItem = {
 };
 
 type FeishuHarnessCuratedItem = { name: string; installed: boolean };
+type FeishuHarnessPluginSummary = {
+  id: string;
+  name: string;
+  sourceType?: string;
+  sourcePath?: string | null;
+  installed: boolean;
+  enabled: boolean;
+  installPolicy: string;
+  authPolicy: string;
+  interface?: {
+    displayName?: string;
+    shortDescription?: string;
+    longDescription?: string | null;
+    developerName?: string | null;
+    category?: string | null;
+    capabilities?: string[];
+  } | null;
+};
+type FeishuHarnessPluginMarketplace = {
+  name: string;
+  path: string;
+  interface?: {
+    displayName?: string;
+  } | null;
+  plugins: FeishuHarnessPluginSummary[];
+};
+type FeishuHarnessPluginDetail = {
+  marketplaceName: string;
+  marketplacePath: string;
+  summary: FeishuHarnessPluginSummary;
+  description?: string | null;
+  skills?: Array<{
+    name: string;
+    description: string;
+    shortDescription?: string | null;
+    path?: string | null;
+    enabled: boolean;
+  }>;
+  apps?: Array<{
+    id: string;
+    name: string;
+    description?: string | null;
+    installUrl?: string | null;
+    needsAuth: boolean;
+  }>;
+  mcpServers?: string[];
+};
+type FeishuHarnessPluginRuntimeOptions = {
+  cwd?: string;
+  forceRemoteSync?: boolean;
+  activeAuthAccount?: {
+    accountId?: string;
+    codexHome?: string;
+  } | null;
+};
+type FeishuHarnessPluginService = {
+  listPlugins: (options?: FeishuHarnessPluginRuntimeOptions) => Promise<{
+    target: { targetKind: "auth-account"; targetId: string };
+    marketplaces: FeishuHarnessPluginMarketplace[];
+    marketplaceLoadErrors: Array<{ marketplacePath: string; message: string }>;
+    remoteSyncError: string | null;
+    featuredPluginIds: string[];
+  }>;
+  readPlugin: (
+    input: { marketplacePath: string; pluginName: string },
+    options?: FeishuHarnessPluginRuntimeOptions,
+  ) => Promise<{
+    target: { targetKind: "auth-account"; targetId: string };
+    plugin: FeishuHarnessPluginDetail;
+  }>;
+  installPlugin: (
+    input: {
+      marketplacePath: string;
+      pluginName: string;
+      forceRemoteSync?: boolean;
+    },
+    options?: FeishuHarnessPluginRuntimeOptions,
+  ) => Promise<{
+    target: { targetKind: "auth-account"; targetId: string };
+    pluginName: string;
+    marketplacePath: string;
+    authPolicy: string;
+    appsNeedingAuth: Array<{
+      id: string;
+      name: string;
+      description?: string | null;
+      installUrl?: string | null;
+      needsAuth: boolean;
+    }>;
+    plugin: FeishuHarnessPluginDetail | null;
+  }>;
+  uninstallPlugin: (
+    input: { pluginId: string; forceRemoteSync?: boolean },
+    options?: FeishuHarnessPluginRuntimeOptions,
+  ) => Promise<{
+    target: { targetKind: "auth-account"; targetId: string };
+    pluginId: string;
+  }>;
+};
 
 type FeishuHarnessConfig = {
   runtimeCatalog?: CodexRuntimeCatalog;
@@ -5528,6 +5979,7 @@ type FeishuHarnessConfig = {
   appServerRuntimeFactory?: (input: {
     runtimeStore: SqliteCodexSessionRegistry;
     identityService: IdentityLinkService;
+    principalMcpService: PrincipalMcpService;
     principalSkillsService: {
       listPrincipalSkills: () => FeishuHarnessSkillItem[];
       listCuratedSkills: () => Promise<FeishuHarnessCuratedItem[]>;
@@ -5552,11 +6004,13 @@ type FeishuHarnessConfig = {
       removeSkill: (principalId: string, skillName: string) => unknown;
       syncSkill: (principalId: string, skillName: string, options?: { force?: boolean }) => Promise<unknown>;
     };
+    pluginService: FeishuHarnessPluginService;
     taskRuntimeCalls: { sdk: number; appServer: number };
     actionBridge: AppServerActionBridge;
   }) => TaskRuntimeFacade;
   listItems?: Array<FeishuHarnessSkillItem>;
   curatedItems?: Array<FeishuHarnessCuratedItem>;
+  pluginService?: FeishuHarnessPluginService;
 };
 
 type FeishuHarnessSkillCall =
@@ -5578,11 +6032,22 @@ type FeishuHarnessAuthCall =
   | { method: "startChatgptDeviceLogin"; accountId: string }
   | { method: "logout"; accountId: string }
   | { method: "cancelPendingLogin"; accountId: string };
+type FeishuHarnessPluginCall =
+  | { method: "readPlugin"; marketplacePath: string; pluginName: string; cwd?: string }
+  | { method: "installPlugin"; marketplacePath: string; pluginName: string; forceRemoteSync?: boolean; cwd?: string }
+  | { method: "uninstallPlugin"; pluginId: string; forceRemoteSync?: boolean; cwd?: string };
+
+type FeishuTaskRuntimeDouble = TaskRuntimeFacade & {
+  getPrincipalMcpService: () => PrincipalMcpService;
+  getPluginService: () => FeishuHarnessPluginService;
+};
 
 function createTaskRuntimeDouble(input: {
   engine: "sdk" | "app-server";
   runtimeStore: SqliteCodexSessionRegistry;
   identityService: IdentityLinkService;
+  principalMcpService?: PrincipalMcpService;
+  pluginService?: FeishuHarnessPluginService;
   principalSkillsService: {
     listPrincipalSkills: () => FeishuHarnessSkillItem[];
     listCuratedSkills: () => Promise<FeishuHarnessCuratedItem[]>;
@@ -5610,7 +6075,32 @@ function createTaskRuntimeDouble(input: {
   taskRuntimeCalls: { sdk: number; appServer: number };
   eventBuilder?: (request: TaskRequest) => TaskEvent[];
   onRequest?: (request: TaskRequest) => void;
-}): TaskRuntimeFacade {
+}): FeishuTaskRuntimeDouble {
+  const principalMcpService = input.principalMcpService ?? new PrincipalMcpService({
+    registry: input.runtimeStore,
+  });
+  const pluginService = input.pluginService ?? {
+    listPlugins: async () => ({
+      target: {
+        targetKind: "auth-account" as const,
+        targetId: "default",
+      },
+      marketplaces: [],
+      marketplaceLoadErrors: [],
+      remoteSyncError: null,
+      featuredPluginIds: [],
+    }),
+    readPlugin: async () => {
+      throw new Error("plugin service not configured");
+    },
+    installPlugin: async () => {
+      throw new Error("plugin service not configured");
+    },
+    uninstallPlugin: async () => {
+      throw new Error("plugin service not configured");
+    },
+  };
+
   return {
     async runTask(request: TaskRequest, hooks: TaskRuntimeRunHooks = {}): Promise<TaskResult> {
       input.onRequest?.(request);
@@ -5661,6 +6151,8 @@ function createTaskRuntimeDouble(input: {
     },
     getRuntimeStore: () => input.runtimeStore,
     getIdentityLinkService: () => input.identityService,
+    getPrincipalMcpService: () => principalMcpService,
+    getPluginService: () => pluginService,
     getPrincipalSkillsService: () => input.principalSkillsService,
   };
 }
@@ -5671,12 +6163,14 @@ function createAppServerSessionThreadRuntime(
     taskIdPrefix: string;
     threadIdForGoal: (goal: string) => string;
   },
-): TaskRuntimeFacade {
+): FeishuTaskRuntimeDouble {
   return {
     ...createTaskRuntimeDouble({
       engine: "app-server",
       runtimeStore: input.runtimeStore,
       identityService: input.identityService,
+      principalMcpService: input.principalMcpService,
+      pluginService: input.pluginService,
       principalSkillsService: input.principalSkillsService,
       taskRuntimeCalls: input.taskRuntimeCalls,
     }),
@@ -5741,6 +6235,7 @@ function createHarness(
       || "appServerEventsBuilder" in runtimeCatalogOrSkillsOverrides
       || "appServerRuntimeFactory" in runtimeCatalogOrSkillsOverrides
       || "resolveFailureActionIds" in runtimeCatalogOrSkillsOverrides
+      || "pluginService" in runtimeCatalogOrSkillsOverrides
     )
       ? runtimeCatalogOrSkillsOverrides as FeishuHarnessConfig
       : null;
@@ -5765,6 +6260,7 @@ function createHarness(
     databaseFile: join(workingDirectory, "infra/local/themis.db"),
   });
   const identityService = new IdentityLinkService(runtimeStore);
+  const principalMcpService = new PrincipalMcpService({ registry: runtimeStore });
   const sessionStore = new FeishuSessionStore({
     filePath: join(workingDirectory, "infra/local/feishu-sessions.json"),
   });
@@ -5882,6 +6378,35 @@ function createHarness(
     curatedItems: normalizedSkillsOverrides?.curatedItems ?? [],
     writeCalls: [] as FeishuHarnessSkillCall[],
   };
+  const pluginState = {
+    marketplaces: [{
+      name: "openai-curated",
+      path: "/tmp/openai-curated/marketplace.json",
+      interface: {
+        displayName: "OpenAI Curated",
+      },
+      plugins: [{
+        id: "github@openai-curated",
+        name: "github",
+        sourceType: "local",
+        sourcePath: "/tmp/plugins/github",
+        installed: false,
+        enabled: false,
+        installPolicy: "AVAILABLE",
+        authPolicy: "ON_INSTALL",
+        interface: {
+          displayName: "GitHub",
+          shortDescription: "Review pull requests",
+          longDescription: "GitHub workflows",
+          developerName: "OpenAI",
+          category: "Coding",
+          capabilities: ["Interactive", "Write"],
+        },
+      }],
+    }] as FeishuHarnessPluginMarketplace[],
+    details: new Map<string, FeishuHarnessPluginDetail>(),
+    writeCalls: [] as FeishuHarnessPluginCall[],
+  };
   function currentPrincipalId(): string {
     return ensurePrincipalId();
   }
@@ -5955,6 +6480,147 @@ function createHarness(
     syncCuratedInstalledFlag(skillName, false);
     return removed;
   }
+
+  function buildPluginTarget() {
+    return {
+      targetKind: "auth-account" as const,
+      targetId: "acc-1",
+    };
+  }
+
+  function createPluginDetailKey(marketplacePath: string, pluginName: string): string {
+    return `${marketplacePath}::${pluginName}`;
+  }
+
+  function findPluginByMarketplacePath(marketplacePath: string, pluginName: string): {
+    marketplace: FeishuHarnessPluginMarketplace;
+    plugin: FeishuHarnessPluginSummary;
+  } {
+    const marketplace = pluginState.marketplaces.find((item) => item.path === marketplacePath);
+
+    if (!marketplace) {
+      throw new Error(`plugin marketplace 不存在：${marketplacePath}`);
+    }
+
+    const plugin = marketplace.plugins.find((item) => item.name === pluginName);
+
+    if (!plugin) {
+      throw new Error(`plugin 不存在：${pluginName}`);
+    }
+
+    return { marketplace, plugin };
+  }
+
+  function findPluginById(pluginId: string): {
+    marketplace: FeishuHarnessPluginMarketplace;
+    plugin: FeishuHarnessPluginSummary;
+  } {
+    for (const marketplace of pluginState.marketplaces) {
+      const plugin = marketplace.plugins.find((item) => item.id === pluginId);
+
+      if (plugin) {
+        return { marketplace, plugin };
+      }
+    }
+
+    throw new Error(`plugin 不存在：${pluginId}`);
+  }
+
+  function buildPluginDetail(marketplace: FeishuHarnessPluginMarketplace, plugin: FeishuHarnessPluginSummary): FeishuHarnessPluginDetail {
+    const detailKey = createPluginDetailKey(marketplace.path, plugin.name);
+    const cached = pluginState.details.get(detailKey);
+
+    if (cached) {
+      cached.summary = plugin;
+      return cached;
+    }
+
+    const created: FeishuHarnessPluginDetail = {
+      marketplaceName: marketplace.name,
+      marketplacePath: marketplace.path,
+      summary: plugin,
+      description: plugin.interface?.longDescription ?? plugin.interface?.shortDescription ?? "暂无说明",
+      skills: [{
+        name: `${plugin.name}-review`,
+        description: `review ${plugin.name}`,
+        shortDescription: "review",
+        path: `/tmp/plugins/${plugin.name}/skills/review`,
+        enabled: true,
+      }],
+      apps: [{
+        id: `${plugin.name}-app`,
+        name: plugin.interface?.displayName ?? plugin.name,
+        description: `${plugin.name} app`,
+        installUrl: `https://example.com/apps/${plugin.name}`,
+        needsAuth: plugin.authPolicy === "ON_INSTALL",
+      }],
+      mcpServers: [plugin.name],
+    };
+    pluginState.details.set(detailKey, created);
+    return created;
+  }
+
+  const pluginService: FeishuHarnessPluginService = harnessConfig?.pluginService ?? {
+    listPlugins: async () => ({
+      target: buildPluginTarget(),
+      marketplaces: pluginState.marketplaces,
+      marketplaceLoadErrors: [],
+      remoteSyncError: null,
+      featuredPluginIds: ["github@openai-curated"],
+    }),
+    readPlugin: async (input, options) => {
+      pluginState.writeCalls.push({
+        method: "readPlugin",
+        marketplacePath: input.marketplacePath,
+        pluginName: input.pluginName,
+        ...(typeof options?.cwd === "string" ? { cwd: options.cwd } : {}),
+      });
+      const { marketplace, plugin } = findPluginByMarketplacePath(input.marketplacePath, input.pluginName);
+      return {
+        target: buildPluginTarget(),
+        plugin: buildPluginDetail(marketplace, plugin),
+      };
+    },
+    installPlugin: async (input, options) => {
+      pluginState.writeCalls.push({
+        method: "installPlugin",
+        marketplacePath: input.marketplacePath,
+        pluginName: input.pluginName,
+        ...(input.forceRemoteSync === true ? { forceRemoteSync: true } : {}),
+        ...(typeof options?.cwd === "string" ? { cwd: options.cwd } : {}),
+      });
+      const { marketplace, plugin } = findPluginByMarketplacePath(input.marketplacePath, input.pluginName);
+      plugin.installed = true;
+      plugin.enabled = true;
+      const detail = buildPluginDetail(marketplace, plugin);
+
+      return {
+        target: buildPluginTarget(),
+        pluginName: input.pluginName,
+        marketplacePath: input.marketplacePath,
+        authPolicy: plugin.authPolicy,
+        appsNeedingAuth: (detail.apps ?? []).filter((item) => item.needsAuth),
+        plugin: detail,
+      };
+    },
+    uninstallPlugin: async (input, options) => {
+      pluginState.writeCalls.push({
+        method: "uninstallPlugin",
+        pluginId: input.pluginId,
+        ...(input.forceRemoteSync === true ? { forceRemoteSync: true } : {}),
+        ...(typeof options?.cwd === "string" ? { cwd: options.cwd } : {}),
+      });
+      const { marketplace, plugin } = findPluginById(input.pluginId);
+      plugin.installed = false;
+      plugin.enabled = false;
+      buildPluginDetail(marketplace, plugin);
+
+      return {
+        target: buildPluginTarget(),
+        pluginId: input.pluginId,
+      };
+    },
+  };
 
   const principalSkillsService = {
     listPrincipalSkills: () => skillsState.listItems,
@@ -6044,6 +6710,8 @@ function createHarness(
     engine: "sdk",
     runtimeStore,
     identityService,
+    principalMcpService,
+    pluginService,
     principalSkillsService,
     taskRuntimeCalls,
     onRequest: (request) => taskRequests.push(request),
@@ -6052,6 +6720,8 @@ function createHarness(
     ...baseRuntime,
     getWorkingDirectory: () => workingDirectory,
     readRuntimeConfig: async (): Promise<CodexRuntimeCatalog> => runtimeCatalog,
+    getPrincipalMcpService: () => principalMcpService,
+    getPluginService: () => pluginService,
     getPrincipalTaskSettings: (principalId?: string): PrincipalTaskSettings | null => {
       if (!principalId) {
         return null;
@@ -6075,6 +6745,8 @@ function createHarness(
     ? harnessConfig.appServerRuntimeFactory({
       runtimeStore,
       identityService,
+      principalMcpService,
+      pluginService,
       principalSkillsService,
       taskRuntimeCalls,
       actionBridge,
@@ -6083,6 +6755,8 @@ function createHarness(
       engine: "app-server",
       runtimeStore,
       identityService,
+      principalMcpService,
+      pluginService,
       principalSkillsService,
       taskRuntimeCalls,
       onRequest: (request) => taskRequests.push(request),
@@ -6408,6 +7082,15 @@ function createHarness(
     },
     getSkillWriteCalls() {
       return [...skillsState.writeCalls];
+    },
+    getPluginWriteCalls() {
+      return [...pluginState.writeCalls];
+    },
+    getPrincipalMcpService() {
+      return principalMcpService;
+    },
+    getPluginService() {
+      return pluginService;
     },
     getInfoLogs() {
       return [...loggerState.infoLogs];
