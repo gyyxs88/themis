@@ -8,9 +8,19 @@ Themis 是一个围绕 `codex app-server` 构建的自托管协作壳。
 
 - 提供本地 / 局域网 Web 聊天工作台，支持认证、多账号、历史、分叉、运行参数和长期画像。
 - 提供飞书机器人入口，并和 Web 共享运行时、通信层与 SQLite 持久化。
+- 提供 Themis 自己的持久化数字员工能力，支持创建、派工、治理和长期运行历史。
 - 提供 `status / doctor / doctor smoke / doctor release` 这套运维诊断入口。
 - 提供 `POST /api/tasks/automation/run` 这类自动化接口。
 - 提供单次定时任务能力，并通过 `themis mcp-server` 暴露 `create_scheduled_task / list_scheduled_tasks / cancel_scheduled_task` 给 Codex 调用。
+
+## 数字员工边界
+
+- Themis 当前支持的“数字员工 / 持久化 agent”能力不是 Codex 原生产品能力，而是 Themis 在 `codex app-server` 之上补出来的长期主体、治理和持久化层。
+- Codex 原生能力更接近一次任务里的短生命周期执行主体；Themis 额外补了组织、长期身份、工作队列、治理面、长期记忆和运行边界。
+- 仓库里有两个相关名词：
+  - `actor`：更轻的内部协作与记忆模型，用于任务 scope、timeline / takeover 和长期记忆候选，不等于完整长期数字员工。
+  - `managed_agent`：真正长期存在、可派工、可暂停 / 恢复 / 归档、可治理的数字员工主体。
+- 详细设计见 [持久化 agent 架构](./docs/product/themis-persistent-agent-architecture.md)。
 
 ## 当前定位
 
