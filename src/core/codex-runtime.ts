@@ -29,6 +29,7 @@ import { ManagedAgentsService } from "./managed-agents-service.js";
 import { ManagedAgentSchedulerService } from "./managed-agent-scheduler-service.js";
 import { PrincipalActorsService } from "./principal-actors-service.js";
 import { PrincipalMcpService } from "./principal-mcp-service.js";
+import { PrincipalPluginsService } from "./principal-plugins-service.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
 import { PluginService } from "./plugin-service.js";
 import { ScheduledTasksService } from "./scheduled-tasks-service.js";
@@ -89,6 +90,7 @@ export interface CodexTaskRuntimeOptions {
   providerConfigs?: OpenAICompatibleProviderConfig[] | null;
   providerConfig?: OpenAICompatibleProviderConfig | null;
   principalMcpService?: PrincipalMcpService;
+  principalPluginsService?: PrincipalPluginsService;
   principalSkillsService?: PrincipalSkillsService;
   pluginService?: PluginService;
   createContextBuilder?: (workingDirectory: string) => ContextBuilder;
@@ -122,6 +124,7 @@ export class CodexTaskRuntime {
   private readonly managedAgentSchedulerService: ManagedAgentSchedulerService;
   private readonly principalActorsService: PrincipalActorsService;
   private readonly principalMcpService: PrincipalMcpService;
+  private readonly principalPluginsService: PrincipalPluginsService;
   private readonly principalSkillsService: PrincipalSkillsService;
   private readonly pluginService: PluginService;
   private readonly scheduledTasksService: ScheduledTasksService;
@@ -159,6 +162,11 @@ export class CodexTaskRuntime {
     });
     this.principalMcpService = options.principalMcpService ?? new PrincipalMcpService({
       registry: this.runtimeStore,
+    });
+    this.principalPluginsService = options.principalPluginsService ?? new PrincipalPluginsService({
+      workingDirectory: this.workingDirectory,
+      registry: this.runtimeStore,
+      ...(options.pluginService ? { runtimePluginService: options.pluginService } : {}),
     });
     this.principalSkillsService = options.principalSkillsService ?? new PrincipalSkillsService({
       workingDirectory: this.workingDirectory,
@@ -699,6 +707,10 @@ export class CodexTaskRuntime {
 
   getPrincipalMcpService(): PrincipalMcpService {
     return this.principalMcpService;
+  }
+
+  getPrincipalPluginsService(): PrincipalPluginsService {
+    return this.principalPluginsService;
   }
 
   getScheduledTasksService(): ScheduledTasksService {

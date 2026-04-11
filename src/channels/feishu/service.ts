@@ -2546,7 +2546,7 @@ export class FeishuChannelService {
       "/group 查看当前群聊设置、路由和管理员控制",
       "/skills 查看和维护当前 principal 的 skills",
       "/mcp 查看和维护当前 principal 的 MCP server",
-      "/plugins 查看和维护当前 Codex 运行环境的 plugins",
+      "/plugins 查看和维护当前 principal 的 plugins",
       "/link <绑定码> 可选：认领一个旧 Web 浏览器身份",
       "/reset confirm 清空当前 principal 的人格档案、历史和默认配置，并重新开始",
       "/msgupdate 测试机器人是否能原地更新自己刚发出的文本消息",
@@ -2631,6 +2631,9 @@ export class FeishuChannelService {
         return;
       case "install":
         await this.handlePluginsInstallCommand(args.slice(1), context);
+        return;
+      case "sync":
+        await this.handlePluginsSyncCommand(args.slice(1), context);
         return;
       case "uninstall":
       case "remove":
@@ -2799,6 +2802,7 @@ export class FeishuChannelService {
   }
 
   private async handlePluginsReadCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
     const marketplaceToken = normalizeText(args[0]);
     const pluginName = normalizeText(args[1]);
 
@@ -2808,30 +2812,36 @@ export class FeishuChannelService {
     }
 
     const { marketplaceName, marketplacePath } = await this.resolvePluginMarketplaceReference(marketplaceToken, context);
-    const result = await this.runtime.getPluginService().readPlugin({
+    const result = await this.runtime.getPrincipalPluginsService().readPrincipalPlugin(principal.principalId, {
       marketplacePath,
       pluginName,
     }, this.buildPluginRuntimeOptions(context));
     const lines = [
       "Plugin 详情：",
+      `当前 principal：${principal.principalId}`,
       `当前槽位：${result.target.targetId}`,
       `marketplace：${marketplaceName}`,
       `plugin：${result.plugin.summary.name}`,
       `pluginId：${result.plugin.summary.id}`,
-      `安装状态：${result.plugin.summary.installed ? "已安装" : "未安装"}`,
+      `来源：${describePrincipalPluginSource(result.plugin)}`,
+      `principal 归属：${result.plugin.summary.owned ? "已纳入" : "未纳入"}`,
+      `当前状态：${formatPrincipalPluginRuntimeState(result.plugin.summary.runtimeState)}`,
       `安装策略：${formatPluginInstallPolicy(result.plugin.summary.installPolicy)}`,
       `认证策略：${formatPluginAuthPolicy(result.plugin.summary.authPolicy)}`,
+      result.plugin.lastError ? `最近问题：${result.plugin.lastError}` : null,
+      result.plugin.repairHint ? `建议动作：${result.plugin.repairHint}` : null,
       `说明：${result.plugin.description || result.plugin.summary.interface?.shortDescription || "暂无说明"}`,
       result.plugin.skills.length > 0 ? `附带 skills：${result.plugin.skills.map((item) => item.name).join(", ")}` : "附带 skills：无",
       result.plugin.apps.length > 0 ? `附带 apps：${result.plugin.apps.map((item) => item.name).join(", ")}` : "附带 apps：无",
       result.plugin.mcpServers.length > 0 ? `附带 MCP：${result.plugin.mcpServers.join(", ")}` : "附带 MCP：无",
       "查看：/plugins list",
-    ];
+    ].filter((line): line is string => line !== null);
 
     await this.safeSendText(context.chatId, lines.join("\n"));
   }
 
   private async handlePluginsInstallCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
     const marketplaceToken = normalizeText(args[0]);
     const pluginName = normalizeText(args[1]);
 
@@ -2841,26 +2851,72 @@ export class FeishuChannelService {
     }
 
     const { marketplaceName, marketplacePath } = await this.resolvePluginMarketplaceReference(marketplaceToken, context);
-    const result = await this.runtime.getPluginService().installPlugin({
+    const result = await this.runtime.getPrincipalPluginsService().installPrincipalPlugin(principal.principalId, {
       marketplacePath,
       pluginName,
     }, this.buildPluginRuntimeOptions(context));
     const lines = [
-      "Plugin 已安装：",
+      "Plugin 已纳入 principal：",
+      `当前 principal：${principal.principalId}`,
       `当前槽位：${result.target.targetId}`,
       `marketplace：${marketplaceName}`,
       `plugin：${result.pluginName}`,
+      result.plugin ? `当前状态：${formatPrincipalPluginRuntimeState(result.plugin.summary.runtimeState)}` : null,
       `认证策略：${formatPluginAuthPolicy(result.authPolicy)}`,
       result.appsNeedingAuth.length > 0
         ? `待补认证 apps：${result.appsNeedingAuth.map((item) => item.name).join(", ")}`
         : "待补认证 apps：无",
       "查看：/plugins list",
-    ];
+    ].filter((line): line is string => line !== null);
 
     await this.safeSendText(context.chatId, lines.join("\n"));
   }
 
+  private async handlePluginsSyncCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const syncMode = normalizeText(args[0])?.toLowerCase() ?? "";
+    const forceRemoteSync = syncMode === "" ? false : parsePluginsSyncRemoteArgument(syncMode);
+
+    if (args.length > 1 || (args.length === 1 && forceRemoteSync === null)) {
+      await this.sendPluginsSyncHelp(context.chatId, context, args.join(" ") || undefined);
+      return;
+    }
+
+    const principal = this.ensurePrincipalIdentity(context);
+    const result = await this.runtime.getPrincipalPluginsService().syncPrincipalPlugins(
+      principal.principalId,
+      this.buildPluginRuntimeOptions(context, {
+        forceRemoteSync: forceRemoteSync === true,
+      }),
+    );
+    const failedPlugins = result.plugins
+      .filter((item) => item.action === "failed")
+      .map((item) => item.pluginName);
+    const missingPlugins = result.plugins
+      .filter((item) => item.action === "missing")
+      .map((item) => item.pluginName);
+    const authRequiredPlugins = result.plugins
+      .filter((item) => item.action === "auth_required")
+      .map((item) => item.pluginName);
+
+    await this.safeSendText(
+      context.chatId,
+      [
+        "Plugin 同步完成：",
+        `当前 principal：${principal.principalId}`,
+        `当前槽位：${result.target.targetId}`,
+        forceRemoteSync === true ? "模式：先远程同步 marketplace，再落到当前 runtime" : "模式：直接对齐当前 runtime",
+        `总数：${result.total}`,
+        `新装 ${result.installedCount}｜已在当前环境 ${result.alreadyInstalledCount}｜待认证 ${result.authRequiredCount}｜缺失 ${result.missingCount}｜失败 ${result.failedCount}`,
+        authRequiredPlugins.length > 0 ? `待认证 plugin：${authRequiredPlugins.join(", ")}` : null,
+        missingPlugins.length > 0 ? `当前工作区不可解析：${missingPlugins.join(", ")}` : null,
+        failedPlugins.length > 0 ? `同步失败：${failedPlugins.join(", ")}` : null,
+        "查看：/plugins list",
+      ].filter((line): line is string => line !== null).join("\n"),
+    );
+  }
+
   private async handlePluginsUninstallCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
     const pluginId = normalizeText(args[0]);
 
     if (!pluginId || args.length !== 1) {
@@ -2868,16 +2924,22 @@ export class FeishuChannelService {
       return;
     }
 
-    const result = await this.runtime.getPluginService().uninstallPlugin({
+    const result = await this.runtime.getPrincipalPluginsService().uninstallPrincipalPlugin(
+      principal.principalId,
       pluginId,
-    }, this.buildPluginRuntimeOptions(context));
+      this.buildPluginRuntimeOptions(context),
+    );
 
     await this.safeSendText(
       context.chatId,
       [
-        "Plugin 已卸载：",
+        "Plugin 已从 principal 移除：",
+        `当前 principal：${principal.principalId}`,
         `当前槽位：${result.target.targetId}`,
         `pluginId：${result.pluginId}`,
+        result.runtimeAction === "uninstalled"
+          ? "当前 runtime：已执行卸载。"
+          : "当前 runtime：当前工作区未解析到该 plugin，只移除了 principal 记录。",
         "查看：/plugins list",
       ].join("\n"),
     );
@@ -3422,21 +3484,21 @@ export class FeishuChannelService {
     context: FeishuIncomingContext,
     invalidSegment?: string,
   ): Promise<void> {
-    const result = await this.runtime.getPluginService().listPlugins({
-      ...this.buildPluginRuntimeOptions(context),
-    });
+    const { principal, result } = await this.readPrincipalPluginsState(context);
     const lines = [
       "Plugins 管理：",
+      `当前 principal：${principal.principalId}`,
       `当前槽位：${result.target.targetId}`,
       invalidSegment ? `未识别的 plugins 子命令：${invalidSegment}` : null,
-      "当前这组 plugins 属于 Codex 运行环境，不属于 principal 长期资产。",
-      "/plugins 查看当前环境可见的 plugin marketplace",
-      "/plugins list 查看当前环境里的 marketplaces 和 plugins",
+      "/plugins 查看和维护当前 principal 的 plugins",
+      "/plugins list 查看当前 principal 已拥有 plugins，并附带当前环境发现结果",
       "/plugins read <MARKETPLACE> <PLUGIN_NAME> 查看 plugin 详情",
-      "/plugins install <MARKETPLACE> <PLUGIN_NAME> 安装 plugin",
-      "/plugins uninstall <PLUGIN_ID> 卸载 plugin",
+      "/plugins install <MARKETPLACE> <PLUGIN_NAME> 纳入当前 principal，并尝试物化到当前 runtime",
+      "/plugins sync [remote] 把当前 principal 已拥有 plugins 重同步到当前 runtime",
+      "/plugins uninstall <PLUGIN_ID> 从当前 principal 移除 plugin",
       "",
       "第一版支持用 marketplace 名称或 marketplacePath 指向 marketplace。",
+      "repo-local plugin 如果当前工作区不可解析，会显示为“已拥有，但当前工作区不可用”。",
       "如果想先看当前列表，请发送 /plugins list。",
     ].filter((line): line is string => line !== null);
 
@@ -3445,30 +3507,55 @@ export class FeishuChannelService {
 
   private async sendPluginsList(chatId: string, _context: FeishuIncomingContext): Promise<void> {
     const context = _context;
-    const result = await this.runtime.getPluginService().listPlugins({
-      ...this.buildPluginRuntimeOptions(context),
-    });
+    const { principal, result } = await this.readPrincipalPluginsState(context);
 
-    if (!result.marketplaces.length) {
+    if (!result.principalPlugins.length && !result.marketplaces.length) {
       await this.safeSendText(
         chatId,
         [
+          `当前 principal：${principal.principalId}`,
           `当前槽位：${result.target.targetId}`,
           "Plugins",
-          "marketplaces：0",
-          "当前运行环境还没有可见 plugin marketplace。",
+          "已拥有：0",
+          "当前环境 marketplace：0",
+          "当前 principal 还没有已拥有 plugins，当前环境也没有发现可接入 marketplace。",
         ].join("\n"),
       );
       return;
     }
 
     const lines = [
+      `当前 principal：${principal.principalId}`,
       `当前槽位：${result.target.targetId}`,
       "Plugins",
-      `marketplaces：${result.marketplaces.length}`,
+      `已拥有：${result.principalPlugins.length}`,
+      `当前环境 marketplace：${result.marketplaces.length}`,
       result.remoteSyncError ? `远程同步异常：${result.remoteSyncError}` : null,
       result.marketplaceLoadErrors.length > 0 ? `读取失败的 marketplace：${result.marketplaceLoadErrors.length}` : null,
       "",
+      "当前 principal 已拥有：",
+      ...(result.principalPlugins.length > 0
+        ? result.principalPlugins.flatMap((plugin, index) => {
+          const pluginLines = [
+            `${index + 1}. ${plugin.summary.interface?.displayName || plugin.pluginName} [${formatPrincipalPluginRuntimeState(plugin.summary.runtimeState)}]`,
+            `   pluginId：${plugin.pluginId}`,
+            `   marketplace：${plugin.marketplaceName}`,
+            `   来源：${describePrincipalPluginSource(plugin)}`,
+            `   安装策略：${formatPluginInstallPolicy(plugin.summary.installPolicy)}`,
+            `   认证策略：${formatPluginAuthPolicy(plugin.summary.authPolicy)}`,
+            plugin.lastError ? `   最近问题：${plugin.lastError}` : null,
+            plugin.repairHint ? `   建议动作：${plugin.repairHint}` : null,
+          ].filter((line): line is string => line !== null);
+
+          if (index < result.principalPlugins.length - 1) {
+            pluginLines.push("");
+          }
+
+          return pluginLines;
+        })
+        : ["当前 principal 还没有已拥有 plugins。"]),
+      "",
+      "当前环境发现：",
       ...result.marketplaces.flatMap((marketplace, marketplaceIndex) => {
         const marketplaceLines = [
           `${marketplaceIndex + 1}. ${marketplace.interface?.displayName || marketplace.name}`,
@@ -3488,7 +3575,9 @@ export class FeishuChannelService {
           const capabilityCopy = plugin.interface?.capabilities?.length
             ? plugin.interface.capabilities.join(", ")
             : "暂无能力标签";
-          marketplaceLines.push(`   - ${plugin.name} ${plugin.installed ? "[已安装]" : "[未安装]"}`);
+          marketplaceLines.push(
+            `   - ${plugin.name} ${plugin.owned ? "[已纳入 principal]" : "[未纳入 principal]"} [${formatPrincipalPluginRuntimeState(plugin.runtimeState)}]`,
+          );
           marketplaceLines.push(`     pluginId：${plugin.id}`);
           marketplaceLines.push(`     安装策略：${formatPluginInstallPolicy(plugin.installPolicy)}`);
           marketplaceLines.push(`     认证策略：${formatPluginAuthPolicy(plugin.authPolicy)}`);
@@ -3513,11 +3602,10 @@ export class FeishuChannelService {
     context: FeishuIncomingContext,
     invalidValue?: string,
   ): Promise<void> {
-    const result = await this.runtime.getPluginService().listPlugins({
-      ...this.buildPluginRuntimeOptions(context),
-    });
+    const { principal, result } = await this.readPrincipalPluginsState(context);
     const lines = [
       "用法：/plugins read <MARKETPLACE> <PLUGIN_NAME>",
+      `当前 principal：${principal.principalId}`,
       `当前槽位：${result.target.targetId}`,
       invalidValue ? `参数不完整或格式不正确：${invalidValue}` : null,
       "MARKETPLACE 支持 marketplace 名称或完整 marketplacePath。",
@@ -3532,14 +3620,32 @@ export class FeishuChannelService {
     context: FeishuIncomingContext,
     invalidValue?: string,
   ): Promise<void> {
-    const result = await this.runtime.getPluginService().listPlugins({
-      ...this.buildPluginRuntimeOptions(context),
-    });
+    const { principal, result } = await this.readPrincipalPluginsState(context);
     const lines = [
       "用法：/plugins install <MARKETPLACE> <PLUGIN_NAME>",
+      `当前 principal：${principal.principalId}`,
       `当前槽位：${result.target.targetId}`,
       invalidValue ? `参数不完整或格式不正确：${invalidValue}` : null,
       "MARKETPLACE 支持 marketplace 名称或完整 marketplacePath。",
+      "如果想先看当前列表，请发送 /plugins list。",
+    ].filter((line): line is string => line !== null);
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendPluginsSyncHelp(
+    chatId: string,
+    context: FeishuIncomingContext,
+    invalidValue?: string,
+  ): Promise<void> {
+    const { principal, result } = await this.readPrincipalPluginsState(context);
+    const lines = [
+      "用法：/plugins sync [remote]",
+      `当前 principal：${principal.principalId}`,
+      `当前槽位：${result.target.targetId}`,
+      invalidValue ? `参数不完整或格式不正确：${invalidValue}` : null,
+      "/plugins sync 把当前 principal 已拥有 plugins 对齐到当前 runtime / 工作区",
+      "/plugins sync remote 会先远程刷新 marketplace，再执行同步",
       "如果想先看当前列表，请发送 /plugins list。",
     ].filter((line): line is string => line !== null);
 
@@ -3551,11 +3657,10 @@ export class FeishuChannelService {
     context: FeishuIncomingContext,
     invalidValue?: string,
   ): Promise<void> {
-    const result = await this.runtime.getPluginService().listPlugins({
-      ...this.buildPluginRuntimeOptions(context),
-    });
+    const { principal, result } = await this.readPrincipalPluginsState(context);
     const lines = [
       "用法：/plugins uninstall <PLUGIN_ID>",
+      `当前 principal：${principal.principalId}`,
       `当前槽位：${result.target.targetId}`,
       invalidValue ? `参数不完整或格式不正确：${invalidValue}` : null,
       "pluginId 可先通过 /plugins list 查看。",
@@ -3577,9 +3682,7 @@ export class FeishuChannelService {
       throw new Error("plugin marketplace 不能为空。");
     }
 
-    const result = await this.runtime.getPluginService().listPlugins({
-      ...this.buildPluginRuntimeOptions(context),
-    });
+    const { result } = await this.readPrincipalPluginsState(context);
     const matched = result.marketplaces.filter((marketplace) =>
       marketplace.path === normalizedToken || marketplace.name === normalizedToken
     );
@@ -3596,6 +3699,27 @@ export class FeishuChannelService {
     }
 
     throw new Error(`未找到 marketplace：${normalizedToken}。请先执行 /plugins list。`);
+  }
+
+  private async readPrincipalPluginsState(
+    context: FeishuIncomingContext,
+    options: {
+      forceRemoteSync?: boolean;
+    } = {},
+  ): Promise<{
+    principal: { principalId: string; principalDisplayName?: string };
+    result: Awaited<ReturnType<ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]>["listPrincipalPlugins"]>>;
+  }> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const result = await this.runtime.getPrincipalPluginsService().listPrincipalPlugins(
+      principal.principalId,
+      this.buildPluginRuntimeOptions(context, options),
+    );
+
+    return {
+      principal,
+      result,
+    };
   }
 
   private buildPluginRuntimeOptions(
@@ -5468,6 +5592,11 @@ function isGroupChatType(chatType: string | null | undefined): boolean {
   return normalizeText(chatType)?.toLowerCase() === "group";
 }
 
+function parsePluginsSyncRemoteArgument(value: string): boolean | null {
+  const normalized = normalizeText(value)?.toLowerCase();
+  return normalized === "remote" || normalized === "force" ? true : null;
+}
+
 function parseSkillsSyncForceArgument(value: string): boolean | null {
   const normalized = normalizeText(value)?.toLowerCase();
   return normalized === "force" ? true : null;
@@ -5616,6 +5745,90 @@ function formatPluginAuthPolicy(value: string): string {
     default:
       return value || "未知";
   }
+}
+
+function formatPrincipalPluginRuntimeState(value: string): string {
+  switch (normalizeText(value)?.toLowerCase()) {
+    case "installed":
+      return "当前已可用";
+    case "available":
+      return "当前可发现";
+    case "missing":
+      return "当前工作区不可用";
+    case "auth_required":
+      return "当前需认证";
+    case "failed":
+      return "当前状态异常";
+    default:
+      return value || "未知";
+  }
+}
+
+function formatPrincipalPluginSourceType(value: string): string {
+  switch (normalizeText(value)?.toLowerCase()) {
+    case "marketplace":
+      return "marketplace";
+    case "repo-local":
+      return "repo 本地";
+    case "home-local":
+      return "宿主机本地";
+    default:
+      return value || "未知";
+  }
+}
+
+function formatPrincipalPluginSourceScope(value: string): string {
+  switch (normalizeText(value)?.toLowerCase()) {
+    case "marketplace":
+      return "可跨工作区复用";
+    case "workspace-current":
+      return "当前工作区";
+    case "workspace-other":
+      return "其他工作区";
+    case "host-local":
+      return "宿主机本地";
+    default:
+      return "未知来源边界";
+  }
+}
+
+function describePrincipalPluginSource(plugin: {
+  sourceType?: string;
+  sourceScope?: string;
+  sourcePath?: string | null;
+  sourceRef?: {
+    sourcePath?: string;
+    workspaceFingerprint?: string;
+    marketplaceName?: string;
+    marketplacePath?: string;
+  } | null;
+}): string {
+  const sourceType = formatPrincipalPluginSourceType(plugin.sourceType ?? "");
+  const sourceScope = formatPrincipalPluginSourceScope(plugin.sourceScope ?? "");
+  const sourcePath = normalizeText(plugin.sourcePath ?? undefined)
+    ?? normalizeText(plugin.sourceRef?.sourcePath ?? undefined);
+  const workspaceFingerprint = normalizeText(plugin.sourceRef?.workspaceFingerprint ?? undefined);
+  const marketplaceName = normalizeText(plugin.sourceRef?.marketplaceName ?? undefined);
+  const marketplacePath = normalizeText(plugin.sourceRef?.marketplacePath ?? undefined);
+  const parts = [sourceType];
+
+  if (sourceScope && sourceScope !== "未知来源边界") {
+    parts.push(sourceScope);
+  }
+
+  if (sourcePath) {
+    parts.push(sourcePath);
+  } else if (marketplacePath) {
+    parts.push(`${marketplaceName || "marketplace"} @ ${marketplacePath}`);
+  } else if (marketplaceName) {
+    parts.push(marketplaceName);
+  }
+
+  if (workspaceFingerprint && normalizeText(plugin.sourceType)?.toLowerCase() === "repo-local") {
+    parts.push(`工作区 ${workspaceFingerprint}`);
+  }
+
+  return parts.join("｜");
 }
 
 function safeParseMcpArgs(argsJson: string): string[] {

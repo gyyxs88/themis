@@ -4,6 +4,7 @@ export function createDefaultPluginsState() {
     errorMessage: "",
     noticeMessage: "",
     busyMessage: "",
+    principalPlugins: [],
     marketplaces: [],
     marketplaceLoadErrors: [],
     remoteSyncError: "",
@@ -44,7 +45,7 @@ export function createPluginsController(app) {
     });
 
     dom?.pluginsRemoteSyncButton?.addEventListener("click", () => {
-      void runSafely(() => refresh({ forceRemoteSync: true }));
+      void runSafely(() => syncPlugins({ forceRemoteSync: true }));
     });
 
     dom?.pluginsPanelActions?.addEventListener("click", (event) => {
@@ -160,9 +161,22 @@ export function createPluginsController(app) {
     return data ?? {};
   }
 
+  function buildPluginsIdentityPayload() {
+    const browserUserId = normalizeText(app.runtime.identity?.browserUserId) || "browser-local";
+    const authEmail = normalizeText(app.runtime.auth?.account?.email);
+    const displayName = authEmail || `Themis Web ${browserUserId.slice(-6)}`;
+
+    return {
+      channel: "web",
+      channelUserId: browserUserId,
+      ...(displayName ? { displayName } : {}),
+    };
+  }
+
   function buildPluginsPayload(extra = {}) {
     const discoveryCwd = resolvePluginDiscoveryCwd();
     return {
+      ...buildPluginsIdentityPayload(),
       ...(discoveryCwd ? { cwd: discoveryCwd } : {}),
       ...extra,
     };
@@ -273,8 +287,12 @@ export function createPluginsController(app) {
 
     try {
       const data = await postPlugins(url, payload);
-      await refreshAfterMutation(successMessage, options);
-      return data?.result ?? {};
+      const result = data?.result ?? {};
+      const resolvedSuccessMessage = typeof successMessage === "function"
+        ? successMessage(result)
+        : successMessage;
+      await refreshAfterMutation(resolvedSuccessMessage, options);
+      return result;
     } catch (error) {
       setState({
         status: "error",
@@ -366,8 +384,8 @@ export function createPluginsController(app) {
         pluginName: input.pluginName,
         ...(options.forceRemoteSync === true ? { forceRemoteSync: true } : {}),
       }),
-      `正在安装 plugin：${input.pluginName}`,
-      `已安装 plugin：${input.pluginName}`,
+      `正在把 plugin 纳入 principal：${input.pluginName}`,
+      `已纳入 principal：${input.pluginName}`,
       options,
     );
     const detailId = createPluginDetailId(input.marketplacePath, result?.plugin?.summary?.id, input.pluginName);
@@ -393,8 +411,8 @@ export function createPluginsController(app) {
         pluginId: input.pluginId,
         ...(options.forceRemoteSync === true ? { forceRemoteSync: true } : {}),
       }),
-      `正在卸载 plugin：${input.pluginId}`,
-      `已卸载 plugin：${input.pluginId}`,
+      `正在从 principal 移除 plugin：${input.pluginId}`,
+      `已从 principal 移除 plugin：${input.pluginId}`,
       options,
     );
     const detailsById = { ...(app.runtime.plugins.detailsById ?? {}) };
@@ -414,6 +432,18 @@ export function createPluginsController(app) {
     return result;
   }
 
+  async function syncPlugins(options = {}) {
+    return await runMutation(
+      "/api/plugins/sync",
+      buildPluginsPayload({
+        ...(options.forceRemoteSync === true ? { forceRemoteSync: true } : {}),
+      }),
+      "正在把当前 principal 已拥有 plugins 同步到当前环境",
+      (result) => summarizePluginSyncResult(result),
+      options,
+    );
+  }
+
   return {
     bindControls,
     load,
@@ -421,12 +451,16 @@ export function createPluginsController(app) {
     togglePluginDetail,
     installPlugin,
     uninstallPlugin,
+    syncPlugins,
     normalizePluginsList,
     normalizePluginDetail,
   };
 }
 
 export function normalizePluginsList(value) {
+  const principalPlugins = Array.isArray(value?.principalPlugins)
+    ? value.principalPlugins.map(normalizePrincipalPlugin).filter(Boolean)
+    : [];
   const marketplaces = Array.isArray(value?.marketplaces)
     ? value.marketplaces.map(normalizePluginMarketplace).filter(Boolean)
     : [];
@@ -435,12 +469,44 @@ export function normalizePluginsList(value) {
     : [];
 
   return {
+    principalPlugins,
     marketplaces,
     marketplaceLoadErrors,
     remoteSyncError: normalizeText(value?.remoteSyncError) || "",
     featuredPluginIds: Array.isArray(value?.featuredPluginIds)
       ? value.featuredPluginIds.filter((item) => typeof item === "string" && item.trim())
       : [],
+  };
+}
+
+function normalizePrincipalPlugin(value) {
+  const summary = normalizePluginSummary(value?.summary);
+  const pluginId = normalizeText(value?.pluginId) || summary?.id || "";
+  const pluginName = normalizeText(value?.pluginName) || summary?.name || "";
+  const marketplacePath = normalizeText(value?.marketplacePath);
+  const marketplaceName = normalizeText(value?.marketplaceName);
+
+  if (!pluginId || !pluginName || !marketplacePath || !marketplaceName || !summary) {
+    return null;
+  }
+
+  return {
+    pluginId,
+    pluginName,
+    marketplacePath,
+    marketplaceName,
+    sourceType: normalizeText(value?.sourceType) || "unknown",
+    sourceScope: normalizeText(value?.sourceScope) || "unknown",
+    sourcePath: normalizeText(value?.sourcePath) || summary.sourcePath || "",
+    sourceRef: normalizePluginSourceRef(value?.sourceRef),
+    runtimeAvailable: value?.runtimeAvailable === true,
+    currentMaterialization: normalizePluginMaterialization(value?.currentMaterialization),
+    lastError: normalizeText(value?.lastError) || "",
+    repairAction: normalizeText(value?.repairAction) || "none",
+    repairHint: normalizeText(value?.repairHint) || "",
+    createdAt: normalizeText(value?.createdAt) || "",
+    updatedAt: normalizeText(value?.updatedAt) || "",
+    summary,
   };
 }
 
@@ -452,6 +518,14 @@ export function normalizePluginDetail(value) {
     marketplacePath: normalizeText(value?.marketplacePath) || "",
     summary,
     description: normalizeText(value?.description) || "",
+    sourceType: normalizeText(value?.sourceType) || summary?.sourceType || "unknown",
+    sourceScope: normalizeText(value?.sourceScope) || "unknown",
+    sourcePath: normalizeText(value?.sourcePath) || summary?.sourcePath || "",
+    sourceRef: normalizePluginSourceRef(value?.sourceRef),
+    currentMaterialization: normalizePluginMaterialization(value?.currentMaterialization),
+    lastError: normalizeText(value?.lastError) || "",
+    repairAction: normalizeText(value?.repairAction) || "none",
+    repairHint: normalizeText(value?.repairHint) || "",
     skills: Array.isArray(value?.skills)
       ? value.skills.map(normalizePluginSkill).filter(Boolean)
       : [],
@@ -484,6 +558,32 @@ function normalizePluginMarketplace(value) {
       ? value.plugins.map(normalizePluginSummary).filter(Boolean)
       : [],
   };
+}
+
+function summarizePluginSyncResult(value) {
+  const total = normalizeCount(value?.total);
+  const installedCount = normalizeCount(value?.installedCount);
+  const alreadyInstalledCount = normalizeCount(value?.alreadyInstalledCount);
+  const authRequiredCount = normalizeCount(value?.authRequiredCount);
+  const missingCount = normalizeCount(value?.missingCount);
+  const failedCount = normalizeCount(value?.failedCount);
+
+  if (total === 0) {
+    return "当前 principal 还没有已拥有 plugins，无需同步。";
+  }
+
+  return [
+    `已同步 ${total} 个 principal plugins`,
+    `新装 ${installedCount}`,
+    `已在当前环境 ${alreadyInstalledCount}`,
+    `待认证 ${authRequiredCount}`,
+    `缺失 ${missingCount}`,
+    `失败 ${failedCount}`,
+  ].join("，");
+}
+
+function normalizeCount(value) {
+  return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
 }
 
 function normalizePluginSummary(value) {
@@ -522,14 +622,40 @@ function normalizePluginSummary(value) {
   return {
     id,
     name,
+    owned: value?.owned === true || value?.installed === true,
+    runtimeInstalled: value?.runtimeInstalled === true || value?.installed === true,
+    runtimeState: normalizePluginRuntimeState(
+      value?.runtimeState,
+      value?.runtimeInstalled === true || value?.installed === true,
+    ),
     sourceType: normalizeText(value?.sourceType) || "unknown",
+    sourceScope: normalizeText(value?.sourceScope) || "unknown",
     sourcePath: normalizeText(value?.sourcePath) || "",
     installed: value?.installed === true,
     enabled: value?.enabled === true,
     installPolicy: normalizeText(value?.installPolicy) || "UNKNOWN",
     authPolicy: normalizeText(value?.authPolicy) || "UNKNOWN",
+    sourceRef: normalizePluginSourceRef(value?.sourceRef),
+    lastError: normalizeText(value?.lastError) || "",
+    repairAction: normalizeText(value?.repairAction) || "none",
+    repairHint: normalizeText(value?.repairHint) || "",
     interface: pluginInterface,
   };
+}
+
+function normalizePluginRuntimeState(value, runtimeInstalled = false) {
+  const normalized = normalizeText(value);
+
+  switch (normalized) {
+    case "installed":
+    case "available":
+    case "missing":
+    case "auth_required":
+    case "failed":
+      return normalized;
+    default:
+      return runtimeInstalled ? "installed" : "available";
+  }
 }
 
 function normalizeMarketplaceLoadError(value) {
@@ -543,6 +669,37 @@ function normalizeMarketplaceLoadError(value) {
   return {
     marketplacePath,
     message,
+  };
+}
+
+function normalizePluginSourceRef(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  return {
+    sourceType: normalizeText(value.sourceType) || "",
+    marketplaceName: normalizeText(value.marketplaceName) || "",
+    marketplacePath: normalizeText(value.marketplacePath) || "",
+    pluginName: normalizeText(value.pluginName) || "",
+    pluginId: normalizeText(value.pluginId) || "",
+    sourcePath: normalizeText(value.sourcePath) || "",
+    workspaceFingerprint: normalizeText(value.workspaceFingerprint) || "",
+  };
+}
+
+function normalizePluginMaterialization(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  return {
+    targetKind: normalizeText(value.targetKind) || "",
+    targetId: normalizeText(value.targetId) || "",
+    workspaceFingerprint: normalizeText(value.workspaceFingerprint) || "",
+    state: normalizePluginRuntimeState(value.state),
+    lastSyncedAt: normalizeText(value.lastSyncedAt) || "",
+    lastError: normalizeText(value.lastError) || "",
   };
 }
 

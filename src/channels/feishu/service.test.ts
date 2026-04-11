@@ -1040,7 +1040,7 @@ test("/help 会展示 /plugins 第一层入口", async () => {
     await harness.handleCommand("help", []);
 
     const message = harness.takeSingleMessage();
-    assert.match(message, /\/plugins 查看和维护当前 Codex 运行环境的 plugins/);
+    assert.match(message, /\/plugins 查看和维护当前 principal 的 plugins/);
   } finally {
     harness.cleanup();
   }
@@ -1054,24 +1054,29 @@ test("/plugins foo 会回退到 /plugins 自己的帮助", async () => {
 
     const message = harness.takeSingleMessage();
     assert.match(message, /Plugins 管理：/);
+    assert.match(message, /当前 principal：/);
     assert.match(message, /\/plugins read <MARKETPLACE> <PLUGIN_NAME>/);
+    assert.match(message, /\/plugins sync \[remote\]/);
     assert.match(message, /\/plugins uninstall <PLUGIN_ID>/);
   } finally {
     harness.cleanup();
   }
 });
 
-test("/plugins list 会展示当前环境的 marketplace 和 plugin 摘要", async () => {
+test("/plugins list 会展示当前 principal 已拥有项和当前环境发现结果", async () => {
   const harness = createHarness();
 
   try {
     await harness.handleCommand("plugins", ["list"]);
 
     const message = harness.takeSingleMessage();
+    assert.match(message, /当前 principal：/);
     assert.match(message, /当前槽位：acc-1/);
+    assert.match(message, /已拥有：0/);
+    assert.match(message, /当前环境发现：/);
     assert.match(message, /1\. OpenAI Curated/);
     assert.match(message, /name：openai-curated/);
-    assert.match(message, /- github \[未安装\]/);
+    assert.match(message, /- github \[未纳入 principal\] \[当前可发现\]/);
     assert.match(message, /pluginId：github@openai-curated/);
     assert.match(message, /安装策略：可安装/);
     assert.match(message, /认证策略：安装时认证/);
@@ -1081,30 +1086,36 @@ test("/plugins list 会展示当前环境的 marketplace 和 plugin 摘要", asy
 });
 
 test("/plugins list 会优先按当前会话工作区发现 marketplace", async () => {
+  let receivedPrincipalId = "";
   let receivedOptions: FeishuHarnessPluginRuntimeOptions | undefined;
   const harness = createHarness({
     pluginService: {
-      listPlugins: async (options) => {
+      listPrincipalPlugins: async (principalId, options) => {
+        receivedPrincipalId = principalId;
         receivedOptions = options;
         return {
           target: {
             targetKind: "auth-account",
             targetId: "acc-1",
           },
+          principalPlugins: [],
           marketplaces: [],
           marketplaceLoadErrors: [],
           remoteSyncError: null,
           featuredPluginIds: [],
         };
       },
-      readPlugin: async () => {
-        throw new Error("unexpected readPlugin");
+      readPrincipalPlugin: async () => {
+        throw new Error("unexpected readPrincipalPlugin");
       },
-      installPlugin: async () => {
-        throw new Error("unexpected installPlugin");
+      installPrincipalPlugin: async () => {
+        throw new Error("unexpected installPrincipalPlugin");
       },
-      uninstallPlugin: async () => {
-        throw new Error("unexpected uninstallPlugin");
+      uninstallPrincipalPlugin: async () => {
+        throw new Error("unexpected uninstallPrincipalPlugin");
+      },
+      syncPrincipalPlugins: async () => {
+        throw new Error("unexpected syncPrincipalPlugins");
       },
     },
   });
@@ -1119,9 +1130,103 @@ test("/plugins list 会优先按当前会话工作区发现 marketplace", async 
     await harness.handleCommand("plugins", ["list"]);
 
     const message = harness.takeSingleMessage();
+    assert.match(message, /当前 principal：/);
     assert.match(message, /当前槽位：acc-1/);
+    assert.equal(receivedPrincipalId, harness.getCurrentPrincipalId());
     assert.equal(receivedOptions?.cwd, "/srv/repos/demo");
     assert.equal(receivedOptions?.activeAuthAccount?.accountId, "acc-1");
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/plugins list 会展示来源边界和建议动作", async () => {
+  const harness = createHarness({
+    pluginService: {
+      listPrincipalPlugins: async () => ({
+        target: {
+          targetKind: "auth-account",
+          targetId: "acc-1",
+        },
+        principalPlugins: [{
+          pluginId: "github@openai-curated",
+          pluginName: "github",
+          marketplaceName: "openai-curated",
+          marketplacePath: "/tmp/openai-curated/marketplace.json",
+          sourceType: "repo-local",
+          sourceScope: "workspace-other",
+          sourcePath: "/srv/repos/demo/.agents/plugins/github",
+          sourceRef: {
+            sourceType: "repo-local",
+            sourcePath: "/srv/repos/demo/.agents/plugins/github",
+            workspaceFingerprint: "/srv/repos/demo",
+            marketplaceName: "openai-curated",
+            marketplacePath: "/tmp/openai-curated/marketplace.json",
+          },
+          runtimeAvailable: false,
+          currentMaterialization: {
+            targetKind: "auth-account",
+            targetId: "acc-1",
+            workspaceFingerprint: "/srv/repos/other",
+            state: "missing",
+            lastSyncedAt: "2026-04-11T00:00:00.000Z",
+            lastError: "当前工作区没有这个 repo-local plugin。",
+          },
+          lastError: "当前工作区没有这个 repo-local plugin。",
+          repairAction: "switch_workspace",
+          repairHint: "这是绑定工作区 /srv/repos/demo 的 repo-local plugin；切回该工作区后再查看或同步。",
+          createdAt: "2026-04-11T00:00:00.000Z",
+          updatedAt: "2026-04-11T00:00:00.000Z",
+          summary: {
+            id: "github@openai-curated",
+            name: "github",
+            owned: true,
+            runtimeInstalled: false,
+            runtimeState: "missing",
+            sourceType: "repo-local",
+            sourceScope: "workspace-other",
+            sourcePath: "/srv/repos/demo/.agents/plugins/github",
+            installed: false,
+            enabled: true,
+            installPolicy: "AVAILABLE",
+            authPolicy: "ON_INSTALL",
+            lastError: "当前工作区没有这个 repo-local plugin。",
+            repairAction: "switch_workspace",
+            repairHint: "这是绑定工作区 /srv/repos/demo 的 repo-local plugin；切回该工作区后再查看或同步。",
+            interface: {
+              displayName: "GitHub",
+              shortDescription: "Review PRs",
+              capabilities: ["Interactive"],
+            },
+          },
+        }],
+        marketplaces: [],
+        marketplaceLoadErrors: [],
+        remoteSyncError: null,
+        featuredPluginIds: [],
+      }),
+      readPrincipalPlugin: async () => {
+        throw new Error("unexpected readPrincipalPlugin");
+      },
+      installPrincipalPlugin: async () => {
+        throw new Error("unexpected installPrincipalPlugin");
+      },
+      uninstallPrincipalPlugin: async () => {
+        throw new Error("unexpected uninstallPrincipalPlugin");
+      },
+      syncPrincipalPlugins: async () => {
+        throw new Error("unexpected syncPrincipalPlugins");
+      },
+    },
+  });
+
+  try {
+    await harness.handleCommand("plugins", ["list"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /来源：repo 本地｜其他工作区｜\/srv\/repos\/demo\/\.agents\/plugins\/github｜工作区 \/srv\/repos\/demo/);
+    assert.match(message, /最近问题：当前工作区没有这个 repo-local plugin。/);
+    assert.match(message, /建议动作：这是绑定工作区 \/srv\/repos\/demo 的 repo-local plugin；切回该工作区后再查看或同步。/);
   } finally {
     harness.cleanup();
   }
@@ -1135,9 +1240,13 @@ test("/plugins read <marketplace> <name> 会返回 plugin 详情", async () => {
 
     const message = harness.takeSingleMessage();
     assert.match(message, /Plugin 详情：/);
+    assert.match(message, /当前 principal：/);
     assert.match(message, /marketplace：openai-curated/);
     assert.match(message, /plugin：github/);
     assert.match(message, /pluginId：github@openai-curated/);
+    assert.match(message, /来源：/);
+    assert.match(message, /principal 归属：未纳入/);
+    assert.match(message, /当前状态：当前可发现/);
     assert.match(message, /附带 skills：github-review/);
     assert.match(message, /附带 apps：GitHub/);
     assert.match(message, /附带 MCP：github/);
@@ -1152,26 +1261,61 @@ test("/plugins install 和 /plugins uninstall 会调用对应写操作", async (
   try {
     await harness.handleCommand("plugins", ["install", "openai-curated", "github"]);
     const installed = harness.takeSingleMessage();
-    assert.match(installed, /Plugin 已安装：/);
+    assert.match(installed, /Plugin 已纳入 principal：/);
+    assert.match(installed, /当前 principal：/);
     assert.match(installed, /plugin：github/);
+    assert.match(installed, /当前状态：当前已可用/);
     assert.match(installed, /待补认证 apps：GitHub/);
 
     await harness.handleCommand("plugins", ["uninstall", "github@openai-curated"]);
     const removed = harness.takeSingleMessage();
-    assert.match(removed, /Plugin 已卸载：/);
+    assert.match(removed, /Plugin 已从 principal 移除：/);
+    assert.match(removed, /当前 principal：/);
     assert.match(removed, /pluginId：github@openai-curated/);
+    assert.match(removed, /当前 runtime：已执行卸载。/);
 
     assert.deepEqual(harness.getPluginWriteCalls(), [
       {
-        method: "installPlugin",
+        method: "installPrincipalPlugin",
+        principalId: harness.getCurrentPrincipalId(),
         marketplacePath: "/tmp/openai-curated/marketplace.json",
         pluginName: "github",
       },
       {
-        method: "uninstallPlugin",
+        method: "uninstallPrincipalPlugin",
+        principalId: harness.getCurrentPrincipalId(),
         pluginId: "github@openai-curated",
       },
     ]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/plugins sync 会调用 principal 同步，并沿用当前会话工作区", async () => {
+  const harness = createHarness();
+
+  try {
+    const sessionId = "session-plugins-sync";
+    harness.setCurrentSession(sessionId);
+    harness.writeSessionSettings(sessionId, {
+      workspacePath: "/srv/repos/demo",
+    });
+
+    await harness.handleCommand("plugins", ["sync", "remote"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /Plugin 同步完成：/);
+    assert.match(message, /当前 principal：/);
+    assert.match(message, /模式：先远程同步 marketplace，再落到当前 runtime/);
+    assert.match(message, /查看：\/plugins list/);
+
+    assert.deepEqual(harness.getPluginWriteCalls(), [{
+      method: "syncPrincipalPlugins",
+      principalId: harness.getCurrentPrincipalId(),
+      forceRemoteSync: true,
+      cwd: "/srv/repos/demo",
+    }]);
   } finally {
     harness.cleanup();
   }
@@ -5873,12 +6017,26 @@ type FeishuHarnessCuratedItem = { name: string; installed: boolean };
 type FeishuHarnessPluginSummary = {
   id: string;
   name: string;
+  owned?: boolean;
+  runtimeInstalled?: boolean;
+  runtimeState?: string;
   sourceType?: string;
+  sourceScope?: string;
   sourcePath?: string | null;
+  sourceRef?: {
+    sourceType?: string;
+    sourcePath?: string | null;
+    workspaceFingerprint?: string;
+    marketplaceName?: string;
+    marketplacePath?: string;
+  } | null;
   installed: boolean;
   enabled: boolean;
   installPolicy: string;
   authPolicy: string;
+  lastError?: string | null;
+  repairAction?: string;
+  repairHint?: string | null;
   interface?: {
     displayName?: string;
     shortDescription?: string;
@@ -5901,6 +6059,21 @@ type FeishuHarnessPluginDetail = {
   marketplacePath: string;
   summary: FeishuHarnessPluginSummary;
   description?: string | null;
+  sourceType?: string;
+  sourceScope?: string;
+  sourcePath?: string | null;
+  sourceRef?: FeishuHarnessPluginSummary["sourceRef"];
+  currentMaterialization?: {
+    targetKind?: string;
+    targetId?: string;
+    workspaceFingerprint?: string;
+    state?: string;
+    lastSyncedAt?: string;
+    lastError?: string | null;
+  } | null;
+  lastError?: string | null;
+  repairAction?: string;
+  repairHint?: string | null;
   skills?: Array<{
     name: string;
     description: string;
@@ -5926,21 +6099,41 @@ type FeishuHarnessPluginRuntimeOptions = {
   } | null;
 };
 type FeishuHarnessPluginService = {
-  listPlugins: (options?: FeishuHarnessPluginRuntimeOptions) => Promise<{
+  listPrincipalPlugins: (principalId: string, options?: FeishuHarnessPluginRuntimeOptions) => Promise<{
     target: { targetKind: "auth-account"; targetId: string };
+    principalPlugins: Array<{
+      pluginId: string;
+      pluginName: string;
+      marketplaceName: string;
+      marketplacePath: string;
+      sourceType: string;
+      sourceScope?: string;
+      sourcePath?: string | null;
+      sourceRef?: FeishuHarnessPluginSummary["sourceRef"];
+      runtimeAvailable: boolean;
+      currentMaterialization?: FeishuHarnessPluginDetail["currentMaterialization"];
+      lastError?: string | null;
+      repairAction?: string;
+      repairHint?: string | null;
+      createdAt: string;
+      updatedAt: string;
+      summary: FeishuHarnessPluginSummary;
+    }>;
     marketplaces: FeishuHarnessPluginMarketplace[];
     marketplaceLoadErrors: Array<{ marketplacePath: string; message: string }>;
     remoteSyncError: string | null;
     featuredPluginIds: string[];
   }>;
-  readPlugin: (
+  readPrincipalPlugin: (
+    principalId: string,
     input: { marketplacePath: string; pluginName: string },
     options?: FeishuHarnessPluginRuntimeOptions,
   ) => Promise<{
     target: { targetKind: "auth-account"; targetId: string };
     plugin: FeishuHarnessPluginDetail;
   }>;
-  installPlugin: (
+  installPrincipalPlugin: (
+    principalId: string,
     input: {
       marketplacePath: string;
       pluginName: string;
@@ -5961,12 +6154,39 @@ type FeishuHarnessPluginService = {
     }>;
     plugin: FeishuHarnessPluginDetail | null;
   }>;
-  uninstallPlugin: (
-    input: { pluginId: string; forceRemoteSync?: boolean },
+  uninstallPrincipalPlugin: (
+    principalId: string,
+    pluginId: string,
     options?: FeishuHarnessPluginRuntimeOptions,
   ) => Promise<{
     target: { targetKind: "auth-account"; targetId: string };
     pluginId: string;
+    removedDefinition: boolean;
+    removedMaterializations: number;
+    runtimeAction: "uninstalled" | "skipped";
+  }>;
+  syncPrincipalPlugins: (
+    principalId: string,
+    options?: FeishuHarnessPluginRuntimeOptions,
+  ) => Promise<{
+    target: { targetKind: "auth-account"; targetId: string };
+    syncedAt: string;
+    total: number;
+    installedCount: number;
+    alreadyInstalledCount: number;
+    authRequiredCount: number;
+    missingCount: number;
+    failedCount: number;
+    plugins: Array<{
+      pluginId: string;
+      pluginName: string;
+      marketplaceName: string;
+      marketplacePath: string;
+      previousState: string;
+      nextState: string;
+      action: "installed" | "already_installed" | "auth_required" | "missing" | "failed";
+      lastError: string | null;
+    }>;
   }>;
 };
 
@@ -6033,13 +6253,32 @@ type FeishuHarnessAuthCall =
   | { method: "logout"; accountId: string }
   | { method: "cancelPendingLogin"; accountId: string };
 type FeishuHarnessPluginCall =
-  | { method: "readPlugin"; marketplacePath: string; pluginName: string; cwd?: string }
-  | { method: "installPlugin"; marketplacePath: string; pluginName: string; forceRemoteSync?: boolean; cwd?: string }
-  | { method: "uninstallPlugin"; pluginId: string; forceRemoteSync?: boolean; cwd?: string };
+  | { method: "readPrincipalPlugin"; principalId: string; marketplacePath: string; pluginName: string; cwd?: string }
+  | {
+    method: "installPrincipalPlugin";
+    principalId: string;
+    marketplacePath: string;
+    pluginName: string;
+    forceRemoteSync?: boolean;
+    cwd?: string;
+  }
+  | {
+    method: "uninstallPrincipalPlugin";
+    principalId: string;
+    pluginId: string;
+    forceRemoteSync?: boolean;
+    cwd?: string;
+  }
+  | {
+    method: "syncPrincipalPlugins";
+    principalId: string;
+    forceRemoteSync?: boolean;
+    cwd?: string;
+  };
 
 type FeishuTaskRuntimeDouble = TaskRuntimeFacade & {
   getPrincipalMcpService: () => PrincipalMcpService;
-  getPluginService: () => FeishuHarnessPluginService;
+  getPrincipalPluginsService: () => FeishuHarnessPluginService;
 };
 
 function createTaskRuntimeDouble(input: {
@@ -6080,23 +6319,27 @@ function createTaskRuntimeDouble(input: {
     registry: input.runtimeStore,
   });
   const pluginService = input.pluginService ?? {
-    listPlugins: async () => ({
+    listPrincipalPlugins: async () => ({
       target: {
         targetKind: "auth-account" as const,
         targetId: "default",
       },
+      principalPlugins: [],
       marketplaces: [],
       marketplaceLoadErrors: [],
       remoteSyncError: null,
       featuredPluginIds: [],
     }),
-    readPlugin: async () => {
+    readPrincipalPlugin: async () => {
       throw new Error("plugin service not configured");
     },
-    installPlugin: async () => {
+    installPrincipalPlugin: async () => {
       throw new Error("plugin service not configured");
     },
-    uninstallPlugin: async () => {
+    uninstallPrincipalPlugin: async () => {
+      throw new Error("plugin service not configured");
+    },
+    syncPrincipalPlugins: async () => {
       throw new Error("plugin service not configured");
     },
   };
@@ -6152,7 +6395,7 @@ function createTaskRuntimeDouble(input: {
     getRuntimeStore: () => input.runtimeStore,
     getIdentityLinkService: () => input.identityService,
     getPrincipalMcpService: () => principalMcpService,
-    getPluginService: () => pluginService,
+    getPrincipalPluginsService: () => pluginService,
     getPrincipalSkillsService: () => input.principalSkillsService,
   };
 }
@@ -6560,17 +6803,61 @@ function createHarness(
     return created;
   }
 
+  function buildPluginSummaryWithPrincipalState(
+    plugin: FeishuHarnessPluginSummary,
+    overrides: Partial<FeishuHarnessPluginSummary> = {},
+  ): FeishuHarnessPluginSummary {
+    return {
+      ...plugin,
+      owned: plugin.installed,
+      runtimeInstalled: plugin.installed,
+      runtimeState: plugin.installed ? "installed" : "available",
+      ...overrides,
+    };
+  }
+
+  function buildPrincipalPluginItem(
+    marketplace: FeishuHarnessPluginMarketplace,
+    plugin: FeishuHarnessPluginSummary,
+  ) {
+    return {
+      pluginId: plugin.id,
+      pluginName: plugin.name,
+      marketplaceName: marketplace.name,
+      marketplacePath: marketplace.path,
+      sourceType: plugin.sourceType ?? "unknown",
+      ...(plugin.sourcePath ? { sourcePath: plugin.sourcePath } : {}),
+      runtimeAvailable: true,
+      createdAt: "2026-04-11T00:00:00.000Z",
+      updatedAt: "2026-04-11T00:00:00.000Z",
+      summary: buildPluginSummaryWithPrincipalState(plugin, {
+        owned: true,
+        runtimeInstalled: true,
+        runtimeState: "installed",
+      }),
+    };
+  }
+
   const pluginService: FeishuHarnessPluginService = harnessConfig?.pluginService ?? {
-    listPlugins: async () => ({
+    listPrincipalPlugins: async () => ({
       target: buildPluginTarget(),
-      marketplaces: pluginState.marketplaces,
+      principalPlugins: pluginState.marketplaces.flatMap((marketplace) =>
+        marketplace.plugins
+          .filter((plugin) => plugin.installed)
+          .map((plugin) => buildPrincipalPluginItem(marketplace, plugin))
+      ),
+      marketplaces: pluginState.marketplaces.map((marketplace) => ({
+        ...marketplace,
+        plugins: marketplace.plugins.map((plugin) => buildPluginSummaryWithPrincipalState(plugin)),
+      })),
       marketplaceLoadErrors: [],
       remoteSyncError: null,
       featuredPluginIds: ["github@openai-curated"],
     }),
-    readPlugin: async (input, options) => {
+    readPrincipalPlugin: async (principalId, input, options) => {
       pluginState.writeCalls.push({
-        method: "readPlugin",
+        method: "readPrincipalPlugin",
+        principalId,
         marketplacePath: input.marketplacePath,
         pluginName: input.pluginName,
         ...(typeof options?.cwd === "string" ? { cwd: options.cwd } : {}),
@@ -6578,12 +6865,16 @@ function createHarness(
       const { marketplace, plugin } = findPluginByMarketplacePath(input.marketplacePath, input.pluginName);
       return {
         target: buildPluginTarget(),
-        plugin: buildPluginDetail(marketplace, plugin),
+        plugin: {
+          ...buildPluginDetail(marketplace, plugin),
+          summary: buildPluginSummaryWithPrincipalState(plugin),
+        },
       };
     },
-    installPlugin: async (input, options) => {
+    installPrincipalPlugin: async (principalId, input, options) => {
       pluginState.writeCalls.push({
-        method: "installPlugin",
+        method: "installPrincipalPlugin",
+        principalId,
         marketplacePath: input.marketplacePath,
         pluginName: input.pluginName,
         ...(input.forceRemoteSync === true ? { forceRemoteSync: true } : {}),
@@ -6600,24 +6891,69 @@ function createHarness(
         marketplacePath: input.marketplacePath,
         authPolicy: plugin.authPolicy,
         appsNeedingAuth: (detail.apps ?? []).filter((item) => item.needsAuth),
-        plugin: detail,
+        plugin: {
+          ...detail,
+          summary: buildPluginSummaryWithPrincipalState(plugin, {
+            owned: true,
+            runtimeInstalled: true,
+            runtimeState: "installed",
+          }),
+        },
       };
     },
-    uninstallPlugin: async (input, options) => {
+    uninstallPrincipalPlugin: async (principalId, pluginId, options) => {
       pluginState.writeCalls.push({
-        method: "uninstallPlugin",
-        pluginId: input.pluginId,
-        ...(input.forceRemoteSync === true ? { forceRemoteSync: true } : {}),
+        method: "uninstallPrincipalPlugin",
+        principalId,
+        pluginId,
+        ...(options?.forceRemoteSync === true ? { forceRemoteSync: true } : {}),
         ...(typeof options?.cwd === "string" ? { cwd: options.cwd } : {}),
       });
-      const { marketplace, plugin } = findPluginById(input.pluginId);
+      const { marketplace, plugin } = findPluginById(pluginId);
       plugin.installed = false;
       plugin.enabled = false;
       buildPluginDetail(marketplace, plugin);
 
       return {
         target: buildPluginTarget(),
-        pluginId: input.pluginId,
+        pluginId,
+        removedDefinition: true,
+        removedMaterializations: 1,
+        runtimeAction: "uninstalled",
+      };
+    },
+    syncPrincipalPlugins: async (principalId, options) => {
+      pluginState.writeCalls.push({
+        method: "syncPrincipalPlugins",
+        principalId,
+        ...(options?.forceRemoteSync === true ? { forceRemoteSync: true } : {}),
+        ...(typeof options?.cwd === "string" ? { cwd: options.cwd } : {}),
+      });
+      const plugins = pluginState.marketplaces.flatMap((marketplace) => marketplace.plugins)
+        .filter((plugin) => plugin.installed)
+        .map((plugin) => {
+          return {
+            pluginId: plugin.id,
+            pluginName: plugin.name,
+            marketplaceName: "openai-curated",
+            marketplacePath: "/tmp/openai-curated/marketplace.json",
+            previousState: "installed",
+            nextState: "installed",
+            action: "already_installed" as const,
+            lastError: null,
+          };
+        });
+
+      return {
+        target: buildPluginTarget(),
+        syncedAt: "2026-04-11T00:00:00.000Z",
+        total: plugins.length,
+        installedCount: 0,
+        alreadyInstalledCount: plugins.length,
+        authRequiredCount: 0,
+        missingCount: 0,
+        failedCount: 0,
+        plugins,
       };
     },
   };
@@ -6721,7 +7057,7 @@ function createHarness(
     getWorkingDirectory: () => workingDirectory,
     readRuntimeConfig: async (): Promise<CodexRuntimeCatalog> => runtimeCatalog,
     getPrincipalMcpService: () => principalMcpService,
-    getPluginService: () => pluginService,
+    getPrincipalPluginsService: () => pluginService,
     getPrincipalTaskSettings: (principalId?: string): PrincipalTaskSettings | null => {
       if (!principalId) {
         return null;
@@ -7088,6 +7424,9 @@ function createHarness(
     },
     getPrincipalMcpService() {
       return principalMcpService;
+    },
+    getPrincipalPluginsService() {
+      return pluginService;
     },
     getPluginService() {
       return pluginService;

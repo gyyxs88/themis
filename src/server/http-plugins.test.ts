@@ -79,11 +79,17 @@ async function postJson(
 
 test("POST /api/plugins/list 会返回当前运行环境可见的 marketplaces", async () => {
   await withPluginsServer(async ({ baseUrl, runtime, authHeaders }) => {
-    const service = runtime.getPluginService() as ReturnType<CodexTaskRuntime["getPluginService"]> & {
-      listPlugins?: ReturnType<CodexTaskRuntime["getPluginService"]>["listPlugins"];
+    const identity = runtime.getIdentityLinkService().ensureIdentity({
+      channel: "web",
+      channelUserId: "browser-1",
+      displayName: "Themis Web er-1",
+    });
+    const service = runtime.getPrincipalPluginsService() as ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]> & {
+      listPrincipalPlugins?: ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]>["listPrincipalPlugins"];
     };
 
-    service.listPlugins = async (options) => {
+    service.listPrincipalPlugins = async (principalId, options) => {
+      assert.equal(principalId, identity.principalId);
       assert.equal(options?.cwd, "/workspace/demo");
       assert.equal(options?.forceRemoteSync, true);
       return {
@@ -91,6 +97,7 @@ test("POST /api/plugins/list 会返回当前运行环境可见的 marketplaces",
           targetKind: "auth-account",
           targetId: "default",
         },
+        principalPlugins: [],
         marketplaces: [{
           name: "openai-curated",
           path: "/tmp/openai-curated/marketplace.json",
@@ -98,6 +105,9 @@ test("POST /api/plugins/list 会返回当前运行环境可见的 marketplaces",
           plugins: [{
             id: "github@openai-curated",
             name: "github",
+            owned: false,
+            runtimeInstalled: false,
+            runtimeState: "available",
             sourceType: "local",
             sourcePath: "/tmp/plugins/github",
             installed: false,
@@ -114,18 +124,23 @@ test("POST /api/plugins/list 会返回当前运行环境可见的 marketplaces",
     };
 
     const response = await postJson(baseUrl, "/api/plugins/list", {
+      channel: "web",
+      channelUserId: "browser-1",
+      displayName: "Themis Web er-1",
       cwd: "/workspace/demo",
       forceRemoteSync: true,
     }, authHeaders);
     assert.equal(response.status, 200);
 
     const payload = await response.json() as {
+      identity?: { principalId?: string };
       result?: {
         marketplaces?: Array<{ name?: string }>;
         target?: { targetId?: string };
       };
     };
 
+    assert.equal(payload.identity?.principalId, identity.principalId);
     assert.equal(payload.result?.target?.targetId, "default");
     assert.equal(payload.result?.marketplaces?.[0]?.name, "openai-curated");
   });
@@ -133,11 +148,17 @@ test("POST /api/plugins/list 会返回当前运行环境可见的 marketplaces",
 
 test("POST /api/plugins/read 会返回 plugin 详情", async () => {
   await withPluginsServer(async ({ baseUrl, runtime, authHeaders }) => {
-    const service = runtime.getPluginService() as ReturnType<CodexTaskRuntime["getPluginService"]> & {
-      readPlugin?: ReturnType<CodexTaskRuntime["getPluginService"]>["readPlugin"];
+    const identity = runtime.getIdentityLinkService().ensureIdentity({
+      channel: "web",
+      channelUserId: "browser-2",
+      displayName: "Themis Web er-2",
+    });
+    const service = runtime.getPrincipalPluginsService() as ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]> & {
+      readPrincipalPlugin?: ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]>["readPrincipalPlugin"];
     };
 
-    service.readPlugin = async (input) => {
+    service.readPrincipalPlugin = async (principalId, input) => {
+      assert.equal(principalId, identity.principalId);
       assert.equal(input.marketplacePath, "/tmp/openai-curated/marketplace.json");
       assert.equal(input.pluginName, "github");
       return {
@@ -151,6 +172,9 @@ test("POST /api/plugins/read 会返回 plugin 详情", async () => {
           summary: {
             id: "github@openai-curated",
             name: "github",
+            owned: true,
+            runtimeInstalled: true,
+            runtimeState: "installed",
             sourceType: "local",
             sourcePath: "/tmp/plugins/github",
             installed: true,
@@ -174,6 +198,9 @@ test("POST /api/plugins/read 会返回 plugin 详情", async () => {
     };
 
     const response = await postJson(baseUrl, "/api/plugins/read", {
+      channel: "web",
+      channelUserId: "browser-2",
+      displayName: "Themis Web er-2",
       marketplacePath: "/tmp/openai-curated/marketplace.json",
       pluginName: "github",
     }, authHeaders);
@@ -195,12 +222,18 @@ test("POST /api/plugins/read 会返回 plugin 详情", async () => {
 
 test("POST /api/plugins/install 和 /api/plugins/uninstall 会调用对应写操作", async () => {
   await withPluginsServer(async ({ baseUrl, runtime, authHeaders }) => {
-    const service = runtime.getPluginService() as ReturnType<CodexTaskRuntime["getPluginService"]> & {
-      installPlugin?: ReturnType<CodexTaskRuntime["getPluginService"]>["installPlugin"];
-      uninstallPlugin?: ReturnType<CodexTaskRuntime["getPluginService"]>["uninstallPlugin"];
+    const identity = runtime.getIdentityLinkService().ensureIdentity({
+      channel: "web",
+      channelUserId: "browser-3",
+      displayName: "Themis Web er-3",
+    });
+    const service = runtime.getPrincipalPluginsService() as ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]> & {
+      installPrincipalPlugin?: ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]>["installPrincipalPlugin"];
+      uninstallPrincipalPlugin?: ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]>["uninstallPrincipalPlugin"];
     };
 
-    service.installPlugin = async (input) => {
+    service.installPrincipalPlugin = async (principalId, input) => {
+      assert.equal(principalId, identity.principalId);
       assert.equal(input.marketplacePath, "/tmp/openai-curated/marketplace.json");
       assert.equal(input.pluginName, "github");
       return {
@@ -216,18 +249,25 @@ test("POST /api/plugins/install 和 /api/plugins/uninstall 会调用对应写操
       };
     };
 
-    service.uninstallPlugin = async (input) => {
-      assert.equal(input.pluginId, "github@openai-curated");
+    service.uninstallPrincipalPlugin = async (principalId, pluginId) => {
+      assert.equal(principalId, identity.principalId);
+      assert.equal(pluginId, "github@openai-curated");
       return {
         target: {
           targetKind: "auth-account",
           targetId: "default",
         },
         pluginId: "github@openai-curated",
+        removedDefinition: true,
+        removedMaterializations: 1,
+        runtimeAction: "uninstalled",
       };
     };
 
     const installResponse = await postJson(baseUrl, "/api/plugins/install", {
+      channel: "web",
+      channelUserId: "browser-3",
+      displayName: "Themis Web er-3",
       marketplacePath: "/tmp/openai-curated/marketplace.json",
       pluginName: "github",
     }, authHeaders);
@@ -243,6 +283,9 @@ test("POST /api/plugins/install 和 /api/plugins/uninstall 会调用对应写操
     assert.equal(installPayload.result?.authPolicy, "ON_INSTALL");
 
     const uninstallResponse = await postJson(baseUrl, "/api/plugins/uninstall", {
+      channel: "web",
+      channelUserId: "browser-3",
+      displayName: "Themis Web er-3",
       pluginId: "github@openai-curated",
     }, authHeaders);
     assert.equal(uninstallResponse.status, 200);
@@ -253,6 +296,67 @@ test("POST /api/plugins/install 和 /api/plugins/uninstall 会调用对应写操
       };
     };
     assert.equal(uninstallPayload.result?.pluginId, "github@openai-curated");
+  });
+});
+
+test("POST /api/plugins/sync 会把当前 principal 已拥有 plugins 对齐到当前 runtime", async () => {
+  await withPluginsServer(async ({ baseUrl, runtime, authHeaders }) => {
+    const identity = runtime.getIdentityLinkService().ensureIdentity({
+      channel: "web",
+      channelUserId: "browser-4",
+      displayName: "Themis Web er-4",
+    });
+    const service = runtime.getPrincipalPluginsService() as ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]> & {
+      syncPrincipalPlugins?: ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]>["syncPrincipalPlugins"];
+    };
+
+    service.syncPrincipalPlugins = async (principalId, options) => {
+      assert.equal(principalId, identity.principalId);
+      assert.equal(options?.cwd, "/workspace/demo");
+      assert.equal(options?.forceRemoteSync, true);
+      return {
+        target: {
+          targetKind: "auth-account",
+          targetId: "default",
+        },
+        syncedAt: "2026-04-11T12:00:00.000Z",
+        total: 2,
+        installedCount: 1,
+        alreadyInstalledCount: 0,
+        authRequiredCount: 0,
+        missingCount: 1,
+        failedCount: 0,
+        plugins: [{
+          pluginId: "github@openai-curated",
+          pluginName: "github",
+          marketplaceName: "openai-curated",
+          marketplacePath: "/tmp/openai-curated/marketplace.json",
+          previousState: "available",
+          nextState: "installed",
+          action: "installed",
+          lastError: null,
+        }],
+      };
+    };
+
+    const response = await postJson(baseUrl, "/api/plugins/sync", {
+      channel: "web",
+      channelUserId: "browser-4",
+      displayName: "Themis Web er-4",
+      cwd: "/workspace/demo",
+      forceRemoteSync: true,
+    }, authHeaders);
+    assert.equal(response.status, 200);
+
+    const payload = await response.json() as {
+      result?: {
+        total?: number;
+        installedCount?: number;
+      };
+    };
+
+    assert.equal(payload.result?.total, 2);
+    assert.equal(payload.result?.installedCount, 1);
   });
 });
 

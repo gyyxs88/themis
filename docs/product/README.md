@@ -22,6 +22,7 @@
 - [Themis Communication Protocol](./themis-communication-protocol.md)
 - [Themis MVP Technical Architecture](./themis-mvp-technical-architecture.md)
 - [Themis Operator CLI Design](./themis-command-design.md)
+- [Themis Principal 级 Plugins 管理 V2 设计](./themis-principal-plugin-management-v2.md)
 - [Themis 持久化合伙人 / 数字员工架构设计](./themis-persistent-agent-architecture.md)
 - [Themis P6 / manager 治理面 / 组织级跨父任务汇总台计划](./themis-p6-manager-governance-dashboard-plan.md)
 - [Themis P6 / manager 治理面 v2 / 组织级摘要、筛选与治理动作计划](./themis-p6-manager-governance-v2-plan.md)

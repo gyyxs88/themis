@@ -7,6 +7,47 @@ test("normalizePluginsList 会把后端结果映射成前端状态", () => {
   const controller = createPluginsController(createAppStub(state));
 
   const result = controller.normalizePluginsList({
+    principalPlugins: [{
+      pluginId: "github@openai-curated",
+      pluginName: "github",
+      marketplaceName: "openai-curated",
+      marketplacePath: "/tmp/openai-curated/marketplace.json",
+      runtimeAvailable: true,
+      sourceType: "repo-local",
+      sourceScope: "workspace-current",
+      sourcePath: "/srv/repos/demo/.agents/plugins/github",
+      sourceRef: {
+        sourceType: "repo-local",
+        sourcePath: "/srv/repos/demo/.agents/plugins/github",
+        workspaceFingerprint: "/srv/repos/demo",
+      },
+      currentMaterialization: {
+        targetKind: "auth-account",
+        targetId: "default",
+        workspaceFingerprint: "/srv/repos/demo",
+        state: "installed",
+        lastSyncedAt: "2026-04-11T00:00:00.000Z",
+      },
+      lastError: "",
+      repairAction: "none",
+      repairHint: "",
+      summary: {
+        id: "github@openai-curated",
+        name: "github",
+        owned: true,
+        runtimeInstalled: true,
+        runtimeState: "installed",
+        installed: true,
+        enabled: true,
+        installPolicy: "AVAILABLE",
+        authPolicy: "ON_INSTALL",
+        interface: {
+          displayName: "GitHub",
+          shortDescription: "Review PRs",
+          capabilities: ["Interactive"],
+        },
+      },
+    }],
     marketplaces: [{
       name: "openai-curated",
       path: "/tmp/openai-curated/marketplace.json",
@@ -35,6 +76,10 @@ test("normalizePluginsList 会把后端结果映射成前端状态", () => {
     featuredPluginIds: ["github@openai-curated"],
   });
 
+  assert.equal(result.principalPlugins[0].summary.owned, true);
+  assert.equal(result.principalPlugins[0].sourceRef.workspaceFingerprint, "/srv/repos/demo");
+  assert.equal(result.principalPlugins[0].sourceScope, "workspace-current");
+  assert.equal(result.principalPlugins[0].currentMaterialization.targetId, "default");
   assert.equal(result.marketplaces[0].name, "openai-curated");
   assert.equal(result.marketplaces[0].plugins[0].id, "github@openai-curated");
   assert.equal(result.marketplaces[0].plugins[0].interface.displayName, "GitHub");
@@ -60,6 +105,7 @@ test("load 会读取当前运行环境 plugins 并回写状态", async () => {
 
       return jsonResponse({
         result: {
+          principalPlugins: [],
           marketplaces: [{
             name: "openai-curated",
             path: "/tmp/openai-curated/marketplace.json",
@@ -94,7 +140,9 @@ test("load 会读取当前运行环境 plugins 并回写状态", async () => {
     assert.equal(app.runtime.plugins.marketplaces[0].plugins[0].name, "github");
     assert.equal(calls[0].url, "/api/plugins/list");
     assert.equal(calls[0].method, "POST");
-    assert.deepEqual(calls[0].body, {});
+    assert.equal(calls[0].body.channel, "web");
+    assert.equal(calls[0].body.channelUserId, "browser-123");
+    assert.equal(calls[0].body.displayName, "Themis Web er-123");
     assert.equal(app.renderer.renderAllCallCount, 2);
   } finally {
     globalThis.fetch = originalFetch;
@@ -120,6 +168,7 @@ test("load 和 install 会优先带上当前会话工作区 cwd", async () => {
       if (url === "/api/plugins/list") {
         return jsonResponse({
           result: {
+            principalPlugins: [],
             marketplaces: [],
             marketplaceLoadErrors: [],
             remoteSyncError: null,
@@ -150,10 +199,13 @@ test("load 和 install 会优先带上当前会话工作区 cwd", async () => {
     });
 
     assert.equal(calls[0].url, "/api/plugins/list");
+    assert.equal(calls[0].body.channelUserId, "browser-123");
     assert.equal(calls[0].body.cwd, "/srv/repos/demo");
     assert.equal(calls[1].url, "/api/plugins/install");
+    assert.equal(calls[1].body.channelUserId, "browser-123");
     assert.equal(calls[1].body.cwd, "/srv/repos/demo");
     assert.equal(calls[2].url, "/api/plugins/list");
+    assert.equal(calls[2].body.channelUserId, "browser-123");
     assert.equal(calls[2].body.cwd, "/srv/repos/demo");
   } finally {
     globalThis.fetch = originalFetch;
@@ -286,6 +338,7 @@ test("installPlugin 和 uninstallPlugin 会调用对应接口并刷新列表", a
       if (url === "/api/plugins/list") {
         return jsonResponse({
           result: {
+            principalPlugins: [],
             marketplaces: [],
             marketplaceLoadErrors: [],
             remoteSyncError: null,
@@ -310,11 +363,74 @@ test("installPlugin 和 uninstallPlugin 会调用对应接口并刷新列表", a
     assert.equal(installResult.pluginName, "github");
     assert.equal(uninstallResult.pluginId, "github@openai-curated");
     assert.equal(calls[0].url, "/api/plugins/install");
+    assert.equal(calls[0].body.channelUserId, "browser-123");
     assert.equal(calls[0].body.marketplacePath, "/tmp/openai-curated/marketplace.json");
     assert.equal(calls[1].url, "/api/plugins/list");
     assert.equal(calls[2].url, "/api/plugins/uninstall");
+    assert.equal(calls[2].body.channelUserId, "browser-123");
     assert.equal(calls[2].body.pluginId, "github@openai-curated");
     assert.equal(calls[3].url, "/api/plugins/list");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("syncPlugins 会调用同步接口并刷新列表", async () => {
+  const state = createDefaultPluginsState();
+  const app = createAppStub(state, {
+    workspacePath: "/srv/repos/demo",
+  });
+  const controller = createPluginsController(app);
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+
+  try {
+    globalThis.fetch = async (url, init = {}) => {
+      calls.push({
+        url,
+        body: init.body ? JSON.parse(init.body) : null,
+      });
+
+      if (url === "/api/plugins/sync") {
+        return jsonResponse({
+          result: {
+            total: 2,
+            installedCount: 1,
+            alreadyInstalledCount: 0,
+            authRequiredCount: 0,
+            missingCount: 1,
+            failedCount: 0,
+            plugins: [],
+          },
+        });
+      }
+
+      if (url === "/api/plugins/list") {
+        return jsonResponse({
+          result: {
+            principalPlugins: [],
+            marketplaces: [],
+            marketplaceLoadErrors: [],
+            remoteSyncError: null,
+            featuredPluginIds: [],
+          },
+        });
+      }
+
+      throw new Error(`unexpected fetch ${url}`);
+    };
+
+    const result = await controller.syncPlugins({
+      forceRemoteSync: true,
+    });
+
+    assert.equal(result.total, 2);
+    assert.equal(calls[0].url, "/api/plugins/sync");
+    assert.equal(calls[0].body.channelUserId, "browser-123");
+    assert.equal(calls[0].body.cwd, "/srv/repos/demo");
+    assert.equal(calls[0].body.forceRemoteSync, true);
+    assert.equal(calls[1].url, "/api/plugins/list");
+    assert.equal(app.runtime.plugins.noticeMessage, "已同步 2 个 principal plugins，新装 1，已在当前环境 0，待认证 0，缺失 1，失败 0");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -324,6 +440,12 @@ function createAppStub(pluginsState, options = {}) {
   return {
     runtime: {
       plugins: pluginsState,
+      identity: {
+        browserUserId: options.browserUserId ?? "browser-123",
+      },
+      auth: {
+        account: options.authAccount ?? null,
+      },
     },
     store: {
       getActiveThread() {

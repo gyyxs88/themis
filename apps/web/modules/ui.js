@@ -984,6 +984,7 @@ export function createRenderer(app) {
 
   function renderPluginsState() {
     const pluginsState = app.runtime.plugins ?? {};
+    const principalPlugins = Array.isArray(pluginsState.principalPlugins) ? pluginsState.principalPlugins : [];
     const marketplaces = Array.isArray(pluginsState.marketplaces) ? pluginsState.marketplaces : [];
     const detailsById = pluginsState.detailsById && typeof pluginsState.detailsById === "object"
       ? pluginsState.detailsById
@@ -1008,8 +1009,8 @@ export function createRenderer(app) {
           : "supported";
 
     dom.pluginsNote.textContent = workspacePath
-      ? `这里展示当前 Codex 运行环境可见的 plugin marketplaces。当前优先按会话工作区 ${workspacePath} 发现 repo marketplace，并叠加 home / curated marketplaces；切换工作区后，可见列表和安装状态可能变化。`
-      : "这里展示当前 Codex 运行环境可见的 plugin marketplaces。当前默认按 Themis 服务所在工作区发现 repo marketplace，并叠加 home / curated marketplaces；如果后续切换认证槽位或服务工作区，可见列表和安装状态可能变化。";
+      ? `这里优先展示当前 principal 已拥有的 plugins，并叠加会话工作区 ${workspacePath} 下当前可发现的 marketplace。切换工作区后，“当前可用”状态可能变化，但 principal 拥有权不会漂移。`
+      : "这里优先展示当前 principal 已拥有的 plugins，并叠加当前环境可发现的 marketplace。切换认证账号或服务工作区只会影响当前可用状态，不会改变 principal 拥有权。";
 
     dom.pluginsStatusNote.classList.toggle("hidden", !statusMessage);
     dom.pluginsStatusNote.textContent = statusMessage;
@@ -1022,19 +1023,22 @@ export function createRenderer(app) {
     dom.pluginsRefreshButton.disabled = busy;
     dom.pluginsRemoteSyncButton.disabled = busy;
 
-    dom.pluginsListEmpty.classList.toggle("hidden", marketplaces.length > 0);
-    dom.pluginsList.innerHTML = marketplaces
-      .map((marketplace) => renderPluginMarketplaceCard(marketplace, {
-        busy,
-        detailsById,
-        expandedPluginId: typeof pluginsState.expandedPluginId === "string" ? pluginsState.expandedPluginId : "",
-        detailLoadingPluginId: typeof pluginsState.detailLoadingPluginId === "string"
-          ? pluginsState.detailLoadingPluginId
-          : "",
-        featuredPluginIds,
-        escapeHtml: utils.escapeHtml,
-      }))
-      .join("");
+    const renderOptions = {
+      busy,
+      detailsById,
+      expandedPluginId: typeof pluginsState.expandedPluginId === "string" ? pluginsState.expandedPluginId : "",
+      detailLoadingPluginId: typeof pluginsState.detailLoadingPluginId === "string"
+        ? pluginsState.detailLoadingPluginId
+        : "",
+      featuredPluginIds,
+      escapeHtml: utils.escapeHtml,
+    };
+
+    dom.pluginsListEmpty.classList.toggle("hidden", principalPlugins.length > 0 || marketplaces.length > 0);
+    dom.pluginsList.innerHTML = [
+      principalPlugins.length > 0 ? renderPrincipalPluginsSection(principalPlugins, renderOptions) : "",
+      marketplaces.length > 0 ? renderPluginDiscoverySection(marketplaces, renderOptions) : "",
+    ].filter(Boolean).join("");
   }
 
   function renderModelSelect(settings, effectiveSettings) {
@@ -2160,7 +2164,7 @@ function resolvePluginsStatusMessage(pluginsState) {
   }
 
   if (pluginsState.loading) {
-    return "正在读取当前 Codex 运行环境的 plugin marketplaces。";
+    return "正在读取当前 principal 的 plugins 和当前环境可发现的 marketplaces。";
   }
 
   if (pluginsState.noticeMessage) {
@@ -2396,6 +2400,64 @@ function renderPluginMarketplaceCard(marketplace, options) {
   `;
 }
 
+function renderPrincipalPluginsSection(principalPlugins, options) {
+  return `
+    <article class="skill-card">
+      <div class="skill-card-head">
+        <div>
+          <h4>当前 Principal</h4>
+          <p class="skill-card-copy">这些 plugin 归主人本人所有；当前环境只决定它们此刻能不能用。</p>
+        </div>
+        <div class="skill-card-actions">
+          <span class="skill-pill" data-tone="ready">${options.escapeHtml(`${principalPlugins.length} 个已拥有`)}</span>
+        </div>
+      </div>
+      <div class="settings-stack">
+        ${principalPlugins.map((plugin) => renderPrincipalPluginCard(plugin, options)).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function renderPluginDiscoverySection(marketplaces, options) {
+  return `
+    <article class="skill-card">
+      <div class="skill-card-head">
+        <div>
+          <h4>当前环境发现</h4>
+          <p class="skill-card-copy">这里展示当前 runtime / 工作区下能发现到的 marketplace 和 plugin 候选。</p>
+        </div>
+      </div>
+      <div class="settings-stack">
+        ${marketplaces.map((marketplace) => renderPluginMarketplaceCard(marketplace, options)).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function renderPrincipalPluginCard(plugin, options) {
+  return renderPluginCard({
+    ...plugin.summary,
+    sourceType: plugin.sourceType || plugin.summary.sourceType,
+    sourceScope: plugin.sourceScope || plugin.summary.sourceScope,
+    sourcePath: plugin.sourcePath || plugin.summary.sourcePath,
+    sourceRef: plugin.sourceRef || plugin.summary.sourceRef || null,
+    lastError: plugin.lastError || plugin.summary.lastError || "",
+    repairAction: plugin.repairAction || plugin.summary.repairAction || "none",
+    repairHint: plugin.repairHint || plugin.summary.repairHint || "",
+    currentMaterialization: plugin.currentMaterialization || null,
+  }, {
+    path: plugin.marketplacePath,
+    name: plugin.marketplaceName,
+    interface: {
+      displayName: plugin.marketplaceName,
+    },
+  }, {
+    ...options,
+    hideFeatured: true,
+  });
+}
+
 function renderPluginCard(plugin, marketplace, options) {
   const pluginId = plugin.id || plugin.name || "";
   const pluginName = plugin.name || pluginId || "未命名 plugin";
@@ -2406,11 +2468,20 @@ function renderPluginCard(plugin, marketplace, options) {
   const capabilities = Array.isArray(plugin.interface?.capabilities) ? plugin.interface.capabilities : [];
   const capabilityCopy = capabilities.length > 0 ? capabilities.join(", ") : "暂无能力标签";
   const description = plugin.interface?.shortDescription || "暂无说明";
-  const featured = options.featuredPluginIds.has(pluginId);
+  const featured = options.hideFeatured === true ? false : options.featuredPluginIds.has(pluginId);
+  const owned = plugin.owned === true;
+  const runtimeAvailable = plugin.runtimeState !== "missing";
+  const detailAvailable = owned || runtimeAvailable;
   const installUnavailable = plugin.installPolicy === "NOT_AVAILABLE";
-  const primaryActionLabel = plugin.installed ? "卸载" : installUnavailable ? "不可安装" : "安装";
-  const primaryAction = plugin.installed ? "uninstall" : "install";
-  const primaryDisabled = options.busy || (!plugin.installed && installUnavailable);
+  const primaryActionLabel = owned ? "移出 principal" : installUnavailable ? "暂不可纳入" : "纳入 principal";
+  const primaryAction = owned ? "uninstall" : "install";
+  const primaryDisabled = options.busy || (!owned && installUnavailable);
+  const sourceCopy = buildPluginSourceCopy(plugin, marketplace);
+  const runtimeCopy = buildPluginRuntimeCopy(plugin);
+  const repairCopy = plugin.repairHint ? `建议：${plugin.repairHint}` : "";
+  const errorMarkup = plugin.lastError
+    ? `<p class="skill-card-error">${options.escapeHtml(plugin.lastError)}</p>`
+    : "";
   const detailMarkup = expanded
     ? detailLoading
       ? '<p class="skill-card-summary">正在读取 plugin 详情。</p>'
@@ -2433,11 +2504,11 @@ function renderPluginCard(plugin, marketplace, options) {
             data-plugin-action="detail"
             data-marketplace-path="${options.escapeHtml(marketplace.path || "")}"
             data-plugin-name="${options.escapeHtml(pluginName)}"
-            data-plugin-id="${options.escapeHtml(pluginId)}"${options.busy ? " disabled" : ""}
+            data-plugin-id="${options.escapeHtml(pluginId)}"${options.busy || !detailAvailable ? " disabled" : ""}
           >${options.escapeHtml(detailLoading ? "读取中..." : expanded ? "收起" : "详情")}</button>
           <button
             type="button"
-            class="${plugin.installed ? "ghost-button" : "toolbar-button subtle"}"
+            class="${owned ? "ghost-button" : "toolbar-button subtle"}"
             data-plugin-action="${options.escapeHtml(primaryAction)}"
             data-marketplace-path="${options.escapeHtml(marketplace.path || "")}"
             data-plugin-name="${options.escapeHtml(pluginName)}"
@@ -2446,15 +2517,21 @@ function renderPluginCard(plugin, marketplace, options) {
         </div>
       </div>
       <div class="skill-pill-row">
-        <span class="skill-pill"${plugin.installed ? ' data-tone="ready"' : ""}>
-          ${options.escapeHtml(plugin.installed ? "已安装" : "未安装")}
+        <span class="skill-pill"${owned ? ' data-tone="ready"' : ""}>
+          ${options.escapeHtml(owned ? "已纳入 principal" : plugin.runtimeInstalled ? "仅当前 runtime 已安装" : "未纳入 principal")}
+        </span>
+        <span class="skill-pill"${plugin.runtimeState === "installed" ? ' data-tone="ready"' : ""}>
+          ${options.escapeHtml(formatPluginRuntimeStateLabel(plugin.runtimeState))}
         </span>
         <span class="skill-pill">${options.escapeHtml(formatPluginInstallPolicyLabel(plugin.installPolicy))}</span>
         <span class="skill-pill">${options.escapeHtml(formatPluginAuthPolicyLabel(plugin.authPolicy))}</span>
         ${featured ? '<span class="skill-pill" data-tone="ready">featured</span>' : ""}
       </div>
       <p class="skill-card-summary">${options.escapeHtml(capabilityCopy)}</p>
-      ${plugin.sourcePath ? `<p class="skill-card-copy">source：<code>${options.escapeHtml(plugin.sourcePath)}</code></p>` : ""}
+      ${sourceCopy ? `<p class="skill-card-copy">${options.escapeHtml(sourceCopy)}</p>` : ""}
+      ${runtimeCopy ? `<p class="skill-card-copy">${options.escapeHtml(runtimeCopy)}</p>` : ""}
+      ${repairCopy ? `<p class="skill-card-copy">${options.escapeHtml(repairCopy)}</p>` : ""}
+      ${errorMarkup}
       ${detailMarkup}
     </article>
   `;
@@ -2490,15 +2567,94 @@ function renderPluginDetail(detail, options) {
   const mcpMarkup = mcpServers.length > 0
     ? `<p class="skill-card-copy">MCP：${options.escapeHtml(mcpServers.join(", "))}</p>`
     : '<p class="skill-card-copy">无附带 MCP server。</p>';
+  const sourceCopy = buildPluginSourceCopy({
+    ...(detail.summary ?? {}),
+    sourceType: detail.sourceType || detail.summary?.sourceType,
+    sourceScope: detail.sourceScope || detail.summary?.sourceScope,
+    sourcePath: detail.sourcePath || detail.summary?.sourcePath,
+    sourceRef: detail.sourceRef || detail.summary?.sourceRef || null,
+  }, {
+    path: detail.marketplacePath,
+    name: detail.marketplaceName,
+  });
+  const runtimeCopy = buildPluginRuntimeCopy(detail);
+  const repairCopy = detail.repairHint ? `建议：${detail.repairHint}` : "";
+  const errorMarkup = detail.lastError
+    ? `<p class="skill-card-error">${options.escapeHtml(detail.lastError)}</p>`
+    : "";
 
   return `
     <div class="settings-stack">
       <p class="skill-card-copy">${options.escapeHtml(description)}</p>
+      ${sourceCopy ? `<p class="skill-card-copy">${options.escapeHtml(sourceCopy)}</p>` : ""}
+      ${runtimeCopy ? `<p class="skill-card-copy">${options.escapeHtml(runtimeCopy)}</p>` : ""}
+      ${repairCopy ? `<p class="skill-card-copy">${options.escapeHtml(repairCopy)}</p>` : ""}
+      ${errorMarkup}
       ${skillsMarkup}
       ${appsMarkup}
       ${mcpMarkup}
     </div>
   `;
+}
+
+function buildPluginSourceCopy(plugin, marketplace) {
+  const sourceTypeLabel = formatPluginSourceLabel(plugin.sourceType);
+  const sourceScopeLabel = formatPluginSourceScopeLabel(plugin.sourceScope);
+  const sourceRef = plugin.sourceRef && typeof plugin.sourceRef === "object" ? plugin.sourceRef : null;
+  const sourcePath = plugin.sourcePath || sourceRef?.sourcePath || "";
+  const workspaceFingerprint = sourceRef?.workspaceFingerprint || "";
+  const marketplaceName = sourceRef?.marketplaceName || marketplace?.name || "";
+  const marketplacePath = sourceRef?.marketplacePath || marketplace?.path || "";
+
+  const details = [];
+
+  if (sourcePath) {
+    details.push(sourcePath);
+  }
+
+  if (workspaceFingerprint && plugin.sourceType === "repo-local") {
+    details.push(`工作区 ${workspaceFingerprint}`);
+  }
+
+  if (!sourcePath && marketplacePath) {
+    details.push(`${marketplaceName || "marketplace"} @ ${marketplacePath}`);
+  }
+
+  if (!details.length && marketplaceName) {
+    details.push(marketplaceName);
+  }
+
+  if (sourceScopeLabel && sourceScopeLabel !== "未知来源边界") {
+    details.unshift(sourceScopeLabel);
+  }
+
+  return details.length > 0 ? `来源：${sourceTypeLabel}｜${details.join("｜")}` : `来源：${sourceTypeLabel}`;
+}
+
+function buildPluginRuntimeCopy(plugin) {
+  const materialization = plugin.currentMaterialization && typeof plugin.currentMaterialization === "object"
+    ? plugin.currentMaterialization
+    : null;
+
+  if (!materialization) {
+    return "";
+  }
+
+  const parts = [];
+
+  if (materialization.targetId) {
+    parts.push(`槽位 ${materialization.targetId}`);
+  }
+
+  if (materialization.workspaceFingerprint) {
+    parts.push(`工作区 ${materialization.workspaceFingerprint}`);
+  }
+
+  if (materialization.lastSyncedAt) {
+    parts.push(`同步于 ${materialization.lastSyncedAt}`);
+  }
+
+  return parts.length > 0 ? `当前物化：${parts.join("｜")}` : "";
 }
 
 function buildModelOptionLabel(model, defaultModel) {
@@ -2563,6 +2719,51 @@ function formatPluginAuthPolicyLabel(value) {
       return "使用时认证";
     default:
       return "认证策略未知";
+  }
+}
+
+function formatPluginRuntimeStateLabel(value) {
+  switch (value) {
+    case "installed":
+      return "当前已可用";
+    case "available":
+      return "当前可发现";
+    case "missing":
+      return "当前工作区不可用";
+    case "auth_required":
+      return "当前需认证";
+    case "failed":
+      return "当前状态异常";
+    default:
+      return "状态未知";
+  }
+}
+
+function formatPluginSourceLabel(sourceType) {
+  switch (sourceType) {
+    case "marketplace":
+      return "marketplace";
+    case "repo-local":
+      return "repo 本地";
+    case "home-local":
+      return "宿主机本地";
+    default:
+      return "未知来源";
+  }
+}
+
+function formatPluginSourceScopeLabel(sourceScope) {
+  switch (sourceScope) {
+    case "marketplace":
+      return "可跨工作区复用";
+    case "workspace-current":
+      return "当前工作区";
+    case "workspace-other":
+      return "其他工作区";
+    case "host-local":
+      return "宿主机本地";
+    default:
+      return "未知来源边界";
   }
 }
 

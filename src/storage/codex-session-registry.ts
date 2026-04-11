@@ -17,6 +17,16 @@ import {
   type StoredPrincipalMcpServerRecord,
 } from "../core/principal-mcp.js";
 import {
+  normalizePrincipalPluginAuthPolicy,
+  normalizePrincipalPluginInstallPolicy,
+  normalizePrincipalPluginMaterializationRecordInput,
+  normalizePrincipalPluginMaterializationState,
+  normalizePrincipalPluginRecordInput,
+  normalizePrincipalPluginSourceType,
+  type StoredPrincipalPluginMaterializationRecord,
+  type StoredPrincipalPluginRecord,
+} from "../core/principal-plugins.js";
+import {
   normalizePrincipalSkillInstallStatus,
   normalizePrincipalSkillMaterializationRecordInput,
   normalizePrincipalSkillMaterializationState,
@@ -124,7 +134,7 @@ import type {
   StoredScheduledTaskRunRecord,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 28;
+const DATABASE_SCHEMA_VERSION = 29;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -444,6 +454,35 @@ interface PrincipalMcpMaterializationRow {
   target_id: string;
   state: string;
   auth_state: string;
+  last_synced_at: string | null;
+  last_error: string | null;
+}
+
+interface PrincipalPluginRow {
+  principal_id: string;
+  plugin_id: string;
+  plugin_name: string;
+  marketplace_name: string;
+  marketplace_path: string;
+  source_type: string;
+  source_ref_json: string;
+  source_path: string | null;
+  interface_json: string;
+  install_policy: string;
+  auth_policy: string;
+  enabled: number;
+  created_at: string;
+  updated_at: string;
+  last_error: string | null;
+}
+
+interface PrincipalPluginMaterializationRow {
+  principal_id: string;
+  plugin_id: string;
+  target_kind: string;
+  target_id: string;
+  workspace_fingerprint: string;
+  state: string;
   last_synced_at: string | null;
   last_error: string | null;
 }
@@ -6203,6 +6242,340 @@ export class SqliteCodexSessionRegistry {
     return result.changes;
   }
 
+  getPrincipalPlugin(principalId: string, pluginId: string): StoredPrincipalPluginRecord | null {
+    const normalizedPrincipalId = principalId.trim();
+    const normalizedPluginId = pluginId.trim();
+
+    if (!normalizedPrincipalId || !normalizedPluginId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            principal_id,
+            plugin_id,
+            plugin_name,
+            marketplace_name,
+            marketplace_path,
+            source_type,
+            source_ref_json,
+            source_path,
+            interface_json,
+            install_policy,
+            auth_policy,
+            enabled,
+            created_at,
+            updated_at,
+            last_error
+          FROM themis_principal_plugins
+          WHERE principal_id = ?
+            AND plugin_id = ?
+        `,
+      )
+      .get(normalizedPrincipalId, normalizedPluginId) as PrincipalPluginRow | undefined;
+
+    return row ? mapPrincipalPluginRow(row) : null;
+  }
+
+  listPrincipalPlugins(principalId: string): StoredPrincipalPluginRecord[] {
+    const normalizedPrincipalId = principalId.trim();
+
+    if (!normalizedPrincipalId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            principal_id,
+            plugin_id,
+            plugin_name,
+            marketplace_name,
+            marketplace_path,
+            source_type,
+            source_ref_json,
+            source_path,
+            interface_json,
+            install_policy,
+            auth_policy,
+            enabled,
+            created_at,
+            updated_at,
+            last_error
+          FROM themis_principal_plugins
+          WHERE principal_id = ?
+          ORDER BY marketplace_name COLLATE NOCASE ASC, plugin_name COLLATE NOCASE ASC, plugin_id ASC
+        `,
+      )
+      .all(normalizedPrincipalId) as PrincipalPluginRow[];
+
+    return rows.map(mapPrincipalPluginRow);
+  }
+
+  savePrincipalPlugin(record: StoredPrincipalPluginRecord): void {
+    const normalizedRecord = normalizePrincipalPluginRecordInput(record);
+    const sourceType = normalizePrincipalPluginSourceType(normalizedRecord.sourceType);
+    const installPolicy = normalizePrincipalPluginInstallPolicy(normalizedRecord.installPolicy);
+    const authPolicy = normalizePrincipalPluginAuthPolicy(normalizedRecord.authPolicy);
+
+    if (
+      !normalizedRecord.principalId ||
+      !normalizedRecord.pluginId ||
+      !normalizedRecord.pluginName ||
+      !normalizedRecord.marketplaceName ||
+      !normalizedRecord.marketplacePath ||
+      !sourceType ||
+      !normalizedRecord.sourceRefJson ||
+      !normalizedRecord.interfaceJson ||
+      !installPolicy ||
+      !authPolicy ||
+      typeof normalizedRecord.enabled !== "boolean" ||
+      !normalizedRecord.createdAt ||
+      !normalizedRecord.updatedAt
+    ) {
+      throw new Error("Principal plugin record is incomplete.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_principal_plugins (
+            principal_id,
+            plugin_id,
+            plugin_name,
+            marketplace_name,
+            marketplace_path,
+            source_type,
+            source_ref_json,
+            source_path,
+            interface_json,
+            install_policy,
+            auth_policy,
+            enabled,
+            created_at,
+            updated_at,
+            last_error
+          ) VALUES (
+            @principal_id,
+            @plugin_id,
+            @plugin_name,
+            @marketplace_name,
+            @marketplace_path,
+            @source_type,
+            @source_ref_json,
+            @source_path,
+            @interface_json,
+            @install_policy,
+            @auth_policy,
+            @enabled,
+            @created_at,
+            @updated_at,
+            @last_error
+          )
+          ON CONFLICT(principal_id, plugin_id) DO UPDATE SET
+            plugin_name = excluded.plugin_name,
+            marketplace_name = excluded.marketplace_name,
+            marketplace_path = excluded.marketplace_path,
+            source_type = excluded.source_type,
+            source_ref_json = excluded.source_ref_json,
+            source_path = excluded.source_path,
+            interface_json = excluded.interface_json,
+            install_policy = excluded.install_policy,
+            auth_policy = excluded.auth_policy,
+            enabled = excluded.enabled,
+            updated_at = excluded.updated_at,
+            last_error = excluded.last_error
+        `,
+      )
+      .run({
+        principal_id: normalizedRecord.principalId,
+        plugin_id: normalizedRecord.pluginId,
+        plugin_name: normalizedRecord.pluginName,
+        marketplace_name: normalizedRecord.marketplaceName,
+        marketplace_path: normalizedRecord.marketplacePath,
+        source_type: sourceType,
+        source_ref_json: normalizedRecord.sourceRefJson,
+        source_path: normalizedRecord.sourcePath ?? null,
+        interface_json: normalizedRecord.interfaceJson,
+        install_policy: installPolicy,
+        auth_policy: authPolicy,
+        enabled: normalizedRecord.enabled ? 1 : 0,
+        created_at: normalizedRecord.createdAt,
+        updated_at: normalizedRecord.updatedAt,
+        last_error: normalizedRecord.lastError ?? null,
+      });
+  }
+
+  deletePrincipalPlugin(principalId: string, pluginId: string): boolean {
+    const normalizedPrincipalId = principalId.trim();
+    const normalizedPluginId = pluginId.trim();
+
+    if (!normalizedPrincipalId || !normalizedPluginId) {
+      return false;
+    }
+
+    const result = this.db
+      .prepare(
+        `
+          DELETE FROM themis_principal_plugins
+          WHERE principal_id = ?
+            AND plugin_id = ?
+        `,
+      )
+      .run(normalizedPrincipalId, normalizedPluginId);
+
+    return result.changes > 0;
+  }
+
+  savePrincipalPluginMaterialization(record: StoredPrincipalPluginMaterializationRecord): void {
+    const normalizedRecord = normalizePrincipalPluginMaterializationRecordInput(record);
+    const state = normalizePrincipalPluginMaterializationState(normalizedRecord.state);
+
+    if (
+      !normalizedRecord.principalId ||
+      !normalizedRecord.pluginId ||
+      normalizedRecord.targetKind !== "auth-account" ||
+      !normalizedRecord.targetId ||
+      !normalizedRecord.workspaceFingerprint ||
+      !state
+    ) {
+      throw new Error("Principal plugin materialization record is incomplete.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_principal_plugin_materializations (
+            principal_id,
+            plugin_id,
+            target_kind,
+            target_id,
+            workspace_fingerprint,
+            state,
+            last_synced_at,
+            last_error
+          ) VALUES (
+            @principal_id,
+            @plugin_id,
+            @target_kind,
+            @target_id,
+            @workspace_fingerprint,
+            @state,
+            @last_synced_at,
+            @last_error
+          )
+          ON CONFLICT(principal_id, plugin_id, target_kind, target_id, workspace_fingerprint) DO UPDATE SET
+            state = excluded.state,
+            last_synced_at = excluded.last_synced_at,
+            last_error = excluded.last_error
+        `,
+      )
+      .run({
+        principal_id: normalizedRecord.principalId,
+        plugin_id: normalizedRecord.pluginId,
+        target_kind: "auth-account",
+        target_id: normalizedRecord.targetId,
+        workspace_fingerprint: normalizedRecord.workspaceFingerprint,
+        state,
+        last_synced_at: normalizedRecord.lastSyncedAt ?? null,
+        last_error: normalizedRecord.lastError ?? null,
+      });
+  }
+
+  listPrincipalPluginMaterializations(
+    principalId: string,
+    pluginId?: string,
+  ): StoredPrincipalPluginMaterializationRecord[] {
+    const normalizedPrincipalId = principalId.trim();
+
+    if (!normalizedPrincipalId) {
+      return [];
+    }
+
+    if (typeof pluginId === "string" && pluginId.trim()) {
+      const normalizedPluginId = pluginId.trim();
+      const rows = this.db
+        .prepare(
+          `
+            SELECT
+              principal_id,
+              plugin_id,
+              target_kind,
+              target_id,
+              workspace_fingerprint,
+              state,
+              last_synced_at,
+              last_error
+            FROM themis_principal_plugin_materializations
+            WHERE principal_id = ?
+              AND plugin_id = ?
+            ORDER BY target_kind ASC, target_id ASC, workspace_fingerprint ASC
+          `,
+        )
+        .all(normalizedPrincipalId, normalizedPluginId) as PrincipalPluginMaterializationRow[];
+
+      return rows.map(mapPrincipalPluginMaterializationRow);
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            principal_id,
+            plugin_id,
+            target_kind,
+            target_id,
+            workspace_fingerprint,
+            state,
+            last_synced_at,
+            last_error
+          FROM themis_principal_plugin_materializations
+          WHERE principal_id = ?
+          ORDER BY plugin_id ASC, target_kind ASC, target_id ASC, workspace_fingerprint ASC
+        `,
+      )
+      .all(normalizedPrincipalId) as PrincipalPluginMaterializationRow[];
+
+    return rows.map(mapPrincipalPluginMaterializationRow);
+  }
+
+  deletePrincipalPluginMaterializations(principalId: string, pluginId?: string): number {
+    const normalizedPrincipalId = principalId.trim();
+
+    if (!normalizedPrincipalId) {
+      return 0;
+    }
+
+    if (typeof pluginId === "string" && pluginId.trim()) {
+      const normalizedPluginId = pluginId.trim();
+      const result = this.db
+        .prepare(
+          `
+            DELETE FROM themis_principal_plugin_materializations
+            WHERE principal_id = ?
+              AND plugin_id = ?
+          `,
+        )
+        .run(normalizedPrincipalId, normalizedPluginId);
+
+      return result.changes;
+    }
+
+    const result = this.db
+      .prepare(
+        `
+          DELETE FROM themis_principal_plugin_materializations
+          WHERE principal_id = ?
+        `,
+      )
+      .run(normalizedPrincipalId);
+
+    return result.changes;
+  }
+
   getPrincipalMcpServer(principalId: string, serverName: string): StoredPrincipalMcpServerRecord | null {
     const normalizedPrincipalId = principalId.trim();
     const normalizedServerName = serverName.trim();
@@ -7219,6 +7592,24 @@ export class SqliteCodexSessionRegistry {
         )
         .run(normalizedPrincipalId);
 
+      this.db
+        .prepare(
+          `
+            DELETE FROM themis_principal_plugin_materializations
+            WHERE principal_id = ?
+          `,
+        )
+        .run(normalizedPrincipalId);
+
+      this.db
+        .prepare(
+          `
+            DELETE FROM themis_principal_plugins
+            WHERE principal_id = ?
+          `,
+        )
+        .run(normalizedPrincipalId);
+
       const clearedLinkCodeCount = this.db
         .prepare(
           `
@@ -7485,6 +7876,32 @@ export class SqliteCodexSessionRegistry {
 
         for (const materialization of sourceMaterializations) {
           this.savePrincipalMcpMaterialization({
+            ...materialization,
+            principalId: targetId,
+          });
+        }
+      }
+
+      const sourcePlugins = this.listPrincipalPlugins(sourceId);
+      const targetPluginIds = new Set(
+        this.listPrincipalPlugins(targetId).map((plugin) => plugin.pluginId),
+      );
+
+      for (const plugin of sourcePlugins) {
+        if (targetPluginIds.has(plugin.pluginId)) {
+          continue;
+        }
+
+        this.savePrincipalPlugin({
+          ...plugin,
+          principalId: targetId,
+          updatedAt,
+        });
+
+        const sourceMaterializations = this.listPrincipalPluginMaterializations(sourceId, plugin.pluginId);
+
+        for (const materialization of sourceMaterializations) {
+          this.savePrincipalPluginMaterialization({
             ...materialization,
             principalId: targetId,
           });
@@ -8594,6 +9011,41 @@ export class SqliteCodexSessionRegistry {
           ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS themis_principal_plugins (
+        principal_id TEXT NOT NULL,
+        plugin_id TEXT NOT NULL,
+        plugin_name TEXT NOT NULL,
+        marketplace_name TEXT NOT NULL,
+        marketplace_path TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_ref_json TEXT NOT NULL,
+        source_path TEXT,
+        interface_json TEXT NOT NULL,
+        install_policy TEXT NOT NULL,
+        auth_policy TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_error TEXT,
+        PRIMARY KEY (principal_id, plugin_id),
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS themis_principal_plugin_materializations (
+        principal_id TEXT NOT NULL,
+        plugin_id TEXT NOT NULL,
+        target_kind TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        workspace_fingerprint TEXT NOT NULL,
+        state TEXT NOT NULL,
+        last_synced_at TEXT,
+        last_error TEXT,
+        PRIMARY KEY (principal_id, plugin_id, target_kind, target_id, workspace_fingerprint),
+        FOREIGN KEY (principal_id, plugin_id)
+          REFERENCES themis_principal_plugins(principal_id, plugin_id)
+          ON DELETE CASCADE
+      );
+
       CREATE TABLE IF NOT EXISTS themis_principal_persona_profiles (
         principal_id TEXT PRIMARY KEY,
         profile_json TEXT NOT NULL,
@@ -9582,6 +10034,41 @@ export class SqliteCodexSessionRegistry {
         PRIMARY KEY (principal_id, server_name, target_kind, target_id),
         FOREIGN KEY (principal_id, server_name)
           REFERENCES themis_principal_mcp_servers(principal_id, server_name)
+          ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS themis_principal_plugins (
+        principal_id TEXT NOT NULL,
+        plugin_id TEXT NOT NULL,
+        plugin_name TEXT NOT NULL,
+        marketplace_name TEXT NOT NULL,
+        marketplace_path TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_ref_json TEXT NOT NULL,
+        source_path TEXT,
+        interface_json TEXT NOT NULL,
+        install_policy TEXT NOT NULL,
+        auth_policy TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_error TEXT,
+        PRIMARY KEY (principal_id, plugin_id),
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS themis_principal_plugin_materializations (
+        principal_id TEXT NOT NULL,
+        plugin_id TEXT NOT NULL,
+        target_kind TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        workspace_fingerprint TEXT NOT NULL,
+        state TEXT NOT NULL,
+        last_synced_at TEXT,
+        last_error TEXT,
+        PRIMARY KEY (principal_id, plugin_id, target_kind, target_id, workspace_fingerprint),
+        FOREIGN KEY (principal_id, plugin_id)
+          REFERENCES themis_principal_plugins(principal_id, plugin_id)
           ON DELETE CASCADE
       );
 
@@ -10595,6 +11082,41 @@ function mapPrincipalMcpMaterializationRow(
     targetId: row.target_id,
     state: row.state as StoredPrincipalMcpMaterializationRecord["state"],
     authState: row.auth_state as StoredPrincipalMcpMaterializationRecord["authState"],
+    ...(row.last_synced_at ? { lastSyncedAt: row.last_synced_at } : {}),
+    ...(row.last_error ? { lastError: row.last_error } : {}),
+  };
+}
+
+function mapPrincipalPluginRow(row: PrincipalPluginRow): StoredPrincipalPluginRecord {
+  return {
+    principalId: row.principal_id,
+    pluginId: row.plugin_id,
+    pluginName: row.plugin_name,
+    marketplaceName: row.marketplace_name,
+    marketplacePath: row.marketplace_path,
+    sourceType: row.source_type as StoredPrincipalPluginRecord["sourceType"],
+    sourceRefJson: row.source_ref_json,
+    ...(row.source_path ? { sourcePath: row.source_path } : {}),
+    interfaceJson: row.interface_json,
+    installPolicy: row.install_policy as StoredPrincipalPluginRecord["installPolicy"],
+    authPolicy: row.auth_policy as StoredPrincipalPluginRecord["authPolicy"],
+    enabled: row.enabled === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.last_error ? { lastError: row.last_error } : {}),
+  };
+}
+
+function mapPrincipalPluginMaterializationRow(
+  row: PrincipalPluginMaterializationRow,
+): StoredPrincipalPluginMaterializationRecord {
+  return {
+    principalId: row.principal_id,
+    pluginId: row.plugin_id,
+    targetKind: row.target_kind as StoredPrincipalPluginMaterializationRecord["targetKind"],
+    targetId: row.target_id,
+    workspaceFingerprint: row.workspace_fingerprint,
+    state: row.state as StoredPrincipalPluginMaterializationRecord["state"],
     ...(row.last_synced_at ? { lastSyncedAt: row.last_synced_at } : {}),
     ...(row.last_error ? { lastError: row.last_error } : {}),
   };

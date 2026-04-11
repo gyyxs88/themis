@@ -28,25 +28,55 @@ function normalizeRequiredText(value: unknown, errorMessage: string): string {
   return normalized;
 }
 
+function normalizeIdentityPayload(value: unknown): {
+  channel: string;
+  channelUserId: string;
+  displayName?: string;
+} {
+  if (!isRecord(value)) {
+    throw new Error("身份请求缺少必要字段。");
+  }
+
+  const channel = normalizeText(value.channel);
+  const channelUserId = normalizeText(value.channelUserId);
+  const displayName = normalizeText(value.displayName);
+
+  if (!channel || !channelUserId) {
+    throw new Error("身份请求缺少必要字段。");
+  }
+
+  return {
+    channel,
+    channelUserId,
+    ...(displayName ? { displayName } : {}),
+  };
+}
+
 function normalizePluginListPayload(value: unknown): {
+  channel: string;
+  channelUserId: string;
+  displayName?: string;
   cwd?: string;
   forceRemoteSync: boolean;
 } {
   if (!isRecord(value)) {
-    return {
-      forceRemoteSync: false,
-    };
+    throw new Error("plugin 请求缺少必要字段。");
   }
 
+  const identity = normalizeIdentityPayload(value);
   const cwd = normalizeText(value.cwd) ?? undefined;
 
   return {
+    ...identity,
     ...(cwd ? { cwd } : {}),
     forceRemoteSync: value.forceRemoteSync === true,
   };
 }
 
 function normalizePluginReadPayload(value: unknown, errorMessage: string): {
+  channel: string;
+  channelUserId: string;
+  displayName?: string;
   cwd?: string;
   forceRemoteSync: boolean;
   marketplacePath: string;
@@ -66,6 +96,9 @@ function normalizePluginReadPayload(value: unknown, errorMessage: string): {
 }
 
 function normalizePluginUninstallPayload(value: unknown, errorMessage: string): {
+  channel: string;
+  channelUserId: string;
+  displayName?: string;
   cwd?: string;
   forceRemoteSync: boolean;
   pluginId: string;
@@ -116,13 +149,15 @@ export async function handlePluginsList(
   }
 
   try {
-    const result = await runtime.getPluginService().listPlugins({
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = await runtime.getPrincipalPluginsService().listPrincipalPlugins(identity.principalId, {
       ...(payload.cwd ? { cwd: payload.cwd } : {}),
       forceRemoteSync: payload.forceRemoteSync,
       activeAuthAccount: authRuntime.getActiveAccount(),
     });
 
     writeJson(response, 200, {
+      identity,
       result,
     });
   } catch (error) {
@@ -147,7 +182,8 @@ export async function handlePluginsRead(
   }
 
   try {
-    const result = await runtime.getPluginService().readPlugin({
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = await runtime.getPrincipalPluginsService().readPrincipalPlugin(identity.principalId, {
       marketplacePath: payload.marketplacePath,
       pluginName: payload.pluginName,
     }, {
@@ -157,6 +193,7 @@ export async function handlePluginsRead(
     });
 
     writeJson(response, 200, {
+      identity,
       result,
     });
   } catch (error) {
@@ -181,7 +218,8 @@ export async function handlePluginsInstall(
   }
 
   try {
-    const result = await runtime.getPluginService().installPlugin({
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = await runtime.getPrincipalPluginsService().installPrincipalPlugin(identity.principalId, {
       marketplacePath: payload.marketplacePath,
       pluginName: payload.pluginName,
       forceRemoteSync: payload.forceRemoteSync,
@@ -191,6 +229,7 @@ export async function handlePluginsInstall(
     });
 
     writeJson(response, 200, {
+      identity,
       result,
     });
   } catch (error) {
@@ -215,15 +254,48 @@ export async function handlePluginsUninstall(
   }
 
   try {
-    const result = await runtime.getPluginService().uninstallPlugin({
-      pluginId: payload.pluginId,
-      forceRemoteSync: payload.forceRemoteSync,
-    }, {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = await runtime.getPrincipalPluginsService().uninstallPrincipalPlugin(
+      identity.principalId,
+      payload.pluginId,
+      {
+        ...(payload.cwd ? { cwd: payload.cwd } : {}),
+        activeAuthAccount: authRuntime.getActiveAccount(),
+        forceRemoteSync: payload.forceRemoteSync,
+      },
+    );
+
+    writeJson(response, 200, {
+      identity,
+      result,
+    });
+  } catch (error) {
+    writeRuntimeError(response, error);
+  }
+}
+
+export async function handlePluginsSync(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: CodexTaskRuntime,
+  authRuntime: CodexAuthRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePluginListPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = await runtime.getPrincipalPluginsService().syncPrincipalPlugins(identity.principalId, {
       ...(payload.cwd ? { cwd: payload.cwd } : {}),
+      forceRemoteSync: payload.forceRemoteSync,
       activeAuthAccount: authRuntime.getActiveAccount(),
     });
 
     writeJson(response, 200, {
+      identity,
       result,
     });
   } catch (error) {

@@ -1029,17 +1029,17 @@
                       <h3>Plugins</h3>
                       <span class="meta-label">当前 Codex 运行环境</span>
                     </div>
-                    <p id="plugins-note" class="settings-section-copy">这里展示当前 Codex 运行环境可见的 plugin marketplaces。第一版直接复用 Codex 原生 marketplace / pluginId 模型，不额外做 principal 持久化抽象；如果后续切换认证槽位或服务工作区，可见列表和安装状态可能变化。</p>
+                    <p id="plugins-note" class="settings-section-copy">这里优先展示当前 principal 已拥有的 plugins，再叠加当前环境可发现的 marketplace。切换认证账号或工作区会影响“当前可用”状态，但不会改变 principal 拥有权。</p>
 
                     <div class="settings-stack">
                       <div class="settings-inline-actions">
                         <button id="plugins-refresh-button" type="button" class="toolbar-button subtle">刷新</button>
-                        <button id="plugins-remote-sync-button" type="button" class="toolbar-button subtle">远程同步后刷新</button>
+                        <button id="plugins-remote-sync-button" type="button" class="toolbar-button subtle">同步到当前环境</button>
                         <p class="settings-inline-copy">当前默认按 Themis 服务所在工作区发现 repo marketplace，并叠加 home / curated marketplaces。</p>
                       </div>
 
                       <p id="plugins-status-note" class="settings-section-copy settings-probe-note hidden" aria-live="polite"></p>
-                      <div id="plugins-list-empty" class="settings-section-copy hidden">当前运行环境还没有可见的 plugin marketplace。</div>
+                      <div id="plugins-list-empty" class="settings-section-copy hidden">当前 principal 还没有已拥有 plugins，当前环境也没有发现可接入的 marketplace。</div>
                       <div id="plugins-list" class="settings-stack"></div>
                     </div>
                   </section>
