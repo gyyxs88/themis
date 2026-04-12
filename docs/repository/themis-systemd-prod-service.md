@@ -191,6 +191,8 @@ cd ~/services/themis-prod
 - 回写 `.env.local` 里的 `THEMIS_BUILD_COMMIT / THEMIS_BUILD_BRANCH`
 - 重启 `systemd --user` 服务
 
+如果这条升级链是从 Web / 飞书后台 worker 发起的，且服务本身运行在 `NODE_ENV=production` 的 `systemd --user` 环境里，当前实现会显式用 `npm ci --include=dev`，避免 build 阶段因为缺少 `tsc` 这类 devDependencies 而失败。
+
 如果你临时不想自动重启，也可以：
 
 ```bash
