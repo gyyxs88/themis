@@ -1,16 +1,25 @@
 # Themis 局域网多节点硅基员工平台 / Phase 2 节点模型与调度租约实施计划
 
-更新时间：2026-04-12 14:12 CST
+更新时间：2026-04-12 15:02 CST
 文档性质：实施计划稿。目标是把平台化路线里的 `Phase 2 / 节点模型与调度租约` 收成可开工的第一版实现方案。
 
 当前状态补充（2026-04-12）：
 
-- 第一包已经完成前 4 项里的前 3 项：`node / execution_lease` 类型与 store 接口、SQLite 节点与租约 schema/适配器，以及 `/api/platform/nodes/register|heartbeat|list` 平台 API 都已落地。
-- 这一包同时补齐了节点服务、SQLite 持久化与平台 HTTP 回归，当前验证已通过：
+- 第一包现在已经全部完成：`node / execution_lease` 类型与 store 接口、SQLite 节点与租约 schema/适配器、`/api/platform/nodes/register|heartbeat|list` 平台 API，以及 scheduler 最小节点匹配都已落地。
+- 当前 scheduler 已支持：
+  - claim 时只挑 `online` 且 `slotAvailable > 0` 的节点
+  - 按 `workspaceCapabilities / credentialCapabilities / providerCapabilities` 做最小精确匹配
+  - 命中节点后创建 `active execution_lease`
+  - 占用与释放 `node.slotAvailable`
+  - 在 run detail / platform run detail 中回填 `node + executionLease`
+- 当前验证已通过：
   - `npm run typecheck`
   - `node --test --import tsx src/core/managed-agent-node-service.test.ts src/storage/codex-session-registry-managed-agent-node.test.ts src/core/managed-agents-service.test.ts src/core/managed-agent-coordination-service.test.ts src/core/managed-agent-scheduler-service.test.ts src/server/http-agents.test.ts src/server/http-platform.test.ts`
   - `git diff --check`
-- 当前仍未进入的是“调度器最小节点匹配”。也就是说，平台已经能认识节点并持久化租约对象，但 `ManagedAgentSchedulerService` 还没有在 claim 时真正选节点并回填 `nodeId / execution_lease`。
+- 当前还没做的是节点治理补充，而不是基础匹配本身。也就是说，平台已经能认识节点、最小匹配节点并持久化租约；后续更值得继续的是：
+  - MySQL 节点/租约 schema 与 store 对齐
+  - 节点失联 / TTL 过期后的 `offline` 治理
+  - 更明确的 `draining` / 下线控制面动作
 
 ## 1. 目标
 
@@ -47,15 +56,16 @@
 
 这意味着“平台对象”和“单机 runtime”之间已经有了第一层边界。
 
-### 2.2 调度器现在仍然只认识本地执行
+### 2.2 调度器已经接进最小节点归属
 
-当前 `ManagedAgentSchedulerService` 的 claim 逻辑仍然是：
+当前 `ManagedAgentSchedulerService` 的 claim 逻辑已经升级为：
 
-- 从队列里找可执行 `work_item`
-- 创建或恢复本地 `run`
-- 默认由当前 `ManagedAgentExecutionService` 在本地继续推进
+- 先从队列里找可执行 `work_item`
+- 再按节点在线状态、槽位和最小能力匹配选节点
+- 命中节点后创建 `execution_lease`
+- 如果没有命中节点，则保留原有“无节点租约、本地 fallback claim”语义
 
-也就是说，当前还没有显式的“节点归属”概念。
+也就是说，当前已经有了显式的“节点归属”概念，但还没有把远端 Worker Node 真执行接进来。
 
 ### 2.3 `run` 已经天然需要节点亲和性
 
@@ -173,7 +183,7 @@ SQLite 和 MySQL 都先给最小实现。
    - `POST /api/platform/nodes/register`
    - `POST /api/platform/nodes/heartbeat`
    - `POST /api/platform/nodes/list`
-4. 下一刀：让调度器开始读取节点列表，并在 claim 结果里回填目标 `nodeId`
+4. 已完成：让调度器开始读取节点列表，并在 claim 结果里回填最小 `node / executionLease`
 
 这样第一包已经先验证了：
 
@@ -181,11 +191,11 @@ SQLite 和 MySQL 都先给最小实现。
 - 控制面、SQLite 与平台 HTTP 口径是不是一致
 - 后续远端执行是不是有清晰挂点
 
-而下一刀的验证重点会切到：
+而下一刀的重点会切到：
 
-- 调度器有没有被新模型打乱
-- claim 时的节点选择是否可解释
-- `run` 与 `execution_lease` 的绑定是不是开始进入主链
+- MySQL 节点/租约 schema 是否和 SQLite 对齐
+- `draining / offline` 状态是否进入治理主链
+- 节点 TTL 过期后是否能自动进入更可解释的下线状态
 
 ## 7. 完成标准
 

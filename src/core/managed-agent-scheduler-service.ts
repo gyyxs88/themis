@@ -1,10 +1,12 @@
 import type { ManagedAgentSchedulerStore, StoredPrincipalRecord } from "../storage/index.js";
 import type {
+  StoredAgentExecutionLeaseRecord,
   AgentRunStatus,
   ManagedAgentWorkItemStatus,
   StoredAgentRunRecord,
   StoredAgentWorkItemRecord,
   StoredManagedAgentRecord,
+  StoredManagedAgentNodeRecord,
   StoredOrganizationRecord,
 } from "../types/index.js";
 
@@ -23,6 +25,8 @@ export interface ManagedAgentSchedulerClaim {
   targetAgent: StoredManagedAgentRecord;
   workItem: StoredAgentWorkItemRecord;
   run: StoredAgentRunRecord;
+  node: StoredManagedAgentNodeRecord | null;
+  executionLease: StoredAgentExecutionLeaseRecord | null;
 }
 
 export interface ClaimNextRunnableWorkItemInput {
@@ -48,6 +52,8 @@ export interface ManagedAgentRunDetailView {
   targetAgent: StoredManagedAgentRecord | null;
   workItem: StoredAgentWorkItemRecord | null;
   run: StoredAgentRunRecord;
+  node: StoredManagedAgentNodeRecord | null;
+  executionLease: StoredAgentExecutionLeaseRecord | null;
 }
 
 export class ManagedAgentSchedulerService {
@@ -105,6 +111,8 @@ export class ManagedAgentSchedulerService {
       targetAgent: this.registry.getManagedAgent(run.targetAgentId),
       workItem: this.registry.getAgentWorkItem(run.workItemId),
       run,
+      executionLease: this.registry.getActiveAgentExecutionLeaseByRun(run.runId),
+      node: resolveLeaseNode(this.registry, this.registry.getActiveAgentExecutionLeaseByRun(run.runId)),
     };
   }
 
@@ -144,6 +152,7 @@ export class ManagedAgentSchedulerService {
       };
       this.registry.saveAgentRun(interruptedRun);
       recoveredRuns.push(this.registry.getAgentRun(run.runId) ?? interruptedRun);
+      this.releaseExecutionLease(run.runId, "expired", normalizedNow);
 
       if (!workItem) {
         continue;
@@ -188,11 +197,23 @@ export class ManagedAgentSchedulerService {
       throw new Error("Claimed agent work item lost its organization or target agent.");
     }
 
+    const node = this.selectExecutionNode(claim.workItem);
+    const executionLease = node
+      ? this.createExecutionLease({
+        run: claim.run,
+        workItem: claim.workItem,
+        node,
+        now,
+      })
+      : null;
+
     return {
       organization,
       targetAgent,
       workItem: claim.workItem,
       run: claim.run,
+      node,
+      executionLease,
     };
   }
 
@@ -205,6 +226,7 @@ export class ManagedAgentSchedulerService {
       lastHeartbeatAt: normalizedNow,
       updatedAt: normalizedNow,
     });
+    this.touchExecutionLease(nextRun, normalizedNow);
 
     if (workItem.status === "queued") {
       this.registry.saveAgentWorkItem({
@@ -227,6 +249,7 @@ export class ManagedAgentSchedulerService {
       lastHeartbeatAt: normalizedNow,
       updatedAt: normalizedNow,
     });
+    this.touchExecutionLease(nextRun, normalizedNow);
 
     if (workItem.status !== "running") {
       this.registry.saveAgentWorkItem({
@@ -243,12 +266,13 @@ export class ManagedAgentSchedulerService {
   heartbeatRun(runId: string, leaseToken: string, now?: string): StoredAgentRunRecord {
     const normalizedNow = normalizeNow(now);
     const { run } = this.requireRunnableRun(runId, leaseToken);
-
-    return this.saveRunTransition(run, {
+    const nextRun = this.saveRunTransition(run, {
       leaseExpiresAt: computeLeaseExpiry(normalizedNow, this.leaseTtlMs),
       lastHeartbeatAt: normalizedNow,
       updatedAt: normalizedNow,
     });
+    this.touchExecutionLease(nextRun, normalizedNow);
+    return nextRun;
   }
 
   markRunWaiting(runId: string, leaseToken: string, waitingFor: "human" | "agent", now?: string): StoredAgentRunRecord {
@@ -260,6 +284,7 @@ export class ManagedAgentSchedulerService {
       lastHeartbeatAt: normalizedNow,
       updatedAt: normalizedNow,
     });
+    this.touchExecutionLease(nextRun, normalizedNow);
 
     const nextWorkItemStatus: ManagedAgentWorkItemStatus = waitingFor === "human"
       ? "waiting_human"
@@ -284,6 +309,7 @@ export class ManagedAgentSchedulerService {
       lastHeartbeatAt: normalizedNow,
       updatedAt: normalizedNow,
     });
+    this.releaseExecutionLease(run.runId, "released", normalizedNow);
 
     this.registry.saveAgentWorkItem({
       ...workItem,
@@ -309,6 +335,7 @@ export class ManagedAgentSchedulerService {
       failureMessage: normalizeRequiredText(failureMessage, "Failure message is required."),
       updatedAt: normalizedNow,
     });
+    this.releaseExecutionLease(run.runId, "revoked", normalizedNow);
 
     this.registry.saveAgentWorkItem({
       ...workItem,
@@ -325,8 +352,7 @@ export class ManagedAgentSchedulerService {
   cancelRun(runId: string, leaseToken: string, failureCode: string, failureMessage: string, now?: string): StoredAgentRunRecord {
     const normalizedNow = normalizeNow(now);
     const { run } = this.requireRunnableRun(runId, leaseToken);
-
-    return this.saveRunTransition(run, {
+    const nextRun = this.saveRunTransition(run, {
       status: "cancelled",
       leaseExpiresAt: normalizedNow,
       completedAt: normalizedNow,
@@ -334,6 +360,89 @@ export class ManagedAgentSchedulerService {
       failureCode: normalizeRequiredText(failureCode, "Failure code is required."),
       failureMessage: normalizeRequiredText(failureMessage, "Failure message is required."),
       updatedAt: normalizedNow,
+    });
+    this.releaseExecutionLease(run.runId, "revoked", normalizedNow);
+    return nextRun;
+  }
+
+  private selectExecutionNode(workItem: StoredAgentWorkItemRecord): StoredManagedAgentNodeRecord | null {
+    const nodes = this.registry.listManagedAgentNodesByOrganization(workItem.organizationId);
+    const matched = nodes.filter((node) => canNodeRunWorkItem(node, workItem));
+
+    return matched[0] ?? null;
+  }
+
+  private createExecutionLease(input: {
+    run: StoredAgentRunRecord;
+    workItem: StoredAgentWorkItemRecord;
+    node: StoredManagedAgentNodeRecord;
+    now: string;
+  }): StoredAgentExecutionLeaseRecord {
+    const executionLease: StoredAgentExecutionLeaseRecord = {
+      leaseId: createId("execution-lease"),
+      runId: input.run.runId,
+      workItemId: input.workItem.workItemId,
+      targetAgentId: input.run.targetAgentId,
+      nodeId: input.node.nodeId,
+      status: "active",
+      leaseToken: input.run.leaseToken,
+      leaseExpiresAt: input.run.leaseExpiresAt,
+      lastHeartbeatAt: input.now,
+      createdAt: input.now,
+      updatedAt: input.now,
+    };
+
+    this.registry.saveAgentExecutionLease(executionLease);
+    this.saveNodeSlotAvailability(input.node, input.node.slotAvailable - 1, input.now);
+    return this.registry.getActiveAgentExecutionLeaseByRun(input.run.runId) ?? executionLease;
+  }
+
+  private touchExecutionLease(run: StoredAgentRunRecord, now: string): void {
+    const activeLease = this.registry.getActiveAgentExecutionLeaseByRun(run.runId);
+
+    if (!activeLease) {
+      return;
+    }
+
+    this.registry.saveAgentExecutionLease({
+      ...activeLease,
+      leaseToken: run.leaseToken,
+      leaseExpiresAt: run.leaseExpiresAt,
+      lastHeartbeatAt: now,
+      updatedAt: now,
+    });
+  }
+
+  private releaseExecutionLease(
+    runId: string,
+    status: StoredAgentExecutionLeaseRecord["status"],
+    now: string,
+  ): void {
+    const activeLease = this.registry.getActiveAgentExecutionLeaseByRun(runId);
+
+    if (!activeLease) {
+      return;
+    }
+
+    this.registry.saveAgentExecutionLease({
+      ...activeLease,
+      status,
+      leaseExpiresAt: now,
+      lastHeartbeatAt: now,
+      updatedAt: now,
+    });
+
+    const node = this.registry.getManagedAgentNode(activeLease.nodeId);
+    if (node) {
+      this.saveNodeSlotAvailability(node, node.slotAvailable + 1, now);
+    }
+  }
+
+  private saveNodeSlotAvailability(node: StoredManagedAgentNodeRecord, slotAvailable: number, now: string): void {
+    this.registry.saveManagedAgentNode({
+      ...node,
+      slotAvailable: Math.max(0, Math.min(node.slotCapacity, Math.floor(slotAvailable))),
+      updatedAt: now,
     });
   }
 
@@ -450,4 +559,62 @@ function computeLeaseExpiry(now: string, leaseTtlMs: number): string {
 
 function createId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function resolveLeaseNode(
+  registry: ManagedAgentSchedulerStore,
+  executionLease: StoredAgentExecutionLeaseRecord | null,
+): StoredManagedAgentNodeRecord | null {
+  if (!executionLease) {
+    return null;
+  }
+
+  return registry.getManagedAgentNode(executionLease.nodeId);
+}
+
+function canNodeRunWorkItem(
+  node: StoredManagedAgentNodeRecord,
+  workItem: StoredAgentWorkItemRecord,
+): boolean {
+  if (node.status !== "online" || node.slotAvailable <= 0) {
+    return false;
+  }
+
+  const workspaceSnapshot = workItem.workspacePolicySnapshot;
+  const runtimeSnapshot = workItem.runtimeProfileSnapshot;
+  const requiredWorkspacePaths = dedupeStrings([
+    workspaceSnapshot?.workspacePath,
+    ...(workspaceSnapshot?.additionalDirectories ?? []),
+  ]);
+
+  if (!matchesCapabilities(node.workspaceCapabilities, requiredWorkspacePaths)) {
+    return false;
+  }
+
+  if (!matchesCapabilities(node.credentialCapabilities, runtimeSnapshot?.authAccountId ? [runtimeSnapshot.authAccountId] : [])) {
+    return false;
+  }
+
+  if (!matchesCapabilities(node.providerCapabilities, runtimeSnapshot?.thirdPartyProviderId ? [runtimeSnapshot.thirdPartyProviderId] : [])) {
+    return false;
+  }
+
+  return true;
+}
+
+function matchesCapabilities(capabilities: string[], required: string[]): boolean {
+  if (required.length === 0) {
+    return true;
+  }
+
+  if (capabilities.length === 0) {
+    return false;
+  }
+
+  const set = new Set(capabilities.map((value) => value.trim()).filter(Boolean));
+  return required.every((value) => set.has(value));
+}
+
+function dedupeStrings(values: Array<string | undefined | null>): string[] {
+  return [...new Set(values.map((value) => normalizeOptionalText(value) ?? "").filter(Boolean))];
 }

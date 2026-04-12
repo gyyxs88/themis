@@ -1,13 +1,13 @@
 # Themis 局域网多节点硅基员工平台 / 分阶段落地计划
 
-更新时间：2026-04-12 14:12 CST
+更新时间：2026-04-12 15:02 CST
 文档性质：路线拆解稿。基于《Themis 局域网多节点硅基员工平台方案（V1 草案）》继续下收，回答“接下来应该按什么顺序推进、每阶段做到什么算完成”。
 
 当前状态补充（2026-04-12）：
 
 - `Phase 1 / 控制面底座` 已按当前计划范围完成，已落地控制面 `store` 抽象、SQLite/MySQL 原型、控制面门面，以及 `/api/platform/*` 最小平台 API 原型。
-- `Phase 2 / 节点模型与调度租约` 的第一包也已完成：当前已固定 `node / execution_lease` 类型与 store 接口，SQLite 已补节点/租约表，平台 API 已新增 `/api/platform/nodes/register|heartbeat|list`。
-- 当前 Phase 2 的下一刀是“调度器最小节点匹配”，详细实施计划见独立文档。
+- `Phase 2 / 节点模型与调度租约` 的第一包也已完成：当前已固定 `node / execution_lease` 类型与 store 接口，SQLite 已补节点/租约表，平台 API 已新增 `/api/platform/nodes/register|heartbeat|list`，scheduler 也已接入最小节点匹配与 `execution_lease` 回填。
+- 当前 Phase 2 的下一刀已切到节点治理补充：更具体地说，是 MySQL 节点/租约对齐、节点 TTL 过期后的 `offline` 语义，以及更明确的 `draining / 下线` 控制面动作。详细实施计划见独立文档。
 
 ## 1. 这份计划解决什么问题
 

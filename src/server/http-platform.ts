@@ -321,6 +321,8 @@ export async function handlePlatformRunDetail(
       targetAgent: detail.targetAgent,
       workItem: detail.workItem,
       run: detail.run,
+      executionLease: detail.executionLease,
+      node: detail.node,
     });
   } catch (error) {
     writePlatformError(response, error);

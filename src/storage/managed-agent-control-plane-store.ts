@@ -74,13 +74,18 @@ export type ManagedAgentCoordinationStore = Pick<SqliteCodexSessionRegistry,
 
 export type ManagedAgentSchedulerStore = Pick<SqliteCodexSessionRegistry,
   | "claimNextRunnableAgentWorkItem"
+  | "getActiveAgentExecutionLeaseByRun"
+  | "getManagedAgentNode"
   | "getAgentRun"
   | "getAgentWorkItem"
   | "getManagedAgent"
   | "getOrganization"
   | "getPrincipal"
+  | "listManagedAgentNodesByOrganization"
   | "listAgentRunsByOwnerPrincipal"
   | "listStaleActiveAgentRuns"
+  | "saveAgentExecutionLease"
+  | "saveManagedAgentNode"
   | "saveAgentRun"
   | "saveAgentWorkItem"
 >;

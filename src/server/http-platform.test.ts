@@ -94,6 +94,41 @@ test("POST /api/platform/* 会暴露控制面最小主链", async () => {
     assert.ok(createPayload.agent?.agentId);
     assert.equal(createPayload.agent?.displayName, "平台值班员");
 
+    const executionBoundary = runtime.getManagedAgentsService().getManagedAgentExecutionBoundary(
+      ownerPrincipalId,
+      createPayload.agent?.agentId ?? "",
+    );
+    assert.ok(executionBoundary);
+    const workspaceCapabilities = [
+      executionBoundary?.workspacePolicy.workspacePath ?? runtime.getWorkingDirectory(),
+      ...(executionBoundary?.workspacePolicy.additionalDirectories ?? []),
+    ];
+    const credentialCapabilities = executionBoundary?.runtimeProfile.authAccountId
+      ? [executionBoundary.runtimeProfile.authAccountId]
+      : [];
+    const providerCapabilities = executionBoundary?.runtimeProfile.thirdPartyProviderId
+      ? [executionBoundary.runtimeProfile.thirdPartyProviderId]
+      : [];
+
+    const nodeRegisterResponse = await postJson(baseUrl, "/api/platform/nodes/register", {
+      ownerPrincipalId,
+      node: {
+        organizationId: createPayload.organization?.organizationId,
+        displayName: "Platform Node A",
+        slotCapacity: 2,
+        slotAvailable: 1,
+        workspaceCapabilities,
+        credentialCapabilities,
+        providerCapabilities,
+      },
+    }, authHeaders);
+
+    assert.equal(nodeRegisterResponse.status, 200);
+    const nodeRegisterPayload = await nodeRegisterResponse.json() as {
+      node?: { nodeId?: string };
+    };
+    assert.ok(nodeRegisterPayload.node?.nodeId);
+
     const listResponse = await postJson(baseUrl, "/api/platform/agents/list", {
       ownerPrincipalId,
     }, authHeaders);
@@ -168,6 +203,8 @@ test("POST /api/platform/* 会暴露控制面最小主链", async () => {
       schedulerId: "scheduler-platform-test",
     });
     assert.ok(claim?.run.runId);
+    assert.equal(claim?.node?.nodeId, nodeRegisterPayload.node?.nodeId);
+    assert.equal(claim?.executionLease?.nodeId, nodeRegisterPayload.node?.nodeId);
 
     const runListResponse = await postJson(baseUrl, "/api/platform/runs/list", {
       ownerPrincipalId,
@@ -191,10 +228,16 @@ test("POST /api/platform/* 会暴露控制面最小主链", async () => {
       run?: { runId?: string };
       workItem?: { workItemId?: string };
       targetAgent?: { agentId?: string };
+      executionLease?: { leaseId?: string; nodeId?: string; status?: string };
+      node?: { nodeId?: string; displayName?: string };
     };
     assert.equal(runDetailPayload.run?.runId, claim?.run.runId);
     assert.equal(runDetailPayload.workItem?.workItemId, dispatchPayload.workItem?.workItemId);
     assert.equal(runDetailPayload.targetAgent?.agentId, createPayload.agent?.agentId);
+    assert.equal(runDetailPayload.executionLease?.nodeId, nodeRegisterPayload.node?.nodeId);
+    assert.equal(runDetailPayload.executionLease?.status, "active");
+    assert.equal(runDetailPayload.node?.nodeId, nodeRegisterPayload.node?.nodeId);
+    assert.equal(runDetailPayload.node?.displayName, "Platform Node A");
   });
 });
 
