@@ -110,6 +110,9 @@ import {
   handlePlatformAgentCreate,
   handlePlatformAgentDetail,
   handlePlatformAgentList,
+  handlePlatformNodeHeartbeat,
+  handlePlatformNodeList,
+  handlePlatformNodeRegister,
   handlePlatformRunDetail,
   handlePlatformRunList,
   handlePlatformWorkItemDetail,
@@ -464,6 +467,18 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/platform/runs/detail") {
         return handlePlatformRunDetail(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/nodes/register") {
+        return handlePlatformNodeRegister(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/nodes/heartbeat") {
+        return handlePlatformNodeHeartbeat(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/nodes/list") {
+        return handlePlatformNodeList(request, response, platformControlPlaneFacade);
       }
 
       if (request.method === "POST" && url.pathname === "/api/actors/list") {

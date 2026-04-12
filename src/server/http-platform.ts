@@ -1,8 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ManagedAgentControlPlaneFacade } from "../core/managed-agent-control-plane-facade.js";
 import {
+  MANAGED_AGENT_NODE_STATUSES,
   MANAGED_AGENT_PRIORITIES,
   MANAGED_AGENT_WORK_ITEM_SOURCE_TYPES,
+  type ManagedAgentNodeStatus,
   type ManagedAgentPriority,
   type ManagedAgentWorkItemSourceType,
 } from "../types/index.js";
@@ -57,6 +59,38 @@ interface PlatformRunListPayload extends PlatformAgentListPayload {
 
 interface PlatformRunDetailPayload extends PlatformAgentListPayload {
   runId: string;
+}
+
+interface PlatformNodeRegisterPayload extends PlatformAgentListPayload {
+  node: {
+    nodeId?: string;
+    organizationId?: string;
+    displayName: string;
+    slotCapacity: number;
+    slotAvailable?: number;
+    labels?: string[];
+    workspaceCapabilities?: string[];
+    credentialCapabilities?: string[];
+    providerCapabilities?: string[];
+    heartbeatTtlSeconds?: number;
+  };
+}
+
+interface PlatformNodeHeartbeatPayload extends PlatformAgentListPayload {
+  node: {
+    nodeId: string;
+    status?: ManagedAgentNodeStatus;
+    slotAvailable?: number;
+    labels?: string[];
+    workspaceCapabilities?: string[];
+    credentialCapabilities?: string[];
+    providerCapabilities?: string[];
+    heartbeatTtlSeconds?: number;
+  };
+}
+
+interface PlatformNodeListPayload extends PlatformAgentListPayload {
+  organizationId?: string;
 }
 
 async function readAndNormalizePayload<T>(
@@ -293,6 +327,99 @@ export async function handlePlatformRunDetail(
   }
 }
 
+export async function handlePlatformNodeRegister(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformNodeRegisterPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.registerNode({
+      ownerPrincipalId: payload.ownerPrincipalId,
+      ...(payload.node.organizationId ? { organizationId: payload.node.organizationId } : {}),
+      ...(payload.node.nodeId ? { nodeId: payload.node.nodeId } : {}),
+      displayName: payload.node.displayName,
+      slotCapacity: payload.node.slotCapacity,
+      ...(payload.node.slotAvailable !== undefined ? { slotAvailable: payload.node.slotAvailable } : {}),
+      ...(payload.node.labels ? { labels: payload.node.labels } : {}),
+      ...(payload.node.workspaceCapabilities ? { workspaceCapabilities: payload.node.workspaceCapabilities } : {}),
+      ...(payload.node.credentialCapabilities ? { credentialCapabilities: payload.node.credentialCapabilities } : {}),
+      ...(payload.node.providerCapabilities ? { providerCapabilities: payload.node.providerCapabilities } : {}),
+      ...(payload.node.heartbeatTtlSeconds !== undefined
+        ? { heartbeatTtlSeconds: payload.node.heartbeatTtlSeconds }
+        : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      organization: result.organization,
+      node: result.node,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformNodeHeartbeat(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformNodeHeartbeatPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.heartbeatNode({
+      ownerPrincipalId: payload.ownerPrincipalId,
+      nodeId: payload.node.nodeId,
+      ...(payload.node.status ? { status: payload.node.status } : {}),
+      ...(payload.node.slotAvailable !== undefined ? { slotAvailable: payload.node.slotAvailable } : {}),
+      ...(payload.node.labels ? { labels: payload.node.labels } : {}),
+      ...(payload.node.workspaceCapabilities ? { workspaceCapabilities: payload.node.workspaceCapabilities } : {}),
+      ...(payload.node.credentialCapabilities ? { credentialCapabilities: payload.node.credentialCapabilities } : {}),
+      ...(payload.node.providerCapabilities ? { providerCapabilities: payload.node.providerCapabilities } : {}),
+      ...(payload.node.heartbeatTtlSeconds !== undefined
+        ? { heartbeatTtlSeconds: payload.node.heartbeatTtlSeconds }
+        : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      organization: result.organization,
+      node: result.node,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformNodeList(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformNodeListPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const nodes = facade.listNodes(payload.ownerPrincipalId, payload.organizationId);
+    writeJson(response, 200, {
+      ok: true,
+      nodes,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
 function normalizePlatformAgentCreatePayload(value: unknown): PlatformAgentCreatePayload {
   if (!isRecord(value) || !isRecord(value.agent)) {
     throw new Error("Request body.agent must be an object.");
@@ -416,6 +543,82 @@ function normalizePlatformRunDetailPayload(value: unknown): PlatformRunDetailPay
   };
 }
 
+function normalizePlatformNodeRegisterPayload(value: unknown): PlatformNodeRegisterPayload {
+  if (!isRecord(value) || !isRecord(value.node)) {
+    throw new Error("Request body.node must be an object.");
+  }
+
+  const organizationId = readOptionalString(value.node.organizationId);
+  const nodeId = readOptionalString(value.node.nodeId);
+  const slotAvailable = readOptionalNumber(value.node.slotAvailable);
+  const heartbeatTtlSeconds = readOptionalPositiveInteger(value.node.heartbeatTtlSeconds, "node.heartbeatTtlSeconds");
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    node: {
+      ...(organizationId ? { organizationId } : {}),
+      ...(nodeId ? { nodeId } : {}),
+      displayName: readRequiredString(value.node.displayName, "node.displayName"),
+      slotCapacity: readRequiredPositiveInteger(value.node.slotCapacity, "node.slotCapacity"),
+      ...(slotAvailable !== undefined ? { slotAvailable } : {}),
+      ...(Array.isArray(value.node.labels) ? { labels: readStringArray(value.node.labels) } : {}),
+      ...(Array.isArray(value.node.workspaceCapabilities)
+        ? { workspaceCapabilities: readStringArray(value.node.workspaceCapabilities) }
+        : {}),
+      ...(Array.isArray(value.node.credentialCapabilities)
+        ? { credentialCapabilities: readStringArray(value.node.credentialCapabilities) }
+        : {}),
+      ...(Array.isArray(value.node.providerCapabilities)
+        ? { providerCapabilities: readStringArray(value.node.providerCapabilities) }
+        : {}),
+      ...(heartbeatTtlSeconds !== undefined ? { heartbeatTtlSeconds } : {}),
+    },
+  };
+}
+
+function normalizePlatformNodeHeartbeatPayload(value: unknown): PlatformNodeHeartbeatPayload {
+  if (!isRecord(value) || !isRecord(value.node)) {
+    throw new Error("Request body.node must be an object.");
+  }
+
+  const status = readOptionalEnum(value.node.status, MANAGED_AGENT_NODE_STATUSES, "node.status");
+  const slotAvailable = readOptionalNumber(value.node.slotAvailable);
+  const heartbeatTtlSeconds = readOptionalPositiveInteger(value.node.heartbeatTtlSeconds, "node.heartbeatTtlSeconds");
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    node: {
+      nodeId: readRequiredString(value.node.nodeId, "node.nodeId"),
+      ...(status ? { status } : {}),
+      ...(slotAvailable !== undefined ? { slotAvailable } : {}),
+      ...(Array.isArray(value.node.labels) ? { labels: readStringArray(value.node.labels) } : {}),
+      ...(Array.isArray(value.node.workspaceCapabilities)
+        ? { workspaceCapabilities: readStringArray(value.node.workspaceCapabilities) }
+        : {}),
+      ...(Array.isArray(value.node.credentialCapabilities)
+        ? { credentialCapabilities: readStringArray(value.node.credentialCapabilities) }
+        : {}),
+      ...(Array.isArray(value.node.providerCapabilities)
+        ? { providerCapabilities: readStringArray(value.node.providerCapabilities) }
+        : {}),
+      ...(heartbeatTtlSeconds !== undefined ? { heartbeatTtlSeconds } : {}),
+    },
+  };
+}
+
+function normalizePlatformNodeListPayload(value: unknown): PlatformNodeListPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  const organizationId = readOptionalString(value.organizationId);
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    ...(organizationId ? { organizationId } : {}),
+  };
+}
+
 function readRequiredString(value: unknown, fieldName: string): string {
   const normalized = readOptionalString(value);
 
@@ -435,6 +638,14 @@ function readOptionalString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
+function readOptionalNumber(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+
+  return Math.floor(value);
+}
+
 function readOptionalEnum<T extends readonly string[]>(
   value: unknown,
   candidates: T,
@@ -451,6 +662,32 @@ function readOptionalEnum<T extends readonly string[]>(
   }
 
   return normalized as T[number];
+}
+
+function readOptionalPositiveInteger(value: unknown, fieldName: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${fieldName} is invalid.`);
+  }
+
+  return value;
+}
+
+function readRequiredPositiveInteger(value: unknown, fieldName: string): number {
+  const normalized = readOptionalPositiveInteger(value, fieldName);
+
+  if (normalized === undefined) {
+    throw new Error(`${fieldName} is required.`);
+  }
+
+  return normalized;
+}
+
+function readStringArray(values: unknown[]): string[] {
+  return [...new Set(values.filter((value): value is string => typeof value === "string").map((value) => value.trim()).filter(Boolean))];
 }
 
 function hasOwn(value: Record<string, unknown>, key: string): boolean {

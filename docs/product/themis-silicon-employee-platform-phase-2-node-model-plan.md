@@ -1,7 +1,16 @@
 # Themis 局域网多节点硅基员工平台 / Phase 2 节点模型与调度租约实施计划
 
-更新时间：2026-04-12 13:18 CST
+更新时间：2026-04-12 14:12 CST
 文档性质：实施计划稿。目标是把平台化路线里的 `Phase 2 / 节点模型与调度租约` 收成可开工的第一版实现方案。
+
+当前状态补充（2026-04-12）：
+
+- 第一包已经完成前 4 项里的前 3 项：`node / execution_lease` 类型与 store 接口、SQLite 节点与租约 schema/适配器，以及 `/api/platform/nodes/register|heartbeat|list` 平台 API 都已落地。
+- 这一包同时补齐了节点服务、SQLite 持久化与平台 HTTP 回归，当前验证已通过：
+  - `npm run typecheck`
+  - `node --test --import tsx src/core/managed-agent-node-service.test.ts src/storage/codex-session-registry-managed-agent-node.test.ts src/core/managed-agents-service.test.ts src/core/managed-agent-coordination-service.test.ts src/core/managed-agent-scheduler-service.test.ts src/server/http-agents.test.ts src/server/http-platform.test.ts`
+  - `git diff --check`
+- 当前仍未进入的是“调度器最小节点匹配”。也就是说，平台已经能认识节点并持久化租约对象，但 `ManagedAgentSchedulerService` 还没有在 claim 时真正选节点并回填 `nodeId / execution_lease`。
 
 ## 1. 目标
 
@@ -156,21 +165,27 @@ SQLite 和 MySQL 都先给最小实现。
 
 ## 6. 推荐第一包
 
-如果现在就开工，我建议 Phase 2 第一包只做下面 4 件事：
+如果按当前实现继续推进，Phase 2 第一包的状态已经可以固定成：
 
-1. 固定 `node / execution_lease` 类型与 store 接口
-2. 先给 SQLite 落最小实现
-3. 新增平台 API：
+1. 已完成：固定 `node / execution_lease` 类型与 store 接口
+2. 已完成：SQLite 最小实现
+3. 已完成：新增平台 API：
    - `POST /api/platform/nodes/register`
    - `POST /api/platform/nodes/heartbeat`
    - `POST /api/platform/nodes/list`
-4. 让调度器开始读取节点列表，并在 claim 结果里回填目标 `nodeId`
+4. 下一刀：让调度器开始读取节点列表，并在 claim 结果里回填目标 `nodeId`
 
-这样第一包就能先验证：
+这样第一包已经先验证了：
 
 - 节点模型是不是顺手
-- 调度器有没有被新模型打乱
+- 控制面、SQLite 与平台 HTTP 口径是不是一致
 - 后续远端执行是不是有清晰挂点
+
+而下一刀的验证重点会切到：
+
+- 调度器有没有被新模型打乱
+- claim 时的节点选择是否可解释
+- `run` 与 `execution_lease` 的绑定是不是开始进入主链
 
 ## 7. 完成标准
 

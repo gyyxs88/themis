@@ -26,6 +26,7 @@ import { ConversationService } from "./conversation-service.js";
 import { IdentityLinkService } from "./identity-link-service.js";
 import { ManagedAgentCoordinationService } from "./managed-agent-coordination-service.js";
 import { ManagedAgentControlPlaneFacade } from "./managed-agent-control-plane-facade.js";
+import { ManagedAgentNodeService } from "./managed-agent-node-service.js";
 import { ManagedAgentsService } from "./managed-agents-service.js";
 import { ManagedAgentSchedulerService } from "./managed-agent-scheduler-service.js";
 import { PrincipalActorsService } from "./principal-actors-service.js";
@@ -124,6 +125,7 @@ export class CodexTaskRuntime {
   private readonly managedAgentControlPlaneStore: SqliteManagedAgentControlPlaneStore;
   private readonly managedAgentCoordinationService: ManagedAgentCoordinationService;
   private readonly managedAgentControlPlaneFacade: ManagedAgentControlPlaneFacade;
+  private readonly managedAgentNodeService: ManagedAgentNodeService;
   private readonly managedAgentsService: ManagedAgentsService;
   private readonly managedAgentSchedulerService: ManagedAgentSchedulerService;
   private readonly principalActorsService: PrincipalActorsService;
@@ -162,10 +164,14 @@ export class CodexTaskRuntime {
     this.managedAgentSchedulerService = new ManagedAgentSchedulerService({
       registry: this.managedAgentControlPlaneStore.schedulerStore,
     });
+    this.managedAgentNodeService = new ManagedAgentNodeService({
+      registry: this.managedAgentControlPlaneStore.nodeStore,
+    });
     this.managedAgentControlPlaneFacade = new ManagedAgentControlPlaneFacade({
       managedAgentsService: this.managedAgentsService,
       coordinationService: this.managedAgentCoordinationService,
       schedulerService: this.managedAgentSchedulerService,
+      nodeService: this.managedAgentNodeService,
     });
     this.principalActorsService = new PrincipalActorsService({
       registry: this.runtimeStore,
@@ -709,6 +715,10 @@ export class CodexTaskRuntime {
 
   getManagedAgentsService(): ManagedAgentsService {
     return this.managedAgentsService;
+  }
+
+  getManagedAgentNodeService(): ManagedAgentNodeService {
+    return this.managedAgentNodeService;
   }
 
   getManagedAgentCoordinationService(): ManagedAgentCoordinationService {

@@ -198,6 +198,124 @@ test("POST /api/platform/* 会暴露控制面最小主链", async () => {
   });
 });
 
+test("POST /api/platform/nodes/* 会暴露节点注册、续心跳与列表能力", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+    const ownerPrincipalId = "principal-platform-node-owner";
+    const now = new Date().toISOString();
+
+    runtimeStore.savePrincipal({
+      principalId: ownerPrincipalId,
+      displayName: "Platform Node Owner",
+      kind: "human_user",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const createResponse = await postJson(baseUrl, "/api/platform/agents/create", {
+      ownerPrincipalId,
+      agent: {
+        departmentRole: "平台工程",
+        displayName: "平台调度员",
+        mission: "负责节点与租约的治理。",
+      },
+    }, authHeaders);
+
+    assert.equal(createResponse.status, 200);
+    const createPayload = await createResponse.json() as {
+      organization?: { organizationId?: string };
+    };
+    assert.ok(createPayload.organization?.organizationId);
+
+    const registerResponse = await postJson(baseUrl, "/api/platform/nodes/register", {
+      ownerPrincipalId,
+      node: {
+        organizationId: createPayload.organization?.organizationId,
+        displayName: "Node A",
+        slotCapacity: 4,
+        slotAvailable: 3,
+        labels: ["linux", "build", "linux"],
+        workspaceCapabilities: ["/workspace/platform", "/workspace/platform"],
+        credentialCapabilities: ["acct-default"],
+        providerCapabilities: ["gateway-a"],
+        heartbeatTtlSeconds: 45,
+      },
+    }, authHeaders);
+
+    assert.equal(registerResponse.status, 200);
+    const registerPayload = await registerResponse.json() as {
+      node?: {
+        nodeId?: string;
+        organizationId?: string;
+        displayName?: string;
+        status?: string;
+        slotCapacity?: number;
+        slotAvailable?: number;
+        labels?: string[];
+      };
+    };
+    assert.ok(registerPayload.node?.nodeId);
+    assert.equal(registerPayload.node?.organizationId, createPayload.organization?.organizationId);
+    assert.equal(registerPayload.node?.displayName, "Node A");
+    assert.equal(registerPayload.node?.status, "online");
+    assert.equal(registerPayload.node?.slotCapacity, 4);
+    assert.equal(registerPayload.node?.slotAvailable, 3);
+    assert.deepEqual(registerPayload.node?.labels, ["linux", "build"]);
+
+    const listResponse = await postJson(baseUrl, "/api/platform/nodes/list", {
+      ownerPrincipalId,
+      organizationId: createPayload.organization?.organizationId,
+    }, authHeaders);
+
+    assert.equal(listResponse.status, 200);
+    const listPayload = await listResponse.json() as {
+      nodes?: Array<{
+        nodeId?: string;
+        status?: string;
+        slotAvailable?: number;
+      }>;
+    };
+    assert.equal(listPayload.nodes?.length, 1);
+    assert.equal(listPayload.nodes?.[0]?.nodeId, registerPayload.node?.nodeId);
+    assert.equal(listPayload.nodes?.[0]?.status, "online");
+    assert.equal(listPayload.nodes?.[0]?.slotAvailable, 3);
+
+    const heartbeatResponse = await postJson(baseUrl, "/api/platform/nodes/heartbeat", {
+      ownerPrincipalId,
+      node: {
+        nodeId: registerPayload.node?.nodeId,
+        status: "draining",
+        slotAvailable: 1,
+        labels: ["linux", "gpu"],
+        workspaceCapabilities: ["/workspace/platform", "/workspace/shared"],
+        credentialCapabilities: ["acct-default", "acct-backup"],
+        providerCapabilities: ["gateway-a", "gateway-b"],
+        heartbeatTtlSeconds: 90,
+      },
+    }, authHeaders);
+
+    assert.equal(heartbeatResponse.status, 200);
+    const heartbeatPayload = await heartbeatResponse.json() as {
+      node?: {
+        nodeId?: string;
+        status?: string;
+        slotAvailable?: number;
+        labels?: string[];
+        credentialCapabilities?: string[];
+        providerCapabilities?: string[];
+        heartbeatTtlSeconds?: number;
+      };
+    };
+    assert.equal(heartbeatPayload.node?.nodeId, registerPayload.node?.nodeId);
+    assert.equal(heartbeatPayload.node?.status, "draining");
+    assert.equal(heartbeatPayload.node?.slotAvailable, 1);
+    assert.deepEqual(heartbeatPayload.node?.labels, ["linux", "gpu"]);
+    assert.deepEqual(heartbeatPayload.node?.credentialCapabilities, ["acct-default", "acct-backup"]);
+    assert.deepEqual(heartbeatPayload.node?.providerCapabilities, ["gateway-a", "gateway-b"]);
+    assert.equal(heartbeatPayload.node?.heartbeatTtlSeconds, 90);
+  });
+});
+
 function listenServer(server: Server): Promise<Server> {
   return new Promise((resolve, reject) => {
     server.once("error", reject);

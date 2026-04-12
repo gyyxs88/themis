@@ -41,6 +41,7 @@ import {
 } from "../core/session-task-settings.js";
 import {
   AGENT_RUN_STATUSES,
+  AGENT_EXECUTION_LEASE_STATUSES,
   AGENT_AUDIT_LOG_EVENT_TYPES,
   AGENT_MAILBOX_STATUSES,
   AGENT_MESSAGE_TYPES,
@@ -54,6 +55,7 @@ import {
   MANAGED_AGENT_CREATION_MODES,
   MANAGED_AGENT_EXPOSURE_POLICIES,
   MANAGED_AGENT_INTERNAL_SOURCE_CHANNEL,
+  MANAGED_AGENT_NODE_STATUSES,
   MANAGED_AGENT_PRIORITIES,
   MANAGED_AGENT_STATUSES,
   MANAGED_AGENT_WORK_ITEM_SOURCE_TYPES,
@@ -73,6 +75,7 @@ import {
 } from "../types/index.js";
 import type {
   AgentRunStatus,
+  AgentExecutionLeaseStatus,
   AgentAuditLogEventType,
   AgentMailboxStatus,
   AgentMessageType,
@@ -86,6 +89,7 @@ import type {
   ManagedAgentAutonomyLevel,
   ManagedAgentCreationMode,
   ManagedAgentExposurePolicy,
+  ManagedAgentNodeStatus,
   ManagedAgentPriority,
   ManagedAgentRuntimeProfileSnapshot,
   ManagedAgentStatus,
@@ -109,6 +113,8 @@ import type {
   StoredAgentMailboxEntryRecord,
   StoredAgentHandoffRecord,
   StoredAgentAuditLogRecord,
+  StoredAgentExecutionLeaseRecord,
+  StoredManagedAgentNodeRecord,
   StoredAgentSpawnSuggestionStateRecord,
   StoredAgentSpawnPolicyRecord,
   StoredAgentMessageRecord,
@@ -134,7 +140,7 @@ import type {
   StoredScheduledTaskRunRecord,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 29;
+const DATABASE_SCHEMA_VERSION = 30;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -811,6 +817,37 @@ interface AgentRunRow {
   completed_at: string | null;
   failure_code: string | null;
   failure_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ManagedAgentNodeRow {
+  node_id: string;
+  organization_id: string;
+  display_name: string;
+  status: string;
+  slot_capacity: number;
+  slot_available: number;
+  labels_json: string | null;
+  workspace_capabilities_json: string | null;
+  credential_capabilities_json: string | null;
+  provider_capabilities_json: string | null;
+  heartbeat_ttl_seconds: number;
+  last_heartbeat_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface AgentExecutionLeaseRow {
+  lease_id: string;
+  run_id: string;
+  work_item_id: string;
+  target_agent_id: string;
+  node_id: string;
+  status: string;
+  lease_token: string;
+  lease_expires_at: string;
+  last_heartbeat_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -3385,6 +3422,383 @@ export class SqliteCodexSessionRegistry {
     if (writeResult.changes === 0) {
       throw new Error("Agent run write did not apply.");
     }
+  }
+
+  getManagedAgentNode(nodeId: string): StoredManagedAgentNodeRecord | null {
+    const normalizedNodeId = nodeId.trim();
+
+    if (!normalizedNodeId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            node_id,
+            organization_id,
+            display_name,
+            status,
+            slot_capacity,
+            slot_available,
+            labels_json,
+            workspace_capabilities_json,
+            credential_capabilities_json,
+            provider_capabilities_json,
+            heartbeat_ttl_seconds,
+            last_heartbeat_at,
+            created_at,
+            updated_at
+          FROM themis_agent_nodes
+          WHERE node_id = ?
+        `,
+      )
+      .get(normalizedNodeId) as ManagedAgentNodeRow | undefined;
+
+    return row ? mapManagedAgentNodeRow(row) : null;
+  }
+
+  listManagedAgentNodesByOrganization(organizationId: string): StoredManagedAgentNodeRecord[] {
+    const normalizedOrganizationId = organizationId.trim();
+
+    if (!normalizedOrganizationId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            node_id,
+            organization_id,
+            display_name,
+            status,
+            slot_capacity,
+            slot_available,
+            labels_json,
+            workspace_capabilities_json,
+            credential_capabilities_json,
+            provider_capabilities_json,
+            heartbeat_ttl_seconds,
+            last_heartbeat_at,
+            created_at,
+            updated_at
+          FROM themis_agent_nodes
+          WHERE organization_id = ?
+          ORDER BY updated_at DESC, node_id ASC
+        `,
+      )
+      .all(normalizedOrganizationId) as ManagedAgentNodeRow[];
+
+    return rows.map(mapManagedAgentNodeRow);
+  }
+
+  saveManagedAgentNode(record: StoredManagedAgentNodeRecord): void {
+    const nodeId = record.nodeId.trim();
+    const organizationId = record.organizationId.trim();
+    const displayName = record.displayName.trim();
+    const status = normalizeText(record.status);
+    const slotCapacity = Number.isFinite(record.slotCapacity) ? Math.max(1, Math.floor(record.slotCapacity)) : 0;
+    const slotAvailable = Number.isFinite(record.slotAvailable)
+      ? Math.max(0, Math.min(slotCapacity, Math.floor(record.slotAvailable)))
+      : -1;
+    const heartbeatTtlSeconds = Number.isFinite(record.heartbeatTtlSeconds)
+      ? Math.max(1, Math.floor(record.heartbeatTtlSeconds))
+      : 0;
+    const lastHeartbeatAt = record.lastHeartbeatAt.trim();
+    const labels = dedupeStrings(record.labels);
+    const workspaceCapabilities = dedupeStrings(record.workspaceCapabilities);
+    const credentialCapabilities = dedupeStrings(record.credentialCapabilities);
+    const providerCapabilities = dedupeStrings(record.providerCapabilities);
+
+    if (
+      !nodeId ||
+      !organizationId ||
+      !displayName ||
+      !status ||
+      !MANAGED_AGENT_NODE_STATUSES.includes(status as ManagedAgentNodeStatus) ||
+      slotCapacity <= 0 ||
+      slotAvailable < 0 ||
+      heartbeatTtlSeconds <= 0 ||
+      !lastHeartbeatAt
+    ) {
+      throw new Error("Managed agent node record is incomplete.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_agent_nodes (
+            node_id,
+            organization_id,
+            display_name,
+            status,
+            slot_capacity,
+            slot_available,
+            labels_json,
+            workspace_capabilities_json,
+            credential_capabilities_json,
+            provider_capabilities_json,
+            heartbeat_ttl_seconds,
+            last_heartbeat_at,
+            created_at,
+            updated_at
+          ) VALUES (
+            @node_id,
+            @organization_id,
+            @display_name,
+            @status,
+            @slot_capacity,
+            @slot_available,
+            @labels_json,
+            @workspace_capabilities_json,
+            @credential_capabilities_json,
+            @provider_capabilities_json,
+            @heartbeat_ttl_seconds,
+            @last_heartbeat_at,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(node_id) DO UPDATE SET
+            organization_id = excluded.organization_id,
+            display_name = excluded.display_name,
+            status = excluded.status,
+            slot_capacity = excluded.slot_capacity,
+            slot_available = excluded.slot_available,
+            labels_json = excluded.labels_json,
+            workspace_capabilities_json = excluded.workspace_capabilities_json,
+            credential_capabilities_json = excluded.credential_capabilities_json,
+            provider_capabilities_json = excluded.provider_capabilities_json,
+            heartbeat_ttl_seconds = excluded.heartbeat_ttl_seconds,
+            last_heartbeat_at = excluded.last_heartbeat_at,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        node_id: nodeId,
+        organization_id: organizationId,
+        display_name: displayName,
+        status,
+        slot_capacity: slotCapacity,
+        slot_available: slotAvailable,
+        labels_json: JSON.stringify(labels),
+        workspace_capabilities_json: JSON.stringify(workspaceCapabilities),
+        credential_capabilities_json: JSON.stringify(credentialCapabilities),
+        provider_capabilities_json: JSON.stringify(providerCapabilities),
+        heartbeat_ttl_seconds: heartbeatTtlSeconds,
+        last_heartbeat_at: lastHeartbeatAt,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+  }
+
+  getAgentExecutionLease(leaseId: string): StoredAgentExecutionLeaseRecord | null {
+    const normalizedLeaseId = leaseId.trim();
+
+    if (!normalizedLeaseId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            lease_id,
+            run_id,
+            work_item_id,
+            target_agent_id,
+            node_id,
+            status,
+            lease_token,
+            lease_expires_at,
+            last_heartbeat_at,
+            created_at,
+            updated_at
+          FROM themis_agent_execution_leases
+          WHERE lease_id = ?
+        `,
+      )
+      .get(normalizedLeaseId) as AgentExecutionLeaseRow | undefined;
+
+    return row ? mapAgentExecutionLeaseRow(row) : null;
+  }
+
+  getActiveAgentExecutionLeaseByRun(runId: string): StoredAgentExecutionLeaseRecord | null {
+    const normalizedRunId = runId.trim();
+
+    if (!normalizedRunId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            lease_id,
+            run_id,
+            work_item_id,
+            target_agent_id,
+            node_id,
+            status,
+            lease_token,
+            lease_expires_at,
+            last_heartbeat_at,
+            created_at,
+            updated_at
+          FROM themis_agent_execution_leases
+          WHERE run_id = ?
+            AND status = 'active'
+          ORDER BY updated_at DESC, lease_id ASC
+          LIMIT 1
+        `,
+      )
+      .get(normalizedRunId) as AgentExecutionLeaseRow | undefined;
+
+    return row ? mapAgentExecutionLeaseRow(row) : null;
+  }
+
+  listAgentExecutionLeasesByRun(runId: string): StoredAgentExecutionLeaseRecord[] {
+    const normalizedRunId = runId.trim();
+
+    if (!normalizedRunId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            lease_id,
+            run_id,
+            work_item_id,
+            target_agent_id,
+            node_id,
+            status,
+            lease_token,
+            lease_expires_at,
+            last_heartbeat_at,
+            created_at,
+            updated_at
+          FROM themis_agent_execution_leases
+          WHERE run_id = ?
+          ORDER BY created_at DESC, lease_id ASC
+        `,
+      )
+      .all(normalizedRunId) as AgentExecutionLeaseRow[];
+
+    return rows.map(mapAgentExecutionLeaseRow);
+  }
+
+  listAgentExecutionLeasesByNode(nodeId: string): StoredAgentExecutionLeaseRecord[] {
+    const normalizedNodeId = nodeId.trim();
+
+    if (!normalizedNodeId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            lease_id,
+            run_id,
+            work_item_id,
+            target_agent_id,
+            node_id,
+            status,
+            lease_token,
+            lease_expires_at,
+            last_heartbeat_at,
+            created_at,
+            updated_at
+          FROM themis_agent_execution_leases
+          WHERE node_id = ?
+          ORDER BY created_at DESC, lease_id ASC
+        `,
+      )
+      .all(normalizedNodeId) as AgentExecutionLeaseRow[];
+
+    return rows.map(mapAgentExecutionLeaseRow);
+  }
+
+  saveAgentExecutionLease(record: StoredAgentExecutionLeaseRecord): void {
+    const leaseId = record.leaseId.trim();
+    const runId = record.runId.trim();
+    const workItemId = record.workItemId.trim();
+    const targetAgentId = record.targetAgentId.trim();
+    const nodeId = record.nodeId.trim();
+    const status = normalizeText(record.status);
+    const leaseToken = record.leaseToken.trim();
+    const leaseExpiresAt = record.leaseExpiresAt.trim();
+    const lastHeartbeatAt = normalizeText(record.lastHeartbeatAt);
+
+    if (
+      !leaseId ||
+      !runId ||
+      !workItemId ||
+      !targetAgentId ||
+      !nodeId ||
+      !status ||
+      !AGENT_EXECUTION_LEASE_STATUSES.includes(status as AgentExecutionLeaseStatus) ||
+      !leaseToken ||
+      !leaseExpiresAt
+    ) {
+      throw new Error("Agent execution lease record is incomplete.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_agent_execution_leases (
+            lease_id,
+            run_id,
+            work_item_id,
+            target_agent_id,
+            node_id,
+            status,
+            lease_token,
+            lease_expires_at,
+            last_heartbeat_at,
+            created_at,
+            updated_at
+          ) VALUES (
+            @lease_id,
+            @run_id,
+            @work_item_id,
+            @target_agent_id,
+            @node_id,
+            @status,
+            @lease_token,
+            @lease_expires_at,
+            @last_heartbeat_at,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(lease_id) DO UPDATE SET
+            run_id = excluded.run_id,
+            work_item_id = excluded.work_item_id,
+            target_agent_id = excluded.target_agent_id,
+            node_id = excluded.node_id,
+            status = excluded.status,
+            lease_token = excluded.lease_token,
+            lease_expires_at = excluded.lease_expires_at,
+            last_heartbeat_at = excluded.last_heartbeat_at,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        lease_id: leaseId,
+        run_id: runId,
+        work_item_id: workItemId,
+        target_agent_id: targetAgentId,
+        node_id: nodeId,
+        status,
+        lease_token: leaseToken,
+        lease_expires_at: leaseExpiresAt,
+        last_heartbeat_at: lastHeartbeatAt ?? null,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
   }
 
   listAgentAuditLogsByOrganization(organizationId: string, limit = 20): StoredAgentAuditLogRecord[] {
@@ -9634,6 +10048,58 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_agent_runs_lease_idx
       ON themis_agent_runs(status, lease_expires_at ASC, run_id ASC);
 
+      CREATE TABLE IF NOT EXISTS themis_agent_nodes (
+        node_id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        slot_capacity INTEGER NOT NULL,
+        slot_available INTEGER NOT NULL,
+        labels_json TEXT NOT NULL DEFAULT '[]',
+        workspace_capabilities_json TEXT NOT NULL DEFAULT '[]',
+        credential_capabilities_json TEXT NOT NULL DEFAULT '[]',
+        provider_capabilities_json TEXT NOT NULL DEFAULT '[]',
+        heartbeat_ttl_seconds INTEGER NOT NULL,
+        last_heartbeat_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (organization_id) REFERENCES themis_organizations(organization_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_agent_nodes_organization_idx
+      ON themis_agent_nodes(organization_id, status, updated_at DESC, node_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_agent_nodes_heartbeat_idx
+      ON themis_agent_nodes(status, last_heartbeat_at DESC, node_id ASC);
+
+      CREATE TABLE IF NOT EXISTS themis_agent_execution_leases (
+        lease_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        work_item_id TEXT NOT NULL,
+        target_agent_id TEXT NOT NULL,
+        node_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        lease_token TEXT NOT NULL,
+        lease_expires_at TEXT NOT NULL,
+        last_heartbeat_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES themis_agent_runs(run_id) ON DELETE CASCADE,
+        FOREIGN KEY (work_item_id) REFERENCES themis_agent_work_items(work_item_id) ON DELETE CASCADE,
+        FOREIGN KEY (target_agent_id) REFERENCES themis_managed_agents(agent_id) ON DELETE CASCADE,
+        FOREIGN KEY (node_id) REFERENCES themis_agent_nodes(node_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_agent_execution_leases_run_idx
+      ON themis_agent_execution_leases(run_id, status, updated_at DESC, lease_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_agent_execution_leases_node_idx
+      ON themis_agent_execution_leases(node_id, status, updated_at DESC, lease_id ASC);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS themis_agent_execution_leases_active_run_idx
+      ON themis_agent_execution_leases(run_id)
+      WHERE status = 'active';
+
       CREATE TABLE IF NOT EXISTS themis_agent_messages (
         message_id TEXT PRIMARY KEY,
         organization_id TEXT NOT NULL,
@@ -10802,6 +11268,47 @@ function mapAgentRunRow(row: AgentRunRow): StoredAgentRunRecord {
     ...(row.completed_at ? { completedAt: row.completed_at } : {}),
     ...(row.failure_code ? { failureCode: row.failure_code } : {}),
     ...(row.failure_message ? { failureMessage: row.failure_message } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapManagedAgentNodeRow(row: ManagedAgentNodeRow): StoredManagedAgentNodeRecord {
+  return {
+    nodeId: row.node_id,
+    organizationId: row.organization_id,
+    displayName: row.display_name,
+    status: row.status as ManagedAgentNodeStatus,
+    slotCapacity: row.slot_capacity,
+    slotAvailable: row.slot_available,
+    labels: normalizeStringArray(row.labels_json ? safeParseJson(row.labels_json) : []),
+    workspaceCapabilities: normalizeStringArray(
+      row.workspace_capabilities_json ? safeParseJson(row.workspace_capabilities_json) : [],
+    ),
+    credentialCapabilities: normalizeStringArray(
+      row.credential_capabilities_json ? safeParseJson(row.credential_capabilities_json) : [],
+    ),
+    providerCapabilities: normalizeStringArray(
+      row.provider_capabilities_json ? safeParseJson(row.provider_capabilities_json) : [],
+    ),
+    heartbeatTtlSeconds: row.heartbeat_ttl_seconds,
+    lastHeartbeatAt: row.last_heartbeat_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapAgentExecutionLeaseRow(row: AgentExecutionLeaseRow): StoredAgentExecutionLeaseRecord {
+  return {
+    leaseId: row.lease_id,
+    runId: row.run_id,
+    workItemId: row.work_item_id,
+    targetAgentId: row.target_agent_id,
+    nodeId: row.node_id,
+    status: row.status as AgentExecutionLeaseStatus,
+    leaseToken: row.lease_token,
+    leaseExpiresAt: row.lease_expires_at,
+    ...(row.last_heartbeat_at ? { lastHeartbeatAt: row.last_heartbeat_at } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

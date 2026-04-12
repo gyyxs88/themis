@@ -18,11 +18,18 @@ import {
   type ManagedAgentRunDetailView,
   type ManagedAgentRunListInput,
 } from "./managed-agent-scheduler-service.js";
+import {
+  ManagedAgentNodeService,
+  type HeartbeatManagedAgentNodeInput,
+  type ManagedAgentNodeMutationResult,
+  type RegisterManagedAgentNodeInput,
+} from "./managed-agent-node-service.js";
 
 export interface ManagedAgentControlPlaneFacadeOptions {
   managedAgentsService: ManagedAgentsService;
   coordinationService: ManagedAgentCoordinationService;
   schedulerService: ManagedAgentSchedulerService;
+  nodeService: ManagedAgentNodeService;
 }
 
 export interface ManagedAgentLifecycleUpdateInput {
@@ -41,11 +48,13 @@ export class ManagedAgentControlPlaneFacade {
   private readonly managedAgentsService: ManagedAgentsService;
   private readonly coordinationService: ManagedAgentCoordinationService;
   private readonly schedulerService: ManagedAgentSchedulerService;
+  private readonly nodeService: ManagedAgentNodeService;
 
   constructor(options: ManagedAgentControlPlaneFacadeOptions) {
     this.managedAgentsService = options.managedAgentsService;
     this.coordinationService = options.coordinationService;
     this.schedulerService = options.schedulerService;
+    this.nodeService = options.nodeService;
   }
 
   createManagedAgent(input: CreateManagedAgentInput): CreateManagedAgentResult {
@@ -97,5 +106,17 @@ export class ManagedAgentControlPlaneFacade {
 
   getRunDetailView(ownerPrincipalId: string, runId: string): ManagedAgentRunDetailView | null {
     return this.schedulerService.getRunDetailView(ownerPrincipalId, runId);
+  }
+
+  registerNode(input: RegisterManagedAgentNodeInput): ManagedAgentNodeMutationResult {
+    return this.nodeService.registerNode(input);
+  }
+
+  heartbeatNode(input: HeartbeatManagedAgentNodeInput): ManagedAgentNodeMutationResult {
+    return this.nodeService.heartbeatNode(input);
+  }
+
+  listNodes(ownerPrincipalId: string, organizationId?: string) {
+    return this.nodeService.listNodes(ownerPrincipalId, organizationId);
   }
 }

@@ -140,6 +140,14 @@ export const AGENT_RUN_STATUSES = [
 
 export type AgentRunStatus = (typeof AGENT_RUN_STATUSES)[number];
 
+export const MANAGED_AGENT_NODE_STATUSES = ["online", "draining", "offline"] as const;
+
+export type ManagedAgentNodeStatus = (typeof MANAGED_AGENT_NODE_STATUSES)[number];
+
+export const AGENT_EXECUTION_LEASE_STATUSES = ["active", "expired", "released", "revoked"] as const;
+
+export type AgentExecutionLeaseStatus = (typeof AGENT_EXECUTION_LEASE_STATUSES)[number];
+
 export const AGENT_SPAWN_SUGGESTION_STATES = [
   "ignored",
   "rejected",
@@ -322,6 +330,37 @@ export interface StoredAgentRunRecord {
   completedAt?: string;
   failureCode?: string;
   failureMessage?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoredManagedAgentNodeRecord {
+  nodeId: string;
+  organizationId: string;
+  displayName: string;
+  status: ManagedAgentNodeStatus;
+  slotCapacity: number;
+  slotAvailable: number;
+  labels: string[];
+  workspaceCapabilities: string[];
+  credentialCapabilities: string[];
+  providerCapabilities: string[];
+  heartbeatTtlSeconds: number;
+  lastHeartbeatAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoredAgentExecutionLeaseRecord {
+  leaseId: string;
+  runId: string;
+  workItemId: string;
+  targetAgentId: string;
+  nodeId: string;
+  status: AgentExecutionLeaseStatus;
+  leaseToken: string;
+  leaseExpiresAt: string;
+  lastHeartbeatAt?: string;
   createdAt: string;
   updatedAt: string;
 }

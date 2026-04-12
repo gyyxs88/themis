@@ -1,7 +1,9 @@
 import type {
   ManagedAgentsStore,
   ManagedAgentCoordinationStore,
+  ManagedAgentExecutionLeaseStore,
   ManagedAgentExecutionStateStore,
+  ManagedAgentNodeStore,
   ManagedAgentSchedulerStore,
 } from "./managed-agent-control-plane-store.js";
 import type { SqliteCodexSessionRegistry } from "./codex-session-registry.js";
@@ -22,6 +24,14 @@ export class SqliteManagedAgentControlPlaneStore {
   }
 
   get schedulerStore(): ManagedAgentSchedulerStore {
+    return this.registry;
+  }
+
+  get nodeStore(): ManagedAgentNodeStore {
+    return this.registry;
+  }
+
+  get executionLeaseStore(): ManagedAgentExecutionLeaseStore {
     return this.registry;
   }
 
