@@ -97,6 +97,23 @@ interface PlatformNodeDetailPayload extends PlatformAgentListPayload {
   nodeId: string;
 }
 
+interface PlatformWorkerPullPayload extends PlatformAgentListPayload {
+  nodeId: string;
+}
+
+interface PlatformWorkerRunStatusPayload extends PlatformWorkerPullPayload {
+  runId: string;
+  leaseToken: string;
+  status: "starting" | "running" | "heartbeat" | "waiting_human" | "waiting_agent" | "failed" | "cancelled";
+  failureCode?: string;
+  failureMessage?: string;
+}
+
+interface PlatformWorkerRunCompletePayload extends PlatformWorkerPullPayload {
+  runId: string;
+  leaseToken: string;
+}
+
 async function readAndNormalizePayload<T>(
   request: IncomingMessage,
   response: ServerResponse,
@@ -471,6 +488,93 @@ export async function handlePlatformNodeOffline(
   await handlePlatformNodeGovernanceAction(request, response, facade, "offline");
 }
 
+export async function handlePlatformWorkerRunPull(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformWorkerPullPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const assigned = facade.pullAssignedRun(payload);
+    writeJson(response, 200, {
+      ok: true,
+      ...(assigned ? {
+        organization: assigned.organization,
+        node: assigned.node,
+        targetAgent: assigned.targetAgent,
+        workItem: assigned.workItem,
+        run: assigned.run,
+        executionLease: assigned.executionLease,
+      } : {
+        organization: null,
+        node: null,
+        targetAgent: null,
+        workItem: null,
+        run: null,
+        executionLease: null,
+      }),
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformWorkerRunUpdate(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformWorkerRunStatusPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.updateWorkerRunStatus(payload);
+    writeJson(response, 200, {
+      ok: true,
+      organization: result.organization,
+      node: result.node,
+      targetAgent: result.targetAgent,
+      workItem: result.workItem,
+      run: result.run,
+      executionLease: result.executionLease,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformWorkerRunComplete(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformWorkerRunCompletePayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.completeWorkerRun(payload);
+    writeJson(response, 200, {
+      ok: true,
+      organization: result.organization,
+      node: result.node,
+      targetAgent: result.targetAgent,
+      workItem: result.workItem,
+      run: result.run,
+      executionLease: result.executionLease,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
 function normalizePlatformAgentCreatePayload(value: unknown): PlatformAgentCreatePayload {
   if (!isRecord(value) || !isRecord(value.agent)) {
     throw new Error("Request body.agent must be an object.");
@@ -678,6 +782,57 @@ function normalizePlatformNodeDetailPayload(value: unknown): PlatformNodeDetailP
   return {
     ...normalizePlatformOwnerPayload(value),
     nodeId: readRequiredString(value.nodeId, "nodeId"),
+  };
+}
+
+function normalizePlatformWorkerPullPayload(value: unknown): PlatformWorkerPullPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    nodeId: readRequiredString(value.nodeId, "nodeId"),
+  };
+}
+
+function normalizePlatformWorkerRunStatusPayload(value: unknown): PlatformWorkerRunStatusPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  const status = readOptionalEnum(
+    value.status,
+    ["starting", "running", "heartbeat", "waiting_human", "waiting_agent", "failed", "cancelled"] as const,
+    "status",
+  );
+
+  if (!status) {
+    throw new Error("status is required.");
+  }
+
+  const failureCode = readOptionalString(value.failureCode);
+  const failureMessage = readOptionalString(value.failureMessage);
+
+  return {
+    ...normalizePlatformWorkerPullPayload(value),
+    runId: readRequiredString(value.runId, "runId"),
+    leaseToken: readRequiredString(value.leaseToken, "leaseToken"),
+    status,
+    ...(failureCode ? { failureCode } : {}),
+    ...(failureMessage ? { failureMessage } : {}),
+  };
+}
+
+function normalizePlatformWorkerRunCompletePayload(value: unknown): PlatformWorkerRunCompletePayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return {
+    ...normalizePlatformWorkerPullPayload(value),
+    runId: readRequiredString(value.runId, "runId"),
+    leaseToken: readRequiredString(value.leaseToken, "leaseToken"),
   };
 }
 

@@ -116,6 +116,9 @@ import {
   handlePlatformNodeList,
   handlePlatformNodeOffline,
   handlePlatformNodeRegister,
+  handlePlatformWorkerRunComplete,
+  handlePlatformWorkerRunPull,
+  handlePlatformWorkerRunUpdate,
   handlePlatformRunDetail,
   handlePlatformRunList,
   handlePlatformWorkItemDetail,
@@ -494,6 +497,18 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/platform/nodes/offline") {
         return handlePlatformNodeOffline(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/worker/runs/pull") {
+        return handlePlatformWorkerRunPull(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/worker/runs/update") {
+        return handlePlatformWorkerRunUpdate(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/worker/runs/complete") {
+        return handlePlatformWorkerRunComplete(request, response, platformControlPlaneFacade);
       }
 
       if (request.method === "POST" && url.pathname === "/api/actors/list") {

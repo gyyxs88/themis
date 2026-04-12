@@ -26,12 +26,21 @@ import {
   type ManagedAgentNodeMutationResult,
   type RegisterManagedAgentNodeInput,
 } from "./managed-agent-node-service.js";
+import {
+  ManagedAgentWorkerService,
+  type CompleteManagedAgentWorkerRunInput,
+  type ManagedAgentWorkerAssignedRun,
+  type ManagedAgentWorkerRunMutationResult,
+  type PullManagedAgentAssignedRunInput,
+  type UpdateManagedAgentWorkerRunStatusInput,
+} from "./managed-agent-worker-service.js";
 
 export interface ManagedAgentControlPlaneFacadeOptions {
   managedAgentsService: ManagedAgentsService;
   coordinationService: ManagedAgentCoordinationService;
   schedulerService: ManagedAgentSchedulerService;
   nodeService: ManagedAgentNodeService;
+  workerService: ManagedAgentWorkerService;
 }
 
 export interface ManagedAgentLifecycleUpdateInput {
@@ -51,12 +60,14 @@ export class ManagedAgentControlPlaneFacade {
   private readonly coordinationService: ManagedAgentCoordinationService;
   private readonly schedulerService: ManagedAgentSchedulerService;
   private readonly nodeService: ManagedAgentNodeService;
+  private readonly workerService: ManagedAgentWorkerService;
 
   constructor(options: ManagedAgentControlPlaneFacadeOptions) {
     this.managedAgentsService = options.managedAgentsService;
     this.coordinationService = options.coordinationService;
     this.schedulerService = options.schedulerService;
     this.nodeService = options.nodeService;
+    this.workerService = options.workerService;
   }
 
   createManagedAgent(input: CreateManagedAgentInput): CreateManagedAgentResult {
@@ -132,5 +143,17 @@ export class ManagedAgentControlPlaneFacade {
 
   markNodeOffline(input: ManagedAgentNodeGovernanceInput): ManagedAgentNodeMutationResult {
     return this.nodeService.markNodeOffline(input);
+  }
+
+  pullAssignedRun(input: PullManagedAgentAssignedRunInput): ManagedAgentWorkerAssignedRun | null {
+    return this.workerService.pullAssignedRun(input);
+  }
+
+  updateWorkerRunStatus(input: UpdateManagedAgentWorkerRunStatusInput): ManagedAgentWorkerRunMutationResult {
+    return this.workerService.updateRunStatus(input);
+  }
+
+  completeWorkerRun(input: CompleteManagedAgentWorkerRunInput): ManagedAgentWorkerRunMutationResult {
+    return this.workerService.completeRun(input);
   }
 }

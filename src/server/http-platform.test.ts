@@ -486,6 +486,143 @@ test("POST /api/platform/nodes/detail|drain|offline 会暴露节点治理动作�
   });
 });
 
+test("POST /api/platform/worker/runs/* 会暴露节点拉任务与状态回传最小闭环", async () => {
+  await withHttpServer(async ({ baseUrl, runtime, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+    const ownerPrincipalId = "principal-platform-worker-owner";
+    const now = new Date().toISOString();
+
+    runtimeStore.savePrincipal({
+      principalId: ownerPrincipalId,
+      displayName: "Platform Worker Owner",
+      kind: "human_user",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const createResponse = await postJson(baseUrl, "/api/platform/agents/create", {
+      ownerPrincipalId,
+      agent: {
+        departmentRole: "平台工程",
+        displayName: "平台远端执行经理",
+        mission: "负责 Worker Node 最小协议验证。",
+      },
+    }, authHeaders);
+
+    assert.equal(createResponse.status, 200);
+    const createPayload = await createResponse.json() as {
+      organization?: { organizationId?: string };
+      agent?: { agentId?: string };
+    };
+    assert.ok(createPayload.organization?.organizationId);
+    assert.ok(createPayload.agent?.agentId);
+
+    const executionBoundary = runtime.getManagedAgentsService().getManagedAgentExecutionBoundary(
+      ownerPrincipalId,
+      createPayload.agent?.agentId ?? "",
+    );
+    assert.ok(executionBoundary);
+
+    const registerResponse = await postJson(baseUrl, "/api/platform/nodes/register", {
+      ownerPrincipalId,
+      node: {
+        organizationId: createPayload.organization?.organizationId,
+        displayName: "Worker Node A",
+        slotCapacity: 2,
+        slotAvailable: 1,
+        heartbeatTtlSeconds: 86400,
+        workspaceCapabilities: [
+          executionBoundary?.workspacePolicy.workspacePath ?? runtime.getWorkingDirectory(),
+          ...(executionBoundary?.workspacePolicy.additionalDirectories ?? []),
+        ],
+        credentialCapabilities: executionBoundary?.runtimeProfile.authAccountId
+          ? [executionBoundary.runtimeProfile.authAccountId]
+          : [],
+        providerCapabilities: executionBoundary?.runtimeProfile.thirdPartyProviderId
+          ? [executionBoundary.runtimeProfile.thirdPartyProviderId]
+          : [],
+      },
+    }, authHeaders);
+
+    assert.equal(registerResponse.status, 200);
+    const registerPayload = await registerResponse.json() as {
+      node?: { nodeId?: string };
+    };
+    assert.ok(registerPayload.node?.nodeId);
+
+    const dispatchResponse = await postJson(baseUrl, "/api/platform/work-items/dispatch", {
+      ownerPrincipalId,
+      workItem: {
+        targetAgentId: createPayload.agent?.agentId,
+        dispatchReason: "platform-worker-smoke",
+        goal: "验证 Worker 拉任务与状态回传。",
+      },
+    }, authHeaders);
+    assert.equal(dispatchResponse.status, 200);
+
+    const claim = runtime.getManagedAgentSchedulerService().claimNextRunnableWorkItem({
+      schedulerId: "scheduler-platform-worker-http-test",
+      now: "2026-04-12T12:10:00.000Z",
+    });
+    assert.ok(claim?.executionLease?.leaseId);
+
+    const pullResponse = await postJson(baseUrl, "/api/platform/worker/runs/pull", {
+      ownerPrincipalId,
+      nodeId: registerPayload.node?.nodeId,
+    }, authHeaders);
+    assert.equal(pullResponse.status, 200);
+    const pullPayload = await pullResponse.json() as {
+      run?: { runId?: string; leaseToken?: string; status?: string };
+      executionLease?: { leaseId?: string; nodeId?: string };
+      node?: { nodeId?: string };
+    };
+    assert.equal(pullPayload.run?.runId, claim?.run.runId);
+    assert.equal(pullPayload.run?.status, "created");
+    assert.equal(pullPayload.executionLease?.leaseId, claim?.executionLease?.leaseId);
+    assert.equal(pullPayload.node?.nodeId, registerPayload.node?.nodeId);
+
+    const startingResponse = await postJson(baseUrl, "/api/platform/worker/runs/update", {
+      ownerPrincipalId,
+      nodeId: registerPayload.node?.nodeId,
+      runId: pullPayload.run?.runId,
+      leaseToken: claim?.run.leaseToken,
+      status: "starting",
+    }, authHeaders);
+    assert.equal(startingResponse.status, 200);
+
+    const runningResponse = await postJson(baseUrl, "/api/platform/worker/runs/update", {
+      ownerPrincipalId,
+      nodeId: registerPayload.node?.nodeId,
+      runId: pullPayload.run?.runId,
+      leaseToken: claim?.run.leaseToken,
+      status: "running",
+    }, authHeaders);
+    assert.equal(runningResponse.status, 200);
+    const runningPayload = await runningResponse.json() as {
+      run?: { status?: string };
+      workItem?: { status?: string };
+    };
+    assert.equal(runningPayload.run?.status, "running");
+    assert.equal(runningPayload.workItem?.status, "running");
+
+    const completeResponse = await postJson(baseUrl, "/api/platform/worker/runs/complete", {
+      ownerPrincipalId,
+      nodeId: registerPayload.node?.nodeId,
+      runId: pullPayload.run?.runId,
+      leaseToken: claim?.run.leaseToken,
+    }, authHeaders);
+    assert.equal(completeResponse.status, 200);
+    const completePayload = await completeResponse.json() as {
+      run?: { status?: string };
+      workItem?: { status?: string };
+      executionLease?: { status?: string };
+    };
+    assert.equal(completePayload.run?.status, "completed");
+    assert.equal(completePayload.workItem?.status, "completed");
+    assert.equal(completePayload.executionLease?.status, "released");
+  });
+});
+
 function listenServer(server: Server): Promise<Server> {
   return new Promise((resolve, reject) => {
     server.once("error", reject);

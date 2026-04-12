@@ -922,6 +922,75 @@ test("ManagedAgentExecutionService 会在顶层治理回复后复用同一个 wo
   }
 });
 
+test("ManagedAgentExecutionService 遇到已绑定节点的 claim 时不会在平台主进程本机直接执行", async () => {
+  const { state, sessionFactory } = createSessionFactory();
+  const {
+    root,
+    registry,
+    managedAgentsService,
+    coordinationService,
+    executionService,
+  } = createServiceContext({ sessionFactory });
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "老板",
+      createdAt: "2026-04-12T12:00:00.000Z",
+      updatedAt: "2026-04-12T12:00:00.000Z",
+    });
+
+    const backend = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "后端·远",
+      departmentRole: "后端",
+      mission: "负责远端节点执行验证。",
+      now: "2026-04-12T12:01:00.000Z",
+    });
+
+    registry.saveManagedAgentNode({
+      nodeId: "node-platform-worker-a",
+      organizationId: backend.organization.organizationId,
+      displayName: "Platform Worker A",
+      status: "online",
+      slotCapacity: 2,
+      slotAvailable: 1,
+      labels: ["linux"],
+      workspaceCapabilities: [root],
+      credentialCapabilities: [],
+      providerCapabilities: [],
+      heartbeatTtlSeconds: 300,
+      lastHeartbeatAt: "2026-04-12T12:01:30.000Z",
+      createdAt: "2026-04-12T12:01:30.000Z",
+      updatedAt: "2026-04-12T12:01:30.000Z",
+    });
+
+    coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: backend.agent.agentId,
+      dispatchReason: "remote-worker-first-slice",
+      goal: "验证平台主进程不会抢跑带节点租约的 run。",
+      now: "2026-04-12T12:02:00.000Z",
+    });
+
+    const tick = await executionService.runNext({
+      schedulerId: "scheduler-exec",
+      now: "2026-04-12T12:03:00.000Z",
+    });
+
+    assert.ok(tick.claimed?.executionLease?.leaseId);
+    assert.equal(tick.claimed?.node?.nodeId, "node-platform-worker-a");
+    assert.equal(tick.execution, null);
+    assert.equal(state.started.length, 0);
+
+    const run = registry.getAgentRun(tick.claimed?.run.runId ?? "");
+    assert.equal(run?.status, "created");
+    assert.equal(registry.getActiveAgentExecutionLeaseByRun(tick.claimed?.run.runId ?? "")?.nodeId, "node-platform-worker-a");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("ManagedAgentExecutionService 可以中断真正 running 的 run，并把 work item 正式取消收口", async () => {
   const { state, sessionFactory } = createSessionFactory({
     startThreadId: "thread-agent-cancel-running-1",

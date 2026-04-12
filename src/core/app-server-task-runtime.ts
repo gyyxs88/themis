@@ -47,6 +47,7 @@ import { ManagedAgentControlPlaneFacade } from "./managed-agent-control-plane-fa
 import { ManagedAgentNodeService } from "./managed-agent-node-service.js";
 import { ManagedAgentsService } from "./managed-agents-service.js";
 import { ManagedAgentSchedulerService } from "./managed-agent-scheduler-service.js";
+import { ManagedAgentWorkerService } from "./managed-agent-worker-service.js";
 import {
   buildStoredTurnInputCompileSummary,
   createTaskEvent,
@@ -209,6 +210,7 @@ export class AppServerTaskRuntime {
   private readonly managedAgentNodeService: ManagedAgentNodeService;
   private readonly managedAgentsService: ManagedAgentsService;
   private readonly managedAgentSchedulerService: ManagedAgentSchedulerService;
+  private readonly managedAgentWorkerService: ManagedAgentWorkerService;
   private readonly principalActorsService: PrincipalActorsService;
   private readonly principalMcpService: PrincipalMcpService;
   private readonly principalSkillsService: PrincipalSkillsService;
@@ -241,11 +243,17 @@ export class AppServerTaskRuntime {
     this.managedAgentNodeService = new ManagedAgentNodeService({
       registry: this.managedAgentControlPlaneStore.nodeStore,
     });
+    this.managedAgentWorkerService = new ManagedAgentWorkerService({
+      registry: this.managedAgentControlPlaneStore.workerStore,
+      nodeService: this.managedAgentNodeService,
+      schedulerService: this.managedAgentSchedulerService,
+    });
     this.managedAgentControlPlaneFacade = new ManagedAgentControlPlaneFacade({
       managedAgentsService: this.managedAgentsService,
       coordinationService: this.managedAgentCoordinationService,
       schedulerService: this.managedAgentSchedulerService,
       nodeService: this.managedAgentNodeService,
+      workerService: this.managedAgentWorkerService,
     });
     this.principalActorsService = new PrincipalActorsService({
       registry: this.runtimeStore,

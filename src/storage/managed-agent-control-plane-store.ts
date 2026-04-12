@@ -121,3 +121,21 @@ export type ManagedAgentExecutionStateStore = Pick<SqliteCodexSessionRegistry,
   | "saveManagedAgent"
   | "saveSessionTaskSettings"
 >;
+
+export type ManagedAgentWorkerStore = Pick<SqliteCodexSessionRegistry,
+  | "getActiveAgentExecutionLeaseByRun"
+  | "getAgentRun"
+  | "getAgentWorkItem"
+  | "getManagedAgent"
+  | "getManagedAgentNode"
+  | "getOrganization"
+  | "getPrincipal"
+  | "listAgentExecutionLeasesByNode"
+  | "listAgentExecutionLeasesByRun"
+  | "listManagedAgentNodesByOrganization"
+  | "listOrganizationsByOwnerPrincipal"
+  | "saveManagedAgentNode"
+  | "saveAgentExecutionLease"
+  | "saveAgentRun"
+  | "saveAgentWorkItem"
+>;

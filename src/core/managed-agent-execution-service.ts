@@ -113,6 +113,15 @@ export class ManagedAgentExecutionService {
       };
     }
 
+    // Once a claim is explicitly bound to a node lease, the platform process should
+    // leave execution to the worker node that owns that lease instead of running locally.
+    if (tick.claimed.node && tick.claimed.executionLease) {
+      return {
+        ...tick,
+        execution: null,
+      };
+    }
+
     const execution = await this.executeClaim(tick.claimed, {
       now: normalizeOptionalText(input.now) ?? new Date().toISOString(),
     });
