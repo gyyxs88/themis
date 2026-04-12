@@ -452,7 +452,9 @@ export class ManagedAgentSchedulerService {
   private saveNodeSlotAvailability(node: StoredManagedAgentNodeRecord, slotAvailable: number, now: string): void {
     this.registry.saveManagedAgentNode({
       ...node,
-      slotAvailable: Math.max(0, Math.min(node.slotCapacity, Math.floor(slotAvailable))),
+      slotAvailable: node.status === "offline"
+        ? 0
+        : Math.max(0, Math.min(node.slotCapacity, Math.floor(slotAvailable))),
       updatedAt: now,
     });
   }

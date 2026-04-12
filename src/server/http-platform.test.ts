@@ -359,7 +359,7 @@ test("POST /api/platform/nodes/* 会暴露节点注册、续心跳与列表能�
   });
 });
 
-test("POST /api/platform/nodes/detail|drain|offline 会暴露节点治理动作与详情视图", async () => {
+test("POST /api/platform/nodes/detail|drain|offline|reclaim 会暴露节点治理动作、详情视图与 lease 回收", async () => {
   await withHttpServer(async ({ baseUrl, runtime, runtimeStore }) => {
     const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
     const ownerPrincipalId = "principal-platform-node-governance-owner";
@@ -483,6 +483,49 @@ test("POST /api/platform/nodes/detail|drain|offline 会暴露节点治理动作�
     };
     assert.equal(offlinePayload.node?.status, "offline");
     assert.equal(offlinePayload.node?.slotAvailable, 0);
+
+    const reclaimResponse = await postJson(baseUrl, "/api/platform/nodes/reclaim", {
+      ownerPrincipalId,
+      nodeId: registerPayload.node?.nodeId,
+    }, authHeaders);
+    assert.equal(reclaimResponse.status, 200);
+    const reclaimPayload = await reclaimResponse.json() as {
+      node?: { status?: string; slotAvailable?: number };
+      summary?: {
+        activeLeaseCount?: number;
+        reclaimedRunCount?: number;
+        requeuedWorkItemCount?: number;
+      };
+      reclaimedLeases?: Array<{
+        lease?: { status?: string };
+        run?: { status?: string; failureCode?: string };
+        workItem?: { status?: string };
+        recoveryAction?: string;
+      }>;
+    };
+    assert.equal(reclaimPayload.node?.status, "offline");
+    assert.equal(reclaimPayload.node?.slotAvailable, 0);
+    assert.equal(reclaimPayload.summary?.activeLeaseCount, 1);
+    assert.equal(reclaimPayload.summary?.reclaimedRunCount, 1);
+    assert.equal(reclaimPayload.summary?.requeuedWorkItemCount, 1);
+    assert.equal(reclaimPayload.reclaimedLeases?.[0]?.lease?.status, "revoked");
+    assert.equal(reclaimPayload.reclaimedLeases?.[0]?.run?.status, "interrupted");
+    assert.equal(reclaimPayload.reclaimedLeases?.[0]?.run?.failureCode, "NODE_LEASE_RECLAIMED");
+    assert.equal(reclaimPayload.reclaimedLeases?.[0]?.workItem?.status, "queued");
+    assert.equal(reclaimPayload.reclaimedLeases?.[0]?.recoveryAction, "requeued");
+
+    const detailAfterReclaimResponse = await postJson(baseUrl, "/api/platform/nodes/detail", {
+      ownerPrincipalId,
+      nodeId: registerPayload.node?.nodeId,
+    }, authHeaders);
+    assert.equal(detailAfterReclaimResponse.status, 200);
+    const detailAfterReclaimPayload = await detailAfterReclaimResponse.json() as {
+      leaseSummary?: { activeCount?: number; revokedCount?: number };
+      activeExecutionLeases?: Array<unknown>;
+    };
+    assert.equal(detailAfterReclaimPayload.leaseSummary?.activeCount, 0);
+    assert.equal(detailAfterReclaimPayload.leaseSummary?.revokedCount, 1);
+    assert.equal(detailAfterReclaimPayload.activeExecutionLeases?.length, 0);
   });
 });
 

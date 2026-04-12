@@ -97,6 +97,9 @@ export type ManagedAgentSchedulerStore = Pick<SqliteCodexSessionRegistry,
 >;
 
 export type ManagedAgentNodeStore = Pick<SqliteCodexSessionRegistry,
+  | "saveAgentExecutionLease"
+  | "saveAgentRun"
+  | "saveAgentWorkItem"
   | "getAgentRun"
   | "getAgentWorkItem"
   | "getManagedAgent"

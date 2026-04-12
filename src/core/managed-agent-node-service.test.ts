@@ -285,6 +285,175 @@ test("ManagedAgentNodeService 支持显式 draining/offline 治理动作，并�
   }
 });
 
+test("ManagedAgentNodeService 支持回收 offline 节点上的 active lease，并区分 requeue 与 waiting preserve", () => {
+  const {
+    root,
+    registry,
+    managedAgentsService,
+    coordinationService,
+    nodeService,
+  } = createServiceContext();
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "平台负责人",
+      createdAt: "2026-04-12T09:00:00.000Z",
+      updatedAt: "2026-04-12T09:00:00.000Z",
+    });
+
+    const created = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "平台经理",
+      departmentRole: "平台工程",
+      mission: "负责 lease reclaim 验证。",
+      now: "2026-04-12T09:01:00.000Z",
+    });
+
+    const registered = nodeService.registerNode({
+      ownerPrincipalId: "principal-owner",
+      organizationId: created.organization.organizationId,
+      displayName: "Node Reclaim",
+      slotCapacity: 2,
+      slotAvailable: 0,
+      workspaceCapabilities: [root],
+      heartbeatTtlSeconds: 300,
+      now: "2026-04-12T09:02:00.000Z",
+    });
+
+    const runningWorkItem = coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: created.agent.agentId,
+      sourcePrincipalId: "principal-owner",
+      dispatchReason: "node-reclaim-running",
+      goal: "验证运行中 work item 被重新排队。",
+      now: "2026-04-12T09:03:00.000Z",
+    }).workItem;
+    registry.saveAgentWorkItem({
+      ...runningWorkItem,
+      status: "running",
+      startedAt: "2026-04-12T09:04:00.000Z",
+      updatedAt: "2026-04-12T09:04:00.000Z",
+    });
+    registry.saveAgentRun({
+      runId: "run-node-reclaim-running",
+      organizationId: created.organization.organizationId,
+      targetAgentId: created.agent.agentId,
+      workItemId: runningWorkItem.workItemId,
+      schedulerId: "scheduler-node-reclaim-test",
+      status: "running",
+      leaseToken: "run-lease-node-reclaim-running",
+      leaseExpiresAt: "2026-04-12T09:12:00.000Z",
+      startedAt: "2026-04-12T09:04:00.000Z",
+      lastHeartbeatAt: "2026-04-12T09:04:00.000Z",
+      createdAt: "2026-04-12T09:04:00.000Z",
+      updatedAt: "2026-04-12T09:04:00.000Z",
+    });
+    registry.saveAgentExecutionLease({
+      leaseId: "execution-lease-node-reclaim-running",
+      runId: "run-node-reclaim-running",
+      workItemId: runningWorkItem.workItemId,
+      targetAgentId: created.agent.agentId,
+      nodeId: registered.node.nodeId,
+      status: "active",
+      leaseToken: "run-lease-node-reclaim-running",
+      leaseExpiresAt: "2026-04-12T09:12:00.000Z",
+      lastHeartbeatAt: "2026-04-12T09:04:00.000Z",
+      createdAt: "2026-04-12T09:04:00.000Z",
+      updatedAt: "2026-04-12T09:04:00.000Z",
+    });
+
+    const waitingWorkItem = coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: created.agent.agentId,
+      sourcePrincipalId: "principal-owner",
+      dispatchReason: "node-reclaim-waiting",
+      goal: "验证等待态保留。",
+      now: "2026-04-12T09:05:00.000Z",
+    }).workItem;
+    registry.saveAgentWorkItem({
+      ...waitingWorkItem,
+      status: "waiting_human",
+      waitingActionRequest: {
+        waitingFor: "human",
+        prompt: "请确认是否继续",
+      },
+      startedAt: "2026-04-12T09:06:00.000Z",
+      updatedAt: "2026-04-12T09:06:00.000Z",
+    });
+    registry.saveAgentRun({
+      runId: "run-node-reclaim-waiting",
+      organizationId: created.organization.organizationId,
+      targetAgentId: created.agent.agentId,
+      workItemId: waitingWorkItem.workItemId,
+      schedulerId: "scheduler-node-reclaim-test",
+      status: "waiting_action",
+      leaseToken: "run-lease-node-reclaim-waiting",
+      leaseExpiresAt: "2026-04-12T09:15:00.000Z",
+      startedAt: "2026-04-12T09:06:00.000Z",
+      lastHeartbeatAt: "2026-04-12T09:06:00.000Z",
+      createdAt: "2026-04-12T09:06:00.000Z",
+      updatedAt: "2026-04-12T09:06:00.000Z",
+    });
+    registry.saveAgentExecutionLease({
+      leaseId: "execution-lease-node-reclaim-waiting",
+      runId: "run-node-reclaim-waiting",
+      workItemId: waitingWorkItem.workItemId,
+      targetAgentId: created.agent.agentId,
+      nodeId: registered.node.nodeId,
+      status: "active",
+      leaseToken: "run-lease-node-reclaim-waiting",
+      leaseExpiresAt: "2026-04-12T09:15:00.000Z",
+      lastHeartbeatAt: "2026-04-12T09:06:00.000Z",
+      createdAt: "2026-04-12T09:06:00.000Z",
+      updatedAt: "2026-04-12T09:06:00.000Z",
+    });
+
+    nodeService.markNodeOffline({
+      ownerPrincipalId: "principal-owner",
+      nodeId: registered.node.nodeId,
+      now: "2026-04-12T09:07:00.000Z",
+    });
+
+    const reclaimed = nodeService.reclaimNodeLeases({
+      ownerPrincipalId: "principal-owner",
+      nodeId: registered.node.nodeId,
+      now: "2026-04-12T09:08:00.000Z",
+    });
+
+    assert.equal(reclaimed.node.status, "offline");
+    assert.equal(reclaimed.node.slotAvailable, 0);
+    assert.equal(reclaimed.summary.activeLeaseCount, 2);
+    assert.equal(reclaimed.summary.reclaimedRunCount, 2);
+    assert.equal(reclaimed.summary.requeuedWorkItemCount, 1);
+    assert.equal(reclaimed.summary.preservedWaitingCount, 1);
+    assert.equal(reclaimed.summary.revokedLeaseOnlyCount, 0);
+
+    const runningLease = reclaimed.reclaimedLeases.find((item) => item.lease.leaseId === "execution-lease-node-reclaim-running");
+    assert.equal(runningLease?.recoveryAction, "requeued");
+    assert.equal(runningLease?.lease.status, "revoked");
+    assert.equal(runningLease?.run?.status, "interrupted");
+    assert.equal(runningLease?.run?.failureCode, "NODE_LEASE_RECLAIMED");
+    assert.equal(runningLease?.workItem?.status, "queued");
+
+    const waitingLease = reclaimed.reclaimedLeases.find((item) => item.lease.leaseId === "execution-lease-node-reclaim-waiting");
+    assert.equal(waitingLease?.recoveryAction, "waiting_preserved");
+    assert.equal(waitingLease?.lease.status, "revoked");
+    assert.equal(waitingLease?.run?.status, "interrupted");
+    assert.equal(waitingLease?.workItem?.status, "waiting_human");
+
+    const detail = nodeService.getNodeDetailView(
+      "principal-owner",
+      registered.node.nodeId,
+      "2026-04-12T09:08:30.000Z",
+    );
+    assert.equal(detail?.leaseSummary.activeCount, 0);
+    assert.equal(detail?.leaseSummary.revokedCount, 2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("ManagedAgentNodeService 只允许 owner 操作自己 organization 下的节点", () => {
   const {
     root,

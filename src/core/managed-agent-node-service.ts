@@ -11,6 +11,9 @@ import type {
 
 const DEFAULT_NODE_HEARTBEAT_TTL_SECONDS = 30;
 const NODE_DETAIL_RECENT_LEASE_LIMIT = 20;
+const ACTIVE_RUN_STATUSES = new Set(["created", "starting", "running", "waiting_action"]);
+const DEFAULT_NODE_LEASE_RECLAIM_FAILURE_CODE = "NODE_LEASE_RECLAIMED";
+const DEFAULT_NODE_LEASE_RECLAIM_FAILURE_MESSAGE = "Execution lease was reclaimed after the node was taken offline.";
 
 export interface ManagedAgentNodeServiceOptions {
   registry: ManagedAgentNodeStore;
@@ -55,11 +58,34 @@ export interface ManagedAgentNodeGovernanceInput {
   now?: string;
 }
 
+export interface ManagedAgentNodeLeaseReclaimInput extends ManagedAgentNodeGovernanceInput {
+  failureCode?: string;
+  failureMessage?: string;
+}
+
 export interface ManagedAgentNodeExecutionLeaseContext {
   lease: StoredAgentExecutionLeaseRecord;
   run: StoredAgentRunRecord | null;
   workItem: StoredAgentWorkItemRecord | null;
   targetAgent: StoredManagedAgentRecord | null;
+}
+
+export type ManagedAgentNodeLeaseRecoveryAction = "requeued" | "waiting_preserved" | "lease_revoked";
+
+export interface ManagedAgentNodeReclaimedLeaseContext {
+  lease: StoredAgentExecutionLeaseRecord;
+  run: StoredAgentRunRecord | null;
+  workItem: StoredAgentWorkItemRecord | null;
+  targetAgent: StoredManagedAgentRecord | null;
+  recoveryAction: ManagedAgentNodeLeaseRecoveryAction;
+}
+
+export interface ManagedAgentNodeLeaseRecoverySummary {
+  activeLeaseCount: number;
+  reclaimedRunCount: number;
+  requeuedWorkItemCount: number;
+  preservedWaitingCount: number;
+  revokedLeaseOnlyCount: number;
 }
 
 export interface ManagedAgentNodeLeaseSummary {
@@ -76,6 +102,13 @@ export interface ManagedAgentNodeDetailView {
   leaseSummary: ManagedAgentNodeLeaseSummary;
   activeExecutionLeases: ManagedAgentNodeExecutionLeaseContext[];
   recentExecutionLeases: ManagedAgentNodeExecutionLeaseContext[];
+}
+
+export interface ManagedAgentNodeLeaseRecoveryResult {
+  organization: StoredOrganizationRecord;
+  node: StoredManagedAgentNodeRecord;
+  summary: ManagedAgentNodeLeaseRecoverySummary;
+  reclaimedLeases: ManagedAgentNodeReclaimedLeaseContext[];
 }
 
 export function isManagedAgentNodeHeartbeatExpired(node: StoredManagedAgentNodeRecord, now: string): boolean {
@@ -227,6 +260,43 @@ export class ManagedAgentNodeService {
     return this.updateNodeStatus(input, "offline");
   }
 
+  reclaimNodeLeases(input: ManagedAgentNodeLeaseReclaimInput): ManagedAgentNodeLeaseRecoveryResult {
+    const now = normalizeTimestamp(input.now);
+    const normalizedFailureCode = normalizeOptionalText(input.failureCode) ?? DEFAULT_NODE_LEASE_RECLAIM_FAILURE_CODE;
+    const normalizedFailureMessage = normalizeOptionalText(input.failureMessage) ?? DEFAULT_NODE_LEASE_RECLAIM_FAILURE_MESSAGE;
+    const node = this.getNode(input.ownerPrincipalId, normalizeRequiredText(input.nodeId, "nodeId is required."), now);
+
+    if (!node) {
+      throw new Error("Managed agent node not found.");
+    }
+
+    if (node.status !== "offline") {
+      throw new Error("Managed agent node must be offline before reclaiming leases.");
+    }
+
+    const organization = this.requireOwnedOrganization(input.ownerPrincipalId, node.organizationId);
+    const reclaimedLeases = this.registry.listAgentExecutionLeasesByNode(node.nodeId)
+      .filter((lease) => lease.status === "active")
+      .sort(compareByUpdatedAtDesc)
+      .map((lease) => this.reclaimActiveLease(lease, now, {
+        failureCode: normalizedFailureCode,
+        failureMessage: normalizedFailureMessage,
+      }));
+    const updatedNode: StoredManagedAgentNodeRecord = {
+      ...node,
+      slotAvailable: 0,
+      updatedAt: now,
+    };
+    this.registry.saveManagedAgentNode(updatedNode);
+
+    return {
+      organization,
+      node: this.registry.getManagedAgentNode(updatedNode.nodeId) ?? updatedNode,
+      summary: summarizeLeaseRecovery(reclaimedLeases),
+      reclaimedLeases,
+    };
+  }
+
   private markStaleNodesOffline(organizationId: string, now: string): void {
     const nodes = this.registry.listManagedAgentNodesByOrganization(organizationId);
 
@@ -273,6 +343,71 @@ export class ManagedAgentNodeService {
     return {
       organization,
       node: this.registry.getManagedAgentNode(updated.nodeId) ?? updated,
+    };
+  }
+
+  private reclaimActiveLease(
+    lease: StoredAgentExecutionLeaseRecord,
+    now: string,
+    options: {
+      failureCode: string;
+      failureMessage: string;
+    },
+  ): ManagedAgentNodeReclaimedLeaseContext {
+    const run = this.registry.getAgentRun(lease.runId);
+    const workItem = run ? this.registry.getAgentWorkItem(run.workItemId) : this.registry.getAgentWorkItem(lease.workItemId);
+    const targetAgent = this.registry.getManagedAgent(run?.targetAgentId ?? lease.targetAgentId);
+    let nextRun: StoredAgentRunRecord | null = run;
+    let nextWorkItem: StoredAgentWorkItemRecord | null = workItem;
+    let recoveryAction: ManagedAgentNodeLeaseRecoveryAction = "lease_revoked";
+
+    if (run && ACTIVE_RUN_STATUSES.has(run.status)) {
+      const interruptedRun: StoredAgentRunRecord = {
+        ...run,
+        status: "interrupted",
+        leaseExpiresAt: now,
+        completedAt: now,
+        lastHeartbeatAt: now,
+        failureCode: run.failureCode ?? options.failureCode,
+        failureMessage: run.failureMessage ?? options.failureMessage,
+        updatedAt: now,
+      };
+      this.registry.saveAgentRun(interruptedRun);
+      nextRun = this.registry.getAgentRun(interruptedRun.runId) ?? interruptedRun;
+
+      if (workItem) {
+        const nextStatus = resolveWorkItemStatusAfterInterruptedRun(workItem.status);
+
+        if (nextStatus !== workItem.status) {
+          const requeuedWorkItem: StoredAgentWorkItemRecord = {
+            ...workItem,
+            status: nextStatus,
+            updatedAt: now,
+          };
+          this.registry.saveAgentWorkItem(requeuedWorkItem);
+          nextWorkItem = this.registry.getAgentWorkItem(requeuedWorkItem.workItemId) ?? requeuedWorkItem;
+          recoveryAction = "requeued";
+        } else if (workItem.status === "waiting_human" || workItem.status === "waiting_agent") {
+          recoveryAction = "waiting_preserved";
+        }
+      }
+    }
+
+    const revokedLease: StoredAgentExecutionLeaseRecord = {
+      ...lease,
+      status: "revoked",
+      leaseExpiresAt: now,
+      lastHeartbeatAt: now,
+      updatedAt: now,
+    };
+    this.registry.saveAgentExecutionLease(revokedLease);
+
+    return {
+      lease: revokedLease,
+      run: nextRun,
+      workItem: nextWorkItem,
+      targetAgent,
+      recoveryAction,
     };
   }
 
@@ -393,6 +528,46 @@ function summarizeExecutionLeases(executionLeases: StoredAgentExecutionLeaseReco
   }
 
   return summary;
+}
+
+function summarizeLeaseRecovery(reclaimedLeases: ManagedAgentNodeReclaimedLeaseContext[]): ManagedAgentNodeLeaseRecoverySummary {
+  const summary: ManagedAgentNodeLeaseRecoverySummary = {
+    activeLeaseCount: reclaimedLeases.length,
+    reclaimedRunCount: 0,
+    requeuedWorkItemCount: 0,
+    preservedWaitingCount: 0,
+    revokedLeaseOnlyCount: 0,
+  };
+
+  for (const reclaimed of reclaimedLeases) {
+    if (reclaimed.run) {
+      summary.reclaimedRunCount += 1;
+    }
+
+    if (reclaimed.recoveryAction === "requeued") {
+      summary.requeuedWorkItemCount += 1;
+      continue;
+    }
+
+    if (reclaimed.recoveryAction === "waiting_preserved") {
+      summary.preservedWaitingCount += 1;
+      continue;
+    }
+
+    summary.revokedLeaseOnlyCount += 1;
+  }
+
+  return summary;
+}
+
+function resolveWorkItemStatusAfterInterruptedRun(
+  status: StoredAgentWorkItemRecord["status"],
+): StoredAgentWorkItemRecord["status"] {
+  if (status === "planning" || status === "running") {
+    return "queued";
+  }
+
+  return status;
 }
 
 function toTimestamp(value: string): number {

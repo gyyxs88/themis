@@ -23,6 +23,8 @@ import {
   type HeartbeatManagedAgentNodeInput,
   type ManagedAgentNodeDetailView,
   type ManagedAgentNodeGovernanceInput,
+  type ManagedAgentNodeLeaseReclaimInput,
+  type ManagedAgentNodeLeaseRecoveryResult,
   type ManagedAgentNodeMutationResult,
   type RegisterManagedAgentNodeInput,
 } from "./managed-agent-node-service.js";
@@ -143,6 +145,10 @@ export class ManagedAgentControlPlaneFacade {
 
   markNodeOffline(input: ManagedAgentNodeGovernanceInput): ManagedAgentNodeMutationResult {
     return this.nodeService.markNodeOffline(input);
+  }
+
+  reclaimNodeLeases(input: ManagedAgentNodeLeaseReclaimInput): ManagedAgentNodeLeaseRecoveryResult {
+    return this.nodeService.reclaimNodeLeases(input);
   }
 
   pullAssignedRun(input: PullManagedAgentAssignedRunInput): ManagedAgentWorkerAssignedRun | null {

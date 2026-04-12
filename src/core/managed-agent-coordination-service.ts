@@ -2718,7 +2718,9 @@ function releaseExecutionLeaseForRun(
 function buildReleasedNodeSnapshot(node: StoredManagedAgentNodeRecord, now: string): StoredManagedAgentNodeRecord {
   return {
     ...node,
-    slotAvailable: Math.max(0, Math.min(node.slotCapacity, node.slotAvailable + 1)),
+    slotAvailable: node.status === "offline"
+      ? 0
+      : Math.max(0, Math.min(node.slotCapacity, node.slotAvailable + 1)),
     updatedAt: now,
   };
 }

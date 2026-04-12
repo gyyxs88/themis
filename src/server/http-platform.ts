@@ -97,6 +97,11 @@ interface PlatformNodeDetailPayload extends PlatformAgentListPayload {
   nodeId: string;
 }
 
+interface PlatformNodeReclaimPayload extends PlatformNodeDetailPayload {
+  failureCode?: string;
+  failureMessage?: string;
+}
+
 interface PlatformWorkerPullPayload extends PlatformAgentListPayload {
   nodeId: string;
 }
@@ -505,6 +510,36 @@ export async function handlePlatformNodeOffline(
   await handlePlatformNodeGovernanceAction(request, response, facade, "offline");
 }
 
+export async function handlePlatformNodeReclaim(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformNodeReclaimPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.reclaimNodeLeases({
+      ownerPrincipalId: payload.ownerPrincipalId,
+      nodeId: payload.nodeId,
+      ...(payload.failureCode ? { failureCode: payload.failureCode } : {}),
+      ...(payload.failureMessage ? { failureMessage: payload.failureMessage } : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      organization: result.organization,
+      node: result.node,
+      summary: result.summary,
+      reclaimedLeases: result.reclaimedLeases,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
 export async function handlePlatformWorkerRunPull(
   request: IncomingMessage,
   response: ServerResponse,
@@ -801,6 +836,22 @@ function normalizePlatformNodeDetailPayload(value: unknown): PlatformNodeDetailP
   return {
     ...normalizePlatformOwnerPayload(value),
     nodeId: readRequiredString(value.nodeId, "nodeId"),
+  };
+}
+
+function normalizePlatformNodeReclaimPayload(value: unknown): PlatformNodeReclaimPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  const failureCode = readOptionalString(value.failureCode);
+  const failureMessage = readOptionalString(value.failureMessage);
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    nodeId: readRequiredString(value.nodeId, "nodeId"),
+    ...(failureCode ? { failureCode } : {}),
+    ...(failureMessage ? { failureMessage } : {}),
   };
 }
 

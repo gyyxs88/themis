@@ -115,6 +115,7 @@ import {
   handlePlatformNodeDrain,
   handlePlatformNodeList,
   handlePlatformNodeOffline,
+  handlePlatformNodeReclaim,
   handlePlatformNodeRegister,
   handlePlatformWorkerRunComplete,
   handlePlatformWorkerRunPull,
@@ -497,6 +498,10 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/platform/nodes/offline") {
         return handlePlatformNodeOffline(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/nodes/reclaim") {
+        return handlePlatformNodeReclaim(request, response, platformControlPlaneFacade);
       }
 
       if (request.method === "POST" && url.pathname === "/api/platform/worker/runs/pull") {
