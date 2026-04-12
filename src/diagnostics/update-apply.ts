@@ -306,10 +306,10 @@ export async function applyThemisUpdate(input: ApplyThemisUpdateOptions): Promis
     });
     runCommandOrThrow(
       "npm",
-      ["ci"],
+      ["ci", "--include=dev"],
       input.workingDirectory,
       env,
-      "npm ci",
+      "npm ci --include=dev",
     );
 
     emit({
@@ -500,10 +500,10 @@ export async function rollbackThemisUpdate(input: RollbackThemisUpdateOptions): 
     });
     runCommandOrThrow(
       "npm",
-      ["ci"],
+      ["ci", "--include=dev"],
       input.workingDirectory,
       env,
-      "npm ci",
+      "npm ci --include=dev",
     );
 
     emit({
