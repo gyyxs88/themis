@@ -27,5 +27,8 @@
     "@openai/codex-sdk": "^0.118.0",
     "better-sqlite3": "^12.8.0",
     "mysql2": "^3.22.0"
+  },
+  "overrides": {
+    "axios": "1.15.0"
   }
 }
