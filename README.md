@@ -70,10 +70,12 @@ http://localhost:3100
 ./themis update apply
 ./themis update rollback
 ./themis doctor
+./themis doctor worker-node
 ./themis doctor smoke web
 ./themis doctor smoke feishu
 ./themis doctor smoke all
 ./themis doctor release
+./themis worker-node run --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --name <displayName> [--once]
 ./themis mcp-server
 ```
 

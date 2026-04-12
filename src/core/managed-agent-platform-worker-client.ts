@@ -63,6 +63,10 @@ export interface ManagedAgentPlatformWorkerNodeMutationResult {
   };
 }
 
+export interface ManagedAgentPlatformWorkerProbeResult {
+  nodeCount: number;
+}
+
 export class ManagedAgentPlatformWorkerClient {
   private readonly baseUrl: string;
   private readonly ownerPrincipalId: string;
@@ -146,6 +150,19 @@ export class ManagedAgentPlatformWorkerClient {
       leaseToken: input.leaseToken,
       ...(input.result ? { result: input.result } : {}),
     });
+  }
+
+  async probeAccess(input: { organizationId?: string } = {}): Promise<ManagedAgentPlatformWorkerProbeResult> {
+    const payload = await this.requestJson<{
+      nodes?: unknown[];
+    }>("/api/platform/nodes/list", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      ...(input.organizationId ? { organizationId: input.organizationId } : {}),
+    });
+
+    return {
+      nodeCount: Array.isArray(payload.nodes) ? payload.nodes.length : 0,
+    };
   }
 
   private async authenticate(): Promise<void> {

@@ -22,6 +22,7 @@ import {
   describeFeishuTakeoverGuidance,
   type FeishuDiagnosticsSummary,
 } from "../diagnostics/feishu-diagnostics.js";
+import { WorkerNodeDiagnosticsService } from "../diagnostics/worker-node-diagnostics.js";
 import { applyThemisUpdate, rollbackThemisUpdate } from "../diagnostics/update-apply.js";
 import {
   checkThemisUpdates,
@@ -529,14 +530,19 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
     return;
   }
 
+  if (selected === "worker-node") {
+    await handleDoctorWorkerNode(args);
+    return;
+  }
+
   const sections = [subcommand, ...args].filter((item): item is string => Boolean(item && item.trim()));
   if (sections.length > 1) {
-    throw new Error("用法：themis doctor [context|auth|provider|memory|service|mcp|feishu|release|smoke]");
+    throw new Error("用法：themis doctor [context|auth|provider|memory|service|mcp|feishu|worker-node|release|smoke]");
   }
 
   const selectedSection = sections[0]?.trim().toLowerCase();
-  if (selectedSection && !["context", "auth", "provider", "memory", "service", "mcp", "feishu", "release"].includes(selectedSection)) {
-    throw new Error("doctor 子命令仅支持 context / auth / provider / memory / service / mcp / feishu / release。");
+  if (selectedSection && !["context", "auth", "provider", "memory", "service", "mcp", "feishu", "worker-node", "release"].includes(selectedSection)) {
+    throw new Error("doctor 子命令仅支持 context / auth / provider / memory / service / mcp / feishu / worker-node / release。");
   }
 
   const dbPath = resolve(cwd, "infra/local/themis.db");
@@ -775,6 +781,81 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
     }
     default:
       return;
+  }
+}
+
+async function handleDoctorWorkerNode(args: string[]): Promise<void> {
+  const valueOptions = ["--platform", "--owner-principal", "--token", "--workspace", "--credential", "--provider"];
+  const unknownArgs = collectUnknownOptions(args, valueOptions, []);
+
+  if (unknownArgs.length > 0) {
+    throw new Error(`doctor worker-node 不支持这些参数：${unknownArgs.join(", ")}`);
+  }
+
+  const dbPath = resolve(cwd, "infra/local/themis.db");
+  const runtimeStore = existsSync(dbPath)
+    ? new SqliteCodexSessionRegistry({ databaseFile: dbPath })
+    : null;
+  const workspaceCapabilities = readOptionValues(args, "--workspace");
+  const credentialCapabilities = readOptionValues(args, "--credential");
+  const providerCapabilities = readOptionValues(args, "--provider");
+  const diagnostics = new WorkerNodeDiagnosticsService({
+    workingDirectory: cwd,
+    runtimeStore,
+    sqliteFilePath: dbPath,
+  });
+  const summary = await diagnostics.readSummary({
+    workspaceCapabilities: workspaceCapabilities.length > 0 ? workspaceCapabilities : [cwd],
+    credentialCapabilities,
+    providerCapabilities,
+    platformBaseUrl: readOptionValue(args, "--platform"),
+    ownerPrincipalId: readOptionValue(args, "--owner-principal"),
+    webAccessToken: readOptionValue(args, "--token"),
+  });
+
+  console.log("Themis 诊断 - worker-node");
+  console.log(`sqlite.path：${summary.sqlite.path}`);
+  console.log(`sqlite.status：${summary.sqlite.exists ? "ok" : "missing"}`);
+  console.log(`workspaceCount：${summary.workspaces.length}`);
+  for (const workspace of summary.workspaces) {
+    console.log(`workspace[${workspace.inputPath}]：${workspace.status}`);
+    if (workspace.inputPath !== workspace.resolvedPath) {
+      console.log(`  resolvedPath：${workspace.resolvedPath}`);
+    }
+  }
+  console.log(`credentialCount：${summary.credentials.length}`);
+  if (summary.credentials.length === 0) {
+    console.log("credential：<none>");
+  } else {
+    for (const credential of summary.credentials) {
+      console.log(
+        `credential[${credential.credentialId}]：${credential.status}${credential.codexHome ? ` (active=${credential.isActive ? "yes" : "no"}, codexHome=${credential.codexHome})` : ""}`,
+      );
+    }
+  }
+  console.log(`providerCount：${summary.providers.length}`);
+  if (summary.providers.length === 0) {
+    console.log("provider：<none>");
+  } else {
+    for (const provider of summary.providers) {
+      console.log(
+        `provider[${provider.providerId}]：${provider.status}${provider.source ? ` (source=${provider.source}, defaultModel=${provider.defaultModel ?? "<none>"})` : ""}`,
+      );
+      if (provider.message) {
+        console.log(`  message：${provider.message}`);
+      }
+    }
+  }
+  console.log(`platform.status：${summary.platform.status}`);
+  console.log(`platform.baseUrl：${summary.platform.baseUrl ?? "<none>"}`);
+  console.log(`platform.nodeCount：${summary.platform.nodeCount ?? "<none>"}`);
+  console.log(`platform.message：${summary.platform.message ?? "<none>"}`);
+  console.log("问题判断");
+  console.log(`主诊断：${summary.primaryDiagnosis.title}`);
+  console.log(`诊断摘要：${summary.primaryDiagnosis.summary}`);
+  console.log("建议动作：");
+  for (const [index, step] of summary.recommendedNextSteps.entries()) {
+    console.log(`${index + 1}. ${step}`);
   }
 }
 
@@ -1159,7 +1240,7 @@ function printHelp(): void {
   console.log("- ./themis update apply [--service <systemd-user-service>] [--no-restart]");
   console.log("- ./themis update rollback [--service <systemd-user-service>] [--no-restart]");
   console.log("- ./themis doctor");
-  console.log("- ./themis doctor <context|auth|provider|memory|service|mcp|feishu|release>");
+  console.log("- ./themis doctor <context|auth|provider|memory|service|mcp|feishu|worker-node|release>");
   console.log("- ./themis doctor smoke <web|feishu|all>");
   console.log("- ./themis config list [--show-secrets]");
   console.log("- ./themis config set <KEY> <VALUE>");
