@@ -1,6 +1,6 @@
 # Themis 局域网多节点硅基员工平台 / Phase 2 节点模型与调度租约实施计划
 
-更新时间：2026-04-12 15:02 CST
+更新时间：2026-04-12 15:46 CST
 文档性质：实施计划稿。目标是把平台化路线里的 `Phase 2 / 节点模型与调度租约` 收成可开工的第一版实现方案。
 
 当前状态补充（2026-04-12）：
@@ -17,9 +17,9 @@
   - `node --test --import tsx src/core/managed-agent-node-service.test.ts src/storage/codex-session-registry-managed-agent-node.test.ts src/core/managed-agents-service.test.ts src/core/managed-agent-coordination-service.test.ts src/core/managed-agent-scheduler-service.test.ts src/server/http-agents.test.ts src/server/http-platform.test.ts`
   - `git diff --check`
 - 当前还没做的是节点治理补充，而不是基础匹配本身。也就是说，平台已经能认识节点、最小匹配节点并持久化租约；后续更值得继续的是：
-  - MySQL 节点/租约 schema 与 store 对齐
   - 节点失联 / TTL 过期后的 `offline` 治理
   - 更明确的 `draining` / 下线控制面动作
+  - MySQL 节点/租约 schema 与 store 对齐也已完成，并已通过本地 `mysql:8.4` round-trip 烟测
 
 ## 1. 目标
 

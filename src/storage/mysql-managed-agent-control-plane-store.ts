@@ -7,9 +7,11 @@ import {
 } from "mysql2/promise";
 import type { StoredPrincipalRecord } from "./codex-session-registry.js";
 import type {
+  StoredAgentExecutionLeaseRecord,
   ManagedAgentBootstrapProfile,
   ManagedAgentRuntimeProfileSnapshot,
   ManagedAgentWorkspacePolicySnapshot,
+  StoredManagedAgentNodeRecord,
   StoredAgentRunRecord,
   StoredAgentRuntimeProfileRecord,
   StoredAgentWorkItemRecord,
@@ -135,6 +137,37 @@ interface AgentRunRow extends RowDataPacket {
   updated_at: MySqlDateTimeValue;
 }
 
+interface ManagedAgentNodeRow extends RowDataPacket {
+  node_id: string;
+  organization_id: string;
+  display_name: string;
+  status: string;
+  slot_capacity: number;
+  slot_available: number;
+  labels_json: unknown | null;
+  workspace_capabilities_json: unknown | null;
+  credential_capabilities_json: unknown | null;
+  provider_capabilities_json: unknown | null;
+  heartbeat_ttl_seconds: number;
+  last_heartbeat_at: MySqlDateTimeValue;
+  created_at: MySqlDateTimeValue;
+  updated_at: MySqlDateTimeValue;
+}
+
+interface AgentExecutionLeaseRow extends RowDataPacket {
+  lease_id: string;
+  run_id: string;
+  work_item_id: string;
+  target_agent_id: string;
+  node_id: string;
+  status: string;
+  lease_token: string;
+  lease_expires_at: MySqlDateTimeValue;
+  last_heartbeat_at: MySqlDateTimeValue | null;
+  created_at: MySqlDateTimeValue;
+  updated_at: MySqlDateTimeValue;
+}
+
 const MYSQL_CONTROL_PLANE_SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS themis_principals (
     principal_id VARCHAR(191) PRIMARY KEY,
@@ -248,6 +281,46 @@ const MYSQL_CONTROL_PLANE_SCHEMA_STATEMENTS = [
     KEY idx_themis_agent_runs_target_status (target_agent_id, status),
     KEY idx_themis_agent_runs_lease (lease_expires_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS themis_agent_nodes (
+    node_id VARCHAR(191) PRIMARY KEY,
+    organization_id VARCHAR(191) NOT NULL,
+    display_name VARCHAR(255) NOT NULL,
+    status VARCHAR(64) NOT NULL,
+    slot_capacity INT NOT NULL,
+    slot_available INT NOT NULL,
+    labels_json JSON NULL,
+    workspace_capabilities_json JSON NULL,
+    credential_capabilities_json JSON NULL,
+    provider_capabilities_json JSON NULL,
+    heartbeat_ttl_seconds INT NOT NULL,
+    last_heartbeat_at DATETIME(3) NOT NULL,
+    created_at DATETIME(3) NOT NULL,
+    updated_at DATETIME(3) NOT NULL,
+    KEY idx_themis_agent_nodes_org_status (organization_id, status, updated_at, node_id),
+    KEY idx_themis_agent_nodes_heartbeat (status, last_heartbeat_at, node_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS themis_agent_execution_leases (
+    lease_id VARCHAR(191) PRIMARY KEY,
+    run_id VARCHAR(191) NOT NULL,
+    work_item_id VARCHAR(191) NOT NULL,
+    target_agent_id VARCHAR(191) NOT NULL,
+    node_id VARCHAR(191) NOT NULL,
+    status VARCHAR(64) NOT NULL,
+    lease_token VARCHAR(191) NOT NULL,
+    lease_expires_at DATETIME(3) NOT NULL,
+    last_heartbeat_at DATETIME(3) NULL,
+    active_run_id VARCHAR(191) GENERATED ALWAYS AS (
+      CASE
+        WHEN status = 'active' THEN run_id
+        ELSE NULL
+      END
+    ) STORED,
+    created_at DATETIME(3) NOT NULL,
+    updated_at DATETIME(3) NOT NULL,
+    UNIQUE KEY uq_themis_agent_execution_leases_active_run (active_run_id),
+    KEY idx_themis_agent_execution_leases_run_status (run_id, status, updated_at, lease_id),
+    KEY idx_themis_agent_execution_leases_node_status (node_id, status, updated_at, lease_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 ] as const;
 
 export class MySqlManagedAgentControlPlaneStore {
@@ -341,6 +414,18 @@ export class MySqlManagedAgentControlPlaneStore {
     );
     const row = rows[0];
     return row ? mapOrganizationRow(row) : null;
+  }
+
+  async listOrganizationsByOwnerPrincipal(ownerPrincipalId: string): Promise<StoredOrganizationRecord[]> {
+    const [rows] = await this.pool.query<OrganizationRow[]>(
+      `SELECT organization_id, owner_principal_id, display_name, slug, created_at, updated_at
+       FROM themis_organizations
+       WHERE owner_principal_id = ?
+       ORDER BY updated_at DESC, organization_id ASC`,
+      [ownerPrincipalId],
+    );
+
+    return rows.map(mapOrganizationRow);
   }
 
   async saveManagedAgent(record: StoredManagedAgentRecord): Promise<void> {
@@ -608,6 +693,160 @@ export class MySqlManagedAgentControlPlaneStore {
     return row ? mapAgentRunRow(row) : null;
   }
 
+  async saveManagedAgentNode(record: StoredManagedAgentNodeRecord): Promise<void> {
+    await this.pool.execute<ResultSetHeader>(
+      `INSERT INTO themis_agent_nodes (
+        node_id, organization_id, display_name, status, slot_capacity, slot_available,
+        labels_json, workspace_capabilities_json, credential_capabilities_json, provider_capabilities_json,
+        heartbeat_ttl_seconds, last_heartbeat_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON), CAST(? AS JSON), CAST(? AS JSON), ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        organization_id = VALUES(organization_id),
+        display_name = VALUES(display_name),
+        status = VALUES(status),
+        slot_capacity = VALUES(slot_capacity),
+        slot_available = VALUES(slot_available),
+        labels_json = VALUES(labels_json),
+        workspace_capabilities_json = VALUES(workspace_capabilities_json),
+        credential_capabilities_json = VALUES(credential_capabilities_json),
+        provider_capabilities_json = VALUES(provider_capabilities_json),
+        heartbeat_ttl_seconds = VALUES(heartbeat_ttl_seconds),
+        last_heartbeat_at = VALUES(last_heartbeat_at),
+        updated_at = VALUES(updated_at)`,
+      [
+        record.nodeId,
+        record.organizationId,
+        record.displayName,
+        record.status,
+        record.slotCapacity,
+        record.slotAvailable,
+        stringifyJson(record.labels),
+        stringifyJson(record.workspaceCapabilities),
+        stringifyJson(record.credentialCapabilities),
+        stringifyJson(record.providerCapabilities),
+        record.heartbeatTtlSeconds,
+        toMySqlDateTime(record.lastHeartbeatAt),
+        toMySqlDateTime(record.createdAt),
+        toMySqlDateTime(record.updatedAt),
+      ],
+    );
+  }
+
+  async getManagedAgentNode(nodeId: string): Promise<StoredManagedAgentNodeRecord | null> {
+    const [rows] = await this.pool.query<ManagedAgentNodeRow[]>(
+      `SELECT
+         node_id, organization_id, display_name, status, slot_capacity, slot_available,
+         labels_json, workspace_capabilities_json, credential_capabilities_json, provider_capabilities_json,
+         heartbeat_ttl_seconds, last_heartbeat_at, created_at, updated_at
+       FROM themis_agent_nodes
+       WHERE node_id = ? LIMIT 1`,
+      [nodeId],
+    );
+    const row = rows[0];
+    return row ? mapManagedAgentNodeRow(row) : null;
+  }
+
+  async listManagedAgentNodesByOrganization(organizationId: string): Promise<StoredManagedAgentNodeRecord[]> {
+    const [rows] = await this.pool.query<ManagedAgentNodeRow[]>(
+      `SELECT
+         node_id, organization_id, display_name, status, slot_capacity, slot_available,
+         labels_json, workspace_capabilities_json, credential_capabilities_json, provider_capabilities_json,
+         heartbeat_ttl_seconds, last_heartbeat_at, created_at, updated_at
+       FROM themis_agent_nodes
+       WHERE organization_id = ?
+       ORDER BY updated_at DESC, node_id ASC`,
+      [organizationId],
+    );
+    return rows.map(mapManagedAgentNodeRow);
+  }
+
+  async saveAgentExecutionLease(record: StoredAgentExecutionLeaseRecord): Promise<void> {
+    await this.pool.execute<ResultSetHeader>(
+      `INSERT INTO themis_agent_execution_leases (
+        lease_id, run_id, work_item_id, target_agent_id, node_id, status, lease_token,
+        lease_expires_at, last_heartbeat_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        run_id = VALUES(run_id),
+        work_item_id = VALUES(work_item_id),
+        target_agent_id = VALUES(target_agent_id),
+        node_id = VALUES(node_id),
+        status = VALUES(status),
+        lease_token = VALUES(lease_token),
+        lease_expires_at = VALUES(lease_expires_at),
+        last_heartbeat_at = VALUES(last_heartbeat_at),
+        updated_at = VALUES(updated_at)`,
+      [
+        record.leaseId,
+        record.runId,
+        record.workItemId,
+        record.targetAgentId,
+        record.nodeId,
+        record.status,
+        record.leaseToken,
+        toMySqlDateTime(record.leaseExpiresAt),
+        record.lastHeartbeatAt ? toMySqlDateTime(record.lastHeartbeatAt) : null,
+        toMySqlDateTime(record.createdAt),
+        toMySqlDateTime(record.updatedAt),
+      ],
+    );
+  }
+
+  async getAgentExecutionLease(leaseId: string): Promise<StoredAgentExecutionLeaseRecord | null> {
+    const [rows] = await this.pool.query<AgentExecutionLeaseRow[]>(
+      `SELECT
+         lease_id, run_id, work_item_id, target_agent_id, node_id, status, lease_token,
+         lease_expires_at, last_heartbeat_at, created_at, updated_at
+       FROM themis_agent_execution_leases
+       WHERE lease_id = ? LIMIT 1`,
+      [leaseId],
+    );
+    const row = rows[0];
+    return row ? mapAgentExecutionLeaseRow(row) : null;
+  }
+
+  async getActiveAgentExecutionLeaseByRun(runId: string): Promise<StoredAgentExecutionLeaseRecord | null> {
+    const [rows] = await this.pool.query<AgentExecutionLeaseRow[]>(
+      `SELECT
+         lease_id, run_id, work_item_id, target_agent_id, node_id, status, lease_token,
+         lease_expires_at, last_heartbeat_at, created_at, updated_at
+       FROM themis_agent_execution_leases
+       WHERE run_id = ?
+         AND status = 'active'
+       ORDER BY updated_at DESC, lease_id ASC
+       LIMIT 1`,
+      [runId],
+    );
+    const row = rows[0];
+    return row ? mapAgentExecutionLeaseRow(row) : null;
+  }
+
+  async listAgentExecutionLeasesByRun(runId: string): Promise<StoredAgentExecutionLeaseRecord[]> {
+    const [rows] = await this.pool.query<AgentExecutionLeaseRow[]>(
+      `SELECT
+         lease_id, run_id, work_item_id, target_agent_id, node_id, status, lease_token,
+         lease_expires_at, last_heartbeat_at, created_at, updated_at
+       FROM themis_agent_execution_leases
+       WHERE run_id = ?
+       ORDER BY created_at DESC, lease_id ASC`,
+      [runId],
+    );
+    return rows.map(mapAgentExecutionLeaseRow);
+  }
+
+  async listAgentExecutionLeasesByNode(nodeId: string): Promise<StoredAgentExecutionLeaseRecord[]> {
+    const [rows] = await this.pool.query<AgentExecutionLeaseRow[]>(
+      `SELECT
+         lease_id, run_id, work_item_id, target_agent_id, node_id, status, lease_token,
+         lease_expires_at, last_heartbeat_at, created_at, updated_at
+       FROM themis_agent_execution_leases
+       WHERE node_id = ?
+       ORDER BY created_at DESC, lease_id ASC`,
+      [nodeId],
+    );
+    return rows.map(mapAgentExecutionLeaseRow);
+  }
+
   private buildPoolOptions(options: MySqlManagedAgentControlPlaneStoreOptions): PoolOptions {
     if (options.uri) {
       return {
@@ -764,6 +1003,41 @@ function mapAgentRunRow(row: AgentRunRow): StoredAgentRunRecord {
   };
 }
 
+function mapManagedAgentNodeRow(row: ManagedAgentNodeRow): StoredManagedAgentNodeRecord {
+  return {
+    nodeId: row.node_id,
+    organizationId: row.organization_id,
+    displayName: row.display_name,
+    status: row.status as StoredManagedAgentNodeRecord["status"],
+    slotCapacity: row.slot_capacity,
+    slotAvailable: row.slot_available,
+    labels: normalizeStringArray(safeParseJson(row.labels_json)),
+    workspaceCapabilities: normalizeStringArray(safeParseJson(row.workspace_capabilities_json)),
+    credentialCapabilities: normalizeStringArray(safeParseJson(row.credential_capabilities_json)),
+    providerCapabilities: normalizeStringArray(safeParseJson(row.provider_capabilities_json)),
+    heartbeatTtlSeconds: row.heartbeat_ttl_seconds,
+    lastHeartbeatAt: fromMySqlDateTime(row.last_heartbeat_at),
+    createdAt: fromMySqlDateTime(row.created_at),
+    updatedAt: fromMySqlDateTime(row.updated_at),
+  };
+}
+
+function mapAgentExecutionLeaseRow(row: AgentExecutionLeaseRow): StoredAgentExecutionLeaseRecord {
+  return {
+    leaseId: row.lease_id,
+    runId: row.run_id,
+    workItemId: row.work_item_id,
+    targetAgentId: row.target_agent_id,
+    nodeId: row.node_id,
+    status: row.status as StoredAgentExecutionLeaseRecord["status"],
+    leaseToken: row.lease_token,
+    leaseExpiresAt: fromMySqlDateTime(row.lease_expires_at),
+    ...(row.last_heartbeat_at ? { lastHeartbeatAt: fromMySqlDateTime(row.last_heartbeat_at) } : {}),
+    createdAt: fromMySqlDateTime(row.created_at),
+    updatedAt: fromMySqlDateTime(row.updated_at),
+  };
+}
+
 function safeParseJson<T>(value: unknown): T | undefined {
   if (value === null || value === undefined) {
     return undefined;
@@ -786,6 +1060,14 @@ function safeParseJson<T>(value: unknown): T | undefined {
 
 function stringifyJson(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return [...new Set(value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean))];
 }
 
 function toMySqlDateTime(value: string): string {
