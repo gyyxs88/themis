@@ -5,12 +5,14 @@ import type {
   ManagedAgentRuntimeProfileSnapshot,
   ManagedAgentWorkItemSourceType,
   ManagedAgentWorkspacePolicySnapshot,
+  StoredAgentExecutionLeaseRecord,
   StoredAgentHandoffRecord,
   StoredAgentMailboxEntryRecord,
   StoredAgentMessageRecord,
   StoredAgentRunRecord,
   StoredAgentWorkItemRecord,
   StoredManagedAgentRecord,
+  StoredManagedAgentNodeRecord,
   StoredOrganizationRecord,
 } from "../types/index.js";
 import { THEMIS_GLOBAL_TASK_DEFAULTS } from "./task-defaults.js";
@@ -2643,6 +2645,7 @@ function cancelWaitingActionRunsForWorkItem(
       updatedAt: now,
     };
     registry.saveAgentRun(nextRun);
+    releaseExecutionLeaseForRun(registry, run.runId, "revoked", now);
     cancelledRuns.push(registry.getAgentRun(run.runId) ?? nextRun);
   }
 
@@ -2676,10 +2679,48 @@ function interruptActiveRunsForWorkItem(
       updatedAt: now,
     };
     registry.saveAgentRun(nextRun);
+    releaseExecutionLeaseForRun(registry, run.runId, "released", now);
     interruptedRuns.push(registry.getAgentRun(run.runId) ?? nextRun);
   }
 
   return interruptedRuns;
+}
+
+function releaseExecutionLeaseForRun(
+  registry: ManagedAgentCoordinationStore,
+  runId: string,
+  status: StoredAgentExecutionLeaseRecord["status"],
+  now: string,
+): void {
+  const executionLease = registry.getActiveAgentExecutionLeaseByRun(runId);
+
+  if (!executionLease) {
+    return;
+  }
+
+  registry.saveAgentExecutionLease({
+    ...executionLease,
+    status,
+    leaseExpiresAt: now,
+    lastHeartbeatAt: now,
+    updatedAt: now,
+  });
+
+  const node = registry.getManagedAgentNode(executionLease.nodeId);
+
+  if (!node) {
+    return;
+  }
+
+  registry.saveManagedAgentNode(buildReleasedNodeSnapshot(node, now));
+}
+
+function buildReleasedNodeSnapshot(node: StoredManagedAgentNodeRecord, now: string): StoredManagedAgentNodeRecord {
+  return {
+    ...node,
+    slotAvailable: Math.max(0, Math.min(node.slotCapacity, node.slotAvailable + 1)),
+    updatedAt: now,
+  };
 }
 
 function normalizeNow(value?: string): string {

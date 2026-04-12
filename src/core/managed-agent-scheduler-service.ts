@@ -371,6 +371,15 @@ export class ManagedAgentSchedulerService {
     const nodes = this.registry.listManagedAgentNodesByOrganization(workItem.organizationId);
     const matched = nodes.filter((node) => canNodeRunWorkItem(node, workItem));
 
+    const preferredNodeId = resolveWaitingResumePreferredNodeId(this.registry, workItem.workItemId);
+    if (preferredNodeId) {
+      const preferredNode = matched.find((node) => node.nodeId === preferredNodeId);
+
+      if (preferredNode) {
+        return preferredNode;
+      }
+    }
+
     return matched[0] ?? null;
   }
 
@@ -595,6 +604,24 @@ function resolveLeaseNode(
   return registry.getManagedAgentNode(executionLease.nodeId);
 }
 
+function resolveWaitingResumePreferredNodeId(
+  registry: ManagedAgentSchedulerStore,
+  workItemId: string,
+): string | null {
+  const resumedRun = registry.listAgentRunsByWorkItem(workItemId)
+    .sort(compareRunsByUpdatedAtDesc)
+    .find((run) => run.status === "interrupted" && run.failureCode === "WAITING_RESUME_TRIGGERED");
+
+  if (!resumedRun) {
+    return null;
+  }
+
+  const executionLease = registry.listAgentExecutionLeasesByRun(resumedRun.runId)
+    .sort(compareLeasesByUpdatedAtDesc)[0];
+
+  return executionLease?.nodeId ?? null;
+}
+
 function canNodeRunWorkItem(
   node: StoredManagedAgentNodeRecord,
   workItem: StoredAgentWorkItemRecord,
@@ -640,4 +667,21 @@ function matchesCapabilities(capabilities: string[], required: string[]): boolea
 
 function dedupeStrings(values: Array<string | undefined | null>): string[] {
   return [...new Set(values.map((value) => normalizeOptionalText(value) ?? "").filter(Boolean))];
+}
+
+function compareRunsByUpdatedAtDesc(left: StoredAgentRunRecord, right: StoredAgentRunRecord): number {
+  return compareTimestampsDesc(left.updatedAt, right.updatedAt) || compareTimestampsDesc(left.createdAt, right.createdAt);
+}
+
+function compareLeasesByUpdatedAtDesc(left: StoredAgentExecutionLeaseRecord, right: StoredAgentExecutionLeaseRecord): number {
+  return compareTimestampsDesc(left.updatedAt, right.updatedAt) || compareTimestampsDesc(left.createdAt, right.createdAt);
+}
+
+function compareTimestampsDesc(left: string, right: string): number {
+  return toTimestamp(right) - toTimestamp(left);
+}
+
+function toTimestamp(value: string): number {
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? 0 : timestamp;
 }

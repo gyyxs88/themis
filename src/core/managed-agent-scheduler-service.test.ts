@@ -279,6 +279,119 @@ test("ManagedAgentSchedulerService 在节点能力不满足时会回退为无节
   }
 });
 
+test("ManagedAgentSchedulerService 会在 waiting 恢复后优先回原节点，并释放上一条 run 的 execution lease", () => {
+  const { root, registry, managedAgentsService, coordinationService, schedulerService } = createServiceContext();
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "老板",
+      createdAt: "2026-04-12T07:00:00.000Z",
+      updatedAt: "2026-04-12T07:00:00.000Z",
+    });
+
+    const backend = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "后端·衡",
+      departmentRole: "后端",
+      mission: "负责 waiting 恢复后的节点亲和性。",
+      now: "2026-04-12T07:01:00.000Z",
+    });
+
+    registry.saveManagedAgentNode({
+      nodeId: "node-worker-a",
+      organizationId: backend.organization.organizationId,
+      displayName: "Worker Node A",
+      status: "online",
+      slotCapacity: 1,
+      slotAvailable: 1,
+      labels: ["linux"],
+      workspaceCapabilities: [root],
+      credentialCapabilities: [],
+      providerCapabilities: [],
+      heartbeatTtlSeconds: 300,
+      lastHeartbeatAt: "2026-04-12T07:01:30.000Z",
+      createdAt: "2026-04-12T07:01:30.000Z",
+      updatedAt: "2026-04-12T07:01:30.000Z",
+    });
+    registry.saveManagedAgentNode({
+      nodeId: "node-worker-b",
+      organizationId: backend.organization.organizationId,
+      displayName: "Worker Node B",
+      status: "online",
+      slotCapacity: 1,
+      slotAvailable: 1,
+      labels: ["linux"],
+      workspaceCapabilities: [root],
+      credentialCapabilities: [],
+      providerCapabilities: [],
+      heartbeatTtlSeconds: 300,
+      lastHeartbeatAt: "2026-04-12T07:01:40.000Z",
+      createdAt: "2026-04-12T07:01:40.000Z",
+      updatedAt: "2026-04-12T07:01:40.000Z",
+    });
+
+    const dispatched = coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: backend.agent.agentId,
+      dispatchReason: "waiting-node-affinity",
+      goal: "验证 waiting 恢复后优先回原节点。",
+      now: "2026-04-12T07:02:00.000Z",
+    });
+
+    const firstClaim = schedulerService.claimNextRunnableWorkItem({
+      schedulerId: "scheduler-node-affinity",
+      now: "2026-04-12T07:03:00.000Z",
+    });
+
+    const firstNodeId = firstClaim?.node?.nodeId ?? "";
+    const fallbackNodeId = firstNodeId === "node-worker-a" ? "node-worker-b" : "node-worker-a";
+
+    assert.ok(firstNodeId);
+    assert.equal(firstClaim?.executionLease?.status, "active");
+    assert.equal(registry.getManagedAgentNode(firstNodeId)?.slotAvailable, 0);
+
+    schedulerService.markRunStarting(
+      firstClaim?.run.runId ?? "",
+      firstClaim?.run.leaseToken ?? "",
+      "2026-04-12T07:03:10.000Z",
+    );
+    schedulerService.markRunWaiting(
+      firstClaim?.run.runId ?? "",
+      firstClaim?.run.leaseToken ?? "",
+      "human",
+      "2026-04-12T07:03:20.000Z",
+    );
+
+    const resumed = coordinationService.respondToHumanWaitingWorkItem({
+      ownerPrincipalId: "principal-owner",
+      workItemId: dispatched.workItem.workItemId,
+      decision: "approve",
+      inputText: "继续执行",
+      now: "2026-04-12T07:04:00.000Z",
+    });
+
+    assert.equal(resumed.workItem.status, "queued");
+    assert.equal(resumed.resumedRuns.length, 1);
+    assert.equal(resumed.resumedRuns[0]?.status, "interrupted");
+    assert.equal(registry.getManagedAgentNode(firstNodeId)?.slotAvailable, 1);
+    assert.equal(registry.getAgentExecutionLease(firstClaim?.executionLease?.leaseId ?? "")?.status, "released");
+
+    const secondClaim = schedulerService.claimNextRunnableWorkItem({
+      schedulerId: "scheduler-node-affinity",
+      now: "2026-04-12T07:05:00.000Z",
+    });
+
+    assert.equal(secondClaim?.workItem.workItemId, dispatched.workItem.workItemId);
+    assert.equal(secondClaim?.node?.nodeId, firstNodeId);
+    assert.equal(secondClaim?.executionLease?.status, "active");
+    assert.equal(registry.getManagedAgentNode(firstNodeId)?.slotAvailable, 0);
+    assert.equal(registry.getManagedAgentNode(fallbackNodeId)?.slotAvailable, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("ManagedAgentSchedulerService 不会选择 TTL 已过期的节点，并会把它落成 offline", () => {
   const { root, registry, managedAgentsService, coordinationService, schedulerService } = createServiceContext();
 

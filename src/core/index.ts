@@ -12,6 +12,7 @@ export * from "./managed-agent-execution-service.js";
 export * from "./managed-agent-node-service.js";
 export * from "./managed-agent-scheduler-service.js";
 export * from "./managed-agent-worker-service.js";
+export * from "./managed-agent-worker-execution-service.js";
 export * from "./principal-actors-service.js";
 export * from "./principal-mcp-service.js";
 export * from "./principal-skills-service.js";
