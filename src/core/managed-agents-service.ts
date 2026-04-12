@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import type { SqliteCodexSessionRegistry, StoredPrincipalRecord } from "../storage/index.js";
+import type { ManagedAgentsStore, StoredAuthAccountRecord, StoredPrincipalRecord } from "../storage/index.js";
 import type {
   ApprovalPolicy,
   AgentAuditLogEventType,
@@ -37,11 +37,15 @@ import {
   WEB_SEARCH_MODES,
 } from "../types/index.js";
 import { THEMIS_GLOBAL_TASK_DEFAULTS } from "./task-defaults.js";
-import { readOpenAICompatibleProviderConfigs } from "./openai-compatible-provider.js";
+import {
+  readOpenAICompatibleProviderConfigs,
+  readOpenAICompatibleProviderSummaries,
+  type OpenAICompatibleProviderSummary,
+} from "./openai-compatible-provider.js";
 import { validateWorkspacePath } from "./session-workspace.js";
 
 export interface ManagedAgentsServiceOptions {
-  registry: SqliteCodexSessionRegistry;
+  registry: ManagedAgentsStore;
   workingDirectory?: string;
 }
 
@@ -73,6 +77,19 @@ export interface ManagedAgentExecutionBoundaryView {
   agent: StoredManagedAgentRecord;
   workspacePolicy: StoredAgentWorkspacePolicyRecord;
   runtimeProfile: StoredAgentRuntimeProfileRecord;
+}
+
+export interface ManagedAgentOwnerView {
+  organization: StoredOrganizationRecord | null;
+  principal: StoredPrincipalRecord | null;
+  agent: StoredManagedAgentRecord;
+}
+
+export interface ManagedAgentDetailView extends ManagedAgentOwnerView {
+  workspacePolicy: StoredAgentWorkspacePolicyRecord | null;
+  runtimeProfile: StoredAgentRuntimeProfileRecord | null;
+  authAccounts: StoredAuthAccountRecord[];
+  thirdPartyProviders: OpenAICompatibleProviderSummary[];
 }
 
 export interface ManagedAgentExecutionBoundaryWorkspacePolicyInput {
@@ -324,7 +341,7 @@ const PAUSED_IDLE_RECOVERY_THRESHOLD_HOURS = 14 * 24;
 const RECENT_IDLE_ACTIVITY_WINDOW_HOURS = 30 * 24;
 
 export class ManagedAgentsService {
-  private readonly registry: SqliteCodexSessionRegistry;
+  private readonly registry: ManagedAgentsStore;
   private readonly workingDirectory: string;
 
   constructor(options: ManagedAgentsServiceOptions) {
@@ -901,6 +918,38 @@ export class ManagedAgentsService {
     }
 
     return this.ensureManagedAgentExecutionBoundary(agent).agent;
+  }
+
+  getManagedAgentOwnerView(ownerPrincipalId: string, agentId: string): ManagedAgentOwnerView | null {
+    const agent = this.getManagedAgent(ownerPrincipalId, agentId);
+
+    if (!agent) {
+      return null;
+    }
+
+    return {
+      organization: this.registry.getOrganization(agent.organizationId),
+      principal: this.registry.getPrincipal(agent.principalId),
+      agent,
+    };
+  }
+
+  getManagedAgentDetailView(ownerPrincipalId: string, agentId: string): ManagedAgentDetailView | null {
+    const ownerView = this.getManagedAgentOwnerView(ownerPrincipalId, agentId);
+
+    if (!ownerView) {
+      return null;
+    }
+
+    const boundary = this.getManagedAgentExecutionBoundary(ownerPrincipalId, agentId);
+
+    return {
+      ...ownerView,
+      workspacePolicy: boundary?.workspacePolicy ?? null,
+      runtimeProfile: boundary?.runtimeProfile ?? null,
+      authAccounts: this.registry.listAuthAccounts(),
+      thirdPartyProviders: readOpenAICompatibleProviderSummaries(this.workingDirectory, this.registry),
+    };
   }
 
   getManagedAgentExecutionBoundary(

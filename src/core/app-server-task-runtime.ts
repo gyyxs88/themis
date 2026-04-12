@@ -1,5 +1,5 @@
 import { AppServerActionBridge } from "./app-server-action-bridge.js";
-import { SqliteCodexSessionRegistry } from "../storage/index.js";
+import { SqliteCodexSessionRegistry, SqliteManagedAgentControlPlaneStore } from "../storage/index.js";
 import {
   buildCodexProcessEnv,
   createCodexAuthStorageConfigOverrides,
@@ -43,6 +43,7 @@ import {
 import { translateAppServerNotification } from "./app-server-event-translator.js";
 import { ConversationService } from "./conversation-service.js";
 import { ManagedAgentCoordinationService } from "./managed-agent-coordination-service.js";
+import { ManagedAgentControlPlaneFacade } from "./managed-agent-control-plane-facade.js";
 import { ManagedAgentsService } from "./managed-agents-service.js";
 import { ManagedAgentSchedulerService } from "./managed-agent-scheduler-service.js";
 import {
@@ -201,7 +202,9 @@ export class AppServerTaskRuntime {
   private readonly identityLinkService: IdentityLinkService;
   private readonly conversationService: ConversationService;
   private readonly principalPersonaService: PrincipalPersonaService;
+  private readonly managedAgentControlPlaneStore: SqliteManagedAgentControlPlaneStore;
   private readonly managedAgentCoordinationService: ManagedAgentCoordinationService;
+  private readonly managedAgentControlPlaneFacade: ManagedAgentControlPlaneFacade;
   private readonly managedAgentsService: ManagedAgentsService;
   private readonly managedAgentSchedulerService: ManagedAgentSchedulerService;
   private readonly principalActorsService: PrincipalActorsService;
@@ -222,15 +225,21 @@ export class AppServerTaskRuntime {
     this.identityLinkService = new IdentityLinkService(this.runtimeStore);
     this.conversationService = new ConversationService(this.runtimeStore, this.identityLinkService);
     this.principalPersonaService = new PrincipalPersonaService(this.runtimeStore);
+    this.managedAgentControlPlaneStore = new SqliteManagedAgentControlPlaneStore(this.runtimeStore);
     this.managedAgentCoordinationService = new ManagedAgentCoordinationService({
-      registry: this.runtimeStore,
+      registry: this.managedAgentControlPlaneStore.coordinationStore,
     });
     this.managedAgentsService = new ManagedAgentsService({
-      registry: this.runtimeStore,
+      registry: this.managedAgentControlPlaneStore.managedAgentsStore,
       workingDirectory: this.workingDirectory,
     });
     this.managedAgentSchedulerService = new ManagedAgentSchedulerService({
-      registry: this.runtimeStore,
+      registry: this.managedAgentControlPlaneStore.schedulerStore,
+    });
+    this.managedAgentControlPlaneFacade = new ManagedAgentControlPlaneFacade({
+      managedAgentsService: this.managedAgentsService,
+      coordinationService: this.managedAgentCoordinationService,
+      schedulerService: this.managedAgentSchedulerService,
     });
     this.principalActorsService = new PrincipalActorsService({
       registry: this.runtimeStore,
@@ -998,6 +1007,14 @@ export class AppServerTaskRuntime {
 
   getWorkingDirectory(): string {
     return this.workingDirectory;
+  }
+
+  getManagedAgentControlPlaneStore(): SqliteManagedAgentControlPlaneStore {
+    return this.managedAgentControlPlaneStore;
+  }
+
+  getManagedAgentControlPlaneFacade(): ManagedAgentControlPlaneFacade {
+    return this.managedAgentControlPlaneFacade;
   }
 
   getIdentityLinkService(): IdentityLinkService {

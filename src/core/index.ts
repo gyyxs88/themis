@@ -7,6 +7,7 @@ export * from "./assistant-style.js";
 export * from "./identity-link-service.js";
 export * from "./principal-persona-service.js";
 export * from "./managed-agent-coordination-service.js";
+export * from "./managed-agent-control-plane-facade.js";
 export * from "./managed-agent-execution-service.js";
 export * from "./managed-agent-scheduler-service.js";
 export * from "./principal-actors-service.js";

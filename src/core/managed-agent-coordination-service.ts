@@ -1,4 +1,4 @@
-import type { SqliteCodexSessionRegistry, StoredPrincipalRecord } from "../storage/index.js";
+import type { ManagedAgentCoordinationStore, StoredPrincipalRecord } from "../storage/index.js";
 import type {
   AgentMessageType,
   ManagedAgentPriority,
@@ -20,7 +20,7 @@ const COLLABORATION_STALE_OPEN_WORK_ITEM_MS = 6 * 60 * 60 * 1000;
 const ACTIVE_AGENT_RUN_STATUSES = new Set<string>(["created", "starting", "running", "waiting_action"]);
 
 export interface ManagedAgentCoordinationServiceOptions {
-  registry: SqliteCodexSessionRegistry;
+  registry: ManagedAgentCoordinationStore;
   mailboxLeaseTtlMs?: number;
 }
 
@@ -123,6 +123,16 @@ export interface ManagedAgentWorkItemCollaborationView {
   parentTargetAgent: StoredManagedAgentRecord | null;
   childSummary: ManagedAgentChildWorkItemSummary;
   childWorkItems: ManagedAgentChildWorkItemView[];
+}
+
+export interface ManagedAgentWorkItemDetailView {
+  organization: StoredOrganizationRecord | null;
+  workItem: StoredAgentWorkItemRecord;
+  targetAgent: StoredManagedAgentRecord | null;
+  sourceAgent: StoredManagedAgentRecord | null;
+  sourcePrincipal: StoredPrincipalRecord | null;
+  messages: StoredAgentMessageRecord[];
+  collaboration: ManagedAgentWorkItemCollaborationView;
 }
 
 export interface ManagedAgentMailboxItem {
@@ -322,7 +332,7 @@ export interface OrganizationGovernanceOverview {
 }
 
 export class ManagedAgentCoordinationService {
-  private readonly registry: SqliteCodexSessionRegistry;
+  private readonly registry: ManagedAgentCoordinationStore;
   private readonly mailboxLeaseTtlMs: number;
 
   constructor(options: ManagedAgentCoordinationServiceOptions) {
@@ -495,6 +505,26 @@ export class ManagedAgentCoordinationService {
   listMessagesForWorkItem(ownerPrincipalId: string, workItemId: string): StoredAgentMessageRecord[] {
     const workItem = this.requireOwnedWorkItem(ownerPrincipalId, workItemId);
     return this.registry.listAgentMessagesByWorkItem(workItem.workItemId);
+  }
+
+  getWorkItemDetailView(ownerPrincipalId: string, workItemId: string): ManagedAgentWorkItemDetailView | null {
+    const workItem = this.getWorkItem(ownerPrincipalId, workItemId);
+
+    if (!workItem) {
+      return null;
+    }
+
+    return {
+      organization: this.registry.getOrganization(workItem.organizationId),
+      workItem,
+      targetAgent: this.registry.getManagedAgent(workItem.targetAgentId),
+      sourceAgent: normalizeOptionalText(workItem.sourceAgentId)
+        ? this.registry.getManagedAgent(workItem.sourceAgentId as string)
+        : null,
+      sourcePrincipal: this.registry.getPrincipal(workItem.sourcePrincipalId),
+      messages: this.registry.listAgentMessagesByWorkItem(workItem.workItemId),
+      collaboration: this.getWorkItemCollaboration(ownerPrincipalId, workItem.workItemId),
+    };
   }
 
   createAgentHandoff(input: CreateAgentHandoffInput): CreateAgentHandoffResult {
@@ -1929,7 +1959,7 @@ function managerHotspotNeedsAttention(item: OrganizationGovernanceManagerHotspot
 }
 
 function resolveDashboardLatestHandoff(
-  registry: SqliteCodexSessionRegistry,
+  registry: ManagedAgentCoordinationStore,
   parentWorkItem: StoredAgentWorkItemRecord,
   childWorkItems: StoredAgentWorkItemRecord[],
 ): StoredAgentHandoffRecord | null {
@@ -1948,14 +1978,14 @@ function resolveDashboardLatestHandoff(
 }
 
 function resolveDashboardLatestWaitingMessage(
-  registry: SqliteCodexSessionRegistry,
+  registry: ManagedAgentCoordinationStore,
   childWorkItems: StoredAgentWorkItemRecord[],
 ): StoredAgentMessageRecord | null {
   return resolveDashboardLatestWaitingContext(registry, childWorkItems)?.message ?? null;
 }
 
 function resolveDashboardLatestWaitingContext(
-  registry: SqliteCodexSessionRegistry,
+  registry: ManagedAgentCoordinationStore,
   childWorkItems: StoredAgentWorkItemRecord[],
 ): { workItem: StoredAgentWorkItemRecord; message: StoredAgentMessageRecord | null } | null {
   let latest: { workItem: StoredAgentWorkItemRecord; message: StoredAgentMessageRecord | null; at: string } | null = null;
@@ -2510,7 +2540,7 @@ function buildEscalatedHumanWaitingActionRequest(input: {
 }
 
 function acknowledgeOutstandingWaitingMailboxEntries(
-  registry: SqliteCodexSessionRegistry,
+  registry: ManagedAgentCoordinationStore,
   workItem: StoredAgentWorkItemRecord,
   latestWaitingMessage: StoredAgentMessageRecord | null,
   now: string,
@@ -2562,7 +2592,7 @@ function acknowledgeOutstandingWaitingMailboxEntries(
 }
 
 function acknowledgeOpenMailboxEntriesForWorkItem(
-  registry: SqliteCodexSessionRegistry,
+  registry: ManagedAgentCoordinationStore,
   organizationId: string,
   workItemId: string,
   now: string,
@@ -2591,7 +2621,7 @@ function acknowledgeOpenMailboxEntriesForWorkItem(
 }
 
 function cancelWaitingActionRunsForWorkItem(
-  registry: SqliteCodexSessionRegistry,
+  registry: ManagedAgentCoordinationStore,
   workItemId: string,
   now: string,
 ): StoredAgentRunRecord[] {
@@ -2620,7 +2650,7 @@ function cancelWaitingActionRunsForWorkItem(
 }
 
 function interruptActiveRunsForWorkItem(
-  registry: SqliteCodexSessionRegistry,
+  registry: ManagedAgentCoordinationStore,
   workItemId: string,
   now: string,
   options: {

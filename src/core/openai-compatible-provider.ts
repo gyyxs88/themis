@@ -6,6 +6,18 @@ import {
   type StoredThirdPartyProviderRecord,
 } from "../storage/index.js";
 
+type OpenAICompatibleProviderReadRegistry = Pick<SqliteCodexSessionRegistry,
+  | "listThirdPartyProviderModels"
+  | "listThirdPartyProviders"
+  | "saveThirdPartyProvider"
+  | "saveThirdPartyProviderModel"
+>;
+
+type OpenAICompatibleProviderWriteRegistry = OpenAICompatibleProviderReadRegistry & Pick<SqliteCodexSessionRegistry,
+  | "updateThirdPartyModelCapabilities"
+  | "updateThirdPartyProviderDefaultModel"
+>;
+
 export const OPENAI_COMPATIBLE_PROVIDER_ID = "themis_openai_compatible";
 
 export interface OpenAICompatibleProviderModelCapabilities {
@@ -185,7 +197,7 @@ const DEFAULT_REASONING_LEVELS = ["low", "medium", "high", "xhigh"];
 
 export function readOpenAICompatibleProviderConfigs(
   cwd: string,
-  registry?: SqliteCodexSessionRegistry,
+  registry?: OpenAICompatibleProviderReadRegistry,
 ): OpenAICompatibleProviderConfig[] {
   const envConfig = readProviderConfigFromEnv();
 
@@ -200,21 +212,21 @@ export function readOpenAICompatibleProviderConfigs(
 
 export function readOpenAICompatibleProviderSummaries(
   cwd: string,
-  registry?: SqliteCodexSessionRegistry,
+  registry?: OpenAICompatibleProviderReadRegistry,
 ): OpenAICompatibleProviderSummary[] {
   return readOpenAICompatibleProviderConfigs(cwd, registry).map(toProviderSummary);
 }
 
 export function readOpenAICompatibleProviderConfig(
   cwd: string,
-  registry?: SqliteCodexSessionRegistry,
+  registry?: OpenAICompatibleProviderReadRegistry,
 ): OpenAICompatibleProviderConfig | null {
   return readOpenAICompatibleProviderConfigs(cwd, registry)[0] ?? null;
 }
 
 export function readOpenAICompatibleProviderSummary(
   cwd: string,
-  registry?: SqliteCodexSessionRegistry,
+  registry?: OpenAICompatibleProviderReadRegistry,
 ): OpenAICompatibleProviderSummary | null {
   return readOpenAICompatibleProviderSummaries(cwd, registry)[0] ?? null;
 }
@@ -222,7 +234,7 @@ export function readOpenAICompatibleProviderSummary(
 export function addOpenAICompatibleProvider(
   cwd: string,
   input: OpenAICompatibleProviderCreateInput,
-  registry?: SqliteCodexSessionRegistry,
+  registry?: OpenAICompatibleProviderWriteRegistry,
 ): OpenAICompatibleProviderConfig {
   const normalized = normalizeProviderCreateInput(input);
   const providerRegistry = getWritableProviderRegistry(cwd, registry);
@@ -252,7 +264,7 @@ export function addOpenAICompatibleProvider(
 export function addOpenAICompatibleProviderModel(
   cwd: string,
   input: OpenAICompatibleProviderModelCreateInput,
-  registry?: SqliteCodexSessionRegistry,
+  registry?: OpenAICompatibleProviderWriteRegistry,
 ): OpenAICompatibleProviderConfig {
   const normalized = normalizeProviderModelCreateInput(input);
   const providerRegistry = getWritableProviderRegistry(cwd, registry);
@@ -296,7 +308,7 @@ export function writeOpenAICompatibleProviderCodexTaskSupport(
   providerId: string,
   model: string,
   supportsCodexTasks: boolean,
-  registry?: SqliteCodexSessionRegistry,
+  registry?: OpenAICompatibleProviderWriteRegistry,
 ): OpenAICompatibleProviderConfig {
   const normalizedProviderId = normalizeRequiredText(providerId);
   const normalizedModel = normalizeRequiredText(model);
@@ -340,7 +352,7 @@ export function writeOpenAICompatibleProviderPreferredEndpoint(
   cwd: string,
   providerId: string,
   preferredBaseUrl: string,
-  registry?: SqliteCodexSessionRegistry,
+  registry?: OpenAICompatibleProviderWriteRegistry,
 ): OpenAICompatibleProviderConfig {
   const normalizedProviderId = normalizeRequiredText(providerId);
   const normalizedBaseUrl = normalizeRequiredText(preferredBaseUrl);
@@ -519,7 +531,7 @@ function toProviderSummary(config: OpenAICompatibleProviderConfig): OpenAICompat
 function findProviderConfig(
   cwd: string,
   providerId: string,
-  registry?: SqliteCodexSessionRegistry,
+  registry?: OpenAICompatibleProviderReadRegistry,
 ): OpenAICompatibleProviderConfig {
   const normalizedProviderId = normalizeRequiredText(providerId);
   const provider = readOpenAICompatibleProviderConfigs(cwd, registry)
@@ -532,21 +544,24 @@ function findProviderConfig(
   return provider;
 }
 
-function getProviderRegistry(registry?: SqliteCodexSessionRegistry): SqliteCodexSessionRegistry {
+function getProviderRegistry(registry?: OpenAICompatibleProviderReadRegistry): OpenAICompatibleProviderReadRegistry {
   return registry ?? new SqliteCodexSessionRegistry();
 }
 
-function getWritableProviderRegistry(cwd: string, registry?: SqliteCodexSessionRegistry): SqliteCodexSessionRegistry {
+function getWritableProviderRegistry(
+  cwd: string,
+  registry?: OpenAICompatibleProviderWriteRegistry,
+): OpenAICompatibleProviderWriteRegistry {
   if (readProviderConfigFromEnv()) {
     throw new Error("当前第三方兼容 provider 来自环境变量，不能在设置里直接修改。");
   }
 
-  const providerRegistry = getProviderRegistry(registry);
+  const providerRegistry = registry ?? new SqliteCodexSessionRegistry();
   ensureProviderConfigBootstrap(cwd, providerRegistry);
   return providerRegistry;
 }
 
-function ensureProviderConfigBootstrap(cwd: string, registry: SqliteCodexSessionRegistry): void {
+function ensureProviderConfigBootstrap(cwd: string, registry: OpenAICompatibleProviderReadRegistry): void {
   if (registry.listThirdPartyProviders().length > 0) {
     return;
   }
@@ -597,7 +612,7 @@ function ensureProviderConfigBootstrap(cwd: string, registry: SqliteCodexSession
 
 function readProviderConfigsFromDatabase(
   cwd: string,
-  registry: SqliteCodexSessionRegistry,
+  registry: OpenAICompatibleProviderReadRegistry,
 ): OpenAICompatibleProviderConfig[] {
   const providers = registry.listThirdPartyProviders();
   const models = registry.listThirdPartyProviderModels();

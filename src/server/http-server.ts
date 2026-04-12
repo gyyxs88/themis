@@ -107,6 +107,15 @@ import {
   handlePluginsUninstall,
 } from "./http-plugins.js";
 import {
+  handlePlatformAgentCreate,
+  handlePlatformAgentDetail,
+  handlePlatformAgentList,
+  handlePlatformRunDetail,
+  handlePlatformRunList,
+  handlePlatformWorkItemDetail,
+  handlePlatformWorkItemDispatch,
+} from "./http-platform.js";
+import {
   handleScheduledTaskCancel,
   handleScheduledTaskCreate,
   handleScheduledTaskList,
@@ -166,7 +175,7 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
   });
   const runtimeRegistry = normalizeRuntimeRegistry(runtime, defaultAppServerRuntime, options.runtimeRegistry);
   const managedAgentExecutionService = options.managedAgentExecutionService ?? new ManagedAgentExecutionService({
-    registry: runtime.getRuntimeStore(),
+    registry: defaultAppServerRuntime.getManagedAgentControlPlaneStore().executionStateStore,
     runtime: defaultAppServerRuntime,
     schedulerService: defaultAppServerRuntime.getManagedAgentSchedulerService(),
     coordinationService: defaultAppServerRuntime.getManagedAgentCoordinationService(),
@@ -187,6 +196,7 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
   });
   const runtimeStore = runtime.getRuntimeStore();
   const webAccessService = new WebAccessService({ registry: runtimeStore });
+  const platformControlPlaneFacade = defaultAppServerRuntime.getManagedAgentControlPlaneFacade();
   const updateService = options.updateService ?? new ThemisUpdateService({
     workingDirectory: runtime.getWorkingDirectory(),
   });
@@ -426,6 +436,34 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/agents/mailbox/respond") {
         return handleAgentMailboxRespond(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/create") {
+        return handlePlatformAgentCreate(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/list") {
+        return handlePlatformAgentList(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/detail") {
+        return handlePlatformAgentDetail(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/work-items/dispatch") {
+        return handlePlatformWorkItemDispatch(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/work-items/detail") {
+        return handlePlatformWorkItemDetail(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/runs/list") {
+        return handlePlatformRunList(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/runs/detail") {
+        return handlePlatformRunDetail(request, response, platformControlPlaneFacade);
       }
 
       if (request.method === "POST" && url.pathname === "/api/actors/list") {

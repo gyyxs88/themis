@@ -38,6 +38,28 @@ npm ci
 npm run build
 ```
 
+如果你当前机器上已经有一个历史正式目录，但它不是 `git clone`，不要直接在原目录里硬改。更稳的一次性迁移方式是：
+
+```bash
+cd ~/services
+git clone https://github.com/gyyxs88/themis.git themis-prod-next
+cd ~/services/themis-prod-next
+npm ci --include=dev
+npm run build
+
+systemctl --user stop themis-prod.service
+cp ~/services/themis-prod/.env.local ~/services/themis-prod-next/.env.local
+cp -a ~/services/themis-prod/.codex ~/services/themis-prod-next/.codex
+cp -a ~/services/themis-prod/infra/local ~/services/themis-prod-next/infra/local
+
+mkdir -p ~/services/themis-prod-backups
+mv ~/services/themis-prod ~/services/themis-prod-backups/$(date +%Y%m%d-%H%M%S)
+mv ~/services/themis-prod-next ~/services/themis-prod
+systemctl --user start themis-prod.service
+```
+
+这条迁移路径的目的不是“省一步 clone”，而是把正式目录补成后续 `./themis update apply` 可识别的公开仓 `git clone`。旁路先 build、最后再停服务切换，能把停机时间压到最短。
+
 ## 2. 准备正式配置
 
 至少确认下面这些键：

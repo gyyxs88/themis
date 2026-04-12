@@ -1,6 +1,12 @@
 # Themis 持久化合伙人 / 数字员工架构设计
 
-更新时间：2026-04-11 19:10 CST
+更新时间：2026-04-12 12:05 CST
+
+补充说明：
+
+- 本文主要描述“当前 Themis 内部的持久化数字员工架构”和其设计边界。
+- 如果后续要把这套能力继续上收成“局域网统一控制面 + 多入口 Themis + 多执行节点”的公司级平台，另见：[Themis 局域网多节点硅基员工平台方案（V1 草案）](./themis-silicon-employee-platform-v1.md)。
+- 路线与阶段计划见：[分阶段落地计划](./themis-silicon-employee-platform-roadmap-plan.md)、[Phase 1 控制面底座实施计划](./themis-silicon-employee-platform-phase-1-control-plane-plan.md)、[Phase 2 节点模型与调度租约实施计划](./themis-silicon-employee-platform-phase-2-node-model-plan.md)。
 
 ## 0. 当前实现快照
 

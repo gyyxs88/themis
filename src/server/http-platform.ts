@@ -1,0 +1,462 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ManagedAgentControlPlaneFacade } from "../core/managed-agent-control-plane-facade.js";
+import {
+  MANAGED_AGENT_PRIORITIES,
+  MANAGED_AGENT_WORK_ITEM_SOURCE_TYPES,
+  type ManagedAgentPriority,
+  type ManagedAgentWorkItemSourceType,
+} from "../types/index.js";
+import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
+import { readJsonBody } from "./http-request.js";
+import { writeJson } from "./http-responses.js";
+
+interface PlatformAgentCreatePayload {
+  ownerPrincipalId: string;
+  agent: {
+    displayName?: string;
+    departmentRole: string;
+    mission?: string;
+    organizationId?: string;
+    supervisorAgentId?: string;
+  };
+}
+
+interface PlatformAgentListPayload {
+  ownerPrincipalId: string;
+}
+
+interface PlatformAgentDetailPayload extends PlatformAgentListPayload {
+  agentId: string;
+}
+
+interface PlatformWorkItemDispatchPayload extends PlatformAgentListPayload {
+  workItem: {
+    targetAgentId: string;
+    sourceType?: ManagedAgentWorkItemSourceType;
+    sourceAgentId?: string;
+    sourcePrincipalId?: string;
+    parentWorkItemId?: string;
+    dispatchReason: string;
+    goal: string;
+    contextPacket?: unknown;
+    priority?: ManagedAgentPriority;
+    workspacePolicySnapshot?: unknown;
+    runtimeProfileSnapshot?: unknown;
+    scheduledAt?: string;
+  };
+}
+
+interface PlatformWorkItemDetailPayload extends PlatformAgentListPayload {
+  workItemId: string;
+}
+
+interface PlatformRunListPayload extends PlatformAgentListPayload {
+  agentId?: string;
+  workItemId?: string;
+}
+
+interface PlatformRunDetailPayload extends PlatformAgentListPayload {
+  runId: string;
+}
+
+async function readAndNormalizePayload<T>(
+  request: IncomingMessage,
+  response: ServerResponse,
+  normalize: (value: unknown) => T,
+): Promise<T | null> {
+  try {
+    return normalize(await readJsonBody(request));
+  } catch (error) {
+    writeJson(response, resolveErrorStatusCode(error, false), {
+      error: createTaskError(error, false),
+    });
+    return null;
+  }
+}
+
+function writePlatformError(response: ServerResponse, error: unknown): void {
+  writeJson(response, resolveErrorStatusCode(error, true), {
+    error: createTaskError(error, true),
+  });
+}
+
+export async function handlePlatformAgentCreate(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformAgentCreatePayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.createManagedAgent({
+      ownerPrincipalId: payload.ownerPrincipalId,
+      departmentRole: payload.agent.departmentRole,
+      ...(payload.agent.displayName ? { displayName: payload.agent.displayName } : {}),
+      ...(payload.agent.mission ? { mission: payload.agent.mission } : {}),
+      ...(payload.agent.organizationId ? { organizationId: payload.agent.organizationId } : {}),
+      ...(payload.agent.supervisorAgentId ? { supervisorAgentId: payload.agent.supervisorAgentId } : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      organization: result.organization,
+      principal: result.principal,
+      agent: result.agent,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformAgentList(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformOwnerPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.listManagedAgents(payload.ownerPrincipalId);
+    writeJson(response, 200, {
+      ok: true,
+      organizations: result.organizations,
+      agents: result.agents,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformAgentDetail(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformAgentDetailPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const detail = facade.getManagedAgentDetailView(payload.ownerPrincipalId, payload.agentId);
+    if (!detail) {
+      throw new Error("Managed agent not found.");
+    }
+
+    writeJson(response, 200, {
+      ok: true,
+      organization: detail.organization,
+      principal: detail.principal,
+      agent: detail.agent,
+      workspacePolicy: detail.workspacePolicy,
+      runtimeProfile: detail.runtimeProfile,
+      authAccounts: detail.authAccounts,
+      thirdPartyProviders: detail.thirdPartyProviders,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformWorkItemDispatch(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformWorkItemDispatchPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.dispatchWorkItem({
+      ownerPrincipalId: payload.ownerPrincipalId,
+      targetAgentId: payload.workItem.targetAgentId,
+      ...(payload.workItem.sourceType ? { sourceType: payload.workItem.sourceType } : {}),
+      ...(payload.workItem.sourceAgentId ? { sourceAgentId: payload.workItem.sourceAgentId } : {}),
+      sourcePrincipalId: payload.workItem.sourcePrincipalId ?? payload.ownerPrincipalId,
+      ...(payload.workItem.parentWorkItemId ? { parentWorkItemId: payload.workItem.parentWorkItemId } : {}),
+      dispatchReason: payload.workItem.dispatchReason,
+      goal: payload.workItem.goal,
+      ...(hasOwn(payload.workItem, "contextPacket") ? { contextPacket: payload.workItem.contextPacket } : {}),
+      ...(payload.workItem.priority ? { priority: payload.workItem.priority } : {}),
+      ...(hasOwn(payload.workItem, "workspacePolicySnapshot")
+        ? { workspacePolicySnapshot: payload.workItem.workspacePolicySnapshot }
+        : {}),
+      ...(hasOwn(payload.workItem, "runtimeProfileSnapshot")
+        ? { runtimeProfileSnapshot: payload.workItem.runtimeProfileSnapshot }
+        : {}),
+      ...(payload.workItem.scheduledAt ? { scheduledAt: payload.workItem.scheduledAt } : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      organization: result.organization,
+      targetAgent: result.targetAgent,
+      workItem: result.workItem,
+      ...(result.dispatchMessage ? { dispatchMessage: result.dispatchMessage } : {}),
+      ...(result.mailboxEntry ? { mailboxEntry: result.mailboxEntry } : {}),
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformWorkItemDetail(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformWorkItemDetailPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const detail = facade.getWorkItemDetailView(payload.ownerPrincipalId, payload.workItemId);
+    if (!detail) {
+      throw new Error("Work item not found.");
+    }
+
+    writeJson(response, 200, {
+      ok: true,
+      organization: detail.organization,
+      workItem: detail.workItem,
+      targetAgent: detail.targetAgent,
+      sourceAgent: detail.sourceAgent,
+      sourcePrincipal: detail.sourcePrincipal,
+      messages: detail.messages,
+      collaboration: detail.collaboration,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformRunList(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformRunListPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const runs = facade.listRuns({
+      ownerPrincipalId: payload.ownerPrincipalId,
+      ...(payload.agentId ? { agentId: payload.agentId } : {}),
+      ...(payload.workItemId ? { workItemId: payload.workItemId } : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      runs,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformRunDetail(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformRunDetailPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const detail = facade.getRunDetailView(payload.ownerPrincipalId, payload.runId);
+    if (!detail) {
+      throw new Error("Run not found.");
+    }
+
+    writeJson(response, 200, {
+      ok: true,
+      organization: detail.organization,
+      targetAgent: detail.targetAgent,
+      workItem: detail.workItem,
+      run: detail.run,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+function normalizePlatformAgentCreatePayload(value: unknown): PlatformAgentCreatePayload {
+  if (!isRecord(value) || !isRecord(value.agent)) {
+    throw new Error("Request body.agent must be an object.");
+  }
+
+  const displayName = readOptionalString(value.agent.displayName);
+  const mission = readOptionalString(value.agent.mission);
+  const organizationId = readOptionalString(value.agent.organizationId);
+  const supervisorAgentId = readOptionalString(value.agent.supervisorAgentId);
+
+  return {
+    ownerPrincipalId: readRequiredString(value.ownerPrincipalId, "ownerPrincipalId"),
+    agent: {
+      departmentRole: readRequiredString(value.agent.departmentRole, "agent.departmentRole"),
+      ...(displayName ? { displayName } : {}),
+      ...(mission ? { mission } : {}),
+      ...(organizationId ? { organizationId } : {}),
+      ...(supervisorAgentId ? { supervisorAgentId } : {}),
+    },
+  };
+}
+
+function normalizePlatformOwnerPayload(value: unknown): PlatformAgentListPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return {
+    ownerPrincipalId: readRequiredString(value.ownerPrincipalId, "ownerPrincipalId"),
+  };
+}
+
+function normalizePlatformAgentDetailPayload(value: unknown): PlatformAgentDetailPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    agentId: readRequiredString(value.agentId, "agentId"),
+  };
+}
+
+function normalizePlatformWorkItemDispatchPayload(value: unknown): PlatformWorkItemDispatchPayload {
+  if (!isRecord(value) || !isRecord(value.workItem)) {
+    throw new Error("Request body.workItem must be an object.");
+  }
+
+  const sourceType = readOptionalEnum(
+    value.workItem.sourceType,
+    MANAGED_AGENT_WORK_ITEM_SOURCE_TYPES,
+    "workItem.sourceType",
+  );
+  const priority = readOptionalEnum(
+    value.workItem.priority,
+    MANAGED_AGENT_PRIORITIES,
+    "workItem.priority",
+  );
+  const sourceAgentId = readOptionalString(value.workItem.sourceAgentId);
+  const sourcePrincipalId = readOptionalString(value.workItem.sourcePrincipalId);
+  const parentWorkItemId = readOptionalString(value.workItem.parentWorkItemId);
+  const scheduledAt = readOptionalString(value.workItem.scheduledAt);
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    workItem: {
+      targetAgentId: readRequiredString(value.workItem.targetAgentId, "workItem.targetAgentId"),
+      ...(sourceType ? { sourceType } : {}),
+      ...(sourceAgentId ? { sourceAgentId } : {}),
+      ...(sourcePrincipalId ? { sourcePrincipalId } : {}),
+      ...(parentWorkItemId ? { parentWorkItemId } : {}),
+      dispatchReason: readRequiredString(value.workItem.dispatchReason, "workItem.dispatchReason"),
+      goal: readRequiredString(value.workItem.goal, "workItem.goal"),
+      ...(hasOwn(value.workItem, "contextPacket") ? { contextPacket: value.workItem.contextPacket } : {}),
+      ...(priority ? { priority } : {}),
+      ...(hasOwn(value.workItem, "workspacePolicySnapshot")
+        ? { workspacePolicySnapshot: value.workItem.workspacePolicySnapshot }
+        : {}),
+      ...(hasOwn(value.workItem, "runtimeProfileSnapshot")
+        ? { runtimeProfileSnapshot: value.workItem.runtimeProfileSnapshot }
+        : {}),
+      ...(scheduledAt ? { scheduledAt } : {}),
+    },
+  };
+}
+
+function normalizePlatformWorkItemDetailPayload(value: unknown): PlatformWorkItemDetailPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    workItemId: readRequiredString(value.workItemId, "workItemId"),
+  };
+}
+
+function normalizePlatformRunListPayload(value: unknown): PlatformRunListPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  const agentId = readOptionalString(value.agentId);
+  const workItemId = readOptionalString(value.workItemId);
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    ...(agentId ? { agentId } : {}),
+    ...(workItemId ? { workItemId } : {}),
+  };
+}
+
+function normalizePlatformRunDetailPayload(value: unknown): PlatformRunDetailPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    runId: readRequiredString(value.runId, "runId"),
+  };
+}
+
+function readRequiredString(value: unknown, fieldName: string): string {
+  const normalized = readOptionalString(value);
+
+  if (!normalized) {
+    throw new Error(`${fieldName} is required.`);
+  }
+
+  return normalized;
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function readOptionalEnum<T extends readonly string[]>(
+  value: unknown,
+  candidates: T,
+  fieldName: string,
+): T[number] | undefined {
+  const normalized = readOptionalString(value);
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (!candidates.includes(normalized)) {
+    throw new Error(`${fieldName} is invalid.`);
+  }
+
+  return normalized as T[number];
+}
+
+function hasOwn(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}

@@ -1,4 +1,4 @@
-import type { SqliteCodexSessionRegistry, StoredPrincipalRecord } from "../storage/index.js";
+import type { ManagedAgentSchedulerStore, StoredPrincipalRecord } from "../storage/index.js";
 import type {
   AgentRunStatus,
   ManagedAgentWorkItemStatus,
@@ -13,7 +13,7 @@ const DEFAULT_LEASE_TTL_MS = 5 * 60 * 1000;
 const ACTIVE_RUN_STATUSES = new Set<AgentRunStatus>(["created", "starting", "running", "waiting_action"]);
 
 export interface ManagedAgentSchedulerServiceOptions {
-  registry: SqliteCodexSessionRegistry;
+  registry: ManagedAgentSchedulerStore;
   defaultSchedulerId?: string;
   leaseTtlMs?: number;
 }
@@ -43,8 +43,15 @@ export interface ManagedAgentSchedulerTickResult {
   claimed: ManagedAgentSchedulerClaim | null;
 }
 
+export interface ManagedAgentRunDetailView {
+  organization: StoredOrganizationRecord | null;
+  targetAgent: StoredManagedAgentRecord | null;
+  workItem: StoredAgentWorkItemRecord | null;
+  run: StoredAgentRunRecord;
+}
+
 export class ManagedAgentSchedulerService {
-  private readonly registry: SqliteCodexSessionRegistry;
+  private readonly registry: ManagedAgentSchedulerStore;
   private readonly defaultSchedulerId: string;
   private readonly leaseTtlMs: number;
 
@@ -84,6 +91,21 @@ export class ManagedAgentSchedulerService {
     }
 
     return this.isOrganizationOwnedBy(run.organizationId, owner.principalId) ? run : null;
+  }
+
+  getRunDetailView(ownerPrincipalId: string, runId: string): ManagedAgentRunDetailView | null {
+    const run = this.getRun(ownerPrincipalId, runId);
+
+    if (!run) {
+      return null;
+    }
+
+    return {
+      organization: this.registry.getOrganization(run.organizationId),
+      targetAgent: this.registry.getManagedAgent(run.targetAgentId),
+      workItem: this.registry.getAgentWorkItem(run.workItemId),
+      run,
+    };
   }
 
   tick(input: ClaimNextRunnableWorkItemInput = {}): ManagedAgentSchedulerTickResult {

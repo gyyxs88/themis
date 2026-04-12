@@ -28,7 +28,7 @@ const appServerRuntime = new AppServerTaskRuntime({
   actionBridge,
 });
 const managedAgentExecutionService = new ManagedAgentExecutionService({
-  registry: runtime.getRuntimeStore(),
+  registry: appServerRuntime.getManagedAgentControlPlaneStore().executionStateStore,
   runtime: appServerRuntime,
   schedulerService: appServerRuntime.getManagedAgentSchedulerService(),
   coordinationService: appServerRuntime.getManagedAgentCoordinationService(),

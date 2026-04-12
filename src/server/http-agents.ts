@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { CodexTaskRuntime } from "../core/codex-runtime.js";
 import type { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
-import { readOpenAICompatibleProviderSummaries } from "../core/openai-compatible-provider.js";
 import {
   MANAGED_AGENT_IDLE_RECOVERY_ACTIONS,
   MANAGED_AGENT_PRIORITIES,
@@ -334,7 +333,7 @@ export async function handleAgentCreate(
       ...(payload.agent.organizationId ? { organizationId: payload.agent.organizationId } : {}),
       ...(payload.agent.supervisorAgentId ? { supervisorAgentId: payload.agent.supervisorAgentId } : {}),
     };
-    const result = runtime.getManagedAgentsService().createManagedAgent(createInput);
+    const result = runtime.getManagedAgentControlPlaneFacade().createManagedAgent(createInput);
 
     writeJson(response, 200, {
       ok: true,
@@ -361,13 +360,12 @@ export async function handleAgentList(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const organizations = runtime.getManagedAgentsService().listOrganizations(identity.principalId);
-    const agents = runtime.getManagedAgentsService().listManagedAgents(identity.principalId);
+    const result = runtime.getManagedAgentControlPlaneFacade().listManagedAgents(identity.principalId);
 
     writeJson(response, 200, {
       identity,
-      organizations,
-      agents,
+      organizations: result.organizations,
+      agents: result.agents,
     });
   } catch (error) {
     writeManagedAgentBoundaryError(response, error);
@@ -387,31 +385,24 @@ export async function handleAgentDetail(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const agent = runtime.getManagedAgentsService().getManagedAgent(identity.principalId, payload.agentId);
+    const detail = runtime.getManagedAgentControlPlaneFacade().getManagedAgentDetailView(
+      identity.principalId,
+      payload.agentId,
+    );
 
-    if (!agent) {
+    if (!detail) {
       throw new Error("Managed agent does not exist.");
     }
 
-    const principal = runtime.getRuntimeStore().getPrincipal(agent.principalId);
-    const organization = runtime.getRuntimeStore().getOrganization(agent.organizationId);
-    const boundary = runtime.getManagedAgentsService().getManagedAgentExecutionBoundary(
-      identity.principalId,
-      agent.agentId,
-    );
-
     writeJson(response, 200, {
       identity,
-      organization,
-      principal,
-      agent,
-      workspacePolicy: boundary?.workspacePolicy ?? null,
-      runtimeProfile: boundary?.runtimeProfile ?? null,
-      authAccounts: runtime.getRuntimeStore().listAuthAccounts(),
-      thirdPartyProviders: readOpenAICompatibleProviderSummaries(
-        runtime.getWorkingDirectory(),
-        runtime.getRuntimeStore(),
-      ),
+      organization: detail.organization,
+      principal: detail.principal,
+      agent: detail.agent,
+      workspacePolicy: detail.workspacePolicy,
+      runtimeProfile: detail.runtimeProfile,
+      authAccounts: detail.authAccounts,
+      thirdPartyProviders: detail.thirdPartyProviders,
     });
   } catch (error) {
     writeManagedAgentBoundaryError(response, error);
@@ -464,21 +455,22 @@ async function handleAgentLifecycleUpdate(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const service = runtime.getManagedAgentsService();
-    const agent = action === "pause"
-      ? service.pauseManagedAgent(identity.principalId, payload.agentId)
-      : action === "resume"
-        ? service.resumeManagedAgent(identity.principalId, payload.agentId)
-        : service.archiveManagedAgent(identity.principalId, payload.agentId);
-    const principal = runtime.getRuntimeStore().getPrincipal(agent.principalId);
-    const organization = runtime.getRuntimeStore().getOrganization(agent.organizationId);
+    const ownerView = runtime.getManagedAgentControlPlaneFacade().updateManagedAgentLifecycle({
+      ownerPrincipalId: identity.principalId,
+      agentId: payload.agentId,
+      action,
+    });
+
+    if (!ownerView) {
+      throw new Error("Managed agent does not exist.");
+    }
 
     writeJson(response, 200, {
       ok: true,
       identity,
-      organization,
-      principal,
-      agent,
+      organization: ownerView?.organization ?? null,
+      principal: ownerView?.principal ?? null,
+      agent: ownerView.agent,
     });
   } catch (error) {
     writeManagedAgentBoundaryError(response, error);
@@ -759,7 +751,7 @@ export async function handleAgentDispatch(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const result = runtime.getManagedAgentCoordinationService().dispatchWorkItem({
+    const result = runtime.getManagedAgentControlPlaneFacade().dispatchWorkItem({
       ownerPrincipalId: identity.principalId,
       targetAgentId: payload.workItem.targetAgentId,
       ...(payload.workItem.sourceType ? { sourceType: payload.workItem.sourceType } : {}),
@@ -806,7 +798,7 @@ export async function handleAgentWorkItemList(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const workItems = runtime.getManagedAgentCoordinationService().listWorkItems(
+    const workItems = runtime.getManagedAgentControlPlaneFacade().listWorkItems(
       identity.principalId,
       payload.agentId,
     );
@@ -939,34 +931,27 @@ export async function handleAgentWorkItemDetail(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const coordinationService = runtime.getManagedAgentCoordinationService();
-    const workItem = coordinationService.getWorkItem(identity.principalId, payload.workItemId);
+    const detail = runtime.getManagedAgentControlPlaneFacade().getWorkItemDetailView(
+      identity.principalId,
+      payload.workItemId,
+    );
 
-    if (!workItem) {
+    if (!detail) {
       throw new Error("Work item does not exist.");
     }
 
-    const targetAgent = runtime.getRuntimeStore().getManagedAgent(workItem.targetAgentId);
-    const sourceAgent = workItem.sourceAgentId
-      ? runtime.getRuntimeStore().getManagedAgent(workItem.sourceAgentId)
-      : null;
-    const sourcePrincipal = runtime.getRuntimeStore().getPrincipal(workItem.sourcePrincipalId);
-    const organization = runtime.getRuntimeStore().getOrganization(workItem.organizationId);
-    const messages = coordinationService.listMessagesForWorkItem(identity.principalId, workItem.workItemId);
-    const collaboration = coordinationService.getWorkItemCollaboration(identity.principalId, workItem.workItemId);
-
     writeJson(response, 200, {
       identity,
-      organization,
-      workItem,
-      targetAgent,
-      sourcePrincipal,
-      ...(sourceAgent ? { sourceAgent } : {}),
-      parentWorkItem: collaboration.parentWorkItem,
-      parentTargetAgent: collaboration.parentTargetAgent,
-      childSummary: collaboration.childSummary,
-      childWorkItems: collaboration.childWorkItems,
-      messages,
+      organization: detail.organization,
+      workItem: detail.workItem,
+      targetAgent: detail.targetAgent,
+      sourcePrincipal: detail.sourcePrincipal,
+      ...(detail.sourceAgent ? { sourceAgent: detail.sourceAgent } : {}),
+      parentWorkItem: detail.collaboration.parentWorkItem,
+      parentTargetAgent: detail.collaboration.parentTargetAgent,
+      childSummary: detail.collaboration.childSummary,
+      childWorkItems: detail.collaboration.childWorkItems,
+      messages: detail.messages,
     });
   } catch (error) {
     writeManagedAgentBoundaryError(response, error);
@@ -1088,7 +1073,7 @@ export async function handleAgentRunList(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const runs = runtime.getManagedAgentSchedulerService().listRuns({
+    const runs = runtime.getManagedAgentControlPlaneFacade().listRuns({
       ownerPrincipalId: identity.principalId,
       ...(payload.agentId ? { agentId: payload.agentId } : {}),
       ...(payload.workItemId ? { workItemId: payload.workItemId } : {}),
@@ -1116,22 +1101,18 @@ export async function handleAgentRunDetail(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const run = runtime.getManagedAgentSchedulerService().getRun(identity.principalId, payload.runId);
+    const detail = runtime.getManagedAgentControlPlaneFacade().getRunDetailView(identity.principalId, payload.runId);
 
-    if (!run) {
+    if (!detail) {
       throw new Error("Agent run does not exist.");
     }
 
-    const workItem = runtime.getRuntimeStore().getAgentWorkItem(run.workItemId);
-    const targetAgent = runtime.getRuntimeStore().getManagedAgent(run.targetAgentId);
-    const organization = runtime.getRuntimeStore().getOrganization(run.organizationId);
-
     writeJson(response, 200, {
       identity,
-      organization,
-      run,
-      workItem,
-      targetAgent,
+      organization: detail.organization,
+      run: detail.run,
+      workItem: detail.workItem,
+      targetAgent: detail.targetAgent,
     });
   } catch (error) {
     writeManagedAgentBoundaryError(response, error);

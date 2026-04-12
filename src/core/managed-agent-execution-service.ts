@@ -1,4 +1,4 @@
-import type { SqliteCodexSessionRegistry } from "../storage/index.js";
+import type { ManagedAgentExecutionStateStore } from "../storage/index.js";
 import type {
   ManagedAgentBootstrapProfile,
   StoredAgentMailboxEntryRecord,
@@ -38,7 +38,7 @@ import { validateWorkspacePath } from "./session-workspace.js";
 const DEFAULT_EXECUTION_SCHEDULER_ID = "scheduler-main";
 
 export interface ManagedAgentExecutionServiceOptions {
-  registry: SqliteCodexSessionRegistry;
+  registry: ManagedAgentExecutionStateStore;
   runtime: AppServerTaskRuntime;
   coordinationService?: ManagedAgentCoordinationService;
   schedulerService?: ManagedAgentSchedulerService;
@@ -81,7 +81,7 @@ class ManagedAgentExecutionBoundaryError extends Error {
 }
 
 export class ManagedAgentExecutionService {
-  private readonly registry: SqliteCodexSessionRegistry;
+  private readonly registry: ManagedAgentExecutionStateStore;
   private readonly runtime: AppServerTaskRuntime;
   private readonly coordinationService: ManagedAgentCoordinationService;
   private readonly schedulerService: ManagedAgentSchedulerService;
@@ -92,10 +92,10 @@ export class ManagedAgentExecutionService {
     this.registry = options.registry;
     this.runtime = options.runtime;
     this.coordinationService = options.coordinationService ?? new ManagedAgentCoordinationService({
-      registry: options.registry,
+      registry: options.runtime.getManagedAgentControlPlaneStore().coordinationStore,
     });
     this.schedulerService = options.schedulerService ?? new ManagedAgentSchedulerService({
-      registry: options.registry,
+      registry: options.runtime.getManagedAgentControlPlaneStore().schedulerStore,
     });
     this.defaultSchedulerId = normalizeOptionalText(options.defaultSchedulerId) ?? DEFAULT_EXECUTION_SCHEDULER_ID;
   }
@@ -777,7 +777,7 @@ function shouldHeartbeatOnEvent(event: TaskEvent): boolean {
 }
 
 function buildExecutionInputText(
-  registry: SqliteCodexSessionRegistry,
+  registry: ManagedAgentExecutionStateStore,
   claim: ManagedAgentSchedulerClaim,
 ): string | null {
   const sections: string[] = [
@@ -814,7 +814,7 @@ function buildExecutionInputText(
 }
 
 function buildResumeContext(
-  registry: SqliteCodexSessionRegistry,
+  registry: ManagedAgentExecutionStateStore,
   workItem: StoredAgentWorkItemRecord,
 ): string | null {
   const humanResumeContext = buildHumanResumeContext(workItem);
