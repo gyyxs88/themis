@@ -397,6 +397,18 @@
 - 主 Themis 和平台控制面故障有明确处置路径
 - 团队对“是否继续扩面”有清晰判断标准
 
+补充更新（2026-04-12）：
+
+- `monitoring / alerting / backup / restore` 的最小可执行包已开始落地：
+  - `./themis doctor worker-fleet --json --fail-on error|warning`
+  - `./themis backup create`
+  - `./themis backup restore --input <backupPath> --yes`
+- 现有 Worker Node / Onboarding 手册也已统一切到平台 Bearer 令牌口径，不再要求运维手工走 `/api/web-auth/login + themis_web_session`。
+- 双节点长跑与故障演练验收也已固定进仓库：
+  - `node --test --import tsx src/core/managed-agent-worker-daemon.test.ts`
+  - 这条验收会用共享平台 HTTP 服务、两个独立 Worker runtime 和两个真实 `ManagedAgentWorkerDaemon`，验证双节点分摊派工，以及节点 `offline + reclaim` 后由另一节点接管恢复
+- 到这一步，前面明确的 4 条硬差口都已收口，局域网 V1 已具备最小可运维能力；后续不再把“再补多节点闭环”当开放主线，而是保持值守复验与边界稳定。
+
 ## 6. 当前推荐首刀顺序
 
 如果只看接下来最值得开的三刀，我推荐是这三个：

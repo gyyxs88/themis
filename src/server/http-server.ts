@@ -109,7 +109,26 @@ import {
 import {
   handlePlatformAgentCreate,
   handlePlatformAgentDetail,
+  handlePlatformAgentExecutionBoundaryUpdate,
+  handlePlatformAgentArchive,
+  handlePlatformAgentIdleSuggestions,
+  handlePlatformAgentIdleApprove,
   handlePlatformAgentList,
+  handlePlatformAgentPause,
+  handlePlatformAgentResume,
+  handlePlatformAgentSpawnApprove,
+  handlePlatformAgentSpawnIgnore,
+  handlePlatformAgentSpawnPolicyUpdate,
+  handlePlatformAgentSpawnReject,
+  handlePlatformAgentSpawnRestore,
+  handlePlatformAgentSpawnSuggestions,
+  handlePlatformCollaborationDashboard,
+  handlePlatformGovernanceOverview,
+  handlePlatformHandoffList,
+  handlePlatformMailboxAck,
+  handlePlatformMailboxList,
+  handlePlatformMailboxPull,
+  handlePlatformMailboxRespond,
   handlePlatformNodeHeartbeat,
   handlePlatformNodeDetail,
   handlePlatformNodeDrain,
@@ -122,8 +141,13 @@ import {
   handlePlatformWorkerRunUpdate,
   handlePlatformRunDetail,
   handlePlatformRunList,
+  handlePlatformWaitingQueueList,
+  handlePlatformWorkItemCancel,
+  handlePlatformWorkItemEscalate,
+  handlePlatformWorkItemList,
   handlePlatformWorkItemDetail,
   handlePlatformWorkItemDispatch,
+  handlePlatformWorkItemRespond,
 } from "./http-platform.js";
 import {
   handleScheduledTaskCancel,
@@ -460,8 +484,104 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
         return handlePlatformAgentDetail(request, response, platformControlPlaneFacade);
       }
 
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/execution-boundary/update") {
+        return handlePlatformAgentExecutionBoundaryUpdate(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/spawn-suggestions") {
+        return handlePlatformAgentSpawnSuggestions(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/idle-suggestions") {
+        return handlePlatformAgentIdleSuggestions(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/spawn-policy/update") {
+        return handlePlatformAgentSpawnPolicyUpdate(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/spawn-approve") {
+        return handlePlatformAgentSpawnApprove(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/spawn-ignore") {
+        return handlePlatformAgentSpawnIgnore(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/spawn-reject") {
+        return handlePlatformAgentSpawnReject(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/spawn-restore") {
+        return handlePlatformAgentSpawnRestore(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/idle-approve") {
+        return handlePlatformAgentIdleApprove(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/pause") {
+        return handlePlatformAgentPause(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/resume") {
+        return handlePlatformAgentResume(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/archive") {
+        return handlePlatformAgentArchive(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/waiting/list") {
+        return handlePlatformWaitingQueueList(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/governance-overview") {
+        return handlePlatformGovernanceOverview(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/collaboration-dashboard") {
+        return handlePlatformCollaborationDashboard(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/handoffs/list") {
+        return handlePlatformHandoffList(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/mailbox/list") {
+        return handlePlatformMailboxList(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/mailbox/pull") {
+        return handlePlatformMailboxPull(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/mailbox/ack") {
+        return handlePlatformMailboxAck(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/mailbox/respond") {
+        return handlePlatformMailboxRespond(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/work-items/list") {
+        return handlePlatformWorkItemList(request, response, platformControlPlaneFacade);
+      }
+
       if (request.method === "POST" && url.pathname === "/api/platform/work-items/dispatch") {
         return handlePlatformWorkItemDispatch(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/work-items/cancel") {
+        return handlePlatformWorkItemCancel(request, response, managedAgentExecutionService);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/work-items/respond") {
+        return handlePlatformWorkItemRespond(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/work-items/escalate") {
+        return handlePlatformWorkItemEscalate(request, response, platformControlPlaneFacade);
       }
 
       if (request.method === "POST" && url.pathname === "/api/platform/work-items/detail") {

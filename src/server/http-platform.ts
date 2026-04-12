@@ -1,16 +1,26 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ManagedAgentControlPlaneFacade } from "../core/managed-agent-control-plane-facade.js";
+import type { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
 import {
+  type ApprovalPolicy,
+  MANAGED_AGENT_IDLE_RECOVERY_ACTIONS,
   MANAGED_AGENT_NODE_STATUSES,
   MANAGED_AGENT_PRIORITIES,
   MANAGED_AGENT_WORK_ITEM_SOURCE_TYPES,
   type ManagedAgentNodeStatus,
+  type ManagedAgentIdleRecoveryAction,
+  type MemoryMode,
   type ManagedAgentPriority,
   type ManagedAgentWorkItemSourceType,
+  type ReasoningLevel,
+  type SandboxMode,
+  type TaskAccessMode,
+  type WebSearchMode,
 } from "../types/index.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
 import { writeJson } from "./http-responses.js";
+import { getPlatformServiceAuthContext } from "./http-web-access.js";
 
 interface PlatformAgentCreatePayload {
   ownerPrincipalId: string;
@@ -29,6 +39,111 @@ interface PlatformAgentListPayload {
 
 interface PlatformAgentDetailPayload extends PlatformAgentListPayload {
   agentId: string;
+}
+
+interface PlatformAgentExecutionBoundaryUpdatePayload extends PlatformAgentListPayload {
+  agentId: string;
+  boundary: {
+    workspacePolicy?: {
+      displayName?: string;
+      workspacePath: string;
+      additionalDirectories?: string[];
+      allowNetworkAccess?: boolean;
+    };
+    runtimeProfile?: {
+      displayName?: string;
+      model?: string;
+      reasoning?: ReasoningLevel;
+      memoryMode?: MemoryMode;
+      sandboxMode?: SandboxMode;
+      webSearchMode?: WebSearchMode;
+      networkAccessEnabled?: boolean;
+      approvalPolicy?: ApprovalPolicy;
+      accessMode?: TaskAccessMode;
+      authAccountId?: string;
+      thirdPartyProviderId?: string;
+    };
+  };
+}
+
+interface PlatformAgentSpawnPolicyUpdatePayload extends PlatformAgentListPayload {
+  policy: {
+    organizationId?: string;
+    maxActiveAgents: number;
+    maxActiveAgentsPerRole: number;
+  };
+}
+
+interface PlatformAgentSpawnApprovePayload extends PlatformAgentListPayload {
+  agent: {
+    displayName?: string;
+    departmentRole: string;
+    mission?: string;
+    organizationId?: string;
+    supervisorAgentId?: string;
+  };
+}
+
+interface PlatformAgentSpawnSuggestionActionPayload extends PlatformAgentListPayload {
+  suggestion: {
+    suggestionId: string;
+    organizationId: string;
+    departmentRole: string;
+    displayName: string;
+    mission?: string;
+    rationale?: string;
+    supportingAgentId?: string;
+    supportingAgentDisplayName?: string;
+    suggestedSupervisorAgentId?: string;
+    openWorkItemCount?: number;
+    waitingWorkItemCount?: number;
+    highPriorityWorkItemCount?: number;
+    spawnPolicy?: unknown;
+    guardrail?: unknown;
+    auditFacts?: unknown;
+  };
+}
+
+interface PlatformAgentSpawnSuggestionRestorePayload extends PlatformAgentListPayload {
+  suggestion: {
+    suggestionId: string;
+    organizationId?: string;
+  };
+}
+
+interface PlatformAgentIdleApprovePayload extends PlatformAgentListPayload {
+  suggestion: {
+    suggestionId: string;
+    organizationId?: string;
+    agentId: string;
+    action: ManagedAgentIdleRecoveryAction;
+  };
+}
+
+interface PlatformAgentLifecyclePayload extends PlatformAgentListPayload {
+  agentId: string;
+}
+
+interface PlatformGovernanceFiltersPayload extends PlatformAgentListPayload {
+  organizationId?: string;
+  managerAgentId?: string;
+  attentionOnly?: boolean;
+  attentionLevels?: Array<"normal" | "attention" | "urgent">;
+  waitingFor?: "any" | "human" | "agent";
+  staleOnly?: boolean;
+  failedOnly?: boolean;
+}
+
+interface PlatformWaitingQueueListPayload extends PlatformGovernanceFiltersPayload {
+  limit?: number;
+}
+
+interface PlatformCollaborationDashboardPayload extends PlatformGovernanceFiltersPayload {
+  limit?: number;
+}
+
+interface PlatformWorkItemListPayload extends PlatformAgentListPayload {
+  agentId?: string;
 }
 
 interface PlatformWorkItemDispatchPayload extends PlatformAgentListPayload {
@@ -52,6 +167,27 @@ interface PlatformWorkItemDetailPayload extends PlatformAgentListPayload {
   workItemId: string;
 }
 
+interface PlatformWorkItemCancelPayload extends PlatformAgentListPayload {
+  workItemId: string;
+}
+
+interface PlatformWorkItemRespondPayload extends PlatformAgentListPayload {
+  workItemId: string;
+  response: {
+    decision?: "approve" | "deny";
+    inputText?: string;
+    payload?: unknown;
+    artifactRefs?: string[];
+  };
+}
+
+interface PlatformWorkItemEscalatePayload extends PlatformAgentListPayload {
+  workItemId: string;
+  escalation?: {
+    inputText?: string;
+  };
+}
+
 interface PlatformRunListPayload extends PlatformAgentListPayload {
   agentId?: string;
   workItemId?: string;
@@ -59,6 +195,37 @@ interface PlatformRunListPayload extends PlatformAgentListPayload {
 
 interface PlatformRunDetailPayload extends PlatformAgentListPayload {
   runId: string;
+}
+
+interface PlatformHandoffListPayload extends PlatformAgentListPayload {
+  agentId: string;
+  workItemId?: string;
+  limit?: number;
+}
+
+interface PlatformMailboxListPayload extends PlatformAgentListPayload {
+  agentId: string;
+}
+
+interface PlatformMailboxPullPayload extends PlatformAgentListPayload {
+  agentId: string;
+}
+
+interface PlatformMailboxAckPayload extends PlatformAgentListPayload {
+  agentId: string;
+  mailboxEntryId: string;
+}
+
+interface PlatformMailboxRespondPayload extends PlatformAgentListPayload {
+  agentId: string;
+  mailboxEntryId: string;
+  response: {
+    decision?: "approve" | "deny";
+    inputText?: string;
+    payload?: unknown;
+    artifactRefs?: string[];
+    priority?: ManagedAgentPriority;
+  };
 }
 
 interface PlatformNodeRegisterPayload extends PlatformAgentListPayload {
@@ -136,13 +303,26 @@ interface PlatformWorkerRunCompletePayload extends PlatformWorkerPullPayload {
   };
 }
 
-async function readAndNormalizePayload<T>(
+async function readAndNormalizePayload<T extends PlatformAgentListPayload>(
   request: IncomingMessage,
   response: ServerResponse,
   normalize: (value: unknown) => T,
 ): Promise<T | null> {
   try {
-    return normalize(await readJsonBody(request));
+    const payload = normalize(await readJsonBody(request));
+    const authContext = getPlatformServiceAuthContext(request);
+
+    if (authContext && payload.ownerPrincipalId !== authContext.ownerPrincipalId) {
+      writeJson(response, 403, {
+        error: {
+          code: "PLATFORM_SERVICE_OWNER_MISMATCH",
+          message: "平台服务令牌与 ownerPrincipalId 不匹配。",
+        },
+      });
+      return null;
+    }
+
+    return payload;
   } catch (error) {
     writeJson(response, resolveErrorStatusCode(error, false), {
       error: createTaskError(error, false),
@@ -223,7 +403,7 @@ export async function handlePlatformAgentDetail(
   try {
     const detail = facade.getManagedAgentDetailView(payload.ownerPrincipalId, payload.agentId);
     if (!detail) {
-      throw new Error("Managed agent not found.");
+      throw new Error("Managed agent does not exist.");
     }
 
     writeJson(response, 200, {
@@ -235,6 +415,393 @@ export async function handlePlatformAgentDetail(
       runtimeProfile: detail.runtimeProfile,
       authAccounts: detail.authAccounts,
       thirdPartyProviders: detail.thirdPartyProviders,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformAgentExecutionBoundaryUpdate(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformAgentExecutionBoundaryUpdatePayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.updateManagedAgentExecutionBoundary({
+      ownerPrincipalId: payload.ownerPrincipalId,
+      agentId: payload.agentId,
+      ...(payload.boundary.workspacePolicy ? { workspacePolicy: payload.boundary.workspacePolicy } : {}),
+      ...(payload.boundary.runtimeProfile ? { runtimeProfile: payload.boundary.runtimeProfile } : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      agent: result.agent,
+      workspacePolicy: result.workspacePolicy,
+      runtimeProfile: result.runtimeProfile,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformAgentSpawnSuggestions(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformOwnerPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.getSpawnSuggestionsView(payload.ownerPrincipalId);
+    writeJson(response, 200, {
+      ok: true,
+      spawnPolicies: result.spawnPolicies,
+      suggestions: result.suggestions,
+      suppressedSuggestions: result.suppressedSuggestions,
+      recentAuditLogs: result.recentAuditLogs,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformAgentIdleSuggestions(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformOwnerPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.getIdleRecoverySuggestionsView(payload.ownerPrincipalId);
+    writeJson(response, 200, {
+      ok: true,
+      suggestions: result.suggestions,
+      recentAuditLogs: result.recentAuditLogs,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformAgentSpawnPolicyUpdate(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformAgentSpawnPolicyUpdatePayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const policy = facade.updateSpawnPolicy({
+      ownerPrincipalId: payload.ownerPrincipalId,
+      ...(payload.policy.organizationId ? { organizationId: payload.policy.organizationId } : {}),
+      maxActiveAgents: payload.policy.maxActiveAgents,
+      maxActiveAgentsPerRole: payload.policy.maxActiveAgentsPerRole,
+    });
+    writeJson(response, 200, {
+      ok: true,
+      policy,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformAgentSpawnApprove(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformAgentSpawnApprovePayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.approveSpawnSuggestion({
+      ownerPrincipalId: payload.ownerPrincipalId,
+      departmentRole: payload.agent.departmentRole,
+      ...(payload.agent.displayName ? { displayName: payload.agent.displayName } : {}),
+      ...(payload.agent.mission ? { mission: payload.agent.mission } : {}),
+      ...(payload.agent.organizationId ? { organizationId: payload.agent.organizationId } : {}),
+      ...(payload.agent.supervisorAgentId ? { supervisorAgentId: payload.agent.supervisorAgentId } : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      organization: result.organization,
+      principal: result.principal,
+      agent: result.agent,
+      bootstrapWorkItem: result.bootstrapWorkItem,
+      auditLog: result.auditLog,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+async function handlePlatformAgentSpawnSuggestionDecision(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+  action: "ignore" | "reject",
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformAgentSpawnSuggestionActionPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = action === "ignore"
+      ? facade.ignoreSpawnSuggestion({
+        ownerPrincipalId: payload.ownerPrincipalId,
+        ...payload.suggestion,
+      })
+      : facade.rejectSpawnSuggestion({
+        ownerPrincipalId: payload.ownerPrincipalId,
+        ...payload.suggestion,
+      });
+
+    writeJson(response, 200, {
+      ok: true,
+      ...(result.suppressedSuggestion ? { suppressedSuggestion: result.suppressedSuggestion } : {}),
+      auditLog: result.auditLog,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformAgentSpawnIgnore(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  await handlePlatformAgentSpawnSuggestionDecision(request, response, facade, "ignore");
+}
+
+export async function handlePlatformAgentSpawnReject(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  await handlePlatformAgentSpawnSuggestionDecision(request, response, facade, "reject");
+}
+
+export async function handlePlatformAgentSpawnRestore(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformAgentSpawnSuggestionRestorePayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const auditLog = facade.restoreSpawnSuggestion({
+      ownerPrincipalId: payload.ownerPrincipalId,
+      suggestionId: payload.suggestion.suggestionId,
+      ...(payload.suggestion.organizationId ? { organizationId: payload.suggestion.organizationId } : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      auditLog,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformAgentIdleApprove(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformAgentIdleApprovePayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.approveIdleRecoverySuggestion({
+      ownerPrincipalId: payload.ownerPrincipalId,
+      suggestionId: payload.suggestion.suggestionId,
+      ...(payload.suggestion.organizationId ? { organizationId: payload.suggestion.organizationId } : {}),
+      agentId: payload.suggestion.agentId,
+      action: payload.suggestion.action,
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      organization: result.organization,
+      agent: result.agent,
+      auditLog: result.auditLog,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+async function handlePlatformAgentLifecycleAction(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+  action: "pause" | "resume" | "archive",
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformAgentLifecyclePayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const ownerView = facade.updateManagedAgentLifecycle({
+      ownerPrincipalId: payload.ownerPrincipalId,
+      agentId: payload.agentId,
+      action,
+    });
+
+    if (!ownerView) {
+      throw new Error("Managed agent does not exist.");
+    }
+
+    writeJson(response, 200, {
+      ok: true,
+      organization: ownerView.organization,
+      principal: ownerView.principal,
+      agent: ownerView.agent,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformAgentPause(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  await handlePlatformAgentLifecycleAction(request, response, facade, "pause");
+}
+
+export async function handlePlatformAgentResume(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  await handlePlatformAgentLifecycleAction(request, response, facade, "resume");
+}
+
+export async function handlePlatformAgentArchive(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  await handlePlatformAgentLifecycleAction(request, response, facade, "archive");
+}
+
+export async function handlePlatformWaitingQueueList(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformWaitingQueueListPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.listOrganizationWaitingQueue(payload.ownerPrincipalId, buildPlatformGovernanceFilters(payload));
+    writeJson(response, 200, {
+      ok: true,
+      summary: result.summary,
+      items: result.items,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformGovernanceOverview(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformGovernanceFiltersPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const overview = facade.getOrganizationGovernanceOverview(
+      payload.ownerPrincipalId,
+      buildPlatformGovernanceFilters(payload),
+    );
+    writeJson(response, 200, {
+      ok: true,
+      overview,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformCollaborationDashboard(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformCollaborationDashboardPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.listOrganizationCollaborationDashboard(
+      payload.ownerPrincipalId,
+      buildPlatformGovernanceFilters(payload),
+    );
+    writeJson(response, 200, {
+      ok: true,
+      summary: result.summary,
+      items: result.items,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformWorkItemList(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformWorkItemListPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const workItems = facade.listWorkItems(payload.ownerPrincipalId, payload.agentId);
+    writeJson(response, 200, {
+      ok: true,
+      workItems,
     });
   } catch (error) {
     writePlatformError(response, error);
@@ -285,6 +852,98 @@ export async function handlePlatformWorkItemDispatch(
   }
 }
 
+export async function handlePlatformWorkItemCancel(
+  request: IncomingMessage,
+  response: ServerResponse,
+  executionService: ManagedAgentExecutionService,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformWorkItemCancelPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = await executionService.cancelWorkItem({
+      ownerPrincipalId: payload.ownerPrincipalId,
+      workItemId: payload.workItemId,
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      organization: result.organization,
+      targetAgent: result.targetAgent,
+      workItem: result.workItem,
+      ackedMailboxEntries: result.ackedMailboxEntries,
+      ...(result.notificationMessage ? { notificationMessage: result.notificationMessage } : {}),
+      ...(result.notificationMailboxEntry ? { notificationMailboxEntry: result.notificationMailboxEntry } : {}),
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformWorkItemRespond(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformWorkItemRespondPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.respondToHumanWaitingWorkItem({
+      ownerPrincipalId: payload.ownerPrincipalId,
+      workItemId: payload.workItemId,
+      ...(payload.response.decision ? { decision: payload.response.decision } : {}),
+      ...(payload.response.inputText ? { inputText: payload.response.inputText } : {}),
+      ...(hasOwn(payload.response, "payload") ? { payload: payload.response.payload } : {}),
+      ...(payload.response.artifactRefs ? { artifactRefs: payload.response.artifactRefs } : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      organization: result.organization,
+      targetAgent: result.targetAgent,
+      workItem: result.workItem,
+      resumedRuns: result.resumedRuns,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformWorkItemEscalate(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformWorkItemEscalatePayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.escalateWaitingAgentWorkItemToHuman({
+      ownerPrincipalId: payload.ownerPrincipalId,
+      workItemId: payload.workItemId,
+      ...(payload.escalation?.inputText ? { inputText: payload.escalation.inputText } : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      organization: result.organization,
+      targetAgent: result.targetAgent,
+      workItem: result.workItem,
+      latestWaitingMessage: result.latestWaitingMessage,
+      ackedMailboxEntries: result.ackedMailboxEntries,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
 export async function handlePlatformWorkItemDetail(
   request: IncomingMessage,
   response: ServerResponse,
@@ -298,7 +957,7 @@ export async function handlePlatformWorkItemDetail(
   try {
     const detail = facade.getWorkItemDetailView(payload.ownerPrincipalId, payload.workItemId);
     if (!detail) {
-      throw new Error("Work item not found.");
+      throw new Error("Work item does not exist.");
     }
 
     writeJson(response, 200, {
@@ -310,6 +969,145 @@ export async function handlePlatformWorkItemDetail(
       sourcePrincipal: detail.sourcePrincipal,
       messages: detail.messages,
       collaboration: detail.collaboration,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformHandoffList(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformHandoffListPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.getAgentHandoffListView(payload.ownerPrincipalId, {
+      agentId: payload.agentId,
+      ...(payload.workItemId ? { workItemId: payload.workItemId } : {}),
+      ...(payload.limit ? { limit: payload.limit } : {}),
+    });
+    writeJson(response, 200, {
+      ok: true,
+      agent: result.agent,
+      handoffs: result.handoffs,
+      timeline: result.timeline,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformMailboxList(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformMailboxListPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.getAgentMailboxListView(payload.ownerPrincipalId, payload.agentId);
+    writeJson(response, 200, {
+      ok: true,
+      agent: result.agent,
+      items: result.items,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformMailboxPull(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformMailboxPullPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.pullMailboxEntry(payload.ownerPrincipalId, payload.agentId);
+    writeJson(response, 200, {
+      ok: true,
+      agent: result.agent,
+      ...(result.item ? { item: result.item } : { item: null }),
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformMailboxAck(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformMailboxAckPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const mailboxEntry = facade.ackMailboxEntry(
+      payload.ownerPrincipalId,
+      payload.agentId,
+      payload.mailboxEntryId,
+    );
+    const result = facade.getAgentMailboxListView(payload.ownerPrincipalId, payload.agentId);
+    const message = result.items.find((item) => item.entry.mailboxEntryId === payload.mailboxEntryId)?.message;
+
+    writeJson(response, 200, {
+      ok: true,
+      agent: result.agent,
+      mailboxEntry,
+      ...(message ? { message } : {}),
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformMailboxRespond(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformMailboxRespondPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = facade.respondToMailboxEntry({
+      ownerPrincipalId: payload.ownerPrincipalId,
+      agentId: payload.agentId,
+      mailboxEntryId: payload.mailboxEntryId,
+      ...(payload.response.decision ? { decision: payload.response.decision } : {}),
+      ...(payload.response.inputText ? { inputText: payload.response.inputText } : {}),
+      ...(hasOwn(payload.response, "payload") ? { payload: payload.response.payload } : {}),
+      ...(payload.response.artifactRefs ? { artifactRefs: payload.response.artifactRefs } : {}),
+      ...(payload.response.priority ? { priority: payload.response.priority } : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      agent: result.agent,
+      organization: result.organization,
+      sourceMailboxEntry: result.sourceMailboxEntry,
+      sourceMessage: result.sourceMessage,
+      responseMessage: result.responseMessage,
+      responseMailboxEntry: result.responseMailboxEntry,
+      resumedRuns: result.resumedRuns,
+      ...(result.resumedWorkItem ? { resumedWorkItem: result.resumedWorkItem } : {}),
     });
   } catch (error) {
     writePlatformError(response, error);
@@ -355,7 +1153,7 @@ export async function handlePlatformRunDetail(
   try {
     const detail = facade.getRunDetailView(payload.ownerPrincipalId, payload.runId);
     if (!detail) {
-      throw new Error("Run not found.");
+      throw new Error("Agent run does not exist.");
     }
 
     writeJson(response, 200, {
@@ -672,6 +1470,274 @@ function normalizePlatformAgentDetailPayload(value: unknown): PlatformAgentDetai
   };
 }
 
+function normalizePlatformAgentExecutionBoundaryUpdatePayload(
+  value: unknown,
+): PlatformAgentExecutionBoundaryUpdatePayload {
+  if (!isRecord(value) || !isRecord(value.boundary)) {
+    throw new Error("Request body.boundary must be an object.");
+  }
+
+  const workspacePolicy = isRecord(value.boundary.workspacePolicy)
+    ? {
+        ...(readOptionalString(value.boundary.workspacePolicy.displayName)
+          ? { displayName: readOptionalString(value.boundary.workspacePolicy.displayName) as string }
+          : {}),
+        workspacePath: readRequiredString(value.boundary.workspacePolicy.workspacePath, "boundary.workspacePolicy.workspacePath"),
+        ...(Array.isArray(value.boundary.workspacePolicy.additionalDirectories)
+          ? { additionalDirectories: readStringArray(value.boundary.workspacePolicy.additionalDirectories) }
+          : {}),
+        ...(typeof value.boundary.workspacePolicy.allowNetworkAccess === "boolean"
+          ? { allowNetworkAccess: value.boundary.workspacePolicy.allowNetworkAccess }
+          : {}),
+      }
+    : undefined;
+  const runtimeProfile = isRecord(value.boundary.runtimeProfile)
+    ? {
+        ...(readOptionalString(value.boundary.runtimeProfile.displayName)
+          ? { displayName: readOptionalString(value.boundary.runtimeProfile.displayName) as string }
+          : {}),
+        ...(readOptionalString(value.boundary.runtimeProfile.model)
+          ? { model: readOptionalString(value.boundary.runtimeProfile.model) as string }
+          : {}),
+        ...(readOptionalString(value.boundary.runtimeProfile.reasoning)
+          ? { reasoning: readOptionalString(value.boundary.runtimeProfile.reasoning) as ReasoningLevel }
+          : {}),
+        ...(readOptionalString(value.boundary.runtimeProfile.memoryMode)
+          ? { memoryMode: readOptionalString(value.boundary.runtimeProfile.memoryMode) as MemoryMode }
+          : {}),
+        ...(readOptionalString(value.boundary.runtimeProfile.sandboxMode)
+          ? { sandboxMode: readOptionalString(value.boundary.runtimeProfile.sandboxMode) as SandboxMode }
+          : {}),
+        ...(readOptionalString(value.boundary.runtimeProfile.webSearchMode)
+          ? { webSearchMode: readOptionalString(value.boundary.runtimeProfile.webSearchMode) as WebSearchMode }
+          : {}),
+        ...(typeof value.boundary.runtimeProfile.networkAccessEnabled === "boolean"
+          ? { networkAccessEnabled: value.boundary.runtimeProfile.networkAccessEnabled }
+          : {}),
+        ...(readOptionalString(value.boundary.runtimeProfile.approvalPolicy)
+          ? { approvalPolicy: readOptionalString(value.boundary.runtimeProfile.approvalPolicy) as ApprovalPolicy }
+          : {}),
+        ...(readOptionalString(value.boundary.runtimeProfile.accessMode)
+          ? { accessMode: readOptionalString(value.boundary.runtimeProfile.accessMode) as TaskAccessMode }
+          : {}),
+        ...(readOptionalString(value.boundary.runtimeProfile.authAccountId)
+          ? { authAccountId: readOptionalString(value.boundary.runtimeProfile.authAccountId) as string }
+          : {}),
+        ...(readOptionalString(value.boundary.runtimeProfile.thirdPartyProviderId)
+          ? { thirdPartyProviderId: readOptionalString(value.boundary.runtimeProfile.thirdPartyProviderId) as string }
+          : {}),
+      }
+    : undefined;
+
+  if (!workspacePolicy && !runtimeProfile) {
+    throw new Error("Request body.boundary must contain workspacePolicy or runtimeProfile.");
+  }
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    agentId: readRequiredString(value.agentId, "agentId"),
+    boundary: {
+      ...(workspacePolicy ? { workspacePolicy } : {}),
+      ...(runtimeProfile ? { runtimeProfile } : {}),
+    },
+  };
+}
+
+function normalizePlatformAgentSpawnPolicyUpdatePayload(value: unknown): PlatformAgentSpawnPolicyUpdatePayload {
+  if (!isRecord(value) || !isRecord(value.policy)) {
+    throw new Error("Request body.policy must be an object.");
+  }
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    policy: {
+      ...(readOptionalString(value.policy.organizationId)
+        ? { organizationId: readOptionalString(value.policy.organizationId) as string }
+        : {}),
+      maxActiveAgents: readRequiredPositiveInteger(value.policy.maxActiveAgents, "policy.maxActiveAgents"),
+      maxActiveAgentsPerRole: readRequiredPositiveInteger(
+        value.policy.maxActiveAgentsPerRole,
+        "policy.maxActiveAgentsPerRole",
+      ),
+    },
+  };
+}
+
+function normalizePlatformAgentSpawnApprovePayload(value: unknown): PlatformAgentSpawnApprovePayload {
+  if (!isRecord(value) || !isRecord(value.agent)) {
+    throw new Error("Request body.agent must be an object.");
+  }
+
+  const displayName = readOptionalString(value.agent.displayName);
+  const mission = readOptionalString(value.agent.mission);
+  const organizationId = readOptionalString(value.agent.organizationId);
+  const supervisorAgentId = readOptionalString(value.agent.supervisorAgentId);
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    agent: {
+      departmentRole: readRequiredString(value.agent.departmentRole, "agent.departmentRole"),
+      ...(displayName ? { displayName } : {}),
+      ...(mission ? { mission } : {}),
+      ...(organizationId ? { organizationId } : {}),
+      ...(supervisorAgentId ? { supervisorAgentId } : {}),
+    },
+  };
+}
+
+function normalizePlatformAgentSpawnSuggestionActionPayload(
+  value: unknown,
+): PlatformAgentSpawnSuggestionActionPayload {
+  if (!isRecord(value) || !isRecord(value.suggestion)) {
+    throw new Error("Request body.suggestion must be an object.");
+  }
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    suggestion: {
+      suggestionId: readRequiredString(value.suggestion.suggestionId, "suggestion.suggestionId"),
+      organizationId: readRequiredString(value.suggestion.organizationId, "suggestion.organizationId"),
+      departmentRole: readRequiredString(value.suggestion.departmentRole, "suggestion.departmentRole"),
+      displayName: readRequiredString(value.suggestion.displayName, "suggestion.displayName"),
+      ...(readOptionalString(value.suggestion.mission)
+        ? { mission: readOptionalString(value.suggestion.mission) as string }
+        : {}),
+      ...(readOptionalString(value.suggestion.rationale)
+        ? { rationale: readOptionalString(value.suggestion.rationale) as string }
+        : {}),
+      ...(readOptionalString(value.suggestion.supportingAgentId)
+        ? { supportingAgentId: readOptionalString(value.suggestion.supportingAgentId) as string }
+        : {}),
+      ...(readOptionalString(value.suggestion.supportingAgentDisplayName)
+        ? { supportingAgentDisplayName: readOptionalString(value.suggestion.supportingAgentDisplayName) as string }
+        : {}),
+      ...(readOptionalString(value.suggestion.suggestedSupervisorAgentId)
+        ? { suggestedSupervisorAgentId: readOptionalString(value.suggestion.suggestedSupervisorAgentId) as string }
+        : {}),
+      ...(typeof value.suggestion.openWorkItemCount === "number"
+        ? { openWorkItemCount: value.suggestion.openWorkItemCount }
+        : {}),
+      ...(typeof value.suggestion.waitingWorkItemCount === "number"
+        ? { waitingWorkItemCount: value.suggestion.waitingWorkItemCount }
+        : {}),
+      ...(typeof value.suggestion.highPriorityWorkItemCount === "number"
+        ? { highPriorityWorkItemCount: value.suggestion.highPriorityWorkItemCount }
+        : {}),
+      ...(hasOwn(value.suggestion, "spawnPolicy") ? { spawnPolicy: value.suggestion.spawnPolicy } : {}),
+      ...(hasOwn(value.suggestion, "guardrail") ? { guardrail: value.suggestion.guardrail } : {}),
+      ...(hasOwn(value.suggestion, "auditFacts") ? { auditFacts: value.suggestion.auditFacts } : {}),
+    },
+  };
+}
+
+function normalizePlatformAgentSpawnSuggestionRestorePayload(
+  value: unknown,
+): PlatformAgentSpawnSuggestionRestorePayload {
+  if (!isRecord(value) || !isRecord(value.suggestion)) {
+    throw new Error("Request body.suggestion must be an object.");
+  }
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    suggestion: {
+      suggestionId: readRequiredString(value.suggestion.suggestionId, "suggestion.suggestionId"),
+      ...(readOptionalString(value.suggestion.organizationId)
+        ? { organizationId: readOptionalString(value.suggestion.organizationId) as string }
+        : {}),
+    },
+  };
+}
+
+function normalizePlatformAgentIdleApprovePayload(value: unknown): PlatformAgentIdleApprovePayload {
+  if (!isRecord(value) || !isRecord(value.suggestion)) {
+    throw new Error("Request body.suggestion must be an object.");
+  }
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    suggestion: {
+      suggestionId: readRequiredString(value.suggestion.suggestionId, "suggestion.suggestionId"),
+      ...(readOptionalString(value.suggestion.organizationId)
+        ? { organizationId: readOptionalString(value.suggestion.organizationId) as string }
+        : {}),
+      agentId: readRequiredString(value.suggestion.agentId, "suggestion.agentId"),
+      action: readRequiredEnum(value.suggestion.action, MANAGED_AGENT_IDLE_RECOVERY_ACTIONS, "suggestion.action"),
+    },
+  };
+}
+
+function normalizePlatformAgentLifecyclePayload(value: unknown): PlatformAgentLifecyclePayload {
+  return normalizePlatformAgentDetailPayload(value);
+}
+
+function normalizePlatformGovernanceFiltersPayload(value: unknown): PlatformGovernanceFiltersPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  const organizationId = readOptionalString(value.organizationId);
+  const managerAgentId = readOptionalString(value.managerAgentId);
+  const attentionOnly = readOptionalBoolean(value.attentionOnly);
+  const attentionLevels = readOptionalEnumArray(
+    value.attentionLevels,
+    ["normal", "attention", "urgent"] as const,
+    "attentionLevels",
+  );
+  const waitingFor = readOptionalEnum(value.waitingFor, ["any", "human", "agent"] as const, "waitingFor");
+  const staleOnly = readOptionalBoolean(value.staleOnly);
+  const failedOnly = readOptionalBoolean(value.failedOnly);
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    ...(organizationId ? { organizationId } : {}),
+    ...(managerAgentId ? { managerAgentId } : {}),
+    ...(attentionOnly !== undefined ? { attentionOnly } : {}),
+    ...(attentionLevels ? { attentionLevels } : {}),
+    ...(waitingFor ? { waitingFor } : {}),
+    ...(staleOnly !== undefined ? { staleOnly } : {}),
+    ...(failedOnly !== undefined ? { failedOnly } : {}),
+  };
+}
+
+function normalizePlatformWaitingQueueListPayload(value: unknown): PlatformWaitingQueueListPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  const limit = readOptionalPositiveInteger(value.limit, "limit");
+
+  return {
+    ...normalizePlatformGovernanceFiltersPayload(value),
+    ...(limit !== undefined ? { limit } : {}),
+  };
+}
+
+function normalizePlatformCollaborationDashboardPayload(value: unknown): PlatformCollaborationDashboardPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  const limit = readOptionalPositiveInteger(value.limit, "limit");
+
+  return {
+    ...normalizePlatformGovernanceFiltersPayload(value),
+    ...(limit !== undefined ? { limit } : {}),
+  };
+}
+
+function normalizePlatformWorkItemListPayload(value: unknown): PlatformWorkItemListPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  const agentId = readOptionalString(value.agentId);
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    ...(agentId ? { agentId } : {}),
+  };
+}
+
 function normalizePlatformWorkItemDispatchPayload(value: unknown): PlatformWorkItemDispatchPayload {
   if (!isRecord(value) || !isRecord(value.workItem)) {
     throw new Error("Request body.workItem must be an object.");
@@ -726,6 +1792,53 @@ function normalizePlatformWorkItemDetailPayload(value: unknown): PlatformWorkIte
   };
 }
 
+function normalizePlatformWorkItemCancelPayload(value: unknown): PlatformWorkItemCancelPayload {
+  return normalizePlatformWorkItemDetailPayload(value);
+}
+
+function normalizePlatformWorkItemRespondPayload(value: unknown): PlatformWorkItemRespondPayload {
+  if (!isRecord(value) || !isRecord(value.response)) {
+    throw new Error("Request body.response must be an object.");
+  }
+
+  const decision = readOptionalEnum(value.response.decision, ["approve", "deny"] as const, "response.decision");
+  const inputText = readOptionalString(value.response.inputText);
+  const artifactRefs = Array.isArray(value.response.artifactRefs)
+    ? readStringArray(value.response.artifactRefs)
+    : undefined;
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    workItemId: readRequiredString(value.workItemId, "workItemId"),
+    response: {
+      ...(decision ? { decision } : {}),
+      ...(inputText ? { inputText } : {}),
+      ...(hasOwn(value.response, "payload") ? { payload: value.response.payload } : {}),
+      ...(artifactRefs?.length ? { artifactRefs } : {}),
+    },
+  };
+}
+
+function normalizePlatformWorkItemEscalatePayload(value: unknown): PlatformWorkItemEscalatePayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  const escalation = isRecord(value.escalation)
+    ? {
+        ...(readOptionalString(value.escalation.inputText)
+          ? { inputText: readOptionalString(value.escalation.inputText) as string }
+          : {}),
+      }
+    : undefined;
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    workItemId: readRequiredString(value.workItemId, "workItemId"),
+    ...(escalation ? { escalation } : {}),
+  };
+}
+
 function normalizePlatformRunListPayload(value: unknown): PlatformRunListPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
@@ -749,6 +1862,82 @@ function normalizePlatformRunDetailPayload(value: unknown): PlatformRunDetailPay
   return {
     ...normalizePlatformOwnerPayload(value),
     runId: readRequiredString(value.runId, "runId"),
+  };
+}
+
+function normalizePlatformHandoffListPayload(value: unknown): PlatformHandoffListPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  const workItemId = readOptionalString(value.workItemId);
+  const limit = readOptionalPositiveInteger(value.limit, "limit");
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    agentId: readRequiredString(value.agentId, "agentId"),
+    ...(workItemId ? { workItemId } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+  };
+}
+
+function normalizePlatformMailboxListPayload(value: unknown): PlatformMailboxListPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    agentId: readRequiredString(value.agentId, "agentId"),
+  };
+}
+
+function normalizePlatformMailboxPullPayload(value: unknown): PlatformMailboxPullPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    agentId: readRequiredString(value.agentId, "agentId"),
+  };
+}
+
+function normalizePlatformMailboxAckPayload(value: unknown): PlatformMailboxAckPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    agentId: readRequiredString(value.agentId, "agentId"),
+    mailboxEntryId: readRequiredString(value.mailboxEntryId, "mailboxEntryId"),
+  };
+}
+
+function normalizePlatformMailboxRespondPayload(value: unknown): PlatformMailboxRespondPayload {
+  if (!isRecord(value) || !isRecord(value.response)) {
+    throw new Error("Request body.response must be an object.");
+  }
+
+  const decision = readOptionalEnum(value.response.decision, ["approve", "deny"] as const, "response.decision");
+  const inputText = readOptionalString(value.response.inputText);
+  const priority = readOptionalEnum(value.response.priority, MANAGED_AGENT_PRIORITIES, "response.priority");
+  const artifactRefs = Array.isArray(value.response.artifactRefs)
+    ? readStringArray(value.response.artifactRefs)
+    : undefined;
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    agentId: readRequiredString(value.agentId, "agentId"),
+    mailboxEntryId: readRequiredString(value.mailboxEntryId, "mailboxEntryId"),
+    response: {
+      ...(decision ? { decision } : {}),
+      ...(inputText ? { inputText } : {}),
+      ...(hasOwn(value.response, "payload") ? { payload: value.response.payload } : {}),
+      ...(artifactRefs?.length ? { artifactRefs } : {}),
+      ...(priority ? { priority } : {}),
+    },
   };
 }
 
@@ -1011,6 +2200,49 @@ function readOptionalPositiveInteger(value: unknown, fieldName: string): number 
   return value;
 }
 
+function readOptionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readOptionalEnumArray<T extends readonly string[]>(
+  value: unknown,
+  candidates: T,
+  fieldName: string,
+): T[number][] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error(`${fieldName} must be an array.`);
+  }
+
+  const normalized = [...new Set(value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean))];
+
+  if (normalized.some((entry) => !candidates.includes(entry))) {
+    throw new Error(`${fieldName} is invalid.`);
+  }
+
+  return normalized as T[number][];
+}
+
+function readRequiredEnum<T extends readonly string[]>(
+  value: unknown,
+  candidates: T,
+  fieldName: string,
+): T[number] {
+  const normalized = readOptionalEnum(value, candidates, fieldName);
+
+  if (!normalized) {
+    throw new Error(`${fieldName} is required.`);
+  }
+
+  return normalized;
+}
+
 function readRequiredPositiveInteger(value: unknown, fieldName: string): number {
   const normalized = readOptionalPositiveInteger(value, fieldName);
 
@@ -1031,6 +2263,30 @@ function hasOwn(value: Record<string, unknown>, key: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function buildPlatformGovernanceFilters(
+  payload: PlatformGovernanceFiltersPayload & { limit?: number },
+): {
+  organizationId?: string;
+  managerAgentId?: string;
+  attentionOnly?: boolean;
+  attentionLevels?: Array<"normal" | "attention" | "urgent">;
+  waitingFor?: "any" | "human" | "agent";
+  staleOnly?: boolean;
+  failedOnly?: boolean;
+  limit?: number;
+} {
+  return {
+    ...(payload.organizationId ? { organizationId: payload.organizationId } : {}),
+    ...(payload.managerAgentId ? { managerAgentId: payload.managerAgentId } : {}),
+    ...(payload.attentionOnly !== undefined ? { attentionOnly: payload.attentionOnly } : {}),
+    ...(payload.attentionLevels ? { attentionLevels: payload.attentionLevels } : {}),
+    ...(payload.waitingFor ? { waitingFor: payload.waitingFor } : {}),
+    ...(payload.staleOnly !== undefined ? { staleOnly: payload.staleOnly } : {}),
+    ...(payload.failedOnly !== undefined ? { failedOnly: payload.failedOnly } : {}),
+    ...(typeof payload.limit === "number" ? { limit: payload.limit } : {}),
+  };
 }
 
 async function handlePlatformNodeGovernanceAction(

@@ -170,7 +170,6 @@ export class ManagedAgentPlatformWorkerClient {
   private readonly ownerPrincipalId: string;
   private readonly webAccessToken: string;
   private readonly fetchImpl: typeof fetch;
-  private cookieHeader: string | null = null;
 
   constructor(options: ManagedAgentPlatformWorkerClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
@@ -304,52 +303,16 @@ export class ManagedAgentPlatformWorkerClient {
     };
   }
 
-  private async authenticate(): Promise<void> {
-    const response = await this.fetchImpl(`${this.baseUrl}/api/web-auth/login`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        token: this.webAccessToken,
-      }),
-    });
-
-    const payload = await readJsonResponse(response);
-
-    if (!response.ok) {
-      throw new Error(resolveHttpErrorMessage(payload, response.status, "平台登录失败。"));
-    }
-
-    const setCookieHeader = response.headers.get("set-cookie");
-
-    if (!setCookieHeader) {
-      throw new Error("平台登录成功，但未返回 Web session cookie。");
-    }
-
-    this.cookieHeader = extractCookie(setCookieHeader, "themis_web_session");
-  }
-
-  private async requestJson<T>(pathname: string, payload: Record<string, unknown>, retry = true): Promise<T> {
-    if (!this.cookieHeader) {
-      await this.authenticate();
-    }
-
+  private async requestJson<T>(pathname: string, payload: Record<string, unknown>): Promise<T> {
     const response = await this.fetchImpl(`${this.baseUrl}${pathname}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(this.cookieHeader ? { Cookie: this.cookieHeader } : {}),
+        Authorization: `Bearer ${this.webAccessToken}`,
       },
       body: JSON.stringify(payload),
     });
     const parsed = await readJsonResponse(response);
-
-    if (response.status === 401 && retry) {
-      this.cookieHeader = null;
-      await this.authenticate();
-      return await this.requestJson<T>(pathname, payload, false);
-    }
 
     if (!response.ok) {
       throw new Error(resolveHttpErrorMessage(parsed, response.status, `平台请求失败：${pathname}`));
@@ -381,20 +344,6 @@ function resolveHttpErrorMessage(payload: unknown, status: number, fallback: str
   }
 
   return `${fallback}（HTTP ${status}）`;
-}
-
-function extractCookie(setCookieHeader: string, name: string): string {
-  const prefix = `${name}=`;
-
-  for (const part of setCookieHeader.split(/, (?=[^;]+=)/)) {
-    const cookie = part.split(";", 1)[0]?.trim();
-
-    if (cookie?.startsWith(prefix)) {
-      return cookie;
-    }
-  }
-
-  throw new Error(`Missing cookie ${name}.`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

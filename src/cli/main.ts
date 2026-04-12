@@ -32,6 +32,7 @@ import {
   type ThemisUpdateCheckResult,
 } from "../diagnostics/update-check.js";
 import { runManagedThemisUpdateWorker } from "../diagnostics/update-service.js";
+import { PlatformBackupService } from "../diagnostics/platform-backup.js";
 import { RuntimeSmokeService, type RuntimeSmokeProgressEvent } from "../diagnostics/runtime-smoke.js";
 import { McpInspector } from "../mcp/mcp-inspector.js";
 import { runThemisMcpServer } from "../mcp/themis-mcp-server.js";
@@ -39,7 +40,7 @@ import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { ManagedAgentPlatformWorkerClient } from "../core/managed-agent-platform-worker-client.js";
 import { ManagedAgentWorkerDaemon } from "../core/managed-agent-worker-daemon.js";
 import { PrincipalSkillsService } from "../core/principal-skills-service.js";
-import { WebAccessService } from "../core/web-access.js";
+import { WebAccessService, type PlatformServiceRole } from "../core/web-access.js";
 import { readOpenAICompatibleProviderConfigs } from "../core/openai-compatible-provider.js";
 import {
   escapeEnvValue,
@@ -116,6 +117,9 @@ async function main(args: string[]): Promise<void> {
     case "config":
       handleConfig(subcommand, rest);
       return;
+    case "backup":
+      await handleBackup(subcommand, rest);
+      return;
     case "auth":
       await handleAuth(subcommand, rest);
       return;
@@ -132,7 +136,7 @@ async function main(args: string[]): Promise<void> {
       await handleWorkerFleet(subcommand, rest);
       return;
     default:
-      throw new Error(`不支持的命令：${command}。可用命令：init / status / check / update / doctor / config / auth / skill / mcp-server / worker-node / worker-fleet / help。`);
+      throw new Error(`不支持的命令：${command}。可用命令：init / status / check / update / doctor / config / backup / auth / skill / mcp-server / worker-node / worker-fleet / help。`);
   }
 }
 
@@ -874,14 +878,15 @@ async function handleDoctorWorkerNode(args: string[]): Promise<void> {
 async function handleDoctorWorkerFleet(args: string[]): Promise<void> {
   if (args.includes("--help") || args.includes("-h")) {
     console.log(
-      "用法：themis doctor worker-fleet --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> [--organization <organizationId>]",
+      "用法：themis doctor worker-fleet --platform <baseUrl> --owner-principal <principalId> --token <platformToken> [--organization <organizationId>] [--json] [--fail-on <error|warning>]",
     );
     console.log("说明：批量读取平台节点列表与 detail，输出当前 Worker Node 集群的值守摘要与建议动作。");
     return;
   }
 
-  const valueOptions = ["--platform", "--owner-principal", "--token", "--organization"];
-  const unknownArgs = collectUnknownOptions(args, valueOptions, []);
+  const valueOptions = ["--platform", "--owner-principal", "--token", "--organization", "--fail-on"];
+  const flagOptions = ["--json"];
+  const unknownArgs = collectUnknownOptions(args, valueOptions, flagOptions);
 
   if (unknownArgs.length > 0) {
     throw new Error(`doctor worker-fleet 不支持这些参数：${unknownArgs.join(", ")}`);
@@ -893,8 +898,15 @@ async function handleDoctorWorkerFleet(args: string[]): Promise<void> {
 
   if (!platformBaseUrl || !ownerPrincipalId || !webAccessToken) {
     throw new Error(
-      "用法：themis doctor worker-fleet --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> [--organization <organizationId>]",
+      "用法：themis doctor worker-fleet --platform <baseUrl> --owner-principal <principalId> --token <platformToken> [--organization <organizationId>] [--json] [--fail-on <error|warning>]",
     );
+  }
+
+  const failOnRaw = readOptionValue(args, "--fail-on");
+  const failOn = normalizeDoctorFailOn(failOnRaw);
+
+  if (failOnRaw && !failOn) {
+    throw new Error("doctor worker-fleet --fail-on 仅支持 error / warning。");
   }
 
   const diagnostics = new WorkerFleetDiagnosticsService();
@@ -905,42 +917,50 @@ async function handleDoctorWorkerFleet(args: string[]): Promise<void> {
     organizationId: readOptionValue(args, "--organization"),
   });
 
-  console.log("Themis 诊断 - worker-fleet");
-  console.log(`platform.baseUrl：${summary.platformBaseUrl}`);
-  console.log(`platform.organizationId：${summary.organizationId ?? "<none>"}`);
-  console.log(`nodeCount：${summary.nodeCount}`);
-  console.log(`status.online：${summary.counts.online}`);
-  console.log(`status.draining：${summary.counts.draining}`);
-  console.log(`status.offline：${summary.counts.offline}`);
-  console.log(`heartbeat.stale：${summary.counts.stale}`);
-  console.log(`heartbeat.expired：${summary.counts.expired}`);
-  console.log(`attention.errorCount：${summary.counts.errorCount}`);
-  console.log(`attention.warningCount：${summary.counts.warningCount}`);
+  if (args.includes("--json")) {
+    console.log(JSON.stringify(summary, null, 2));
+  } else {
+    console.log("Themis 诊断 - worker-fleet");
+    console.log(`platform.baseUrl：${summary.platformBaseUrl}`);
+    console.log(`platform.organizationId：${summary.organizationId ?? "<none>"}`);
+    console.log(`nodeCount：${summary.nodeCount}`);
+    console.log(`status.online：${summary.counts.online}`);
+    console.log(`status.draining：${summary.counts.draining}`);
+    console.log(`status.offline：${summary.counts.offline}`);
+    console.log(`heartbeat.stale：${summary.counts.stale}`);
+    console.log(`heartbeat.expired：${summary.counts.expired}`);
+    console.log(`attention.errorCount：${summary.counts.errorCount}`);
+    console.log(`attention.warningCount：${summary.counts.warningCount}`);
 
-  for (const node of summary.nodes) {
-    console.log(`node[${node.node.displayName}|${node.node.nodeId}]：${node.node.status}`);
-    console.log(`  slots：${node.node.slotAvailable}/${node.node.slotCapacity}`);
-    console.log(
-      `  heartbeat：${node.heartbeatFreshness} (age=${formatOptionalSeconds(node.heartbeatAgeSeconds)}, ttl=${node.node.heartbeatTtlSeconds}s, remaining=${formatOptionalSeconds(node.heartbeatRemainingSeconds)})`,
-    );
-    console.log(
-      `  leases：active=${node.leaseSummary?.activeCount ?? "<unknown>"}, revoked=${node.leaseSummary?.revokedCount ?? "<unknown>"}, total=${node.leaseSummary?.totalCount ?? "<unknown>"}`,
-    );
-    if (node.detailError) {
-      console.log(`  detailError：${node.detailError}`);
+    for (const node of summary.nodes) {
+      console.log(`node[${node.node.displayName}|${node.node.nodeId}]：${node.node.status}`);
+      console.log(`  slots：${node.node.slotAvailable}/${node.node.slotCapacity}`);
+      console.log(
+        `  heartbeat：${node.heartbeatFreshness} (age=${formatOptionalSeconds(node.heartbeatAgeSeconds)}, ttl=${node.node.heartbeatTtlSeconds}s, remaining=${formatOptionalSeconds(node.heartbeatRemainingSeconds)})`,
+      );
+      console.log(
+        `  leases：active=${node.leaseSummary?.activeCount ?? "<unknown>"}, revoked=${node.leaseSummary?.revokedCount ?? "<unknown>"}, total=${node.leaseSummary?.totalCount ?? "<unknown>"}`,
+      );
+      if (node.detailError) {
+        console.log(`  detailError：${node.detailError}`);
+      }
+      if (node.attention) {
+        console.log(`  attention：${node.attention.severity} - ${node.attention.summary}`);
+        console.log(`  nextStep：${node.attention.recommendedAction}`);
+      }
     }
-    if (node.attention) {
-      console.log(`  attention：${node.attention.severity} - ${node.attention.summary}`);
-      console.log(`  nextStep：${node.attention.recommendedAction}`);
+
+    console.log("问题判断");
+    console.log(`主诊断：${summary.primaryDiagnosis.title}`);
+    console.log(`诊断摘要：${summary.primaryDiagnosis.summary}`);
+    console.log("建议动作：");
+    for (const [index, step] of summary.recommendedNextSteps.entries()) {
+      console.log(`${index + 1}. ${step}`);
     }
   }
 
-  console.log("问题判断");
-  console.log(`主诊断：${summary.primaryDiagnosis.title}`);
-  console.log(`诊断摘要：${summary.primaryDiagnosis.summary}`);
-  console.log("建议动作：");
-  for (const [index, step] of summary.recommendedNextSteps.entries()) {
-    console.log(`${index + 1}. ${step}`);
+  if (shouldFailWorkerFleetDoctor(summary, failOn)) {
+    process.exitCode = 1;
   }
 }
 
@@ -985,13 +1005,13 @@ async function handleWorkerNode(subcommand: string | undefined, args: string[]):
 
   if (action !== "run") {
     throw new Error(
-      "用法：themis worker-node run --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --name <displayName> [--node-id <nodeId>] [--organization <organizationId>] [--workspace <path>] [--credential <id>] [--provider <id>] [--label <label>] [--slot-capacity <n>] [--slot-available <n>] [--heartbeat-ttl-seconds <n>] [--poll-interval-ms <n>] [--heartbeat-interval-ms <n>] [--once]",
+      "用法：themis worker-node run --platform <baseUrl> --owner-principal <principalId> --token <platformToken> --name <displayName> [--node-id <nodeId>] [--organization <organizationId>] [--workspace <path>] [--credential <id>] [--provider <id>] [--label <label>] [--slot-capacity <n>] [--slot-available <n>] [--heartbeat-ttl-seconds <n>] [--poll-interval-ms <n>] [--heartbeat-interval-ms <n>] [--once]",
     );
   }
 
   if (args.includes("--help") || args.includes("-h")) {
     console.log(
-      "用法：themis worker-node run --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --name <displayName> [--node-id <nodeId>] [--organization <organizationId>] [--workspace <path>] [--credential <id>] [--provider <id>] [--label <label>] [--slot-capacity <n>] [--slot-available <n>] [--heartbeat-ttl-seconds <n>] [--poll-interval-ms <n>] [--heartbeat-interval-ms <n>] [--once]",
+      "用法：themis worker-node run --platform <baseUrl> --owner-principal <principalId> --token <platformToken> --name <displayName> [--node-id <nodeId>] [--organization <organizationId>] [--workspace <path>] [--credential <id>] [--provider <id>] [--label <label>] [--slot-capacity <n>] [--slot-available <n>] [--heartbeat-ttl-seconds <n>] [--poll-interval-ms <n>] [--heartbeat-interval-ms <n>] [--once]",
     );
     console.log("说明：以轻量 Worker Node 形态连接平台，执行 register -> heartbeat -> pull -> execute -> report 最小闭环。");
     return;
@@ -1028,7 +1048,7 @@ async function handleWorkerNode(subcommand: string | undefined, args: string[]):
 
   if (!platformBaseUrl || !ownerPrincipalId || !webAccessToken || !displayName) {
     throw new Error(
-      "用法：themis worker-node run --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --name <displayName> [--node-id <nodeId>] [--organization <organizationId>] [--workspace <path>] [--credential <id>] [--provider <id>] [--label <label>] [--slot-capacity <n>] [--slot-available <n>] [--heartbeat-ttl-seconds <n>] [--poll-interval-ms <n>] [--heartbeat-interval-ms <n>] [--once]",
+      "用法：themis worker-node run --platform <baseUrl> --owner-principal <principalId> --token <platformToken> --name <displayName> [--node-id <nodeId>] [--organization <organizationId>] [--workspace <path>] [--credential <id>] [--provider <id>] [--label <label>] [--slot-capacity <n>] [--slot-available <n>] [--heartbeat-ttl-seconds <n>] [--poll-interval-ms <n>] [--heartbeat-interval-ms <n>] [--once]",
     );
   }
 
@@ -1110,13 +1130,13 @@ async function handleWorkerFleet(subcommand: string | undefined, args: string[])
 
   if (action !== "drain" && action !== "offline" && action !== "reclaim") {
     throw new Error(
-      "用法：themis worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --node <nodeId> [--node <nodeId> ...] [--failure-code <code>] [--failure-message <message>] --yes",
+      "用法：themis worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <platformToken> --node <nodeId> [--node <nodeId> ...] [--failure-code <code>] [--failure-message <message>] --yes",
     );
   }
 
   if (args.includes("--help") || args.includes("-h")) {
     console.log(
-      "用法：themis worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --node <nodeId> [--node <nodeId> ...] [--failure-code <code>] [--failure-message <message>] --yes",
+      "用法：themis worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <platformToken> --node <nodeId> [--node <nodeId> ...] [--failure-code <code>] [--failure-message <message>] --yes",
     );
     console.log("说明：面向值班的 Worker Node 平台治理入口；支持对多个 nodeId 顺序执行 drain / offline / reclaim。");
     return;
@@ -1137,7 +1157,7 @@ async function handleWorkerFleet(subcommand: string | undefined, args: string[])
 
   if (!platformBaseUrl || !ownerPrincipalId || !webAccessToken || nodeIds.length === 0) {
     throw new Error(
-      "用法：themis worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --node <nodeId> [--node <nodeId> ...] [--failure-code <code>] [--failure-message <message>] --yes",
+      "用法：themis worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <platformToken> --node <nodeId> [--node <nodeId> ...] [--failure-code <code>] [--failure-message <message>] --yes",
     );
   }
 
@@ -1264,13 +1284,93 @@ function handleConfig(subcommand: string | undefined, args: string[]): void {
   }
 }
 
+async function handleBackup(subcommand: string | undefined, args: string[]): Promise<void> {
+  switch (subcommand) {
+    case "create":
+      await handleBackupCreate(args);
+      return;
+    case "restore":
+      await handleBackupRestore(args);
+      return;
+    default:
+      throw new Error("backup 子命令仅支持 create / restore。");
+  }
+}
+
+async function handleBackupCreate(args: string[]): Promise<void> {
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log("用法：themis backup create [--database <sqlitePath>] [--output <backupPath>]");
+    console.log("说明：对当前 Themis SQLite 数据库做一致性备份，默认输出到 infra/backups/。");
+    return;
+  }
+
+  const valueOptions = ["--database", "--output"];
+  const unknownArgs = collectUnknownOptions(args, valueOptions, []);
+
+  if (unknownArgs.length > 0) {
+    throw new Error(`backup create 不支持这些参数：${unknownArgs.join(", ")}`);
+  }
+
+  const service = new PlatformBackupService();
+  const result = await service.createBackup({
+    sourcePath: readOptionValue(args, "--database") ?? cliDatabasePath,
+    ...(readOptionValue(args, "--output") ? { outputPath: readOptionValue(args, "--output")! } : {}),
+  });
+
+  console.log("Themis SQLite 备份已创建");
+  console.log(`- sourcePath：${result.sourcePath}`);
+  console.log(`- outputPath：${result.outputPath}`);
+  console.log(`- createdAt：${result.createdAt}`);
+  console.log(`- sizeBytes：${result.sizeBytes}`);
+}
+
+async function handleBackupRestore(args: string[]): Promise<void> {
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log("用法：themis backup restore --input <backupPath> [--database <sqlitePath>] --yes");
+    console.log("说明：先自动备份当前库，再把指定快照恢复到目标 SQLite；执行前应先停掉常驻服务。");
+    return;
+  }
+
+  const valueOptions = ["--input", "--database"];
+  const flagOptions = ["--yes"];
+  const unknownArgs = collectUnknownOptions(args, valueOptions, flagOptions);
+
+  if (unknownArgs.length > 0) {
+    throw new Error(`backup restore 不支持这些参数：${unknownArgs.join(", ")}`);
+  }
+
+  const inputPath = readOptionValue(args, "--input");
+
+  if (!inputPath || !args.includes("--yes")) {
+    throw new Error("用法：themis backup restore --input <backupPath> [--database <sqlitePath>] --yes");
+  }
+
+  const service = new PlatformBackupService();
+  const result = await service.restoreBackup({
+    inputPath,
+    targetPath: readOptionValue(args, "--database") ?? cliDatabasePath,
+  });
+
+  console.log("Themis SQLite 已从备份恢复");
+  console.log(`- inputPath：${result.inputPath}`);
+  console.log(`- targetPath：${result.targetPath}`);
+  console.log(`- restoredAt：${result.restoredAt}`);
+  console.log(`- sizeBytes：${result.sizeBytes}`);
+  if (result.previousBackupPath) {
+    console.log(`- previousBackupPath：${result.previousBackupPath}`);
+  }
+}
+
 async function handleAuth(subcommand: string | undefined, args: string[]): Promise<void> {
   switch (subcommand) {
     case "web":
       await handleAuthWeb(args);
       return;
+    case "platform":
+      await handleAuthPlatform(args);
+      return;
     default:
-      throw new Error("auth 子命令仅支持 web。");
+      throw new Error("auth 子命令仅支持 web / platform。");
   }
 }
 
@@ -1308,6 +1408,65 @@ async function handleAuthWeb(args: string[]): Promise<void> {
       return;
     default:
       throw new Error("auth web 子命令仅支持 list / add / remove / rename。");
+  }
+}
+
+async function handleAuthPlatform(args: string[]): Promise<void> {
+  const [action, ...rest] = args;
+  const valueOptions = ["--role", "--owner-principal"];
+  const unknownOptions = collectUnknownOptions(rest, valueOptions, []).filter((arg) => arg.startsWith("-"));
+
+  if (unknownOptions.length > 0) {
+    throw new Error(`未知参数：${unknownOptions.join(", ")}`);
+  }
+
+  switch (action) {
+    case "list": {
+      const positionals = collectPositionalArgs(rest, valueOptions, []);
+
+      if (positionals.length > 0 || readOptionValue(rest, "--role") || readOptionValue(rest, "--owner-principal")) {
+        throw new Error("用法：themis auth platform list");
+      }
+
+      handleAuthPlatformList();
+      return;
+    }
+    case "add": {
+      const positionals = collectPositionalArgs(rest, valueOptions, []);
+      const role = normalizePlatformServiceRole(readOptionValue(rest, "--role"));
+      const ownerPrincipalId = readOptionValue(rest, "--owner-principal");
+
+      if (positionals.length !== 1 || !role || !ownerPrincipalId) {
+        throw new Error(
+          "用法：themis auth platform add <label> --role <gateway|worker> --owner-principal <principalId>",
+        );
+      }
+
+      await handleAuthPlatformAdd(positionals[0]!, role, ownerPrincipalId);
+      return;
+    }
+    case "remove": {
+      const positionals = collectPositionalArgs(rest, valueOptions, []);
+
+      if (positionals.length !== 1 || readOptionValue(rest, "--role") || readOptionValue(rest, "--owner-principal")) {
+        throw new Error("用法：themis auth platform remove <label>");
+      }
+
+      handleAuthPlatformRemove(positionals[0]!);
+      return;
+    }
+    case "rename": {
+      const positionals = collectPositionalArgs(rest, valueOptions, []);
+
+      if (positionals.length !== 2 || readOptionValue(rest, "--role") || readOptionValue(rest, "--owner-principal")) {
+        throw new Error("用法：themis auth platform rename <old-label> <new-label>");
+      }
+
+      handleAuthPlatformRename(positionals[0]!, positionals[1]!);
+      return;
+    }
+    default:
+      throw new Error("auth platform 子命令仅支持 list / add / remove / rename。");
   }
 }
 
@@ -1419,10 +1578,16 @@ function printHelp(): void {
   console.log("- ./themis config list [--show-secrets]");
   console.log("- ./themis config set <KEY> <VALUE>");
   console.log("- ./themis config unset <KEY>");
+  console.log("- ./themis backup create [--database <sqlitePath>] [--output <backupPath>]");
+  console.log("- ./themis backup restore --input <backupPath> [--database <sqlitePath>] --yes");
   console.log("- ./themis auth web list");
   console.log("- ./themis auth web add <label>");
   console.log("- ./themis auth web remove <label>");
   console.log("- ./themis auth web rename <old-label> <new-label>");
+  console.log("- ./themis auth platform list");
+  console.log("- ./themis auth platform add <label> --role <gateway|worker> --owner-principal <principalId>");
+  console.log("- ./themis auth platform remove <label>");
+  console.log("- ./themis auth platform rename <old-label> <new-label>");
   console.log("- ./themis skill list");
   console.log("- ./themis skill curated list");
   console.log("- ./themis skill install local <ABSOLUTE_PATH>");
@@ -1432,8 +1597,8 @@ function printHelp(): void {
   console.log("- ./themis skill remove <SKILL_NAME>");
   console.log("- ./themis skill sync <SKILL_NAME> [--force]");
   console.log("- ./themis mcp-server [--channel <channel>] [--user <channelUserId>] [--name <displayName>] [--session <sessionId>] [--channel-session-key <key>]");
-  console.log("- ./themis worker-node run --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --name <displayName> [--once]");
-  console.log("- ./themis worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --node <nodeId> [--node <nodeId> ...] --yes");
+  console.log("- ./themis worker-node run --platform <baseUrl> --owner-principal <principalId> --token <platformToken> --name <displayName> [--once]");
+  console.log("- ./themis worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <platformToken> --node <nodeId> [--node <nodeId> ...] --yes");
   console.log("");
   console.log("如果希望像 codex/openclaw 一样直接输入 `themis`，建议执行 `./themis install`。");
 }
@@ -1444,6 +1609,34 @@ function formatOptionalSeconds(value: number | null): string {
   }
 
   return `${value}s`;
+}
+
+function normalizeDoctorFailOn(value: string | null): "error" | "warning" | null {
+  if (value === "error" || value === "warning") {
+    return value;
+  }
+
+  return null;
+}
+
+function shouldFailWorkerFleetDoctor(
+  summary: {
+    counts: {
+      errorCount: number;
+      warningCount: number;
+    };
+  },
+  failOn: "error" | "warning" | null,
+): boolean {
+  if (failOn === "error") {
+    return summary.counts.errorCount > 0;
+  }
+
+  if (failOn === "warning") {
+    return summary.counts.errorCount > 0 || summary.counts.warningCount > 0;
+  }
+
+  return false;
 }
 
 function printReleaseReadinessSummary(summary: ReleaseReadinessSummary): void {
@@ -2035,7 +2228,7 @@ function createCliWebAccessService(): WebAccessService {
 
 function handleAuthWebList(): void {
   const service = createCliWebAccessService();
-  const tokens = service.listTokens();
+  const tokens = service.listWebTokens();
 
   console.log("Themis Web 访问口令");
   console.log("");
@@ -2080,7 +2273,7 @@ function handleAuthWebRemove(label: string): void {
 
 function handleAuthWebRename(oldLabel: string, newLabel: string): void {
   const service = createCliWebAccessService();
-  const token = service.listTokens().find((item) => item.label === oldLabel && !item.revokedAt);
+  const token = service.listWebTokens().find((item) => item.label === oldLabel && !item.revokedAt);
 
   if (!token) {
     throw new Error(`未找到处于 active 状态的 Web 访问口令：${oldLabel}`);
@@ -2094,6 +2287,83 @@ function handleAuthWebRename(oldLabel: string, newLabel: string): void {
 
   console.log(`已重命名 Web 访问口令：${oldLabel} -> ${renamed.label}`);
   console.log(`- tokenId：${renamed.tokenId}`);
+}
+
+function handleAuthPlatformList(): void {
+  const service = createCliWebAccessService();
+  const tokens = service.listPlatformServiceTokens();
+
+  console.log("Themis 平台服务令牌");
+  console.log("");
+
+  if (tokens.length === 0) {
+    console.log("暂无平台服务令牌。");
+    return;
+  }
+
+  for (const token of tokens) {
+    console.log(`- label：${token.label}`);
+    console.log(`  状态：${token.revokedAt ? "revoked" : "active"}`);
+    console.log(`  role：${token.serviceRole}`);
+    console.log(`  ownerPrincipalId：${token.ownerPrincipalId}`);
+    console.log(`  最近使用：${token.lastUsedAt ?? "未使用"}`);
+    console.log("");
+  }
+}
+
+async function handleAuthPlatformAdd(
+  label: string,
+  role: PlatformServiceRole,
+  ownerPrincipalId: string,
+): Promise<void> {
+  const service = createCliWebAccessService();
+  const secret = await readHiddenLinePair(`请输入 ${label} 的平台服务令牌：`, "请再次输入平台服务令牌：");
+  const created = service.createPlatformServiceToken({
+    label,
+    secret,
+    ownerPrincipalId,
+    serviceRole: role,
+    remoteIp: "cli",
+  });
+
+  console.log(`已添加平台服务令牌：${created.label}`);
+  console.log(`- tokenId：${created.tokenId}`);
+  console.log(`- role：${created.serviceRole}`);
+  console.log(`- ownerPrincipalId：${created.ownerPrincipalId}`);
+}
+
+function handleAuthPlatformRemove(label: string): void {
+  const service = createCliWebAccessService();
+  const revoked = service.revokePlatformServiceTokenByLabel({
+    label,
+    remoteIp: "cli",
+  });
+
+  console.log(`已移除平台服务令牌：${revoked.label}`);
+  console.log(`- tokenId：${revoked.tokenId}`);
+  console.log(`- role：${revoked.serviceRole}`);
+  console.log(`- ownerPrincipalId：${revoked.ownerPrincipalId}`);
+  console.log(`- 状态：${revoked.revokedAt ? "revoked" : "active"}`);
+}
+
+function handleAuthPlatformRename(oldLabel: string, newLabel: string): void {
+  const service = createCliWebAccessService();
+  const token = service.listPlatformServiceTokens().find((item) => item.label === oldLabel && !item.revokedAt);
+
+  if (!token) {
+    throw new Error(`未找到处于 active 状态的平台服务令牌：${oldLabel}`);
+  }
+
+  const renamed = service.renameToken({
+    tokenId: token.tokenId,
+    label: newLabel,
+    remoteIp: "cli",
+  });
+
+  console.log(`已重命名平台服务令牌：${oldLabel} -> ${renamed.label}`);
+  console.log(`- tokenId：${renamed.tokenId}`);
+  console.log(`- role：${renamed.serviceRole ?? "unknown"}`);
+  console.log(`- ownerPrincipalId：${renamed.ownerPrincipalId ?? "unknown"}`);
 }
 
 async function readHiddenLinePair(firstPrompt: string, secondPrompt: string): Promise<string> {
@@ -2142,6 +2412,14 @@ function parseNonTtyHiddenLinePair(text: string): string {
   }
 
   return first;
+}
+
+function normalizePlatformServiceRole(value: string | null): PlatformServiceRole | null {
+  if (value === "gateway" || value === "worker") {
+    return value;
+  }
+
+  return null;
 }
 
 async function readHiddenLineFromTty(prompt: string): Promise<string> {
@@ -2705,6 +2983,35 @@ function readOptionValues(args: string[], key: string): string[] {
   }
 
   return [...new Set(values)];
+}
+
+function collectPositionalArgs(args: string[], valueOptions: string[], flagOptions: string[]): string[] {
+  const valueOptionSet = new Set(valueOptions);
+  const flagOptionSet = new Set(flagOptions);
+  const positionals: string[] = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const value = args[index];
+
+    if (!value) {
+      continue;
+    }
+
+    if (valueOptionSet.has(value)) {
+      index += 1;
+      continue;
+    }
+
+    if (flagOptionSet.has(value)) {
+      continue;
+    }
+
+    if (!value.startsWith("-")) {
+      positionals.push(value);
+    }
+  }
+
+  return positionals;
 }
 
 function ensureWorkerNodeCredentialAccounts(

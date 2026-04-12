@@ -11,16 +11,8 @@ test("WorkerFleetDiagnosticsService 会汇总节点 attention 与推荐动作", 
     server = createServer((req, res) => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
-      if (req.method === "POST" && url.pathname === "/api/web-auth/login") {
-        res.writeHead(200, {
-          "content-type": "application/json",
-          "set-cookie": "themis_web_session=session-worker-fleet; Path=/; HttpOnly",
-        });
-        res.end(JSON.stringify({ ok: true }));
-        return;
-      }
-
       if (req.method === "POST" && url.pathname === "/api/platform/nodes/list") {
+        assert.equal(req.headers.authorization, "Bearer secret-token");
         res.writeHead(200, {
           "content-type": "application/json",
         });
@@ -65,6 +57,7 @@ test("WorkerFleetDiagnosticsService 会汇总节点 attention 与推荐动作", 
       }
 
       if (req.method === "POST" && url.pathname === "/api/platform/nodes/detail") {
+        assert.equal(req.headers.authorization, "Bearer secret-token");
         let body = "";
         req.on("data", (chunk) => {
           body += chunk.toString();

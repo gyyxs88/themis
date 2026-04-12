@@ -7,9 +7,15 @@ import {
 
 export const WEB_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
+export type WebAccessTokenKind = "web_login" | "platform_service";
+export type PlatformServiceRole = "gateway" | "worker";
+
 export interface WebAccessTokenSummary {
   tokenId: string;
   label: string;
+  tokenKind: WebAccessTokenKind;
+  ownerPrincipalId?: string;
+  serviceRole?: PlatformServiceRole;
   createdAt: string;
   updatedAt: string;
   lastUsedAt?: string;
@@ -46,6 +52,18 @@ export type WebAccessAuthenticationResult =
   | { ok: true; session: WebAccessSessionSummary }
   | { ok: false; reason: WebAccessAuthenticationFailureReason };
 
+export interface PlatformServiceTokenSummary extends WebAccessTokenSummary {
+  tokenKind: "platform_service";
+  ownerPrincipalId: string;
+  serviceRole: PlatformServiceRole;
+}
+
+export type PlatformServiceAuthenticationFailureReason = "INVALID_CREDENTIALS" | "INVALID_TOKEN_SHAPE";
+
+export type PlatformServiceAuthenticationResult =
+  | { ok: true; token: PlatformServiceTokenSummary }
+  | { ok: false; reason: PlatformServiceAuthenticationFailureReason };
+
 export interface WebAccessServiceOptions {
   registry: SqliteCodexSessionRegistry;
   now?: () => string;
@@ -54,6 +72,14 @@ export interface WebAccessServiceOptions {
 export interface CreateWebAccessTokenInput {
   label: string;
   secret: string;
+  remoteIp?: string;
+}
+
+export interface CreatePlatformServiceTokenInput {
+  label: string;
+  secret: string;
+  ownerPrincipalId: string;
+  serviceRole: PlatformServiceRole;
   remoteIp?: string;
 }
 
@@ -68,7 +94,14 @@ export interface RevokeWebAccessTokenInput {
   remoteIp?: string;
 }
 
+export interface RevokePlatformServiceTokenInput extends RevokeWebAccessTokenInput {}
+
 export interface AuthenticateWebAccessInput {
+  secret: string;
+  remoteIp?: string;
+}
+
+export interface AuthenticatePlatformServiceInput {
   secret: string;
   remoteIp?: string;
 }
@@ -97,14 +130,58 @@ export class WebAccessService {
   }
 
   hasActiveToken(): boolean {
-    return this.registry.listActiveWebAccessTokens().length > 0;
+    return this.listActiveTokensByKind("web_login").length > 0;
   }
 
   listTokens(): WebAccessTokenSummary[] {
     return this.registry.listWebAccessTokens().map((record) => this.toTokenSummary(record));
   }
 
+  listWebTokens(): WebAccessTokenSummary[] {
+    return this.listTokens().filter((record) => record.tokenKind === "web_login");
+  }
+
+  listPlatformServiceTokens(): PlatformServiceTokenSummary[] {
+    return this.registry
+      .listWebAccessTokens()
+      .filter((record) => record.tokenKind === "platform_service")
+      .map((record) => this.toPlatformServiceTokenSummary(record));
+  }
+
   createToken(input: CreateWebAccessTokenInput): WebAccessTokenSummary {
+    return this.toTokenSummary(this.createStoredToken({
+      label: input.label,
+      secret: input.secret,
+      tokenKind: "web_login",
+      ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
+    }));
+  }
+
+  createPlatformServiceToken(input: CreatePlatformServiceTokenInput): PlatformServiceTokenSummary {
+    const ownerPrincipalId = input.ownerPrincipalId.trim();
+
+    if (!ownerPrincipalId) {
+      throw new Error("Platform service token ownerPrincipalId is required.");
+    }
+
+    return this.toPlatformServiceTokenSummary(this.createStoredToken({
+      label: input.label,
+      secret: input.secret,
+      tokenKind: "platform_service",
+      ownerPrincipalId,
+      serviceRole: input.serviceRole,
+      ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
+    }));
+  }
+
+  private createStoredToken(input: {
+    label: string;
+    secret: string;
+    tokenKind: WebAccessTokenKind;
+    ownerPrincipalId?: string;
+    serviceRole?: PlatformServiceRole;
+    remoteIp?: string;
+  }): StoredWebAccessTokenRecord {
     const label = input.label.trim();
     const secret = normalizeWebAccessSecret(input.secret);
 
@@ -125,6 +202,9 @@ export class WebAccessService {
       tokenId: randomUUID(),
       label,
       tokenHash: hashWebAccessSecret(secret),
+      tokenKind: input.tokenKind,
+      ...(input.ownerPrincipalId ? { ownerPrincipalId: input.ownerPrincipalId } : {}),
+      ...(input.serviceRole ? { serviceRole: input.serviceRole } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -140,11 +220,14 @@ export class WebAccessService {
     }
 
     this.appendAudit(
-      "web_access.token_created",
-      `新增 Web 口令 ${label}`,
+      input.tokenKind === "web_login" ? "web_access.token_created" : "platform_auth.token_created",
+      input.tokenKind === "web_login" ? `新增 Web 口令 ${label}` : `新增平台服务令牌 ${label}`,
       {
         label,
         tokenId: record.tokenId,
+        tokenKind: input.tokenKind,
+        ...(record.ownerPrincipalId ? { ownerPrincipalId: record.ownerPrincipalId } : {}),
+        ...(record.serviceRole ? { serviceRole: record.serviceRole } : {}),
       },
       {
         tokenId: record.tokenId,
@@ -152,7 +235,7 @@ export class WebAccessService {
         ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
       },
     );
-    return this.toTokenSummary(record);
+    return record;
   }
 
   renameToken(input: RenameWebAccessTokenInput): WebAccessTokenSummary {
@@ -199,12 +282,15 @@ export class WebAccessService {
     }
 
     this.appendAudit(
-      "web_access.token_renamed",
-      `重命名 Web 口令 ${previousLabel} -> ${normalizedLabel}`,
+      updated.tokenKind === "platform_service" ? "platform_auth.token_renamed" : "web_access.token_renamed",
+      updated.tokenKind === "platform_service"
+        ? `重命名平台服务令牌 ${previousLabel} -> ${normalizedLabel}`
+        : `重命名 Web 口令 ${previousLabel} -> ${normalizedLabel}`,
       {
         tokenId: normalizedTokenId,
         previousLabel,
         label: normalizedLabel,
+        tokenKind: updated.tokenKind ?? "web_login",
       },
       {
         tokenId: normalizedTokenId,
@@ -217,16 +303,35 @@ export class WebAccessService {
   }
 
   revokeTokenByLabel(input: RevokeWebAccessTokenInput): WebAccessTokenSummary {
-    const normalizedLabel = input.label.trim();
+    return this.toTokenSummary(this.revokeStoredTokenByLabel(input.label, input.remoteIp));
+  }
+
+  revokePlatformServiceTokenByLabel(input: RevokePlatformServiceTokenInput): PlatformServiceTokenSummary {
+    return this.toPlatformServiceTokenSummary(
+      this.revokeStoredTokenByLabel(input.label, input.remoteIp, "platform_service"),
+    );
+  }
+
+  private revokeStoredTokenByLabel(
+    label: string,
+    remoteIp?: string,
+    expectedKind?: WebAccessTokenKind,
+  ): StoredWebAccessTokenRecord {
+    const normalizedLabel = label.trim();
 
     if (!normalizedLabel) {
       throw new Error("Web access token label is required.");
     }
 
-    const token = this.getActiveTokenByLabel(normalizedLabel) ?? this.registry.getWebAccessTokenByLabel(normalizedLabel);
+    const token = this.getActiveTokenByLabel(normalizedLabel, expectedKind)
+      ?? this.registry.getWebAccessTokenByLabel(normalizedLabel);
 
     if (!token) {
       throw new Error(`Web access token ${normalizedLabel} not found.`);
+    }
+
+    if (expectedKind && token.tokenKind !== expectedKind) {
+      throw new Error(`Web access token ${normalizedLabel} kind mismatch.`);
     }
 
     const now = this.now();
@@ -238,41 +343,43 @@ export class WebAccessService {
     const revokedSessionCount = this.registry.revokeWebSessionsByTokenId(token.tokenId, now, now);
 
     this.appendAudit(
-      "web_access.token_revoked",
-      `删除 Web 口令 ${token.label}`,
+      token.tokenKind === "platform_service" ? "platform_auth.token_revoked" : "web_access.token_revoked",
+      token.tokenKind === "platform_service" ? `删除平台服务令牌 ${token.label}` : `删除 Web 口令 ${token.label}`,
       {
         tokenId: token.tokenId,
         label: token.label,
+        tokenKind: token.tokenKind ?? "web_login",
         revokedAt: now,
       },
       {
         tokenId: token.tokenId,
         tokenLabel: token.label,
-        ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
-      },
-    );
-    this.appendAudit(
-      "web_access.sessions_revoked_by_token",
-      `撤销 Web 口令关联会话 ${revokedSessionCount} 个`,
-      {
-        tokenId: token.tokenId,
-        revokedAt: now,
-        revokedSessionCount,
-      },
-      {
-        tokenId: token.tokenId,
-        tokenLabel: token.label,
-        ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
+        ...(remoteIp ? { remoteIp } : {}),
       },
     );
 
-    return this.toTokenSummary(
-      this.registry.getWebAccessTokenById(token.tokenId) ?? {
-        ...token,
-        revokedAt: token.revokedAt ?? now,
-        updatedAt: now,
-      },
-    );
+    if (token.tokenKind !== "platform_service") {
+      this.appendAudit(
+        "web_access.sessions_revoked_by_token",
+        `撤销 Web 口令关联会话 ${revokedSessionCount} 个`,
+        {
+          tokenId: token.tokenId,
+          revokedAt: now,
+          revokedSessionCount,
+        },
+        {
+          tokenId: token.tokenId,
+          tokenLabel: token.label,
+          ...(remoteIp ? { remoteIp } : {}),
+        },
+      );
+    }
+
+    return this.registry.getWebAccessTokenById(token.tokenId) ?? {
+      ...token,
+      revokedAt: token.revokedAt ?? now,
+      updatedAt: now,
+    };
   }
 
   authenticate(input: AuthenticateWebAccessInput): WebAccessAuthenticationResult {
@@ -292,8 +399,7 @@ export class WebAccessService {
       return { ok: false, reason: "INVALID_CREDENTIALS" };
     }
 
-    const token = this.registry
-      .listActiveWebAccessTokens()
+    const token = this.listActiveTokensByKind("web_login")
       .find((record) => verifyWebAccessSecret(secret, record.tokenHash));
 
     if (!token) {
@@ -342,6 +448,86 @@ export class WebAccessService {
     return {
       ok: true,
       session: this.toSessionSummary(session, token),
+    };
+  }
+
+  authenticatePlatformServiceToken(input: AuthenticatePlatformServiceInput): PlatformServiceAuthenticationResult {
+    const secret = normalizeWebAccessSecret(input.secret);
+
+    if (!secret) {
+      this.appendAudit(
+        "platform_auth.authenticate_failed",
+        "平台服务鉴权失败",
+        {
+          reason: "INVALID_CREDENTIALS",
+        },
+        {
+          ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
+        },
+      );
+      return { ok: false, reason: "INVALID_CREDENTIALS" };
+    }
+
+    const token = this.listActiveTokensByKind("platform_service")
+      .find((record) => verifyWebAccessSecret(secret, record.tokenHash));
+
+    if (!token) {
+      this.appendAudit(
+        "platform_auth.authenticate_failed",
+        "平台服务鉴权失败",
+        {
+          reason: "INVALID_CREDENTIALS",
+        },
+        {
+          ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
+        },
+      );
+      return { ok: false, reason: "INVALID_CREDENTIALS" };
+    }
+
+    if (!token.ownerPrincipalId || !token.serviceRole) {
+      this.appendAudit(
+        "platform_auth.authenticate_failed",
+        "平台服务鉴权失败",
+        {
+          reason: "INVALID_TOKEN_SHAPE",
+          tokenId: token.tokenId,
+          tokenLabel: token.label,
+        },
+        {
+          tokenId: token.tokenId,
+          tokenLabel: token.label,
+          ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
+        },
+      );
+      return { ok: false, reason: "INVALID_TOKEN_SHAPE" };
+    }
+
+    const now = this.now();
+    this.registry.touchWebAccessToken(token.tokenId, now, now);
+    this.appendAudit(
+      "platform_auth.authenticate_succeeded",
+      "平台服务鉴权成功",
+      {
+        tokenId: token.tokenId,
+        tokenLabel: token.label,
+        ownerPrincipalId: token.ownerPrincipalId,
+        serviceRole: token.serviceRole,
+      },
+      {
+        tokenId: token.tokenId,
+        tokenLabel: token.label,
+        ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
+      },
+    );
+
+    return {
+      ok: true,
+      token: this.toPlatformServiceTokenSummary({
+        ...token,
+        updatedAt: now,
+        lastUsedAt: now,
+      }),
     };
   }
 
@@ -520,6 +706,27 @@ export class WebAccessService {
     return {
       tokenId: record.tokenId,
       label: record.label,
+      tokenKind: record.tokenKind ?? "web_login",
+      ...(record.ownerPrincipalId ? { ownerPrincipalId: record.ownerPrincipalId } : {}),
+      ...(record.serviceRole ? { serviceRole: record.serviceRole } : {}),
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+      ...(record.lastUsedAt ? { lastUsedAt: record.lastUsedAt } : {}),
+      ...(record.revokedAt ? { revokedAt: record.revokedAt } : {}),
+    };
+  }
+
+  private toPlatformServiceTokenSummary(record: StoredWebAccessTokenRecord): PlatformServiceTokenSummary {
+    if (record.tokenKind !== "platform_service" || !record.ownerPrincipalId || !record.serviceRole) {
+      throw new Error(`Platform service token ${record.label} is incomplete.`);
+    }
+
+    return {
+      tokenId: record.tokenId,
+      label: record.label,
+      tokenKind: "platform_service",
+      ownerPrincipalId: record.ownerPrincipalId,
+      serviceRole: record.serviceRole,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       ...(record.lastUsedAt ? { lastUsedAt: record.lastUsedAt } : {}),
@@ -541,7 +748,7 @@ export class WebAccessService {
     };
   }
 
-  private getActiveTokenByLabel(label: string): StoredWebAccessTokenRecord | null {
+  private getActiveTokenByLabel(label: string, kind?: WebAccessTokenKind): StoredWebAccessTokenRecord | null {
     const normalized = label.trim();
 
     if (!normalized) {
@@ -554,7 +761,17 @@ export class WebAccessService {
       return null;
     }
 
+    if (kind && token.tokenKind !== kind) {
+      return null;
+    }
+
     return token;
+  }
+
+  private listActiveTokensByKind(kind: WebAccessTokenKind): StoredWebAccessTokenRecord[] {
+    return this.registry
+      .listActiveWebAccessTokens()
+      .filter((record) => (record.tokenKind ?? "web_login") === kind);
   }
 }
 

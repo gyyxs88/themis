@@ -1,5 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { WebAccessService, type WebAccessSessionReadResult } from "../core/web-access.js";
+import {
+  WebAccessService,
+  type PlatformServiceRole,
+  type PlatformServiceTokenSummary,
+  type WebAccessSessionReadResult,
+} from "../core/web-access.js";
 import { resolveRemoteIp } from "./http-audit.js";
 import { toErrorMessage } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
@@ -9,6 +14,15 @@ import { writeHtml, writeJson, writeRedirect } from "./http-responses.js";
 interface WebAccessLoginPayload {
   token?: unknown;
 }
+
+export interface PlatformServiceAuthContext {
+  tokenId: string;
+  tokenLabel: string;
+  ownerPrincipalId: string;
+  serviceRole: PlatformServiceRole;
+}
+
+const PLATFORM_SERVICE_AUTH_CONTEXT = Symbol("themis.platform-service-auth-context");
 
 export async function maybeHandleWebAccessRoute(
   request: IncomingMessage,
@@ -124,6 +138,23 @@ export function requireWebAccess(
     return true;
   }
 
+  const platformAuth = authenticatePlatformServiceRequest(request, service, url.pathname);
+
+  if (platformAuth.status === "authorized") {
+    return true;
+  }
+
+  if (platformAuth.status === "denied") {
+    clearSessionCookie(response);
+    writeJson(response, platformAuth.httpStatus, {
+      error: {
+        code: platformAuth.code,
+        message: platformAuth.message,
+      },
+    }, method === "HEAD");
+    return false;
+  }
+
   const sessionId = readCookie(request, WEB_SESSION_COOKIE);
   const remoteIp = resolveRemoteIp(request);
   const sessionResult = sessionId ? service.readSession(sessionId) : { ok: false, reason: "MISSING_SESSION" as const };
@@ -157,6 +188,14 @@ export function requireWebAccess(
   return false;
 }
 
+export function getPlatformServiceAuthContext(request: IncomingMessage): PlatformServiceAuthContext | null {
+  const context = (request as IncomingMessage & {
+    [PLATFORM_SERVICE_AUTH_CONTEXT]?: PlatformServiceAuthContext;
+  })[PLATFORM_SERVICE_AUTH_CONTEXT];
+
+  return context ?? null;
+}
+
 function readSessionFromCookie(
   request: IncomingMessage,
   service: WebAccessService,
@@ -170,6 +209,88 @@ function readSessionFromCookie(
   return service.readSession(sessionId);
 }
 
+function authenticatePlatformServiceRequest(
+  request: IncomingMessage,
+  service: WebAccessService,
+  pathname: string,
+): {
+  status: "not_applicable" | "authorized" | "denied";
+  httpStatus: number;
+  code: string;
+  message: string;
+} {
+  if (!pathname.startsWith("/api/platform/")) {
+    return {
+      status: "not_applicable",
+      httpStatus: 0,
+      code: "",
+      message: "",
+    };
+  }
+
+  const secret = readBearerToken(request.headers.authorization);
+
+  if (!secret) {
+    return {
+      status: "not_applicable",
+      httpStatus: 0,
+      code: "",
+      message: "",
+    };
+  }
+
+  const remoteIp = resolveRemoteIp(request);
+  const auth = service.authenticatePlatformServiceToken({
+    secret,
+    ...(remoteIp ? { remoteIp } : {}),
+  });
+
+  if (!auth.ok) {
+    return {
+      status: "denied",
+      httpStatus: 401,
+      code: "PLATFORM_SERVICE_AUTH_DENIED",
+      message: "平台服务令牌无效。",
+    };
+  }
+
+  if (!isPlatformPathAllowedForRole(pathname, auth.token.serviceRole)) {
+    service.recordDeniedAccess({
+      reason: "PLATFORM_SERVICE_FORBIDDEN",
+      tokenId: auth.token.tokenId,
+      tokenLabel: auth.token.label,
+      ...(remoteIp ? { remoteIp } : {}),
+      details: {
+        pathname,
+        serviceRole: auth.token.serviceRole,
+        ownerPrincipalId: auth.token.ownerPrincipalId,
+      },
+    });
+    return {
+      status: "denied",
+      httpStatus: 403,
+      code: "PLATFORM_SERVICE_FORBIDDEN",
+      message: "当前平台服务令牌无权访问该接口。",
+    };
+  }
+
+  (request as IncomingMessage & {
+    [PLATFORM_SERVICE_AUTH_CONTEXT]?: PlatformServiceAuthContext;
+  })[PLATFORM_SERVICE_AUTH_CONTEXT] = {
+    tokenId: auth.token.tokenId,
+    tokenLabel: auth.token.label,
+    ownerPrincipalId: auth.token.ownerPrincipalId,
+    serviceRole: auth.token.serviceRole,
+  };
+
+  return {
+    status: "authorized",
+    httpStatus: 200,
+    code: "OK",
+    message: "",
+  };
+}
+
 function isPublicWebAccessRoute(method: string, pathname: string): boolean {
   if ((method === "GET" || method === "HEAD") && (pathname === "/login" || pathname === "/api/web-auth/status")) {
     return true;
@@ -180,6 +301,26 @@ function isPublicWebAccessRoute(method: string, pathname: string): boolean {
   }
 
   return false;
+}
+
+function readBearerToken(authorizationHeader: string | undefined): string | null {
+  if (typeof authorizationHeader !== "string") {
+    return null;
+  }
+
+  const match = authorizationHeader.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim() || null;
+}
+
+function isPlatformPathAllowedForRole(pathname: string, role: PlatformServiceRole): boolean {
+  if (role === "gateway") {
+    return pathname.startsWith("/api/platform/agents/")
+      || pathname.startsWith("/api/platform/work-items/")
+      || pathname.startsWith("/api/platform/runs/");
+  }
+
+  return pathname.startsWith("/api/platform/nodes/")
+    || pathname.startsWith("/api/platform/worker/");
 }
 
 function normalizeOptionalText(value: unknown): string | null {

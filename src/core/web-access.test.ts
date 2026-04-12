@@ -442,3 +442,94 @@ test("readSession 过期分支返回 SESSION_EXPIRED", () => {
     rmSync(workingDirectory, { recursive: true, force: true });
   }
 });
+
+test("平台服务令牌与 Web 登录口令会严格隔离", () => {
+  const { workingDirectory, registry, service } = createService(() => NOW);
+
+  try {
+    const created = service.createPlatformServiceToken({
+      label: "gateway-alpha",
+      secret: "platform-secret",
+      ownerPrincipalId: "principal-owner",
+      serviceRole: "gateway",
+      remoteIp: "192.168.1.21",
+    });
+
+    assert.equal(service.hasActiveToken(), false);
+    assert.equal(service.listWebTokens().length, 0);
+    assert.deepEqual(service.listPlatformServiceTokens().map((token) => token.label), ["gateway-alpha"]);
+    assert.equal(created.ownerPrincipalId, "principal-owner");
+    assert.equal(created.serviceRole, "gateway");
+
+    const platformAuth = service.authenticatePlatformServiceToken({
+      secret: "platform-secret",
+      remoteIp: "192.168.1.22",
+    });
+
+    assert.equal(platformAuth.ok, true);
+    if (!platformAuth.ok) {
+      throw new Error("expected platform authentication to succeed");
+    }
+
+    assert.equal(platformAuth.token.label, "gateway-alpha");
+    assert.equal(platformAuth.token.ownerPrincipalId, "principal-owner");
+    assert.equal(platformAuth.token.serviceRole, "gateway");
+
+    assert.deepEqual(service.authenticate({
+      secret: "platform-secret",
+      remoteIp: "192.168.1.23",
+    }), {
+      ok: false,
+      reason: "INVALID_CREDENTIALS",
+    });
+
+    const events = registry.listWebAuditEvents();
+    assert.ok(events.some((event) => event.eventType === "platform_auth.token_created"));
+    assert.ok(events.some((event) => event.eventType === "platform_auth.authenticate_succeeded"));
+    assert.ok(events.some((event) => event.eventType === "web_access.login_failed"));
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test("不完整的平台服务令牌不会通过平台鉴权", () => {
+  const { workingDirectory, registry, service } = createService(() => NOW);
+
+  try {
+    service.createPlatformServiceToken({
+      label: "worker-beta",
+      secret: "worker-secret",
+      ownerPrincipalId: "principal-owner",
+      serviceRole: "worker",
+    });
+
+    const stored = registry.getWebAccessTokenByLabel("worker-beta");
+    assert.ok(stored);
+
+    registry.saveWebAccessToken({
+      tokenId: stored?.tokenId ?? "missing-token-id",
+      label: stored?.label ?? "worker-beta",
+      tokenHash: stored?.tokenHash ?? "missing-token-hash",
+      tokenKind: "platform_service",
+      createdAt: stored?.createdAt ?? NOW,
+      updatedAt: NOW,
+    });
+
+    assert.deepEqual(service.authenticatePlatformServiceToken({
+      secret: "worker-secret",
+      remoteIp: "192.168.1.24",
+    }), {
+      ok: false,
+      reason: "INVALID_TOKEN_SHAPE",
+    });
+
+    const failedAudit = registry
+      .listWebAuditEvents()
+      .find((event) => event.eventType === "platform_auth.authenticate_failed");
+
+    assert.ok(failedAudit);
+    assert.equal(failedAudit?.summary, "平台服务鉴权失败");
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});

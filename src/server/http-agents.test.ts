@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import type { Server } from "node:http";
+import { createServer, type IncomingMessage, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -31,7 +31,13 @@ const OPENAI_COMPAT_ENV_KEYS = [
   "THEMIS_OPENAI_COMPAT_MODEL_CATALOG_JSON",
 ] as const;
 
-function withClearedOpenAICompatEnv<T>(fn: () => T): T {
+const PLATFORM_GATEWAY_ENV_KEYS = [
+  "THEMIS_PLATFORM_BASE_URL",
+  "THEMIS_PLATFORM_OWNER_PRINCIPAL_ID",
+  "THEMIS_PLATFORM_WEB_ACCESS_TOKEN",
+] as const;
+
+async function withClearedOpenAICompatEnv<T>(fn: () => Promise<T> | T): Promise<T> {
   const savedEnv = new Map<string, string | undefined>();
 
   for (const key of OPENAI_COMPAT_ENV_KEYS) {
@@ -40,7 +46,28 @@ function withClearedOpenAICompatEnv<T>(fn: () => T): T {
   }
 
   try {
-    return fn();
+    return await fn();
+  } finally {
+    for (const [key, value] of savedEnv) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+async function withClearedPlatformGatewayEnv<T>(fn: () => Promise<T> | T): Promise<T> {
+  const savedEnv = new Map<string, string | undefined>();
+
+  for (const key of PLATFORM_GATEWAY_ENV_KEYS) {
+    savedEnv.set(key, process.env[key]);
+    delete process.env[key];
+  }
+
+  try {
+    return await fn();
   } finally {
     for (const [key, value] of savedEnv) {
       if (value === undefined) {
@@ -109,6 +136,1126 @@ async function postJson(
   });
 }
 
+async function createMockPlatformGatewayServer(): Promise<{
+  baseUrl: string;
+  close: () => Promise<void>;
+}> {
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    const body = await readRequestBody(request);
+    const authorization = request.headers.authorization ?? "";
+    assert.equal(authorization, "Bearer gateway-secret");
+
+    const platformOrganization = {
+      organizationId: "org-platform",
+      displayName: "平台组织",
+    };
+    const platformAgent = {
+      agentId: "agent-platform-1",
+      organizationId: "org-platform",
+      principalId: "principal-platform-agent-1",
+      displayName: "平台·后端",
+      departmentRole: "后端",
+      mission: "来自平台控制面的详情。",
+      status: "active",
+      createdAt: "2026-04-12T12:00:00.000Z",
+      updatedAt: "2026-04-12T12:00:00.000Z",
+    };
+    const platformManagerAgent = {
+      agentId: "agent-platform-manager",
+      organizationId: "org-platform",
+      principalId: "principal-platform-manager",
+      displayName: "平台·负责人",
+      departmentRole: "管理",
+      mission: "负责组织治理。",
+      status: "active",
+      createdAt: "2026-04-12T11:00:00.000Z",
+      updatedAt: "2026-04-12T11:00:00.000Z",
+    };
+    const platformPeerAgent = {
+      agentId: "agent-platform-peer",
+      organizationId: "org-platform",
+      principalId: "principal-platform-peer",
+      displayName: "平台·协作",
+      departmentRole: "协作",
+      mission: "负责协作交接。",
+      status: "active",
+      createdAt: "2026-04-12T11:30:00.000Z",
+      updatedAt: "2026-04-12T11:30:00.000Z",
+    };
+    const platformWorkItem = {
+      workItemId: "work-item-platform-1",
+      organizationId: "org-platform",
+      targetAgentId: "agent-platform-1",
+      sourceType: "human",
+      sourcePrincipalId: "principal-platform-owner",
+      dispatchReason: "platform-gateway-smoke",
+      goal: "验证 gateway 模式读取平台 work item。",
+      priority: "high",
+      status: "waiting_human",
+      createdAt: "2026-04-12T12:10:00.000Z",
+      updatedAt: "2026-04-12T12:15:00.000Z",
+      waitingActionRequest: {
+        waitingFor: "human",
+        message: "请顶层治理确认后续执行边界。",
+      },
+    };
+    const platformRun = {
+      runId: "run-platform-1",
+      organizationId: "org-platform",
+      targetAgentId: "agent-platform-1",
+      workItemId: "work-item-platform-1",
+      schedulerId: "scheduler-platform",
+      status: "created",
+      createdAt: "2026-04-12T12:11:00.000Z",
+      updatedAt: "2026-04-12T12:11:00.000Z",
+    };
+    const platformMailboxItem = {
+      entry: {
+        mailboxEntryId: "mailbox-platform-1",
+        ownerAgentId: "agent-platform-1",
+        messageId: "message-platform-1",
+        status: "pending",
+        leaseToken: null,
+        leasedAt: null,
+        ackedAt: null,
+        createdAt: "2026-04-12T12:12:00.000Z",
+        updatedAt: "2026-04-12T12:12:00.000Z",
+      },
+      message: {
+        messageId: "message-platform-1",
+        organizationId: "org-platform",
+        fromAgentId: "agent-platform-peer",
+        toAgentId: "agent-platform-1",
+        workItemId: "work-item-platform-1",
+        messageType: "handoff",
+        payload: {
+          summary: "平台协作者已整理完交接上下文。",
+        },
+        artifactRefs: [],
+        priority: "normal",
+        requiresAck: true,
+        createdAt: "2026-04-12T12:12:00.000Z",
+        updatedAt: "2026-04-12T12:12:00.000Z",
+      },
+    };
+    const platformHandoff = {
+      handoffId: "handoff-platform-1",
+      organizationId: "org-platform",
+      fromAgentId: "agent-platform-1",
+      toAgentId: "agent-platform-peer",
+      workItemId: "work-item-platform-1",
+      summary: "平台后端已将未完事项交接给协作 agent。",
+      blockers: ["等待治理确认"],
+      recommendedNextActions: ["同步执行边界", "恢复 run"],
+      attachedArtifacts: [],
+      createdAt: "2026-04-12T12:13:00.000Z",
+      updatedAt: "2026-04-12T12:13:00.000Z",
+      counterpartyDisplayName: "平台·协作",
+    };
+    const platformTimelineEntry = {
+      entryId: "timeline-platform-1",
+      kind: "handoff",
+      title: "平台完成最近一次交接",
+      summary: "平台后端已将未完事项交接给协作 agent。",
+      at: "2026-04-12T12:13:00.000Z",
+      workItemId: "work-item-platform-1",
+      counterpartyAgentId: "agent-platform-peer",
+      counterpartyDisplayName: "平台·协作",
+    };
+    const platformCreatedPrincipal = {
+      principalId: "principal-platform-created",
+      kind: "managed_agent",
+    };
+    const platformCreatedAgent = {
+      ...platformAgent,
+      agentId: "agent-platform-created",
+      principalId: "principal-platform-created",
+      displayName: "平台·新建",
+      departmentRole: "平台工程",
+      mission: "来自 gateway 写路径。",
+    };
+    const platformExecutionBoundaryWorkspacePolicy = {
+      ownerAgentId: "agent-platform-1",
+      workspacePath: "/workspace/platform-updated",
+      additionalDirectories: ["/workspace/shared"],
+      allowNetworkAccess: false,
+    };
+    const platformExecutionBoundaryRuntimeProfile = {
+      ownerAgentId: "agent-platform-1",
+      accessMode: "third-party",
+      thirdPartyProviderId: "gateway-platform",
+      model: "gpt-5.4-mini",
+      sandboxMode: "danger-full-access",
+      approvalPolicy: "on-request",
+      webSearchMode: "disabled",
+      networkAccessEnabled: false,
+    };
+    const platformSpawnPolicy = {
+      policyId: "spawn-policy-platform-updated",
+      organizationId: "org-platform",
+      maxActiveAgents: 6,
+      maxActiveAgentsPerRole: 2,
+      updatedAt: "2026-04-12T12:20:00.000Z",
+    };
+    const platformSpawnApprovedAgent = {
+      agentId: "agent-platform-auto-1",
+      organizationId: "org-platform",
+      principalId: "principal-platform-auto-1",
+      displayName: "平台·自动化",
+      departmentRole: "自动化",
+      mission: "负责平台自动化验证。",
+      status: "active",
+      createdAt: "2026-04-12T12:21:00.000Z",
+      updatedAt: "2026-04-12T12:21:00.000Z",
+    };
+    const platformSuppressedSuggestion = {
+      suggestionId: "spawn-suggestion-platform-1",
+      organizationId: "org-platform",
+      departmentRole: "测试",
+      displayName: "平台·测试",
+      suppressedAt: "2026-04-12T12:22:00.000Z",
+    };
+    const platformSpawnAuditLog = {
+      auditLogId: "spawn-audit-platform-write-1",
+      organizationId: "org-platform",
+      eventType: "spawn_policy_updated",
+      action: "approve",
+      summary: "平台写路径已生效。",
+      createdAt: "2026-04-12T12:22:00.000Z",
+    };
+    const platformIdleApprovedAgent = {
+      ...platformAgent,
+      status: "paused",
+      updatedAt: "2026-04-12T12:23:00.000Z",
+    };
+    const platformIdleAuditLog = {
+      auditLogId: "idle-audit-platform-write-1",
+      organizationId: "org-platform",
+      eventType: "idle_recovery_pause_approved",
+      subjectAgentId: "agent-platform-1",
+      createdAt: "2026-04-12T12:23:00.000Z",
+    };
+    const platformPausedAgent = {
+      ...platformAgent,
+      status: "paused",
+      updatedAt: "2026-04-12T12:24:00.000Z",
+    };
+    const platformArchivedAgent = {
+      ...platformAgent,
+      status: "archived",
+      updatedAt: "2026-04-12T12:26:00.000Z",
+    };
+    const platformDispatchedWorkItem = {
+      ...platformWorkItem,
+      workItemId: "work-item-platform-dispatch-1",
+      status: "queued",
+      waitingActionRequest: undefined,
+      updatedAt: "2026-04-12T12:27:00.000Z",
+    };
+    const platformCancelledWorkItem = {
+      ...platformWorkItem,
+      workItemId: "work-item-platform-cancel-1",
+      status: "cancelled",
+      updatedAt: "2026-04-12T12:28:00.000Z",
+    };
+    const platformCancelledMailboxEntry = {
+      mailboxEntryId: "mailbox-platform-cancel-1",
+      ownerAgentId: "agent-platform-manager",
+      messageId: "message-platform-cancel-1",
+      status: "acked",
+      leasedAt: "2026-04-12T12:28:30.000Z",
+      ackedAt: "2026-04-12T12:28:35.000Z",
+      createdAt: "2026-04-12T12:28:00.000Z",
+      updatedAt: "2026-04-12T12:28:35.000Z",
+    };
+    const platformNotificationMessage = {
+      messageId: "message-platform-cancel-1",
+      organizationId: "org-platform",
+      fromAgentId: "agent-platform-1",
+      toAgentId: "agent-platform-manager",
+      workItemId: "work-item-platform-cancel-1",
+      messageType: "status_update",
+      payload: { summary: "已取消" },
+      artifactRefs: [],
+      priority: "normal",
+      requiresAck: true,
+      createdAt: "2026-04-12T12:28:00.000Z",
+    };
+    const platformHumanRespondedWorkItem = {
+      ...platformWorkItem,
+      workItemId: "work-item-platform-human-1",
+      status: "queued",
+      latestHumanResponse: {
+        decision: "approve",
+        inputText: "可以继续。",
+      },
+      updatedAt: "2026-04-12T12:29:00.000Z",
+    };
+    const platformResumedRun = {
+      ...platformRun,
+      runId: "run-platform-resumed-1",
+      workItemId: "work-item-platform-human-1",
+      status: "interrupted",
+      failureCode: "WAITING_RESUME_TRIGGERED",
+    };
+    const platformEscalatedWorkItem = {
+      ...platformWorkItem,
+      workItemId: "work-item-platform-escalate-1",
+      status: "waiting_human",
+      updatedAt: "2026-04-12T12:30:00.000Z",
+    };
+    const platformEscalatedMessage = {
+      messageId: "message-platform-escalate-1",
+      organizationId: "org-platform",
+      fromAgentId: "agent-platform-1",
+      toAgentId: "agent-platform-manager",
+      workItemId: "work-item-platform-escalate-1",
+      messageType: "approval_request",
+      payload: { prompt: "请人工接管" },
+      artifactRefs: [],
+      priority: "high",
+      requiresAck: true,
+      createdAt: "2026-04-12T12:30:00.000Z",
+    };
+    const platformEscalatedMailboxEntry = {
+      mailboxEntryId: "mailbox-platform-escalate-1",
+      ownerAgentId: "agent-platform-manager",
+      messageId: "message-platform-escalate-1",
+      status: "acked",
+      leasedAt: "2026-04-12T12:30:10.000Z",
+      ackedAt: "2026-04-12T12:30:20.000Z",
+      createdAt: "2026-04-12T12:30:00.000Z",
+      updatedAt: "2026-04-12T12:30:20.000Z",
+    };
+    const platformLeasedMailboxItem = {
+      entry: {
+        ...platformMailboxItem.entry,
+        status: "leased",
+        leasedAt: "2026-04-12T12:31:00.000Z",
+        updatedAt: "2026-04-12T12:31:00.000Z",
+      },
+      message: platformMailboxItem.message,
+    };
+    const platformAckedMailboxEntry = {
+      ...platformMailboxItem.entry,
+      status: "acked",
+      ackedAt: "2026-04-12T12:31:10.000Z",
+      updatedAt: "2026-04-12T12:31:10.000Z",
+    };
+    const platformMailboxResponseMessage = {
+      messageId: "message-platform-response-1",
+      organizationId: "org-platform",
+      fromAgentId: "agent-platform-1",
+      toAgentId: "agent-platform-peer",
+      workItemId: "work-item-platform-1",
+      messageType: "approval_result",
+      payload: { decision: "approve" },
+      artifactRefs: [],
+      priority: "urgent",
+      requiresAck: true,
+      createdAt: "2026-04-12T12:32:00.000Z",
+    };
+    const platformMailboxResponseEntry = {
+      mailboxEntryId: "mailbox-platform-response-1",
+      ownerAgentId: "agent-platform-peer",
+      messageId: "message-platform-response-1",
+      status: "acked",
+      ackedAt: "2026-04-12T12:32:05.000Z",
+      createdAt: "2026-04-12T12:32:00.000Z",
+      updatedAt: "2026-04-12T12:32:05.000Z",
+    };
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/list") {
+      const payload = parseJson(body) as { ownerPrincipalId?: string };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        organizations: [
+          platformOrganization,
+        ],
+        agents: [
+          platformAgent,
+        ],
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/create") {
+      const payload = parseJson(body) as {
+        ownerPrincipalId?: string;
+        agent?: { departmentRole?: string; displayName?: string; mission?: string };
+      };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.agent?.departmentRole, "平台工程");
+      assert.equal(payload.agent?.displayName, "平台·新建");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        organization: platformOrganization,
+        principal: platformCreatedPrincipal,
+        agent: platformCreatedAgent,
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/execution-boundary/update") {
+      const payload = parseJson(body) as {
+        ownerPrincipalId?: string;
+        agentId?: string;
+        boundary?: {
+          workspacePolicy?: { workspacePath?: string; additionalDirectories?: string[]; allowNetworkAccess?: boolean };
+          runtimeProfile?: { accessMode?: string; thirdPartyProviderId?: string; model?: string };
+        };
+      };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.agentId, "agent-platform-1");
+      assert.equal(payload.boundary?.workspacePolicy?.workspacePath, "/workspace/platform-updated");
+      assert.deepEqual(payload.boundary?.workspacePolicy?.additionalDirectories, ["/workspace/shared"]);
+      assert.equal(payload.boundary?.workspacePolicy?.allowNetworkAccess, false);
+      assert.equal(payload.boundary?.runtimeProfile?.accessMode, "third-party");
+      assert.equal(payload.boundary?.runtimeProfile?.thirdPartyProviderId, "gateway-platform");
+      assert.equal(payload.boundary?.runtimeProfile?.model, "gpt-5.4-mini");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        agent: platformAgent,
+        workspacePolicy: platformExecutionBoundaryWorkspacePolicy,
+        runtimeProfile: platformExecutionBoundaryRuntimeProfile,
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/detail") {
+      const payload = parseJson(body) as { ownerPrincipalId?: string; agentId?: string };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.agentId, "agent-platform-1");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        organization: platformOrganization,
+        principal: {
+          principalId: "principal-platform-agent-1",
+          kind: "managed_agent",
+        },
+        agent: platformAgent,
+        workspacePolicy: {
+          workspacePath: "/workspace/platform",
+        },
+        runtimeProfile: {
+          model: "gpt-5.4",
+        },
+        authAccounts: [],
+        thirdPartyProviders: [],
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/spawn-suggestions") {
+      const payload = parseJson(body) as { ownerPrincipalId?: string };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        spawnPolicies: [
+          {
+            policyId: "spawn-policy-platform-1",
+            organizationId: "org-platform",
+            maxActiveAgents: 8,
+            maxActiveAgentsPerRole: 3,
+            updatedAt: "2026-04-12T12:14:00.000Z",
+          },
+        ],
+        suggestions: [
+          {
+            suggestionId: "spawn-suggestion-platform-1",
+            organizationId: "org-platform",
+            departmentRole: "测试",
+            displayName: "平台·测试",
+            mission: "负责 gateway 回归验证。",
+          },
+        ],
+        suppressedSuggestions: [],
+        recentAuditLogs: [
+          {
+            auditLogId: "spawn-audit-platform-1",
+            organizationId: "org-platform",
+            action: "suggest",
+            summary: "平台建议补一个测试 agent。",
+            createdAt: "2026-04-12T12:14:30.000Z",
+          },
+        ],
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/idle-suggestions") {
+      const payload = parseJson(body) as { ownerPrincipalId?: string };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        suggestions: [
+          {
+            suggestionId: "idle-suggestion-platform-1",
+            organizationId: "org-platform",
+            agentId: "agent-platform-1",
+            displayName: "平台·后端",
+            recommendedAction: "pause",
+          },
+        ],
+        recentAuditLogs: [
+          {
+            auditLogId: "idle-audit-platform-1",
+            organizationId: "org-platform",
+            action: "suggest",
+            summary: "平台建议暂停长时间空闲 agent。",
+            createdAt: "2026-04-12T12:15:00.000Z",
+          },
+        ],
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/spawn-policy/update") {
+      const payload = parseJson(body) as {
+        ownerPrincipalId?: string;
+        policy?: { organizationId?: string; maxActiveAgents?: number; maxActiveAgentsPerRole?: number };
+      };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.policy?.organizationId, "org-platform");
+      assert.equal(payload.policy?.maxActiveAgents, 6);
+      assert.equal(payload.policy?.maxActiveAgentsPerRole, 2);
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        policy: platformSpawnPolicy,
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/spawn-approve") {
+      const payload = parseJson(body) as {
+        ownerPrincipalId?: string;
+        agent?: { departmentRole?: string; displayName?: string; organizationId?: string };
+      };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.agent?.departmentRole, "自动化");
+      assert.equal(payload.agent?.displayName, "平台·自动化");
+      assert.equal(payload.agent?.organizationId, "org-platform");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        organization: platformOrganization,
+        principal: {
+          principalId: "principal-platform-auto-1",
+          kind: "managed_agent",
+        },
+        agent: platformSpawnApprovedAgent,
+        bootstrapWorkItem: {
+          workItemId: "work-item-platform-bootstrap-1",
+        },
+        auditLog: platformSpawnAuditLog,
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/spawn-ignore") {
+      const payload = parseJson(body) as {
+        ownerPrincipalId?: string;
+        suggestion?: { suggestionId?: string; organizationId?: string; departmentRole?: string };
+      };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.suggestion?.suggestionId, "spawn-suggestion-platform-1");
+      assert.equal(payload.suggestion?.organizationId, "org-platform");
+      assert.equal(payload.suggestion?.departmentRole, "测试");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        suppressedSuggestion: platformSuppressedSuggestion,
+        auditLog: {
+          ...platformSpawnAuditLog,
+          eventType: "spawn_suggestion_ignored",
+        },
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/spawn-reject") {
+      const payload = parseJson(body) as {
+        ownerPrincipalId?: string;
+        suggestion?: { suggestionId?: string; organizationId?: string; displayName?: string };
+      };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.suggestion?.suggestionId, "spawn-suggestion-platform-1");
+      assert.equal(payload.suggestion?.displayName, "平台·测试");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        suppressedSuggestion: platformSuppressedSuggestion,
+        auditLog: {
+          ...platformSpawnAuditLog,
+          eventType: "spawn_suggestion_rejected",
+        },
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/spawn-restore") {
+      const payload = parseJson(body) as {
+        ownerPrincipalId?: string;
+        suggestion?: { suggestionId?: string; organizationId?: string };
+      };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.suggestion?.suggestionId, "spawn-suggestion-platform-1");
+      assert.equal(payload.suggestion?.organizationId, "org-platform");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        auditLog: {
+          ...platformSpawnAuditLog,
+          eventType: "spawn_suggestion_restored",
+        },
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/idle-approve") {
+      const payload = parseJson(body) as {
+        ownerPrincipalId?: string;
+        suggestion?: { suggestionId?: string; agentId?: string; action?: string };
+      };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.suggestion?.suggestionId, "idle-suggestion-platform-1");
+      assert.equal(payload.suggestion?.agentId, "agent-platform-1");
+      assert.equal(payload.suggestion?.action, "pause");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        organization: platformOrganization,
+        agent: platformIdleApprovedAgent,
+        auditLog: platformIdleAuditLog,
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/pause") {
+      const payload = parseJson(body) as { ownerPrincipalId?: string; agentId?: string };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.agentId, "agent-platform-1");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        organization: platformOrganization,
+        principal: {
+          principalId: "principal-platform-agent-1",
+          kind: "managed_agent",
+        },
+        agent: platformPausedAgent,
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/resume") {
+      const payload = parseJson(body) as { ownerPrincipalId?: string; agentId?: string };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.agentId, "agent-platform-1");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        organization: platformOrganization,
+        principal: {
+          principalId: "principal-platform-agent-1",
+          kind: "managed_agent",
+        },
+        agent: platformAgent,
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/archive") {
+      const payload = parseJson(body) as { ownerPrincipalId?: string; agentId?: string };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.agentId, "agent-platform-1");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        organization: platformOrganization,
+        principal: {
+          principalId: "principal-platform-agent-1",
+          kind: "managed_agent",
+        },
+        agent: platformArchivedAgent,
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/waiting/list") {
+      const payload = parseJson(body) as {
+        ownerPrincipalId?: string;
+        waitingFor?: string;
+      };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.waitingFor, "human");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        summary: {
+          totalCount: 1,
+          waitingHumanCount: 1,
+          waitingAgentCount: 0,
+          escalationCount: 1,
+        },
+        items: [
+          {
+            workItem: platformWorkItem,
+            organization: platformOrganization,
+            targetAgent: platformAgent,
+            managerAgent: platformManagerAgent,
+            parentWorkItem: null,
+            sourceAgent: null,
+            sourcePrincipal: {
+              principalId: "principal-platform-owner",
+              kind: "human_user",
+            },
+            latestWaitingMessage: {
+              messageId: "waiting-platform-1",
+              messageType: "approval_request",
+            },
+            waitingFor: "human",
+            isStale: false,
+            relatedFailedChildCount: 0,
+            relatedStaleChildCount: 0,
+            attentionLevel: "attention",
+            attentionReasons: ["等待人工决策"],
+          },
+        ],
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/governance-overview") {
+      const payload = parseJson(body) as {
+        ownerPrincipalId?: string;
+        waitingFor?: string;
+      };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.waitingFor, "human");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        overview: {
+          urgentParentCount: 0,
+          attentionParentCount: 1,
+          waitingHumanCount: 1,
+          waitingAgentCount: 0,
+          staleParentCount: 0,
+          failedChildCount: 0,
+          managersNeedingAttentionCount: 1,
+          managerHotspots: [
+            {
+              managerAgent: platformManagerAgent,
+              openParentCount: 1,
+              urgentParentCount: 0,
+              attentionParentCount: 1,
+              waitingCount: 1,
+              staleParentCount: 0,
+              failedChildCount: 0,
+              latestActivityAt: "2026-04-12T12:15:00.000Z",
+            },
+          ],
+        },
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/collaboration-dashboard") {
+      const payload = parseJson(body) as {
+        ownerPrincipalId?: string;
+        waitingFor?: string;
+      };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.waitingFor, "human");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        summary: {
+          totalCount: 1,
+          urgentCount: 0,
+          attentionCount: 1,
+          normalCount: 0,
+        },
+        items: [
+          {
+            parentWorkItem: platformWorkItem,
+            managerAgent: platformManagerAgent,
+            childSummary: {
+              totalCount: 1,
+              openCount: 1,
+              waitingCount: 1,
+              completedCount: 0,
+              failedCount: 0,
+              cancelledCount: 0,
+            },
+            waitingHumanChildCount: 1,
+            waitingAgentChildCount: 0,
+            failedChildCount: 0,
+            staleChildCount: 0,
+            managerStatus: "active",
+            latestHandoff: platformHandoff,
+            latestWaitingMessage: {
+              messageId: "waiting-platform-1",
+              messageType: "approval_request",
+            },
+            latestWaitingWorkItemId: "work-item-platform-1",
+            latestWaitingTargetAgentId: "agent-platform-1",
+            latestWaitingActionType: "approval_request",
+            latestGovernanceResponse: null,
+            lastActivityAt: "2026-04-12T12:15:00.000Z",
+            lastActivityKind: "waiting",
+            lastActivitySummary: "等待人工确认执行边界。",
+            attentionLevel: "attention",
+            attentionReasons: ["等待人工决策"],
+          },
+        ],
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/work-items/list") {
+      const payload = parseJson(body) as { ownerPrincipalId?: string; agentId?: string };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.agentId, "agent-platform-1");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        workItems: [platformWorkItem],
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/work-items/dispatch") {
+      const payload = parseJson(body) as {
+        ownerPrincipalId?: string;
+        workItem?: { targetAgentId?: string; dispatchReason?: string; goal?: string };
+      };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.workItem?.targetAgentId, "agent-platform-1");
+      assert.equal(payload.workItem?.dispatchReason, "platform-gateway-write");
+      assert.equal(payload.workItem?.goal, "验证 gateway 写路径派工。");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        organization: platformOrganization,
+        targetAgent: platformAgent,
+        workItem: platformDispatchedWorkItem,
+        dispatchMessage: {
+          messageId: "message-platform-dispatch-1",
+        },
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/work-items/cancel") {
+      const payload = parseJson(body) as { ownerPrincipalId?: string; workItemId?: string };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.workItemId, "work-item-platform-cancel-1");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        organization: platformOrganization,
+        targetAgent: platformAgent,
+        workItem: platformCancelledWorkItem,
+        ackedMailboxEntries: [platformCancelledMailboxEntry],
+        notificationMessage: platformNotificationMessage,
+        notificationMailboxEntry: platformCancelledMailboxEntry,
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/work-items/respond") {
+      const payload = parseJson(body) as {
+        ownerPrincipalId?: string;
+        workItemId?: string;
+        response?: { decision?: string; inputText?: string };
+      };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.workItemId, "work-item-platform-human-1");
+      assert.equal(payload.response?.decision, "approve");
+      assert.equal(payload.response?.inputText, "可以继续。");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        organization: platformOrganization,
+        targetAgent: platformAgent,
+        workItem: platformHumanRespondedWorkItem,
+        resumedRuns: [platformResumedRun],
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/work-items/escalate") {
+      const payload = parseJson(body) as {
+        ownerPrincipalId?: string;
+        workItemId?: string;
+        escalation?: { inputText?: string };
+      };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.workItemId, "work-item-platform-escalate-1");
+      assert.equal(payload.escalation?.inputText, "请值班经理接手。");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        organization: platformOrganization,
+        targetAgent: platformAgent,
+        workItem: platformEscalatedWorkItem,
+        latestWaitingMessage: platformEscalatedMessage,
+        ackedMailboxEntries: [platformEscalatedMailboxEntry],
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/work-items/detail") {
+      const payload = parseJson(body) as { ownerPrincipalId?: string; workItemId?: string };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.workItemId, "work-item-platform-1");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        organization: platformOrganization,
+        workItem: platformWorkItem,
+        targetAgent: platformAgent,
+        sourceAgent: null,
+        sourcePrincipal: {
+          principalId: "principal-platform-owner",
+          kind: "human_user",
+        },
+        messages: [platformMailboxItem.message],
+        collaboration: {
+          parentWorkItem: null,
+          parentTargetAgent: null,
+          childSummary: {
+            totalCount: 1,
+            openCount: 1,
+            waitingCount: 1,
+            completedCount: 0,
+            failedCount: 0,
+            cancelledCount: 0,
+          },
+          childWorkItems: [],
+        },
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/runs/list") {
+      const payload = parseJson(body) as { ownerPrincipalId?: string; workItemId?: string };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.workItemId, "work-item-platform-1");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        runs: [platformRun],
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/runs/detail") {
+      const payload = parseJson(body) as { ownerPrincipalId?: string; runId?: string };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.runId, "run-platform-1");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        organization: platformOrganization,
+        targetAgent: platformAgent,
+        workItem: platformWorkItem,
+        run: platformRun,
+        executionLease: {
+          leaseId: "lease-platform-1",
+          runId: "run-platform-1",
+          nodeId: "node-platform-1",
+          status: "active",
+        },
+        node: {
+          nodeId: "node-platform-1",
+          displayName: "平台节点 1",
+        },
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/mailbox/list") {
+      const payload = parseJson(body) as { ownerPrincipalId?: string; agentId?: string };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.agentId, "agent-platform-1");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        agent: platformAgent,
+        items: [platformMailboxItem],
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/mailbox/pull") {
+      const payload = parseJson(body) as { ownerPrincipalId?: string; agentId?: string };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.agentId, "agent-platform-1");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        agent: platformAgent,
+        item: platformLeasedMailboxItem,
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/mailbox/ack") {
+      const payload = parseJson(body) as { ownerPrincipalId?: string; agentId?: string; mailboxEntryId?: string };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.agentId, "agent-platform-1");
+      assert.equal(payload.mailboxEntryId, "mailbox-platform-1");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        agent: platformAgent,
+        mailboxEntry: platformAckedMailboxEntry,
+        message: platformMailboxItem.message,
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/mailbox/respond") {
+      const payload = parseJson(body) as {
+        ownerPrincipalId?: string;
+        agentId?: string;
+        mailboxEntryId?: string;
+        response?: { decision?: string; inputText?: string; priority?: string };
+      };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.agentId, "agent-platform-1");
+      assert.equal(payload.mailboxEntryId, "mailbox-platform-1");
+      assert.equal(payload.response?.decision, "approve");
+      assert.equal(payload.response?.inputText, "继续执行。");
+      assert.equal(payload.response?.priority, "urgent");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        organization: platformOrganization,
+        agent: platformAgent,
+        sourceMailboxEntry: platformAckedMailboxEntry,
+        sourceMessage: platformMailboxItem.message,
+        responseMessage: platformMailboxResponseMessage,
+        responseMailboxEntry: platformMailboxResponseEntry,
+        resumedWorkItem: platformHumanRespondedWorkItem,
+        resumedRuns: [platformResumedRun],
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/platform/agents/handoffs/list") {
+      const payload = parseJson(body) as { ownerPrincipalId?: string; agentId?: string };
+      assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
+      assert.equal(payload.agentId, "agent-platform-1");
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+      response.end(JSON.stringify({
+        ok: true,
+        agent: platformAgent,
+        handoffs: [platformHandoff],
+        timeline: [platformTimelineEntry],
+      }));
+      return;
+    }
+
+    response.writeHead(404, {
+      "Content-Type": "application/json",
+    });
+    response.end(JSON.stringify({
+      error: {
+        message: `Unexpected mock platform path: ${url.pathname}`,
+      },
+    }));
+  });
+
+  const listeningServer = await listenServer(server);
+  const address = listeningServer.address();
+
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to resolve mock platform server address.");
+  }
+
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: async () => {
+      await closeServer(listeningServer);
+    },
+  };
+}
+
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
   const startedAt = Date.now();
 
@@ -159,77 +1306,650 @@ async function createManagedAgent(
 }
 
 test("POST /api/agents/create、/list、/detail 会创建并返回 managed agent", async () => {
-  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
-    const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+  await withClearedPlatformGatewayEnv(async () => {
+    await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+      const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
 
-    const createResponse = await postJson(baseUrl, "/api/agents/create", {
-      ...buildIdentityPayload("owner-managed-agent"),
-      agent: {
-        departmentRole: "后端",
-        displayName: "后端·衡",
-        mission: "负责服务端实现与维护。",
-      },
-    }, authHeaders);
-
-    assert.equal(createResponse.status, 200);
-    const createPayload = await createResponse.json() as {
-      identity?: { principalId?: string };
-      organization?: { organizationId?: string };
-      principal?: { principalId?: string; kind?: string; organizationId?: string };
-      agent?: { agentId?: string; displayName?: string; departmentRole?: string; mission?: string };
-    };
-    assert.ok(createPayload.identity?.principalId);
-    assert.ok(createPayload.organization?.organizationId);
-    assert.ok(createPayload.principal?.principalId);
-    assert.equal(createPayload.principal?.kind, "managed_agent");
-    assert.equal(createPayload.principal?.organizationId, createPayload.organization?.organizationId);
-    assert.ok(createPayload.agent?.agentId);
-    assert.equal(createPayload.agent?.displayName, "后端·衡");
-    assert.equal(createPayload.agent?.departmentRole, "后端");
-
-    const listResponse = await postJson(
-      baseUrl,
-      "/api/agents/list",
-      buildIdentityPayload("owner-managed-agent"),
-      authHeaders,
-    );
-
-    assert.equal(listResponse.status, 200);
-    const listPayload = await listResponse.json() as {
-      organizations?: Array<{ organizationId?: string }>;
-      agents?: Array<{ agentId?: string; displayName?: string }>;
-    };
-    assert.equal(listPayload.organizations?.length, 1);
-    assert.equal(listPayload.organizations?.[0]?.organizationId, createPayload.organization?.organizationId);
-    assert.deepEqual(
-      listPayload.agents?.map((agent) => ({
-        agentId: agent.agentId,
-        displayName: agent.displayName,
-      })),
-      [
-        {
-          agentId: createPayload.agent?.agentId,
+      const createResponse = await postJson(baseUrl, "/api/agents/create", {
+        ...buildIdentityPayload("owner-managed-agent"),
+        agent: {
+          departmentRole: "后端",
           displayName: "后端·衡",
+          mission: "负责服务端实现与维护。",
         },
-      ],
-    );
+      }, authHeaders);
 
-    const detailResponse = await postJson(baseUrl, "/api/agents/detail", {
-      ...buildIdentityPayload("owner-managed-agent"),
-      agentId: createPayload.agent?.agentId,
-    }, authHeaders);
+      assert.equal(createResponse.status, 200);
+      const createPayload = await createResponse.json() as {
+        identity?: { principalId?: string };
+        organization?: { organizationId?: string };
+        principal?: { principalId?: string; kind?: string; organizationId?: string };
+        agent?: { agentId?: string; displayName?: string; departmentRole?: string; mission?: string };
+      };
+      assert.ok(createPayload.identity?.principalId);
+      assert.ok(createPayload.organization?.organizationId);
+      assert.ok(createPayload.principal?.principalId);
+      assert.equal(createPayload.principal?.kind, "managed_agent");
+      assert.equal(createPayload.principal?.organizationId, createPayload.organization?.organizationId);
+      assert.ok(createPayload.agent?.agentId);
+      assert.equal(createPayload.agent?.displayName, "后端·衡");
+      assert.equal(createPayload.agent?.departmentRole, "后端");
 
-    assert.equal(detailResponse.status, 200);
-    const detailPayload = await detailResponse.json() as {
-      organization?: { organizationId?: string };
-      principal?: { principalId?: string; kind?: string };
-      agent?: { agentId?: string; displayName?: string; mission?: string };
-    };
-    assert.equal(detailPayload.organization?.organizationId, createPayload.organization?.organizationId);
-    assert.equal(detailPayload.principal?.principalId, createPayload.principal?.principalId);
-    assert.equal(detailPayload.principal?.kind, "managed_agent");
-    assert.equal(detailPayload.agent?.agentId, createPayload.agent?.agentId);
-    assert.equal(detailPayload.agent?.mission, "负责服务端实现与维护。");
+      const listResponse = await postJson(
+        baseUrl,
+        "/api/agents/list",
+        buildIdentityPayload("owner-managed-agent"),
+        authHeaders,
+      );
+
+      assert.equal(listResponse.status, 200);
+      const listPayload = await listResponse.json() as {
+        organizations?: Array<{ organizationId?: string }>;
+        agents?: Array<{ agentId?: string; displayName?: string }>;
+      };
+      assert.equal(listPayload.organizations?.length, 1);
+      assert.equal(listPayload.organizations?.[0]?.organizationId, createPayload.organization?.organizationId);
+      assert.deepEqual(
+        listPayload.agents?.map((agent) => ({
+          agentId: agent.agentId,
+          displayName: agent.displayName,
+        })),
+        [
+          {
+            agentId: createPayload.agent?.agentId,
+            displayName: "后端·衡",
+          },
+        ],
+      );
+
+      const detailResponse = await postJson(baseUrl, "/api/agents/detail", {
+        ...buildIdentityPayload("owner-managed-agent"),
+        agentId: createPayload.agent?.agentId,
+      }, authHeaders);
+
+      assert.equal(detailResponse.status, 200);
+      const detailPayload = await detailResponse.json() as {
+        organization?: { organizationId?: string };
+        principal?: { principalId?: string; kind?: string };
+        agent?: { agentId?: string; displayName?: string; mission?: string };
+      };
+      assert.equal(detailPayload.organization?.organizationId, createPayload.organization?.organizationId);
+      assert.equal(detailPayload.principal?.principalId, createPayload.principal?.principalId);
+      assert.equal(detailPayload.principal?.kind, "managed_agent");
+      assert.equal(detailPayload.agent?.agentId, createPayload.agent?.agentId);
+      assert.equal(detailPayload.agent?.mission, "负责服务端实现与维护。");
+    });
+  });
+});
+
+test("POST /api/agents/list、/detail 在配置平台上游后会改读 platform facts", async () => {
+  await withClearedPlatformGatewayEnv(async () => {
+    const platformServer = await createMockPlatformGatewayServer();
+    process.env.THEMIS_PLATFORM_BASE_URL = platformServer.baseUrl;
+    process.env.THEMIS_PLATFORM_OWNER_PRINCIPAL_ID = "principal-platform-owner";
+    process.env.THEMIS_PLATFORM_WEB_ACCESS_TOKEN = "gateway-secret";
+
+    try {
+      await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+        const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+
+        const listResponse = await postJson(
+          baseUrl,
+          "/api/agents/list",
+          buildIdentityPayload("owner-managed-agent-gateway"),
+          authHeaders,
+        );
+
+        assert.equal(listResponse.status, 200);
+        const listPayload = await listResponse.json() as {
+          identity?: { principalId?: string };
+          organizations?: Array<{ organizationId?: string; displayName?: string }>;
+          agents?: Array<{ agentId?: string; displayName?: string }>;
+        };
+        assert.ok(listPayload.identity?.principalId);
+        assert.deepEqual(listPayload.organizations, [
+          {
+            organizationId: "org-platform",
+            displayName: "平台组织",
+          },
+        ]);
+        assert.equal(listPayload.agents?.length, 1);
+        assert.equal(listPayload.agents?.[0]?.agentId, "agent-platform-1");
+        assert.equal(listPayload.agents?.[0]?.displayName, "平台·后端");
+
+        const detailResponse = await postJson(baseUrl, "/api/agents/detail", {
+          ...buildIdentityPayload("owner-managed-agent-gateway"),
+          agentId: "agent-platform-1",
+        }, authHeaders);
+
+        assert.equal(detailResponse.status, 200);
+        const detailPayload = await detailResponse.json() as {
+          organization?: { organizationId?: string; displayName?: string };
+          principal?: { principalId?: string; kind?: string };
+          agent?: { agentId?: string; displayName?: string; mission?: string };
+          workspacePolicy?: { workspacePath?: string };
+          runtimeProfile?: { model?: string };
+        };
+        assert.deepEqual(detailPayload.organization, {
+          organizationId: "org-platform",
+          displayName: "平台组织",
+        });
+        assert.deepEqual(detailPayload.principal, {
+          principalId: "principal-platform-agent-1",
+          kind: "managed_agent",
+        });
+        assert.equal(detailPayload.agent?.agentId, "agent-platform-1");
+        assert.equal(detailPayload.agent?.displayName, "平台·后端");
+        assert.equal(detailPayload.agent?.mission, "来自平台控制面的详情。");
+        assert.deepEqual(detailPayload.workspacePolicy, {
+          workspacePath: "/workspace/platform",
+        });
+        assert.deepEqual(detailPayload.runtimeProfile, {
+          model: "gpt-5.4",
+        });
+      });
+    } finally {
+      await platformServer.close();
+    }
+  });
+});
+
+test("POST /api/agents 核心治理读面在配置平台上游后会统一改读 platform facts", async () => {
+  await withClearedPlatformGatewayEnv(async () => {
+    const platformServer = await createMockPlatformGatewayServer();
+    process.env.THEMIS_PLATFORM_BASE_URL = platformServer.baseUrl;
+    process.env.THEMIS_PLATFORM_OWNER_PRINCIPAL_ID = "principal-platform-owner";
+    process.env.THEMIS_PLATFORM_WEB_ACCESS_TOKEN = "gateway-secret";
+
+    try {
+      await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+        const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+        const identity = buildIdentityPayload("owner-managed-agent-gateway-read");
+
+        const spawnSuggestionsResponse = await postJson(baseUrl, "/api/agents/spawn-suggestions", identity, authHeaders);
+        assert.equal(spawnSuggestionsResponse.status, 200);
+        const spawnSuggestionsPayload = await spawnSuggestionsResponse.json() as {
+          spawnPolicies?: Array<{ policyId?: string }>;
+          suggestions?: Array<{ suggestionId?: string; displayName?: string }>;
+        };
+        assert.equal(spawnSuggestionsPayload.spawnPolicies?.[0]?.policyId, "spawn-policy-platform-1");
+        assert.equal(spawnSuggestionsPayload.suggestions?.[0]?.suggestionId, "spawn-suggestion-platform-1");
+        assert.equal(spawnSuggestionsPayload.suggestions?.[0]?.displayName, "平台·测试");
+
+        const idleSuggestionsResponse = await postJson(baseUrl, "/api/agents/idle-suggestions", identity, authHeaders);
+        assert.equal(idleSuggestionsResponse.status, 200);
+        const idleSuggestionsPayload = await idleSuggestionsResponse.json() as {
+          suggestions?: Array<{ suggestionId?: string; recommendedAction?: string }>;
+        };
+        assert.equal(idleSuggestionsPayload.suggestions?.[0]?.suggestionId, "idle-suggestion-platform-1");
+        assert.equal(idleSuggestionsPayload.suggestions?.[0]?.recommendedAction, "pause");
+
+        const governancePayload = {
+          ...identity,
+          waitingFor: "human",
+        };
+
+        const waitingResponse = await postJson(baseUrl, "/api/agents/waiting/list", governancePayload, authHeaders);
+        assert.equal(waitingResponse.status, 200);
+        const waitingPayload = await waitingResponse.json() as {
+          summary?: { waitingHumanCount?: number };
+          items?: Array<{ workItem?: { workItemId?: string } }>;
+        };
+        assert.equal(waitingPayload.summary?.waitingHumanCount, 1);
+        assert.equal(waitingPayload.items?.[0]?.workItem?.workItemId, "work-item-platform-1");
+
+        const overviewResponse = await postJson(baseUrl, "/api/agents/governance-overview", governancePayload, authHeaders);
+        assert.equal(overviewResponse.status, 200);
+        const overviewPayload = await overviewResponse.json() as {
+          overview?: {
+            waitingHumanCount?: number;
+            managersNeedingAttentionCount?: number;
+            managerHotspots?: Array<{ managerAgent?: { agentId?: string } }>;
+          };
+        };
+        assert.equal(overviewPayload.overview?.waitingHumanCount, 1);
+        assert.equal(overviewPayload.overview?.managersNeedingAttentionCount, 1);
+        assert.equal(overviewPayload.overview?.managerHotspots?.[0]?.managerAgent?.agentId, "agent-platform-manager");
+
+        const collaborationResponse = await postJson(
+          baseUrl,
+          "/api/agents/collaboration-dashboard",
+          governancePayload,
+          authHeaders,
+        );
+        assert.equal(collaborationResponse.status, 200);
+        const collaborationPayload = await collaborationResponse.json() as {
+          summary?: { attentionCount?: number };
+          items?: Array<{ parentWorkItem?: { workItemId?: string } }>;
+        };
+        assert.equal(collaborationPayload.summary?.attentionCount, 1);
+        assert.equal(collaborationPayload.items?.[0]?.parentWorkItem?.workItemId, "work-item-platform-1");
+
+        const workItemsResponse = await postJson(baseUrl, "/api/agents/work-items/list", {
+          ...identity,
+          agentId: "agent-platform-1",
+        }, authHeaders);
+        assert.equal(workItemsResponse.status, 200);
+        const workItemsPayload = await workItemsResponse.json() as {
+          workItems?: Array<{ workItemId?: string; status?: string }>;
+        };
+        assert.equal(workItemsPayload.workItems?.[0]?.workItemId, "work-item-platform-1");
+        assert.equal(workItemsPayload.workItems?.[0]?.status, "waiting_human");
+
+        const mailboxResponse = await postJson(baseUrl, "/api/agents/mailbox/list", {
+          ...identity,
+          agentId: "agent-platform-1",
+        }, authHeaders);
+        assert.equal(mailboxResponse.status, 200);
+        const mailboxPayload = await mailboxResponse.json() as {
+          agent?: { agentId?: string };
+          items?: Array<{ entry?: { mailboxEntryId?: string } }>;
+        };
+        assert.equal(mailboxPayload.agent?.agentId, "agent-platform-1");
+        assert.equal(mailboxPayload.items?.[0]?.entry?.mailboxEntryId, "mailbox-platform-1");
+
+        const handoffResponse = await postJson(baseUrl, "/api/agents/handoffs/list", {
+          ...identity,
+          agentId: "agent-platform-1",
+        }, authHeaders);
+        assert.equal(handoffResponse.status, 200);
+        const handoffPayload = await handoffResponse.json() as {
+          agent?: { agentId?: string };
+          handoffs?: Array<{ handoffId?: string }>;
+          timeline?: Array<{ entryId?: string }>;
+        };
+        assert.equal(handoffPayload.agent?.agentId, "agent-platform-1");
+        assert.equal(handoffPayload.handoffs?.[0]?.handoffId, "handoff-platform-1");
+        assert.equal(handoffPayload.timeline?.[0]?.entryId, "timeline-platform-1");
+
+        const workItemDetailResponse = await postJson(baseUrl, "/api/agents/work-items/detail", {
+          ...identity,
+          workItemId: "work-item-platform-1",
+        }, authHeaders);
+        assert.equal(workItemDetailResponse.status, 200);
+        const workItemDetailPayload = await workItemDetailResponse.json() as {
+          workItem?: { workItemId?: string };
+          targetAgent?: { agentId?: string };
+          childSummary?: { waitingCount?: number };
+          messages?: Array<{ messageId?: string }>;
+        };
+        assert.equal(workItemDetailPayload.workItem?.workItemId, "work-item-platform-1");
+        assert.equal(workItemDetailPayload.targetAgent?.agentId, "agent-platform-1");
+        assert.equal(workItemDetailPayload.childSummary?.waitingCount, 1);
+        assert.equal(workItemDetailPayload.messages?.[0]?.messageId, "message-platform-1");
+
+        const runsResponse = await postJson(baseUrl, "/api/agents/runs/list", {
+          ...identity,
+          workItemId: "work-item-platform-1",
+        }, authHeaders);
+        assert.equal(runsResponse.status, 200);
+        const runsPayload = await runsResponse.json() as {
+          runs?: Array<{ runId?: string; schedulerId?: string }>;
+        };
+        assert.equal(runsPayload.runs?.[0]?.runId, "run-platform-1");
+        assert.equal(runsPayload.runs?.[0]?.schedulerId, "scheduler-platform");
+
+        const runDetailResponse = await postJson(baseUrl, "/api/agents/runs/detail", {
+          ...identity,
+          runId: "run-platform-1",
+        }, authHeaders);
+        assert.equal(runDetailResponse.status, 200);
+        const runDetailPayload = await runDetailResponse.json() as {
+          organization?: { organizationId?: string };
+          run?: { runId?: string };
+          workItem?: { workItemId?: string };
+          targetAgent?: { agentId?: string };
+        };
+        assert.equal(runDetailPayload.organization?.organizationId, "org-platform");
+        assert.equal(runDetailPayload.run?.runId, "run-platform-1");
+        assert.equal(runDetailPayload.workItem?.workItemId, "work-item-platform-1");
+        assert.equal(runDetailPayload.targetAgent?.agentId, "agent-platform-1");
+      });
+    } finally {
+      await platformServer.close();
+    }
+  });
+});
+
+test("POST /api/agents 核心治理写面在配置平台上游后会统一改写 platform facts", async () => {
+  await withClearedPlatformGatewayEnv(async () => {
+    const platformServer = await createMockPlatformGatewayServer();
+    process.env.THEMIS_PLATFORM_BASE_URL = platformServer.baseUrl;
+    process.env.THEMIS_PLATFORM_OWNER_PRINCIPAL_ID = "principal-platform-owner";
+    process.env.THEMIS_PLATFORM_WEB_ACCESS_TOKEN = "gateway-secret";
+
+    try {
+      await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+        const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+        const identity = buildIdentityPayload("owner-managed-agent-gateway-write");
+
+        const createResponse = await postJson(baseUrl, "/api/agents/create", {
+          ...identity,
+          agent: {
+            departmentRole: "平台工程",
+            displayName: "平台·新建",
+            mission: "验证 gateway 创建写路径。",
+          },
+        }, authHeaders);
+        assert.equal(createResponse.status, 200);
+        const createPayload = await createResponse.json() as {
+          identity?: { principalId?: string };
+          principal?: { principalId?: string };
+          agent?: { agentId?: string; displayName?: string };
+        };
+        assert.ok(createPayload.identity?.principalId);
+        assert.equal(createPayload.principal?.principalId, "principal-platform-created");
+        assert.equal(createPayload.agent?.agentId, "agent-platform-created");
+        assert.equal(createPayload.agent?.displayName, "平台·新建");
+
+        const boundaryResponse = await postJson(baseUrl, "/api/agents/execution-boundary/update", {
+          ...identity,
+          agentId: "agent-platform-1",
+          boundary: {
+            workspacePolicy: {
+              workspacePath: "/workspace/platform-updated",
+              additionalDirectories: ["/workspace/shared"],
+              allowNetworkAccess: false,
+            },
+            runtimeProfile: {
+              accessMode: "third-party",
+              thirdPartyProviderId: "gateway-platform",
+              model: "gpt-5.4-mini",
+              sandboxMode: "danger-full-access",
+              approvalPolicy: "on-request",
+              webSearchMode: "disabled",
+              networkAccessEnabled: false,
+            },
+          },
+        }, authHeaders);
+        assert.equal(boundaryResponse.status, 200);
+        const boundaryPayload = await boundaryResponse.json() as {
+          workspacePolicy?: { workspacePath?: string; additionalDirectories?: string[]; allowNetworkAccess?: boolean };
+          runtimeProfile?: { accessMode?: string; thirdPartyProviderId?: string; model?: string };
+        };
+        assert.equal(boundaryPayload.workspacePolicy?.workspacePath, "/workspace/platform-updated");
+        assert.deepEqual(boundaryPayload.workspacePolicy?.additionalDirectories, ["/workspace/shared"]);
+        assert.equal(boundaryPayload.workspacePolicy?.allowNetworkAccess, false);
+        assert.equal(boundaryPayload.runtimeProfile?.accessMode, "third-party");
+        assert.equal(boundaryPayload.runtimeProfile?.thirdPartyProviderId, "gateway-platform");
+        assert.equal(boundaryPayload.runtimeProfile?.model, "gpt-5.4-mini");
+
+        const spawnPolicyResponse = await postJson(baseUrl, "/api/agents/spawn-policy/update", {
+          ...identity,
+          policy: {
+            organizationId: "org-platform",
+            maxActiveAgents: 6,
+            maxActiveAgentsPerRole: 2,
+          },
+        }, authHeaders);
+        assert.equal(spawnPolicyResponse.status, 200);
+        const spawnPolicyPayload = await spawnPolicyResponse.json() as {
+          policy?: { policyId?: string; maxActiveAgents?: number; maxActiveAgentsPerRole?: number };
+        };
+        assert.equal(spawnPolicyPayload.policy?.policyId, "spawn-policy-platform-updated");
+        assert.equal(spawnPolicyPayload.policy?.maxActiveAgents, 6);
+        assert.equal(spawnPolicyPayload.policy?.maxActiveAgentsPerRole, 2);
+
+        const spawnApproveResponse = await postJson(baseUrl, "/api/agents/spawn-approve", {
+          ...identity,
+          agent: {
+            departmentRole: "自动化",
+            displayName: "平台·自动化",
+            mission: "负责平台自动化验证。",
+            organizationId: "org-platform",
+          },
+        }, authHeaders);
+        assert.equal(spawnApproveResponse.status, 200);
+        const spawnApprovePayload = await spawnApproveResponse.json() as {
+          principal?: { principalId?: string };
+          agent?: { agentId?: string; displayName?: string };
+          bootstrapWorkItem?: { workItemId?: string };
+          auditLog?: { eventType?: string } | { action?: string };
+        };
+        assert.equal(spawnApprovePayload.principal?.principalId, "principal-platform-auto-1");
+        assert.equal(spawnApprovePayload.agent?.agentId, "agent-platform-auto-1");
+        assert.equal(spawnApprovePayload.bootstrapWorkItem?.workItemId, "work-item-platform-bootstrap-1");
+
+        const suggestion = {
+          suggestionId: "spawn-suggestion-platform-1",
+          organizationId: "org-platform",
+          departmentRole: "测试",
+          displayName: "平台·测试",
+          mission: "负责 gateway 回归验证。",
+        };
+
+        const spawnIgnoreResponse = await postJson(baseUrl, "/api/agents/spawn-ignore", {
+          ...identity,
+          suggestion,
+        }, authHeaders);
+        assert.equal(spawnIgnoreResponse.status, 200);
+        const spawnIgnorePayload = await spawnIgnoreResponse.json() as {
+          suppressedSuggestion?: { suggestionId?: string };
+          auditLog?: { eventType?: string };
+        };
+        assert.equal(spawnIgnorePayload.suppressedSuggestion?.suggestionId, "spawn-suggestion-platform-1");
+        assert.equal(spawnIgnorePayload.auditLog?.eventType, "spawn_suggestion_ignored");
+
+        const spawnRejectResponse = await postJson(baseUrl, "/api/agents/spawn-reject", {
+          ...identity,
+          suggestion,
+        }, authHeaders);
+        assert.equal(spawnRejectResponse.status, 200);
+        const spawnRejectPayload = await spawnRejectResponse.json() as {
+          suppressedSuggestion?: { suggestionId?: string };
+          auditLog?: { eventType?: string };
+        };
+        assert.equal(spawnRejectPayload.suppressedSuggestion?.suggestionId, "spawn-suggestion-platform-1");
+        assert.equal(spawnRejectPayload.auditLog?.eventType, "spawn_suggestion_rejected");
+
+        const spawnRestoreResponse = await postJson(baseUrl, "/api/agents/spawn-restore", {
+          ...identity,
+          suggestion: {
+            suggestionId: "spawn-suggestion-platform-1",
+            organizationId: "org-platform",
+          },
+        }, authHeaders);
+        assert.equal(spawnRestoreResponse.status, 200);
+        const spawnRestorePayload = await spawnRestoreResponse.json() as {
+          auditLog?: { eventType?: string };
+        };
+        assert.equal(spawnRestorePayload.auditLog?.eventType, "spawn_suggestion_restored");
+
+        const idleApproveResponse = await postJson(baseUrl, "/api/agents/idle-approve", {
+          ...identity,
+          suggestion: {
+            suggestionId: "idle-suggestion-platform-1",
+            organizationId: "org-platform",
+            agentId: "agent-platform-1",
+            action: "pause",
+          },
+        }, authHeaders);
+        assert.equal(idleApproveResponse.status, 200);
+        const idleApprovePayload = await idleApproveResponse.json() as {
+          agent?: { status?: string };
+          auditLog?: { eventType?: string; subjectAgentId?: string };
+        };
+        assert.equal(idleApprovePayload.agent?.status, "paused");
+        assert.equal(idleApprovePayload.auditLog?.eventType, "idle_recovery_pause_approved");
+        assert.equal(idleApprovePayload.auditLog?.subjectAgentId, "agent-platform-1");
+
+        const pauseResponse = await postJson(baseUrl, "/api/agents/pause", {
+          ...identity,
+          agentId: "agent-platform-1",
+        }, authHeaders);
+        assert.equal(pauseResponse.status, 200);
+        const pausePayload = await pauseResponse.json() as {
+          agent?: { status?: string };
+          principal?: { principalId?: string };
+        };
+        assert.equal(pausePayload.agent?.status, "paused");
+        assert.equal(pausePayload.principal?.principalId, "principal-platform-agent-1");
+
+        const resumeResponse = await postJson(baseUrl, "/api/agents/resume", {
+          ...identity,
+          agentId: "agent-platform-1",
+        }, authHeaders);
+        assert.equal(resumeResponse.status, 200);
+        const resumePayload = await resumeResponse.json() as {
+          agent?: { status?: string };
+        };
+        assert.equal(resumePayload.agent?.status, "active");
+
+        const archiveResponse = await postJson(baseUrl, "/api/agents/archive", {
+          ...identity,
+          agentId: "agent-platform-1",
+        }, authHeaders);
+        assert.equal(archiveResponse.status, 200);
+        const archivePayload = await archiveResponse.json() as {
+          agent?: { status?: string };
+        };
+        assert.equal(archivePayload.agent?.status, "archived");
+      });
+    } finally {
+      await platformServer.close();
+    }
+  });
+});
+
+test("POST /api/agents 协作写面在配置平台上游后会统一改写 platform facts", async () => {
+  await withClearedPlatformGatewayEnv(async () => {
+    const platformServer = await createMockPlatformGatewayServer();
+    process.env.THEMIS_PLATFORM_BASE_URL = platformServer.baseUrl;
+    process.env.THEMIS_PLATFORM_OWNER_PRINCIPAL_ID = "principal-platform-owner";
+    process.env.THEMIS_PLATFORM_WEB_ACCESS_TOKEN = "gateway-secret";
+
+    try {
+      await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+        const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+        const identity = buildIdentityPayload("owner-managed-agent-gateway-workflow");
+
+        const dispatchResponse = await postJson(baseUrl, "/api/agents/dispatch", {
+          ...identity,
+          workItem: {
+            targetAgentId: "agent-platform-1",
+            dispatchReason: "platform-gateway-write",
+            goal: "验证 gateway 写路径派工。",
+          },
+        }, authHeaders);
+        assert.equal(dispatchResponse.status, 200);
+        const dispatchPayload = await dispatchResponse.json() as {
+          workItem?: { workItemId?: string; status?: string };
+          dispatchMessage?: { messageId?: string };
+        };
+        assert.equal(dispatchPayload.workItem?.workItemId, "work-item-platform-dispatch-1");
+        assert.equal(dispatchPayload.workItem?.status, "queued");
+        assert.equal(dispatchPayload.dispatchMessage?.messageId, "message-platform-dispatch-1");
+
+        const cancelResponse = await postJson(baseUrl, "/api/agents/work-items/cancel", {
+          ...identity,
+          workItemId: "work-item-platform-cancel-1",
+        }, authHeaders);
+        assert.equal(cancelResponse.status, 200);
+        const cancelPayload = await cancelResponse.json() as {
+          workItem?: { workItemId?: string; status?: string };
+          ackedMailboxEntries?: Array<{ mailboxEntryId?: string }>;
+          notificationMessage?: { messageId?: string };
+        };
+        assert.equal(cancelPayload.workItem?.workItemId, "work-item-platform-cancel-1");
+        assert.equal(cancelPayload.workItem?.status, "cancelled");
+        assert.equal(cancelPayload.ackedMailboxEntries?.[0]?.mailboxEntryId, "mailbox-platform-cancel-1");
+        assert.equal(cancelPayload.notificationMessage?.messageId, "message-platform-cancel-1");
+
+        const respondResponse = await postJson(baseUrl, "/api/agents/work-items/respond", {
+          ...identity,
+          workItemId: "work-item-platform-human-1",
+          response: {
+            decision: "approve",
+            inputText: "可以继续。",
+          },
+        }, authHeaders);
+        assert.equal(respondResponse.status, 200);
+        const respondPayload = await respondResponse.json() as {
+          workItem?: { workItemId?: string; status?: string; latestHumanResponse?: { decision?: string } };
+          resumedRuns?: Array<{ runId?: string; status?: string; failureCode?: string }>;
+        };
+        assert.equal(respondPayload.workItem?.workItemId, "work-item-platform-human-1");
+        assert.equal(respondPayload.workItem?.status, "queued");
+        assert.equal(respondPayload.workItem?.latestHumanResponse?.decision, "approve");
+        assert.equal(respondPayload.resumedRuns?.[0]?.runId, "run-platform-resumed-1");
+        assert.equal(respondPayload.resumedRuns?.[0]?.status, "interrupted");
+        assert.equal(respondPayload.resumedRuns?.[0]?.failureCode, "WAITING_RESUME_TRIGGERED");
+
+        const escalateResponse = await postJson(baseUrl, "/api/agents/work-items/escalate", {
+          ...identity,
+          workItemId: "work-item-platform-escalate-1",
+          escalation: {
+            inputText: "请值班经理接手。",
+          },
+        }, authHeaders);
+        assert.equal(escalateResponse.status, 200);
+        const escalatePayload = await escalateResponse.json() as {
+          workItem?: { workItemId?: string; status?: string };
+          latestWaitingMessage?: { messageId?: string };
+          ackedMailboxEntries?: Array<{ mailboxEntryId?: string }>;
+        };
+        assert.equal(escalatePayload.workItem?.workItemId, "work-item-platform-escalate-1");
+        assert.equal(escalatePayload.workItem?.status, "waiting_human");
+        assert.equal(escalatePayload.latestWaitingMessage?.messageId, "message-platform-escalate-1");
+        assert.equal(escalatePayload.ackedMailboxEntries?.[0]?.mailboxEntryId, "mailbox-platform-escalate-1");
+
+        const mailboxPullResponse = await postJson(baseUrl, "/api/agents/mailbox/pull", {
+          ...identity,
+          agentId: "agent-platform-1",
+        }, authHeaders);
+        assert.equal(mailboxPullResponse.status, 200);
+        const mailboxPullPayload = await mailboxPullResponse.json() as {
+          item?: { entry?: { mailboxEntryId?: string; status?: string } } | null;
+        };
+        assert.equal(mailboxPullPayload.item?.entry?.mailboxEntryId, "mailbox-platform-1");
+        assert.equal(mailboxPullPayload.item?.entry?.status, "leased");
+
+        const mailboxAckResponse = await postJson(baseUrl, "/api/agents/mailbox/ack", {
+          ...identity,
+          agentId: "agent-platform-1",
+          mailboxEntryId: "mailbox-platform-1",
+        }, authHeaders);
+        assert.equal(mailboxAckResponse.status, 200);
+        const mailboxAckPayload = await mailboxAckResponse.json() as {
+          mailboxEntry?: { mailboxEntryId?: string; status?: string };
+          message?: { messageId?: string };
+        };
+        assert.equal(mailboxAckPayload.mailboxEntry?.mailboxEntryId, "mailbox-platform-1");
+        assert.equal(mailboxAckPayload.mailboxEntry?.status, "acked");
+        assert.equal(mailboxAckPayload.message?.messageId, "message-platform-1");
+
+        const mailboxRespondResponse = await postJson(baseUrl, "/api/agents/mailbox/respond", {
+          ...identity,
+          agentId: "agent-platform-1",
+          mailboxEntryId: "mailbox-platform-1",
+          response: {
+            decision: "approve",
+            inputText: "继续执行。",
+            priority: "urgent",
+          },
+        }, authHeaders);
+        assert.equal(mailboxRespondResponse.status, 200);
+        const mailboxRespondPayload = await mailboxRespondResponse.json() as {
+          sourceMailboxEntry?: { mailboxEntryId?: string; status?: string };
+          responseMessage?: { messageId?: string; messageType?: string };
+          responseMailboxEntry?: { mailboxEntryId?: string; status?: string };
+          resumedWorkItem?: { workItemId?: string; status?: string };
+          resumedRuns?: Array<{ runId?: string; status?: string }>;
+        };
+        assert.equal(mailboxRespondPayload.sourceMailboxEntry?.mailboxEntryId, "mailbox-platform-1");
+        assert.equal(mailboxRespondPayload.sourceMailboxEntry?.status, "acked");
+        assert.equal(mailboxRespondPayload.responseMessage?.messageId, "message-platform-response-1");
+        assert.equal(mailboxRespondPayload.responseMessage?.messageType, "approval_result");
+        assert.equal(mailboxRespondPayload.responseMailboxEntry?.mailboxEntryId, "mailbox-platform-response-1");
+        assert.equal(mailboxRespondPayload.responseMailboxEntry?.status, "acked");
+        assert.equal(mailboxRespondPayload.resumedWorkItem?.workItemId, "work-item-platform-human-1");
+        assert.equal(mailboxRespondPayload.resumedWorkItem?.status, "queued");
+        assert.equal(mailboxRespondPayload.resumedRuns?.[0]?.runId, "run-platform-resumed-1");
+        assert.equal(mailboxRespondPayload.resumedRuns?.[0]?.status, "interrupted");
+      });
+    } finally {
+      await platformServer.close();
+    }
   });
 });
 
@@ -2223,4 +3943,22 @@ function closeServer(server: Server): Promise<void> {
       resolve();
     });
   });
+}
+
+function readRequestBody(request: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+
+    request.on("data", (chunk: Buffer | string) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    request.on("end", () => {
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+    request.on("error", reject);
+  });
+}
+
+function parseJson(text: string): unknown {
+  return text.trim() ? JSON.parse(text) as unknown : {};
 }

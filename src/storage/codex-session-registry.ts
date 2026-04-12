@@ -140,7 +140,7 @@ import type {
   StoredScheduledTaskRunRecord,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 30;
+const DATABASE_SCHEMA_VERSION = 31;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -154,6 +154,9 @@ export interface StoredWebAccessTokenRecord {
   tokenId: string;
   label: string;
   tokenHash: string;
+  tokenKind?: "web_login" | "platform_service";
+  ownerPrincipalId?: string;
+  serviceRole?: "gateway" | "worker";
   createdAt: string;
   updatedAt: string;
   lastUsedAt?: string;
@@ -622,6 +625,9 @@ interface WebAccessTokenRow {
   token_id: string;
   label: string;
   token_hash: string;
+  token_kind?: string | null;
+  owner_principal_id?: string | null;
+  service_role?: string | null;
   created_at: string;
   updated_at: string;
   last_used_at: string | null;
@@ -1341,7 +1347,7 @@ export class SqliteCodexSessionRegistry {
     const rows = this.db
       .prepare(
         `
-          SELECT token_id, label, token_hash, created_at, updated_at, last_used_at, revoked_at
+          SELECT token_id, label, token_hash, token_kind, owner_principal_id, service_role, created_at, updated_at, last_used_at, revoked_at
           FROM themis_web_access_tokens
           ORDER BY revoked_at IS NULL DESC, updated_at DESC, label ASC, token_id ASC
         `,
@@ -1355,7 +1361,7 @@ export class SqliteCodexSessionRegistry {
     const rows = this.db
       .prepare(
         `
-          SELECT token_id, label, token_hash, created_at, updated_at, last_used_at, revoked_at
+          SELECT token_id, label, token_hash, token_kind, owner_principal_id, service_role, created_at, updated_at, last_used_at, revoked_at
           FROM themis_web_access_tokens
           WHERE revoked_at IS NULL
           ORDER BY updated_at DESC, label ASC, token_id ASC
@@ -1376,7 +1382,7 @@ export class SqliteCodexSessionRegistry {
     const row = this.db
       .prepare(
         `
-          SELECT token_id, label, token_hash, created_at, updated_at, last_used_at, revoked_at
+          SELECT token_id, label, token_hash, token_kind, owner_principal_id, service_role, created_at, updated_at, last_used_at, revoked_at
           FROM themis_web_access_tokens
           WHERE label = ?
           ORDER BY revoked_at IS NULL DESC, updated_at DESC, token_id ASC
@@ -1398,7 +1404,7 @@ export class SqliteCodexSessionRegistry {
     const row = this.db
       .prepare(
         `
-          SELECT token_id, label, token_hash, created_at, updated_at, last_used_at, revoked_at
+          SELECT token_id, label, token_hash, token_kind, owner_principal_id, service_role, created_at, updated_at, last_used_at, revoked_at
           FROM themis_web_access_tokens
           WHERE token_id = ?
         `,
@@ -1424,6 +1430,9 @@ export class SqliteCodexSessionRegistry {
             token_id,
             label,
             token_hash,
+            token_kind,
+            owner_principal_id,
+            service_role,
             created_at,
             updated_at,
             last_used_at,
@@ -1432,6 +1441,9 @@ export class SqliteCodexSessionRegistry {
             @token_id,
             @label,
             @token_hash,
+            @token_kind,
+            @owner_principal_id,
+            @service_role,
             @created_at,
             @updated_at,
             @last_used_at,
@@ -1440,6 +1452,9 @@ export class SqliteCodexSessionRegistry {
           ON CONFLICT(token_id) DO UPDATE SET
             label = excluded.label,
             token_hash = excluded.token_hash,
+            token_kind = excluded.token_kind,
+            owner_principal_id = excluded.owner_principal_id,
+            service_role = excluded.service_role,
             created_at = excluded.created_at,
             updated_at = excluded.updated_at,
             last_used_at = excluded.last_used_at,
@@ -1450,6 +1465,9 @@ export class SqliteCodexSessionRegistry {
         token_id: tokenId,
         label,
         token_hash: tokenHash,
+        token_kind: record.tokenKind ?? "web_login",
+        owner_principal_id: record.ownerPrincipalId ?? null,
+        service_role: record.serviceRole ?? null,
         created_at: record.createdAt,
         updated_at: record.updatedAt,
         last_used_at: record.lastUsedAt ?? null,
@@ -9593,6 +9611,9 @@ export class SqliteCodexSessionRegistry {
         token_id TEXT PRIMARY KEY,
         label TEXT NOT NULL,
         token_hash TEXT NOT NULL,
+        token_kind TEXT NOT NULL DEFAULT 'web_login',
+        owner_principal_id TEXT,
+        service_role TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         last_used_at TEXT,
@@ -10568,6 +10589,9 @@ export class SqliteCodexSessionRegistry {
         token_id TEXT PRIMARY KEY,
         label TEXT NOT NULL,
         token_hash TEXT NOT NULL,
+        token_kind TEXT NOT NULL DEFAULT 'web_login',
+        owner_principal_id TEXT,
+        service_role TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         last_used_at TEXT,
@@ -10647,6 +10671,32 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_principals_organization_idx
       ON themis_principals(organization_id, updated_at DESC);
     `);
+
+    const webAccessTokenColumns = database
+      .prepare(`PRAGMA table_info(themis_web_access_tokens)`)
+      .all() as Array<{ name: string }>;
+    const webAccessTokenColumnNames = new Set(webAccessTokenColumns.map((column) => column.name));
+
+    if (!webAccessTokenColumnNames.has("token_kind")) {
+      database.exec(`
+        ALTER TABLE themis_web_access_tokens
+        ADD COLUMN token_kind TEXT NOT NULL DEFAULT 'web_login';
+      `);
+    }
+
+    if (!webAccessTokenColumnNames.has("owner_principal_id")) {
+      database.exec(`
+        ALTER TABLE themis_web_access_tokens
+        ADD COLUMN owner_principal_id TEXT;
+      `);
+    }
+
+    if (!webAccessTokenColumnNames.has("service_role")) {
+      database.exec(`
+        ALTER TABLE themis_web_access_tokens
+        ADD COLUMN service_role TEXT;
+      `);
+    }
 
     this.createSessionHistoryMetadataTables(database);
     this.createTurnInputTables(database);
@@ -11054,6 +11104,11 @@ function mapWebAccessTokenRow(row: WebAccessTokenRow): StoredWebAccessTokenRecor
     tokenId: row.token_id,
     label: row.label,
     tokenHash: row.token_hash,
+    tokenKind: (row.token_kind as StoredWebAccessTokenRecord["tokenKind"]) ?? "web_login",
+    ...(row.owner_principal_id ? { ownerPrincipalId: row.owner_principal_id } : {}),
+    ...(row.service_role
+      ? { serviceRole: row.service_role as NonNullable<StoredWebAccessTokenRecord["serviceRole"]> }
+      : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(row.last_used_at ? { lastUsedAt: row.last_used_at } : {}),

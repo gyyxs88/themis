@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -58,6 +58,45 @@ async function postJson(
     },
     body: JSON.stringify(payload),
   });
+}
+
+async function createPlatformManagedAgent(
+  baseUrl: string,
+  headers: Record<string, string>,
+  ownerPrincipalId: string,
+  agent: {
+    departmentRole: string;
+    displayName?: string;
+    mission?: string;
+    organizationId?: string;
+    supervisorAgentId?: string;
+  },
+): Promise<{
+  organizationId: string;
+  principalId: string;
+  agentId: string;
+}> {
+  const response = await postJson(baseUrl, "/api/platform/agents/create", {
+    ownerPrincipalId,
+    agent,
+  }, headers);
+
+  assert.equal(response.status, 200);
+  const payload = await response.json() as {
+    organization?: { organizationId?: string };
+    principal?: { principalId?: string };
+    agent?: { agentId?: string };
+  };
+
+  assert.ok(payload.organization?.organizationId);
+  assert.ok(payload.principal?.principalId);
+  assert.ok(payload.agent?.agentId);
+
+  return {
+    organizationId: payload.organization.organizationId as string,
+    principalId: payload.principal.principalId as string,
+    agentId: payload.agent.agentId as string,
+  };
 }
 
 test("POST /api/platform/* 会暴露控制面最小主链", async () => {
@@ -238,6 +277,665 @@ test("POST /api/platform/* 会暴露控制面最小主链", async () => {
     assert.equal(runDetailPayload.executionLease?.status, "active");
     assert.equal(runDetailPayload.node?.nodeId, nodeRegisterPayload.node?.nodeId);
     assert.equal(runDetailPayload.node?.displayName, "Platform Node A");
+  });
+});
+
+test("POST /api/platform/agents 写治理接口会暴露执行边界、spawn policy 与 lifecycle 变更", async () => {
+  await withHttpServer(async ({ baseUrl, runtime, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+    const ownerPrincipalId = "principal-platform-agent-write-owner";
+    const now = new Date().toISOString();
+
+    runtimeStore.savePrincipal({
+      principalId: ownerPrincipalId,
+      displayName: "Platform Agent Write Owner",
+      kind: "human_user",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const agent = await createPlatformManagedAgent(baseUrl, authHeaders, ownerPrincipalId, {
+      departmentRole: "平台工程",
+      displayName: "平台编排",
+      mission: "负责验证 platform 写治理接口。",
+    });
+    runtimeStore.saveAuthAccount({
+      accountId: "acct-platform-write",
+      label: "Platform 写接口账号",
+      codexHome: join(runtime.getWorkingDirectory(), "infra/local/codex-auth/acct-platform-write"),
+      isActive: true,
+      createdAt: "2026-04-12T11:59:00.000Z",
+      updatedAt: "2026-04-12T11:59:00.000Z",
+    });
+
+    const workspacePath = join(runtime.getWorkingDirectory(), "workspace/platform-write-agent");
+    const sharedPath = join(runtime.getWorkingDirectory(), "workspace/platform-write-shared");
+    mkdirSync(workspacePath, { recursive: true });
+    mkdirSync(sharedPath, { recursive: true });
+
+    const boundaryResponse = await postJson(baseUrl, "/api/platform/agents/execution-boundary/update", {
+      ownerPrincipalId,
+      agentId: agent.agentId,
+      boundary: {
+        workspacePolicy: {
+          workspacePath,
+          additionalDirectories: [sharedPath],
+          allowNetworkAccess: false,
+        },
+        runtimeProfile: {
+          accessMode: "auth",
+          authAccountId: "acct-platform-write",
+          model: "gpt-5.4-mini",
+          sandboxMode: "danger-full-access",
+          approvalPolicy: "on-request",
+          webSearchMode: "disabled",
+          networkAccessEnabled: false,
+        },
+      },
+    }, authHeaders);
+    assert.equal(boundaryResponse.status, 200);
+    const boundaryPayload = await boundaryResponse.json() as {
+      workspacePolicy?: { workspacePath?: string; additionalDirectories?: string[]; allowNetworkAccess?: boolean };
+      runtimeProfile?: {
+        accessMode?: string;
+        authAccountId?: string;
+        model?: string;
+        sandboxMode?: string;
+        approvalPolicy?: string;
+        webSearchMode?: string;
+        networkAccessEnabled?: boolean;
+      };
+    };
+    assert.equal(boundaryPayload.workspacePolicy?.workspacePath, workspacePath);
+    assert.deepEqual(boundaryPayload.workspacePolicy?.additionalDirectories, [sharedPath]);
+    assert.equal(boundaryPayload.workspacePolicy?.allowNetworkAccess, false);
+    assert.equal(boundaryPayload.runtimeProfile?.accessMode, "auth");
+    assert.equal(boundaryPayload.runtimeProfile?.authAccountId, "acct-platform-write");
+    assert.equal(boundaryPayload.runtimeProfile?.model, "gpt-5.4-mini");
+    assert.equal(boundaryPayload.runtimeProfile?.sandboxMode, "danger-full-access");
+    assert.equal(boundaryPayload.runtimeProfile?.approvalPolicy, "on-request");
+    assert.equal(boundaryPayload.runtimeProfile?.webSearchMode, "disabled");
+    assert.equal(boundaryPayload.runtimeProfile?.networkAccessEnabled, false);
+
+    const spawnPolicyResponse = await postJson(baseUrl, "/api/platform/agents/spawn-policy/update", {
+      ownerPrincipalId,
+      policy: {
+        organizationId: agent.organizationId,
+        maxActiveAgents: 4,
+        maxActiveAgentsPerRole: 2,
+      },
+    }, authHeaders);
+    assert.equal(spawnPolicyResponse.status, 200);
+    const spawnPolicyPayload = await spawnPolicyResponse.json() as {
+      policy?: {
+        organizationId?: string;
+        maxActiveAgents?: number;
+        maxActiveAgentsPerRole?: number;
+      };
+    };
+    assert.equal(spawnPolicyPayload.policy?.organizationId, agent.organizationId);
+    assert.equal(spawnPolicyPayload.policy?.maxActiveAgents, 4);
+    assert.equal(spawnPolicyPayload.policy?.maxActiveAgentsPerRole, 2);
+
+    const pauseResponse = await postJson(baseUrl, "/api/platform/agents/pause", {
+      ownerPrincipalId,
+      agentId: agent.agentId,
+    }, authHeaders);
+    assert.equal(pauseResponse.status, 200);
+    const pausePayload = await pauseResponse.json() as {
+      agent?: { agentId?: string; status?: string };
+    };
+    assert.equal(pausePayload.agent?.agentId, agent.agentId);
+    assert.equal(pausePayload.agent?.status, "paused");
+
+    const resumeResponse = await postJson(baseUrl, "/api/platform/agents/resume", {
+      ownerPrincipalId,
+      agentId: agent.agentId,
+    }, authHeaders);
+    assert.equal(resumeResponse.status, 200);
+    const resumePayload = await resumeResponse.json() as {
+      agent?: { status?: string };
+    };
+    assert.equal(resumePayload.agent?.status, "active");
+
+    const archiveResponse = await postJson(baseUrl, "/api/platform/agents/archive", {
+      ownerPrincipalId,
+      agentId: agent.agentId,
+    }, authHeaders);
+    assert.equal(archiveResponse.status, 200);
+    const archivePayload = await archiveResponse.json() as {
+      agent?: { status?: string };
+    };
+    assert.equal(archivePayload.agent?.status, "archived");
+  });
+});
+
+test("POST /api/platform 扩展治理读接口会暴露 waiting、collaboration、mailbox 与 handoff 事实", async () => {
+  await withHttpServer(async ({ baseUrl, runtime, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+    const ownerPrincipalId = "principal-platform-read-owner";
+    const now = new Date().toISOString();
+
+    runtimeStore.savePrincipal({
+      principalId: ownerPrincipalId,
+      displayName: "Platform Read Owner",
+      kind: "human_user",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const managerCreateResponse = await postJson(baseUrl, "/api/platform/agents/create", {
+      ownerPrincipalId,
+      agent: {
+        departmentRole: "管理",
+        displayName: "平台经理",
+        mission: "负责父任务治理。",
+      },
+    }, authHeaders);
+    assert.equal(managerCreateResponse.status, 200);
+    const managerCreatePayload = await managerCreateResponse.json() as {
+      organization?: { organizationId?: string };
+      principal?: { principalId?: string };
+      agent?: { agentId?: string };
+    };
+    assert.ok(managerCreatePayload.organization?.organizationId);
+    assert.ok(managerCreatePayload.principal?.principalId);
+    assert.ok(managerCreatePayload.agent?.agentId);
+
+    const workerCreateResponse = await postJson(baseUrl, "/api/platform/agents/create", {
+      ownerPrincipalId,
+      agent: {
+        departmentRole: "执行",
+        displayName: "平台执行",
+        mission: "负责子任务执行。",
+        organizationId: managerCreatePayload.organization?.organizationId,
+      },
+    }, authHeaders);
+    assert.equal(workerCreateResponse.status, 200);
+    const workerCreatePayload = await workerCreateResponse.json() as {
+      principal?: { principalId?: string };
+      agent?: { agentId?: string };
+    };
+    assert.ok(workerCreatePayload.principal?.principalId);
+    assert.ok(workerCreatePayload.agent?.agentId);
+
+    const parentDispatchResponse = await postJson(baseUrl, "/api/platform/work-items/dispatch", {
+      ownerPrincipalId,
+      workItem: {
+        targetAgentId: managerCreatePayload.agent?.agentId,
+        dispatchReason: "platform-parent",
+        goal: "创建一个父任务用于治理读面验证。",
+      },
+    }, authHeaders);
+    assert.equal(parentDispatchResponse.status, 200);
+    const parentDispatchPayload = await parentDispatchResponse.json() as {
+      workItem?: { workItemId?: string };
+    };
+    assert.ok(parentDispatchPayload.workItem?.workItemId);
+
+    const childDispatchResponse = await postJson(baseUrl, "/api/platform/work-items/dispatch", {
+      ownerPrincipalId,
+      workItem: {
+        targetAgentId: workerCreatePayload.agent?.agentId,
+        sourceType: "agent",
+        sourceAgentId: managerCreatePayload.agent?.agentId,
+        sourcePrincipalId: managerCreatePayload.principal?.principalId,
+        parentWorkItemId: parentDispatchPayload.workItem?.workItemId,
+        dispatchReason: "platform-child",
+        goal: "创建一个需要等待人工决策的子任务。",
+      },
+    }, authHeaders);
+    assert.equal(childDispatchResponse.status, 200);
+    const childDispatchPayload = await childDispatchResponse.json() as {
+      mailboxEntry?: { mailboxEntryId?: string };
+      workItem?: { workItemId?: string };
+    };
+    assert.ok(childDispatchPayload.mailboxEntry?.mailboxEntryId);
+    assert.ok(childDispatchPayload.workItem?.workItemId);
+
+    runtime.getManagedAgentCoordinationService().createAgentHandoff({
+      ownerPrincipalId,
+      fromAgentId: managerCreatePayload.agent?.agentId ?? "",
+      toAgentId: workerCreatePayload.agent?.agentId ?? "",
+      workItemId: childDispatchPayload.workItem?.workItemId ?? "",
+      summary: "平台经理已补齐上下文并交接给执行 agent。",
+      blockers: ["等待人工确认"],
+      recommendedNextActions: ["确认执行边界", "恢复执行"],
+    });
+
+    const workerBoundary = runtime.getManagedAgentsService().getManagedAgentExecutionBoundary(
+      ownerPrincipalId,
+      workerCreatePayload.agent?.agentId ?? "",
+    );
+    assert.ok(workerBoundary);
+    const workerWorkspaceCapabilities = [
+      workerBoundary?.workspacePolicy.workspacePath ?? runtime.getWorkingDirectory(),
+      ...(workerBoundary?.workspacePolicy.additionalDirectories ?? []),
+    ];
+    const workerCredentialCapabilities = workerBoundary?.runtimeProfile.authAccountId
+      ? [workerBoundary.runtimeProfile.authAccountId]
+      : [];
+    const workerProviderCapabilities = workerBoundary?.runtimeProfile.thirdPartyProviderId
+      ? [workerBoundary.runtimeProfile.thirdPartyProviderId]
+      : [];
+    const nodeRegisterResult = runtime.getManagedAgentControlPlaneFacade().registerNode({
+      ownerPrincipalId,
+      organizationId: managerCreatePayload.organization?.organizationId,
+      displayName: "Platform Read Node",
+      slotCapacity: 1,
+      slotAvailable: 1,
+      workspaceCapabilities: workerWorkspaceCapabilities,
+      credentialCapabilities: workerCredentialCapabilities,
+      providerCapabilities: workerProviderCapabilities,
+    });
+    const claimed = runtime.getManagedAgentSchedulerService().tick({
+      schedulerId: "scheduler-platform-read",
+      targetAgentId: workerCreatePayload.agent?.agentId,
+      now: "2026-04-12T13:00:00.000Z",
+    }).claimed;
+    assert.ok(claimed?.run.runId);
+    assert.equal(claimed?.workItem.workItemId, childDispatchPayload.workItem?.workItemId);
+
+    const executionLease = claimed?.executionLease;
+    assert.ok(executionLease?.leaseToken);
+    runtime.getManagedAgentControlPlaneFacade().updateWorkerRunStatus({
+      ownerPrincipalId,
+      nodeId: nodeRegisterResult.node.nodeId,
+      runId: claimed?.run.runId ?? "",
+      leaseToken: executionLease?.leaseToken ?? "",
+      status: "waiting_human",
+      waitingAction: {
+        actionType: "approval_request",
+        message: "请顶层治理确认执行边界。",
+      },
+      now: "2026-04-12T13:01:00.000Z",
+    });
+
+    const spawnSuggestionsResponse = await postJson(baseUrl, "/api/platform/agents/spawn-suggestions", {
+      ownerPrincipalId,
+    }, authHeaders);
+    assert.equal(spawnSuggestionsResponse.status, 200);
+    const spawnSuggestionsPayload = await spawnSuggestionsResponse.json() as {
+      suggestions?: unknown[];
+      recentAuditLogs?: unknown[];
+    };
+    assert.ok(Array.isArray(spawnSuggestionsPayload.suggestions));
+    assert.ok(Array.isArray(spawnSuggestionsPayload.recentAuditLogs));
+
+    const idleSuggestionsResponse = await postJson(baseUrl, "/api/platform/agents/idle-suggestions", {
+      ownerPrincipalId,
+    }, authHeaders);
+    assert.equal(idleSuggestionsResponse.status, 200);
+    const idleSuggestionsPayload = await idleSuggestionsResponse.json() as {
+      suggestions?: unknown[];
+      recentAuditLogs?: unknown[];
+    };
+    assert.ok(Array.isArray(idleSuggestionsPayload.suggestions));
+    assert.ok(Array.isArray(idleSuggestionsPayload.recentAuditLogs));
+
+    const waitingResponse = await postJson(baseUrl, "/api/platform/agents/waiting/list", {
+      ownerPrincipalId,
+      waitingFor: "human",
+    }, authHeaders);
+    assert.equal(waitingResponse.status, 200);
+    const waitingPayload = await waitingResponse.json() as {
+      summary?: { waitingHumanCount?: number };
+      items?: Array<{ workItem?: { workItemId?: string } }>;
+    };
+    assert.equal(waitingPayload.summary?.waitingHumanCount, 1);
+    assert.equal(waitingPayload.items?.[0]?.workItem?.workItemId, childDispatchPayload.workItem?.workItemId);
+
+    const overviewResponse = await postJson(baseUrl, "/api/platform/agents/governance-overview", {
+      ownerPrincipalId,
+      waitingFor: "human",
+    }, authHeaders);
+    assert.equal(overviewResponse.status, 200);
+    const overviewPayload = await overviewResponse.json() as {
+      overview?: { waitingHumanCount?: number; managerHotspots?: Array<{ managerAgent?: { agentId?: string } }> };
+    };
+    assert.equal(overviewPayload.overview?.waitingHumanCount, 1);
+    assert.equal(
+      overviewPayload.overview?.managerHotspots?.[0]?.managerAgent?.agentId,
+      managerCreatePayload.agent?.agentId,
+    );
+
+    const collaborationResponse = await postJson(baseUrl, "/api/platform/agents/collaboration-dashboard", {
+      ownerPrincipalId,
+      waitingFor: "human",
+    }, authHeaders);
+    assert.equal(collaborationResponse.status, 200);
+    const collaborationPayload = await collaborationResponse.json() as {
+      items?: Array<{ parentWorkItem?: { workItemId?: string } }>;
+    };
+    assert.equal(
+      collaborationPayload.items?.[0]?.parentWorkItem?.workItemId,
+      parentDispatchPayload.workItem?.workItemId,
+    );
+
+    const workItemsResponse = await postJson(baseUrl, "/api/platform/work-items/list", {
+      ownerPrincipalId,
+      agentId: workerCreatePayload.agent?.agentId,
+    }, authHeaders);
+    assert.equal(workItemsResponse.status, 200);
+    const workItemsPayload = await workItemsResponse.json() as {
+      workItems?: Array<{ workItemId?: string; status?: string }>;
+    };
+    assert.equal(workItemsPayload.workItems?.[0]?.workItemId, childDispatchPayload.workItem?.workItemId);
+    assert.equal(workItemsPayload.workItems?.[0]?.status, "waiting_human");
+
+    const mailboxResponse = await postJson(baseUrl, "/api/platform/agents/mailbox/list", {
+      ownerPrincipalId,
+      agentId: workerCreatePayload.agent?.agentId,
+    }, authHeaders);
+    assert.equal(mailboxResponse.status, 200);
+    const mailboxPayload = await mailboxResponse.json() as {
+      agent?: { agentId?: string };
+      items?: Array<{ entry?: { mailboxEntryId?: string } }>;
+    };
+    assert.equal(mailboxPayload.agent?.agentId, workerCreatePayload.agent?.agentId);
+    assert.equal(mailboxPayload.items?.[0]?.entry?.mailboxEntryId, childDispatchPayload.mailboxEntry?.mailboxEntryId);
+
+    const handoffResponse = await postJson(baseUrl, "/api/platform/agents/handoffs/list", {
+      ownerPrincipalId,
+      agentId: workerCreatePayload.agent?.agentId,
+    }, authHeaders);
+    assert.equal(handoffResponse.status, 200);
+    const handoffPayload = await handoffResponse.json() as {
+      agent?: { agentId?: string };
+      handoffs?: Array<{ summary?: string }>;
+      timeline?: Array<{ kind?: string }>;
+    };
+    assert.equal(handoffPayload.agent?.agentId, workerCreatePayload.agent?.agentId);
+    assert.equal(handoffPayload.handoffs?.[0]?.summary, "平台经理已补齐上下文并交接给执行 agent。");
+    assert.equal(handoffPayload.timeline?.[0]?.kind, "handoff");
+  });
+});
+
+test("POST /api/platform/work-items/* 与 mailbox 写接口会暴露协作收口动作", async () => {
+  await withHttpServer(async ({ baseUrl, runtime, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+    const ownerPrincipalId = "principal-platform-workflow-write-owner";
+    const now = new Date().toISOString();
+
+    runtimeStore.savePrincipal({
+      principalId: ownerPrincipalId,
+      displayName: "Platform Workflow Write Owner",
+      kind: "human_user",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const manager = await createPlatformManagedAgent(baseUrl, authHeaders, ownerPrincipalId, {
+      departmentRole: "管理",
+      displayName: "平台经理",
+      mission: "负责协作治理。",
+    });
+    const backend = await createPlatformManagedAgent(baseUrl, authHeaders, ownerPrincipalId, {
+      departmentRole: "后端",
+      displayName: "平台后端",
+      mission: "负责服务端执行。",
+      organizationId: manager.organizationId,
+    });
+    const frontend = await createPlatformManagedAgent(baseUrl, authHeaders, ownerPrincipalId, {
+      departmentRole: "前端",
+      displayName: "平台前端",
+      mission: "负责界面确认。",
+      organizationId: manager.organizationId,
+    });
+
+    const waitingHuman = runtime.getManagedAgentCoordinationService().dispatchWorkItem({
+      ownerPrincipalId,
+      targetAgentId: backend.agentId,
+      dispatchReason: "等待人工审批",
+      goal: "确认是否允许继续发布。",
+      priority: "urgent",
+      now: "2026-04-12T12:00:00.000Z",
+    });
+    runtimeStore.saveAgentWorkItem({
+      ...waitingHuman.workItem,
+      status: "waiting_human",
+      waitingActionRequest: {
+        actionType: "approval",
+        prompt: "是否允许继续执行发布",
+        choices: ["approve", "deny"],
+      },
+      updatedAt: "2026-04-12T12:01:00.000Z",
+    });
+    runtimeStore.saveAgentRun({
+      runId: "run-platform-human-write-1",
+      organizationId: waitingHuman.workItem.organizationId,
+      workItemId: waitingHuman.workItem.workItemId,
+      targetAgentId: backend.agentId,
+      schedulerId: "scheduler-platform-write",
+      leaseToken: "lease-platform-human-write-1",
+      leaseExpiresAt: "2026-04-12T12:10:00.000Z",
+      status: "waiting_action",
+      startedAt: "2026-04-12T12:01:00.000Z",
+      lastHeartbeatAt: "2026-04-12T12:01:00.000Z",
+      createdAt: "2026-04-12T12:01:00.000Z",
+      updatedAt: "2026-04-12T12:01:00.000Z",
+    });
+
+    const respondResponse = await postJson(baseUrl, "/api/platform/work-items/respond", {
+      ownerPrincipalId,
+      workItemId: waitingHuman.workItem.workItemId,
+      response: {
+        decision: "approve",
+        inputText: "可以继续，但先确认监控正常。",
+      },
+    }, authHeaders);
+    assert.equal(respondResponse.status, 200);
+    const respondPayload = await respondResponse.json() as {
+      workItem?: { workItemId?: string; status?: string; latestHumanResponse?: { decision?: string } };
+      resumedRuns?: Array<{ runId?: string; status?: string; failureCode?: string }>;
+    };
+    assert.equal(respondPayload.workItem?.workItemId, waitingHuman.workItem.workItemId);
+    assert.equal(respondPayload.workItem?.status, "queued");
+    assert.equal(respondPayload.workItem?.latestHumanResponse?.decision, "approve");
+    assert.equal(respondPayload.resumedRuns?.[0]?.runId, "run-platform-human-write-1");
+    assert.equal(respondPayload.resumedRuns?.[0]?.status, "interrupted");
+    assert.equal(respondPayload.resumedRuns?.[0]?.failureCode, "WAITING_RESUME_TRIGGERED");
+
+    const waitingAgent = runtime.getManagedAgentCoordinationService().dispatchWorkItem({
+      ownerPrincipalId,
+      targetAgentId: backend.agentId,
+      sourceType: "agent",
+      sourceAgentId: manager.agentId,
+      sourcePrincipalId: manager.principalId,
+      dispatchReason: "等待经理确认",
+      goal: "确认是否切换到发布窗口。",
+      priority: "high",
+      now: "2026-04-12T12:10:00.000Z",
+    });
+    runtimeStore.saveAgentWorkItem({
+      ...waitingAgent.workItem,
+      status: "waiting_agent",
+      updatedAt: "2026-04-12T12:11:00.000Z",
+    });
+    runtimeStore.saveAgentRun({
+      runId: "run-platform-agent-write-1",
+      organizationId: waitingAgent.workItem.organizationId,
+      workItemId: waitingAgent.workItem.workItemId,
+      targetAgentId: backend.agentId,
+      schedulerId: "scheduler-platform-write",
+      leaseToken: "lease-platform-agent-write-1",
+      leaseExpiresAt: "2026-04-12T12:20:00.000Z",
+      status: "waiting_action",
+      startedAt: "2026-04-12T12:11:00.000Z",
+      lastHeartbeatAt: "2026-04-12T12:11:00.000Z",
+      createdAt: "2026-04-12T12:11:00.000Z",
+      updatedAt: "2026-04-12T12:11:00.000Z",
+    });
+    const waitingAgentMailbox = runtime.getManagedAgentCoordinationService().sendAgentMessage({
+      ownerPrincipalId,
+      fromAgentId: backend.agentId,
+      toAgentId: manager.agentId,
+      workItemId: waitingAgent.workItem.workItemId,
+      runId: "run-platform-agent-write-1",
+      messageType: "approval_request",
+      payload: {
+        prompt: "请经理确认是否切到发布窗口。",
+      },
+      priority: "high",
+      requiresAck: true,
+      now: "2026-04-12T12:11:30.000Z",
+    });
+
+    const escalateResponse = await postJson(baseUrl, "/api/platform/work-items/escalate", {
+      ownerPrincipalId,
+      workItemId: waitingAgent.workItem.workItemId,
+      escalation: {
+        inputText: "请顶层治理接手。",
+      },
+    }, authHeaders);
+    assert.equal(escalateResponse.status, 200);
+    const escalatePayload = await escalateResponse.json() as {
+      workItem?: { workItemId?: string; status?: string };
+      latestWaitingMessage?: { messageId?: string };
+      ackedMailboxEntries?: Array<{ mailboxEntryId?: string }>;
+    };
+    assert.equal(escalatePayload.workItem?.workItemId, waitingAgent.workItem.workItemId);
+    assert.equal(escalatePayload.workItem?.status, "waiting_human");
+    assert.equal(escalatePayload.latestWaitingMessage?.messageId, waitingAgentMailbox.message.messageId);
+    assert.equal(
+      escalatePayload.ackedMailboxEntries?.[0]?.mailboxEntryId,
+      waitingAgentMailbox.mailboxEntry.mailboxEntryId,
+    );
+
+    const ackMailbox = runtime.getManagedAgentCoordinationService().sendAgentMessage({
+      ownerPrincipalId,
+      fromAgentId: backend.agentId,
+      toAgentId: frontend.agentId,
+      messageType: "status_update",
+      payload: {
+        summary: "请确认最近一次构建状态。",
+      },
+      priority: "normal",
+      requiresAck: true,
+      now: "2026-04-12T12:20:00.000Z",
+    });
+
+    const mailboxPullResponse = await postJson(baseUrl, "/api/platform/agents/mailbox/pull", {
+      ownerPrincipalId,
+      agentId: frontend.agentId,
+    }, authHeaders);
+    assert.equal(mailboxPullResponse.status, 200);
+    const mailboxPullPayload = await mailboxPullResponse.json() as {
+      item?: {
+        entry?: { mailboxEntryId?: string; status?: string };
+        message?: { messageId?: string };
+      } | null;
+    };
+    assert.equal(mailboxPullPayload.item?.entry?.mailboxEntryId, ackMailbox.mailboxEntry.mailboxEntryId);
+    assert.equal(mailboxPullPayload.item?.entry?.status, "leased");
+    assert.equal(mailboxPullPayload.item?.message?.messageId, ackMailbox.message.messageId);
+
+    const mailboxAckResponse = await postJson(baseUrl, "/api/platform/agents/mailbox/ack", {
+      ownerPrincipalId,
+      agentId: frontend.agentId,
+      mailboxEntryId: ackMailbox.mailboxEntry.mailboxEntryId,
+    }, authHeaders);
+    assert.equal(mailboxAckResponse.status, 200);
+    const mailboxAckPayload = await mailboxAckResponse.json() as {
+      mailboxEntry?: { mailboxEntryId?: string; status?: string };
+      message?: { messageId?: string };
+    };
+    assert.equal(mailboxAckPayload.mailboxEntry?.mailboxEntryId, ackMailbox.mailboxEntry.mailboxEntryId);
+    assert.equal(mailboxAckPayload.mailboxEntry?.status, "acked");
+    assert.equal(mailboxAckPayload.message?.messageId, ackMailbox.message.messageId);
+
+    const mailboxWaiting = runtime.getManagedAgentCoordinationService().dispatchWorkItem({
+      ownerPrincipalId,
+      targetAgentId: backend.agentId,
+      sourceType: "agent",
+      sourceAgentId: frontend.agentId,
+      sourcePrincipalId: frontend.principalId,
+      dispatchReason: "等待前端确认",
+      goal: "确认是否可以继续发布。",
+      priority: "urgent",
+      now: "2026-04-12T12:30:00.000Z",
+    });
+    runtimeStore.saveAgentWorkItem({
+      ...mailboxWaiting.workItem,
+      status: "waiting_agent",
+      updatedAt: "2026-04-12T12:31:00.000Z",
+    });
+    runtimeStore.saveAgentRun({
+      runId: "run-platform-mailbox-write-1",
+      organizationId: mailboxWaiting.workItem.organizationId,
+      workItemId: mailboxWaiting.workItem.workItemId,
+      targetAgentId: backend.agentId,
+      schedulerId: "scheduler-platform-write",
+      leaseToken: "lease-platform-mailbox-write-1",
+      leaseExpiresAt: "2026-04-12T12:40:00.000Z",
+      status: "waiting_action",
+      startedAt: "2026-04-12T12:31:00.000Z",
+      lastHeartbeatAt: "2026-04-12T12:31:00.000Z",
+      createdAt: "2026-04-12T12:31:00.000Z",
+      updatedAt: "2026-04-12T12:31:00.000Z",
+    });
+    const mailboxWaitingMessage = runtime.getManagedAgentCoordinationService().sendAgentMessage({
+      ownerPrincipalId,
+      fromAgentId: backend.agentId,
+      toAgentId: frontend.agentId,
+      workItemId: mailboxWaiting.workItem.workItemId,
+      runId: "run-platform-mailbox-write-1",
+      messageType: "approval_request",
+      payload: {
+        prompt: "是否允许继续执行发布",
+      },
+      priority: "urgent",
+      requiresAck: true,
+      now: "2026-04-12T12:31:30.000Z",
+    });
+
+    const mailboxRespondResponse = await postJson(baseUrl, "/api/platform/agents/mailbox/respond", {
+      ownerPrincipalId,
+      agentId: frontend.agentId,
+      mailboxEntryId: mailboxWaitingMessage.mailboxEntry.mailboxEntryId,
+      response: {
+        decision: "approve",
+        inputText: "可以继续，请同步 release note。",
+        priority: "urgent",
+      },
+    }, authHeaders);
+    assert.equal(mailboxRespondResponse.status, 200);
+    const mailboxRespondPayload = await mailboxRespondResponse.json() as {
+      sourceMailboxEntry?: { status?: string };
+      responseMessage?: { messageType?: string; toAgentId?: string };
+      responseMailboxEntry?: { ownerAgentId?: string; status?: string };
+      resumedWorkItem?: { workItemId?: string; status?: string };
+      resumedRuns?: Array<{ runId?: string; status?: string; failureCode?: string }>;
+    };
+    assert.equal(mailboxRespondPayload.sourceMailboxEntry?.status, "acked");
+    assert.equal(mailboxRespondPayload.responseMessage?.messageType, "approval_result");
+    assert.equal(mailboxRespondPayload.responseMessage?.toAgentId, backend.agentId);
+    assert.equal(mailboxRespondPayload.responseMailboxEntry?.ownerAgentId, backend.agentId);
+    assert.equal(mailboxRespondPayload.responseMailboxEntry?.status, "acked");
+    assert.equal(mailboxRespondPayload.resumedWorkItem?.workItemId, mailboxWaiting.workItem.workItemId);
+    assert.equal(mailboxRespondPayload.resumedWorkItem?.status, "queued");
+    assert.equal(mailboxRespondPayload.resumedRuns?.[0]?.runId, "run-platform-mailbox-write-1");
+    assert.equal(mailboxRespondPayload.resumedRuns?.[0]?.status, "interrupted");
+    assert.equal(mailboxRespondPayload.resumedRuns?.[0]?.failureCode, "WAITING_RESUME_TRIGGERED");
+
+    const cancellable = runtime.getManagedAgentCoordinationService().dispatchWorkItem({
+      ownerPrincipalId,
+      targetAgentId: backend.agentId,
+      dispatchReason: "取消平台写路径测试任务",
+      goal: "验证 platform cancel write 接口。",
+      now: "2026-04-12T12:40:00.000Z",
+    });
+
+    const cancelResponse = await postJson(baseUrl, "/api/platform/work-items/cancel", {
+      ownerPrincipalId,
+      workItemId: cancellable.workItem.workItemId,
+    }, authHeaders);
+    assert.equal(cancelResponse.status, 200);
+    const cancelPayload = await cancelResponse.json() as {
+      workItem?: { workItemId?: string; status?: string };
+    };
+    assert.equal(cancelPayload.workItem?.workItemId, cancellable.workItem.workItemId);
+    assert.equal(cancelPayload.workItem?.status, "cancelled");
   });
 });
 

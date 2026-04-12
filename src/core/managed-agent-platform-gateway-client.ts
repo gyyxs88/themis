@@ -1,0 +1,698 @@
+import type {
+  ManagedAgentHandoffListView,
+  ManagedAgentIdleRecoverySuggestionsView,
+  ManagedAgentListView,
+  ManagedAgentMailboxListView,
+  ManagedAgentSpawnSuggestionsView,
+  ManagedAgentLifecycleUpdateInput,
+} from "./managed-agent-control-plane-facade.js";
+import type {
+  CancelWorkItemResult,
+  DispatchWorkItemInput,
+  DispatchWorkItemResult,
+  EscalateWaitingAgentWorkItemToHumanInput,
+  EscalateWaitingAgentWorkItemToHumanResult,
+  ManagedAgentWorkItemDetailView,
+  OrganizationCollaborationDashboardResult,
+  OrganizationGovernanceFilters,
+  OrganizationGovernanceOverview,
+  OrganizationWaitingQueueResult,
+  PullMailboxEntryResult,
+  RespondToHumanWaitingWorkItemInput,
+  RespondToHumanWaitingWorkItemResult,
+  RespondToMailboxEntryInput,
+  RespondToMailboxEntryResult,
+} from "./managed-agent-coordination-service.js";
+import type {
+  ApproveManagedAgentIdleRecoverySuggestionInput,
+  ApproveManagedAgentIdleRecoverySuggestionResult,
+  ApproveManagedAgentSpawnSuggestionInput,
+  ApproveManagedAgentSpawnSuggestionResult,
+  CreateManagedAgentInput,
+  CreateManagedAgentResult,
+  ManagedAgentDetailView,
+  ManagedAgentExecutionBoundaryView,
+  ManagedAgentOwnerView,
+  ManagedAgentSpawnSuggestionDecisionInput,
+  ManagedAgentSpawnSuggestionDecisionResult,
+  RestoreManagedAgentSpawnSuggestionInput,
+  UpdateManagedAgentExecutionBoundaryInput,
+  UpdateManagedAgentSpawnPolicyInput,
+} from "./managed-agents-service.js";
+import type { ManagedAgentRunDetailView, ManagedAgentRunListInput } from "./managed-agent-scheduler-service.js";
+import type {
+  StoredAgentMailboxEntryRecord,
+  StoredAgentMessageRecord,
+  StoredAgentRunRecord,
+  StoredAgentSpawnPolicyRecord,
+  StoredAgentWorkItemRecord,
+} from "../types/index.js";
+
+export interface ManagedAgentPlatformGatewayConfig {
+  baseUrl: string;
+  ownerPrincipalId: string;
+  webAccessToken: string;
+}
+
+export interface ManagedAgentPlatformGatewayClientOptions extends ManagedAgentPlatformGatewayConfig {
+  fetchImpl?: typeof fetch;
+}
+
+export interface ManagedAgentPlatformGatewayListResult {
+  organizations: ManagedAgentListView["organizations"];
+  agents: ManagedAgentListView["agents"];
+}
+
+export interface ManagedAgentPlatformGatewayDetailResult {
+  organization: ManagedAgentDetailView["organization"];
+  principal: ManagedAgentDetailView["principal"];
+  agent: ManagedAgentDetailView["agent"];
+  workspacePolicy: ManagedAgentDetailView["workspacePolicy"];
+  runtimeProfile: ManagedAgentDetailView["runtimeProfile"];
+  authAccounts: ManagedAgentDetailView["authAccounts"];
+  thirdPartyProviders: ManagedAgentDetailView["thirdPartyProviders"];
+}
+
+export interface ManagedAgentPlatformGatewayWorkItemDetailResult {
+  organization: ManagedAgentWorkItemDetailView["organization"];
+  workItem: ManagedAgentWorkItemDetailView["workItem"];
+  targetAgent: ManagedAgentWorkItemDetailView["targetAgent"];
+  sourcePrincipal: ManagedAgentWorkItemDetailView["sourcePrincipal"];
+  sourceAgent?: ManagedAgentWorkItemDetailView["sourceAgent"];
+  parentWorkItem: ManagedAgentWorkItemDetailView["collaboration"]["parentWorkItem"];
+  parentTargetAgent: ManagedAgentWorkItemDetailView["collaboration"]["parentTargetAgent"];
+  childSummary: ManagedAgentWorkItemDetailView["collaboration"]["childSummary"];
+  childWorkItems: ManagedAgentWorkItemDetailView["collaboration"]["childWorkItems"];
+  messages: ManagedAgentWorkItemDetailView["messages"];
+}
+
+export interface ManagedAgentPlatformGatewayRunDetailResult {
+  organization: ManagedAgentRunDetailView["organization"];
+  run: ManagedAgentRunDetailView["run"];
+  workItem: ManagedAgentRunDetailView["workItem"];
+  targetAgent: ManagedAgentRunDetailView["targetAgent"];
+}
+
+export interface ManagedAgentPlatformGatewayMailboxAckResult {
+  agent: ManagedAgentMailboxListView["agent"];
+  mailboxEntry: StoredAgentMailboxEntryRecord;
+  message?: StoredAgentMessageRecord;
+}
+
+export class ManagedAgentPlatformGatewayClient {
+  private readonly baseUrl: string;
+  private readonly ownerPrincipalId: string;
+  private readonly webAccessToken: string;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(options: ManagedAgentPlatformGatewayClientOptions) {
+    this.baseUrl = trimTrailingSlash(options.baseUrl);
+    this.ownerPrincipalId = options.ownerPrincipalId;
+    this.webAccessToken = options.webAccessToken;
+    this.fetchImpl = options.fetchImpl ?? fetch;
+  }
+
+  async listManagedAgents(): Promise<ManagedAgentPlatformGatewayListResult> {
+    const payload = await this.requestJson<{
+      organizations?: ManagedAgentPlatformGatewayListResult["organizations"];
+      agents?: ManagedAgentPlatformGatewayListResult["agents"];
+    }>("/api/platform/agents/list", {
+      ownerPrincipalId: this.ownerPrincipalId,
+    });
+
+    return {
+      organizations: Array.isArray(payload.organizations) ? payload.organizations : [],
+      agents: Array.isArray(payload.agents) ? payload.agents : [],
+    };
+  }
+
+  async getManagedAgentDetail(agentId: string): Promise<ManagedAgentPlatformGatewayDetailResult | null> {
+    const payload = await this.requestJson<Partial<ManagedAgentPlatformGatewayDetailResult>>(
+      "/api/platform/agents/detail",
+      {
+        ownerPrincipalId: this.ownerPrincipalId,
+        agentId,
+      },
+    );
+
+    if (!payload.agent) {
+      return null;
+    }
+
+    return {
+      organization: payload.organization ?? null,
+      principal: payload.principal ?? null,
+      agent: payload.agent,
+      workspacePolicy: payload.workspacePolicy ?? null,
+      runtimeProfile: payload.runtimeProfile ?? null,
+      authAccounts: Array.isArray(payload.authAccounts) ? payload.authAccounts : [],
+      thirdPartyProviders: Array.isArray(payload.thirdPartyProviders) ? payload.thirdPartyProviders : [],
+    };
+  }
+
+  async createManagedAgent(input: Omit<CreateManagedAgentInput, "ownerPrincipalId">): Promise<CreateManagedAgentResult> {
+    return await this.requestJson<CreateManagedAgentResult>("/api/platform/agents/create", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      agent: {
+        departmentRole: input.departmentRole,
+        ...(input.displayName ? { displayName: input.displayName } : {}),
+        ...(input.mission ? { mission: input.mission } : {}),
+        ...(input.organizationId ? { organizationId: input.organizationId } : {}),
+        ...(input.supervisorAgentId ? { supervisorAgentId: input.supervisorAgentId } : {}),
+      },
+    });
+  }
+
+  async updateManagedAgentExecutionBoundary(
+    input: Omit<UpdateManagedAgentExecutionBoundaryInput, "ownerPrincipalId">,
+  ): Promise<ManagedAgentExecutionBoundaryView> {
+    return await this.requestJson<ManagedAgentExecutionBoundaryView>("/api/platform/agents/execution-boundary/update", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      agentId: input.agentId,
+      boundary: {
+        ...(input.workspacePolicy ? { workspacePolicy: input.workspacePolicy } : {}),
+        ...(input.runtimeProfile ? { runtimeProfile: input.runtimeProfile } : {}),
+      },
+    });
+  }
+
+  async updateSpawnPolicy(
+    input: Omit<UpdateManagedAgentSpawnPolicyInput, "ownerPrincipalId">,
+  ): Promise<StoredAgentSpawnPolicyRecord> {
+    const payload = await this.requestJson<{ policy: StoredAgentSpawnPolicyRecord }>(
+      "/api/platform/agents/spawn-policy/update",
+      {
+        ownerPrincipalId: this.ownerPrincipalId,
+        policy: {
+          ...(input.organizationId ? { organizationId: input.organizationId } : {}),
+          maxActiveAgents: input.maxActiveAgents,
+          maxActiveAgentsPerRole: input.maxActiveAgentsPerRole,
+        },
+      },
+    );
+
+    return payload.policy;
+  }
+
+  async approveSpawnSuggestion(
+    input: Omit<ApproveManagedAgentSpawnSuggestionInput, "ownerPrincipalId">,
+  ): Promise<ApproveManagedAgentSpawnSuggestionResult> {
+    return await this.requestJson<ApproveManagedAgentSpawnSuggestionResult>("/api/platform/agents/spawn-approve", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      agent: {
+        departmentRole: input.departmentRole,
+        ...(input.displayName ? { displayName: input.displayName } : {}),
+        ...(input.mission ? { mission: input.mission } : {}),
+        ...(input.organizationId ? { organizationId: input.organizationId } : {}),
+        ...(input.supervisorAgentId ? { supervisorAgentId: input.supervisorAgentId } : {}),
+      },
+    });
+  }
+
+  async ignoreSpawnSuggestion(
+    input: Omit<ManagedAgentSpawnSuggestionDecisionInput, "ownerPrincipalId">,
+  ): Promise<ManagedAgentSpawnSuggestionDecisionResult> {
+    return await this.requestJson<ManagedAgentSpawnSuggestionDecisionResult>("/api/platform/agents/spawn-ignore", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      suggestion: input,
+    });
+  }
+
+  async rejectSpawnSuggestion(
+    input: Omit<ManagedAgentSpawnSuggestionDecisionInput, "ownerPrincipalId">,
+  ): Promise<ManagedAgentSpawnSuggestionDecisionResult> {
+    return await this.requestJson<ManagedAgentSpawnSuggestionDecisionResult>("/api/platform/agents/spawn-reject", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      suggestion: input,
+    });
+  }
+
+  async restoreSpawnSuggestion(
+    input: Omit<RestoreManagedAgentSpawnSuggestionInput, "ownerPrincipalId">,
+  ): Promise<{ auditLog: ManagedAgentSpawnSuggestionDecisionResult["auditLog"] }> {
+    return await this.requestJson<{ auditLog: ManagedAgentSpawnSuggestionDecisionResult["auditLog"] }>(
+      "/api/platform/agents/spawn-restore",
+      {
+        ownerPrincipalId: this.ownerPrincipalId,
+        suggestion: input,
+      },
+    );
+  }
+
+  async approveIdleRecoverySuggestion(
+    input: Omit<ApproveManagedAgentIdleRecoverySuggestionInput, "ownerPrincipalId">,
+  ): Promise<ApproveManagedAgentIdleRecoverySuggestionResult> {
+    return await this.requestJson<ApproveManagedAgentIdleRecoverySuggestionResult>("/api/platform/agents/idle-approve", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      suggestion: input,
+    });
+  }
+
+  async updateManagedAgentLifecycle(
+    input: Omit<ManagedAgentLifecycleUpdateInput, "ownerPrincipalId">,
+  ): Promise<ManagedAgentOwnerView> {
+    const pathname = input.action === "pause"
+      ? "/api/platform/agents/pause"
+      : input.action === "resume"
+        ? "/api/platform/agents/resume"
+        : "/api/platform/agents/archive";
+
+    return await this.requestJson<ManagedAgentOwnerView>(pathname, {
+      ownerPrincipalId: this.ownerPrincipalId,
+      agentId: input.agentId,
+    });
+  }
+
+  async getSpawnSuggestionsView(): Promise<ManagedAgentSpawnSuggestionsView> {
+    const payload = await this.requestJson<Partial<ManagedAgentSpawnSuggestionsView>>(
+      "/api/platform/agents/spawn-suggestions",
+      {
+        ownerPrincipalId: this.ownerPrincipalId,
+      },
+    );
+
+    return {
+      spawnPolicies: Array.isArray(payload.spawnPolicies) ? payload.spawnPolicies : [],
+      suggestions: Array.isArray(payload.suggestions) ? payload.suggestions : [],
+      suppressedSuggestions: Array.isArray(payload.suppressedSuggestions) ? payload.suppressedSuggestions : [],
+      recentAuditLogs: Array.isArray(payload.recentAuditLogs) ? payload.recentAuditLogs : [],
+    };
+  }
+
+  async getIdleRecoverySuggestionsView(): Promise<ManagedAgentIdleRecoverySuggestionsView> {
+    const payload = await this.requestJson<Partial<ManagedAgentIdleRecoverySuggestionsView>>(
+      "/api/platform/agents/idle-suggestions",
+      {
+        ownerPrincipalId: this.ownerPrincipalId,
+      },
+    );
+
+    return {
+      suggestions: Array.isArray(payload.suggestions) ? payload.suggestions : [],
+      recentAuditLogs: Array.isArray(payload.recentAuditLogs) ? payload.recentAuditLogs : [],
+    };
+  }
+
+  async listWorkItems(agentId?: string): Promise<StoredAgentWorkItemRecord[]> {
+    const payload = await this.requestJson<{
+      workItems?: StoredAgentWorkItemRecord[];
+    }>("/api/platform/work-items/list", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      ...(agentId ? { agentId } : {}),
+    });
+
+    return Array.isArray(payload.workItems) ? payload.workItems : [];
+  }
+
+  async dispatchWorkItem(input: Omit<DispatchWorkItemInput, "ownerPrincipalId">): Promise<DispatchWorkItemResult> {
+    return await this.requestJson<DispatchWorkItemResult>("/api/platform/work-items/dispatch", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      workItem: {
+        targetAgentId: input.targetAgentId,
+        ...(input.sourceType ? { sourceType: input.sourceType } : {}),
+        ...(input.sourceAgentId ? { sourceAgentId: input.sourceAgentId } : {}),
+        ...(input.sourcePrincipalId ? { sourcePrincipalId: input.sourcePrincipalId } : {}),
+        ...(input.parentWorkItemId ? { parentWorkItemId: input.parentWorkItemId } : {}),
+        dispatchReason: input.dispatchReason,
+        goal: input.goal,
+        ...(Object.prototype.hasOwnProperty.call(input, "contextPacket") ? { contextPacket: input.contextPacket } : {}),
+        ...(input.priority ? { priority: input.priority } : {}),
+        ...(Object.prototype.hasOwnProperty.call(input, "workspacePolicySnapshot")
+          ? { workspacePolicySnapshot: input.workspacePolicySnapshot }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(input, "runtimeProfileSnapshot")
+          ? { runtimeProfileSnapshot: input.runtimeProfileSnapshot }
+          : {}),
+        ...(input.scheduledAt ? { scheduledAt: input.scheduledAt } : {}),
+      },
+    });
+  }
+
+  async cancelWorkItem(workItemId: string): Promise<CancelWorkItemResult> {
+    return await this.requestJson<CancelWorkItemResult>("/api/platform/work-items/cancel", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      workItemId,
+    });
+  }
+
+  async respondToHumanWaitingWorkItem(
+    input: Omit<RespondToHumanWaitingWorkItemInput, "ownerPrincipalId">,
+  ): Promise<RespondToHumanWaitingWorkItemResult> {
+    return await this.requestJson<RespondToHumanWaitingWorkItemResult>("/api/platform/work-items/respond", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      workItemId: input.workItemId,
+      response: {
+        ...(input.decision ? { decision: input.decision } : {}),
+        ...(input.inputText ? { inputText: input.inputText } : {}),
+        ...(Object.prototype.hasOwnProperty.call(input, "payload") ? { payload: input.payload } : {}),
+        ...(input.artifactRefs ? { artifactRefs: input.artifactRefs } : {}),
+      },
+    });
+  }
+
+  async escalateWaitingAgentWorkItemToHuman(
+    input: Omit<EscalateWaitingAgentWorkItemToHumanInput, "ownerPrincipalId">,
+  ): Promise<EscalateWaitingAgentWorkItemToHumanResult> {
+    return await this.requestJson<EscalateWaitingAgentWorkItemToHumanResult>("/api/platform/work-items/escalate", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      workItemId: input.workItemId,
+      ...(input.inputText ? { escalation: { inputText: input.inputText } } : {}),
+    });
+  }
+
+  async listOrganizationWaitingQueue(
+    filters: OrganizationGovernanceFilters = {},
+  ): Promise<OrganizationWaitingQueueResult> {
+    const payload = await this.requestJson<Partial<OrganizationWaitingQueueResult>>(
+      "/api/platform/agents/waiting/list",
+      {
+        ownerPrincipalId: this.ownerPrincipalId,
+        ...toGatewayGovernanceFilters(filters),
+      },
+    );
+
+    return {
+      summary: isRecord(payload.summary)
+        ? {
+            totalCount: toFiniteNumber(payload.summary.totalCount),
+            waitingHumanCount: toFiniteNumber(payload.summary.waitingHumanCount),
+            waitingAgentCount: toFiniteNumber(payload.summary.waitingAgentCount),
+            escalationCount: toFiniteNumber(payload.summary.escalationCount),
+          }
+        : {
+            totalCount: 0,
+            waitingHumanCount: 0,
+            waitingAgentCount: 0,
+            escalationCount: 0,
+          },
+      items: Array.isArray(payload.items) ? payload.items : [],
+    };
+  }
+
+  async getOrganizationGovernanceOverview(
+    filters: OrganizationGovernanceFilters = {},
+  ): Promise<OrganizationGovernanceOverview> {
+    const payload = await this.requestJson<{ overview?: Partial<OrganizationGovernanceOverview> }>(
+      "/api/platform/agents/governance-overview",
+      {
+        ownerPrincipalId: this.ownerPrincipalId,
+        ...toGatewayGovernanceFilters(filters),
+      },
+    );
+    const overview = isRecord(payload.overview) ? payload.overview : {};
+
+    return {
+      urgentParentCount: toFiniteNumber(overview.urgentParentCount),
+      attentionParentCount: toFiniteNumber(overview.attentionParentCount),
+      waitingHumanCount: toFiniteNumber(overview.waitingHumanCount),
+      waitingAgentCount: toFiniteNumber(overview.waitingAgentCount),
+      staleParentCount: toFiniteNumber(overview.staleParentCount),
+      failedChildCount: toFiniteNumber(overview.failedChildCount),
+      managersNeedingAttentionCount: toFiniteNumber(overview.managersNeedingAttentionCount),
+      managerHotspots: Array.isArray(overview.managerHotspots) ? overview.managerHotspots : [],
+    };
+  }
+
+  async listOrganizationCollaborationDashboard(
+    filters: OrganizationGovernanceFilters = {},
+  ): Promise<OrganizationCollaborationDashboardResult> {
+    const payload = await this.requestJson<Partial<OrganizationCollaborationDashboardResult>>(
+      "/api/platform/agents/collaboration-dashboard",
+      {
+        ownerPrincipalId: this.ownerPrincipalId,
+        ...toGatewayGovernanceFilters(filters),
+      },
+    );
+
+    return {
+      summary: isRecord(payload.summary)
+        ? {
+            totalCount: toFiniteNumber(payload.summary.totalCount),
+            urgentCount: toFiniteNumber(payload.summary.urgentCount),
+            attentionCount: toFiniteNumber(payload.summary.attentionCount),
+            normalCount: toFiniteNumber(payload.summary.normalCount),
+          }
+        : {
+            totalCount: 0,
+            urgentCount: 0,
+            attentionCount: 0,
+            normalCount: 0,
+          },
+      items: Array.isArray(payload.items) ? payload.items : [],
+    };
+  }
+
+  async getWorkItemDetail(workItemId: string): Promise<ManagedAgentPlatformGatewayWorkItemDetailResult | null> {
+    const payload = await this.requestJson<{
+      organization?: ManagedAgentWorkItemDetailView["organization"];
+      workItem?: ManagedAgentWorkItemDetailView["workItem"];
+      targetAgent?: ManagedAgentWorkItemDetailView["targetAgent"];
+      sourceAgent?: ManagedAgentWorkItemDetailView["sourceAgent"];
+      sourcePrincipal?: ManagedAgentWorkItemDetailView["sourcePrincipal"];
+      messages?: ManagedAgentWorkItemDetailView["messages"];
+      collaboration?: ManagedAgentWorkItemDetailView["collaboration"];
+    }>(
+      "/api/platform/work-items/detail",
+      {
+        ownerPrincipalId: this.ownerPrincipalId,
+        workItemId,
+      },
+    );
+
+    if (!payload.workItem) {
+      return null;
+    }
+
+    return {
+      organization: payload.organization ?? null,
+      workItem: payload.workItem,
+      targetAgent: payload.targetAgent ?? null,
+      sourcePrincipal: payload.sourcePrincipal ?? null,
+      ...(payload.sourceAgent ? { sourceAgent: payload.sourceAgent } : {}),
+      parentWorkItem: payload.collaboration?.parentWorkItem ?? null,
+      parentTargetAgent: payload.collaboration?.parentTargetAgent ?? null,
+      childSummary: payload.collaboration?.childSummary ?? {
+        totalCount: 0,
+        openCount: 0,
+        waitingCount: 0,
+        completedCount: 0,
+        failedCount: 0,
+        cancelledCount: 0,
+      },
+      childWorkItems: Array.isArray(payload.collaboration?.childWorkItems) ? payload.collaboration.childWorkItems : [],
+      messages: Array.isArray(payload.messages) ? payload.messages : [],
+    };
+  }
+
+  async listRuns(input: Omit<ManagedAgentRunListInput, "ownerPrincipalId"> = {}): Promise<StoredAgentRunRecord[]> {
+    const payload = await this.requestJson<{
+      runs?: StoredAgentRunRecord[];
+    }>("/api/platform/runs/list", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      ...(input.agentId ? { agentId: input.agentId } : {}),
+      ...(input.workItemId ? { workItemId: input.workItemId } : {}),
+    });
+
+    return Array.isArray(payload.runs) ? payload.runs : [];
+  }
+
+  async getRunDetail(runId: string): Promise<ManagedAgentPlatformGatewayRunDetailResult | null> {
+    const payload = await this.requestJson<Partial<ManagedAgentPlatformGatewayRunDetailResult>>(
+      "/api/platform/runs/detail",
+      {
+        ownerPrincipalId: this.ownerPrincipalId,
+        runId,
+      },
+    );
+
+    if (!payload.run) {
+      return null;
+    }
+
+    return {
+      organization: payload.organization ?? null,
+      run: payload.run,
+      workItem: payload.workItem ?? null,
+      targetAgent: payload.targetAgent ?? null,
+    };
+  }
+
+  async getAgentHandoffListView(
+    input: {
+      agentId: string;
+      workItemId?: string;
+      limit?: number;
+    },
+  ): Promise<ManagedAgentHandoffListView> {
+    const payload = await this.requestJson<Partial<ManagedAgentHandoffListView>>(
+      "/api/platform/agents/handoffs/list",
+      {
+        ownerPrincipalId: this.ownerPrincipalId,
+        agentId: input.agentId,
+        ...(input.workItemId ? { workItemId: input.workItemId } : {}),
+        ...(input.limit ? { limit: input.limit } : {}),
+      },
+    );
+
+    if (!payload.agent) {
+      throw new Error("Managed agent does not exist.");
+    }
+
+    return {
+      agent: payload.agent,
+      handoffs: Array.isArray(payload.handoffs) ? payload.handoffs : [],
+      timeline: Array.isArray(payload.timeline) ? payload.timeline : [],
+    };
+  }
+
+  async getAgentMailboxListView(agentId: string): Promise<ManagedAgentMailboxListView> {
+    const payload = await this.requestJson<Partial<ManagedAgentMailboxListView>>(
+      "/api/platform/agents/mailbox/list",
+      {
+        ownerPrincipalId: this.ownerPrincipalId,
+        agentId,
+      },
+    );
+
+    if (!payload.agent) {
+      throw new Error("Managed agent does not exist.");
+    }
+
+    return {
+      agent: payload.agent,
+      items: Array.isArray(payload.items) ? payload.items : [],
+    };
+  }
+
+  async pullMailboxEntry(agentId: string): Promise<PullMailboxEntryResult> {
+    return await this.requestJson<PullMailboxEntryResult>("/api/platform/agents/mailbox/pull", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      agentId,
+    });
+  }
+
+  async ackMailboxEntry(agentId: string, mailboxEntryId: string): Promise<ManagedAgentPlatformGatewayMailboxAckResult> {
+    return await this.requestJson<ManagedAgentPlatformGatewayMailboxAckResult>("/api/platform/agents/mailbox/ack", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      agentId,
+      mailboxEntryId,
+    });
+  }
+
+  async respondToMailboxEntry(
+    input: Omit<RespondToMailboxEntryInput, "ownerPrincipalId">,
+  ): Promise<RespondToMailboxEntryResult> {
+    return await this.requestJson<RespondToMailboxEntryResult>("/api/platform/agents/mailbox/respond", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      agentId: input.agentId,
+      mailboxEntryId: input.mailboxEntryId,
+      response: {
+        ...(input.decision ? { decision: input.decision } : {}),
+        ...(input.inputText ? { inputText: input.inputText } : {}),
+        ...(Object.prototype.hasOwnProperty.call(input, "payload") ? { payload: input.payload } : {}),
+        ...(input.artifactRefs ? { artifactRefs: input.artifactRefs } : {}),
+        ...(input.priority ? { priority: input.priority } : {}),
+      },
+    });
+  }
+
+  private async requestJson<T>(pathname: string, payload: Record<string, unknown>): Promise<T> {
+    const response = await this.fetchImpl(`${this.baseUrl}${pathname}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.webAccessToken}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    const parsed = await readJsonResponse(response);
+
+    if (!response.ok) {
+      throw new Error(resolveHttpErrorMessage(parsed, response.status, `平台请求失败：${pathname}`));
+    }
+
+    return parsed as T;
+  }
+}
+
+export function readManagedAgentPlatformGatewayConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): ManagedAgentPlatformGatewayConfig | null {
+  const baseUrl = normalizeOptionalText(env.THEMIS_PLATFORM_BASE_URL);
+  const ownerPrincipalId = normalizeOptionalText(env.THEMIS_PLATFORM_OWNER_PRINCIPAL_ID);
+  const webAccessToken = normalizeOptionalText(env.THEMIS_PLATFORM_WEB_ACCESS_TOKEN);
+
+  if (!baseUrl && !ownerPrincipalId && !webAccessToken) {
+    return null;
+  }
+
+  if (!baseUrl || !ownerPrincipalId || !webAccessToken) {
+    throw new Error(
+      "THEMIS_PLATFORM_BASE_URL / THEMIS_PLATFORM_OWNER_PRINCIPAL_ID / THEMIS_PLATFORM_WEB_ACCESS_TOKEN 必须同时配置，才能启用主 Themis Gateway 模式。",
+    );
+  }
+
+  return {
+    baseUrl: trimTrailingSlash(baseUrl),
+    ownerPrincipalId,
+    webAccessToken,
+  };
+}
+
+async function readJsonResponse(response: Response): Promise<unknown> {
+  const text = await response.text();
+
+  if (!text.trim()) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return {
+      raw: text,
+    };
+  }
+}
+
+function resolveHttpErrorMessage(payload: unknown, status: number, fallback: string): string {
+  if (isRecord(payload) && isRecord(payload.error) && typeof payload.error.message === "string" && payload.error.message.trim()) {
+    return payload.error.message.trim();
+  }
+
+  return `${fallback}（HTTP ${status}）`;
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+function normalizeOptionalText(value: string | null | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function toGatewayGovernanceFilters(filters: OrganizationGovernanceFilters): Record<string, unknown> {
+  return {
+    ...(filters.organizationId ? { organizationId: filters.organizationId } : {}),
+    ...(filters.managerAgentId ? { managerAgentId: filters.managerAgentId } : {}),
+    ...(filters.attentionOnly !== undefined ? { attentionOnly: filters.attentionOnly } : {}),
+    ...(filters.attentionLevels ? { attentionLevels: filters.attentionLevels } : {}),
+    ...(filters.waitingFor ? { waitingFor: filters.waitingFor } : {}),
+    ...(filters.staleOnly !== undefined ? { staleOnly: filters.staleOnly } : {}),
+    ...(filters.failedOnly !== undefined ? { failedOnly: filters.failedOnly } : {}),
+    ...(filters.limit !== undefined ? { limit: filters.limit } : {}),
+  };
+}
+
+function toFiniteNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}

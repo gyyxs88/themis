@@ -27,6 +27,25 @@ export const PROJECT_CONFIG_DEFINITIONS: ProjectConfigDefinition[] = [
     defaultValue: "300000",
   },
   {
+    key: "THEMIS_PLATFORM_BASE_URL",
+    section: "服务监听",
+    description: "可选。启用主 Themis Gateway 读模式时要连接的平台 base URL。",
+    note: "只有与 THEMIS_PLATFORM_OWNER_PRINCIPAL_ID / THEMIS_PLATFORM_WEB_ACCESS_TOKEN 同时配置时才生效。",
+  },
+  {
+    key: "THEMIS_PLATFORM_OWNER_PRINCIPAL_ID",
+    section: "服务监听",
+    description: "可选。主 Themis 读取平台事实时使用的平台 owner principalId。",
+    note: "只有与 THEMIS_PLATFORM_BASE_URL / THEMIS_PLATFORM_WEB_ACCESS_TOKEN 同时配置时才生效。",
+  },
+  {
+    key: "THEMIS_PLATFORM_WEB_ACCESS_TOKEN",
+    section: "服务监听",
+    description: "可选。主 Themis 读取平台事实时使用的平台 Web Access token。",
+    secret: true,
+    note: "只有与 THEMIS_PLATFORM_BASE_URL / THEMIS_PLATFORM_OWNER_PRINCIPAL_ID 同时配置时才生效。",
+  },
+  {
     key: "THEMIS_BUILD_COMMIT",
     section: "版本更新",
     description: "可选。显式标记当前构建提交；非 git 部署或需要固定版本比较时使用。",

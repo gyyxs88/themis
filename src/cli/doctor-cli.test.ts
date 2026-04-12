@@ -167,16 +167,8 @@ test("themis doctor worker-node 会输出本地 capability 与平台探测摘要
     server = createServer((req, res) => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
-      if (req.method === "POST" && url.pathname === "/api/web-auth/login") {
-        res.writeHead(200, {
-          "content-type": "application/json",
-          "set-cookie": "themis_web_session=session-worker-node-cli; Path=/; HttpOnly",
-        });
-        res.end(JSON.stringify({ ok: true }));
-        return;
-      }
-
       if (req.method === "POST" && url.pathname === "/api/platform/nodes/list") {
+        assert.equal(req.headers.authorization, "Bearer secret-token");
         res.writeHead(200, {
           "content-type": "application/json",
         });
@@ -242,16 +234,8 @@ test("themis doctor worker-fleet 会输出平台节点批量巡检摘要", async
     server = createServer((req, res) => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
-      if (req.method === "POST" && url.pathname === "/api/web-auth/login") {
-        res.writeHead(200, {
-          "content-type": "application/json",
-          "set-cookie": "themis_web_session=session-worker-fleet-cli; Path=/; HttpOnly",
-        });
-        res.end(JSON.stringify({ ok: true }));
-        return;
-      }
-
       if (req.method === "POST" && url.pathname === "/api/platform/nodes/list") {
+        assert.equal(req.headers.authorization, "Bearer secret-token");
         res.writeHead(200, {
           "content-type": "application/json",
         });
@@ -296,6 +280,7 @@ test("themis doctor worker-fleet 会输出平台节点批量巡检摘要", async
       }
 
       if (req.method === "POST" && url.pathname === "/api/platform/nodes/detail") {
+        assert.equal(req.headers.authorization, "Bearer secret-token");
         let body = "";
         req.on("data", (chunk) => {
           body += chunk.toString();
@@ -412,6 +397,134 @@ test("themis doctor worker-fleet 会输出平台节点批量巡检摘要", async
   }
 });
 
+test("themis doctor worker-fleet 支持 JSON 输出，并能按告警级别返回非 0", async () => {
+  const workspace = mkdtempSync(resolve(tmpdir(), "themis-doctor-cli-worker-fleet-json-"));
+  const offlineHeartbeatAt = new Date(Date.now() - 60_000).toISOString();
+  let server: ReturnType<typeof createServer> | null = null;
+
+  try {
+    server = createServer((req, res) => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+
+      if (req.method === "POST" && url.pathname === "/api/platform/nodes/list") {
+        assert.equal(req.headers.authorization, "Bearer secret-token");
+        res.writeHead(200, {
+          "content-type": "application/json",
+        });
+        res.end(JSON.stringify({
+          ok: true,
+          nodes: [
+            {
+              nodeId: "node-offline",
+              organizationId: "org-1",
+              displayName: "worker-node-offline",
+              status: "offline",
+              slotCapacity: 1,
+              slotAvailable: 0,
+              labels: [],
+              workspaceCapabilities: ["/workspace/a"],
+              credentialCapabilities: ["default"],
+              providerCapabilities: [],
+              heartbeatTtlSeconds: 30,
+              lastHeartbeatAt: offlineHeartbeatAt,
+              createdAt: "2026-04-12T11:00:00.000Z",
+              updatedAt: offlineHeartbeatAt,
+            },
+          ],
+        }));
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/platform/nodes/detail") {
+        assert.equal(req.headers.authorization, "Bearer secret-token");
+        res.writeHead(200, {
+          "content-type": "application/json",
+        });
+        res.end(JSON.stringify({
+          ok: true,
+          organization: {
+            organizationId: "org-1",
+            ownerPrincipalId: "principal-owner",
+            displayName: "团队",
+            slug: "team",
+            createdAt: "2026-04-12T11:00:00.000Z",
+            updatedAt: "2026-04-12T11:00:00.000Z",
+          },
+          node: {
+            nodeId: "node-offline",
+            organizationId: "org-1",
+            displayName: "worker-node-offline",
+            status: "offline",
+            slotCapacity: 1,
+            slotAvailable: 0,
+            labels: [],
+            workspaceCapabilities: ["/workspace/a"],
+            credentialCapabilities: ["default"],
+            providerCapabilities: [],
+            heartbeatTtlSeconds: 30,
+            lastHeartbeatAt: offlineHeartbeatAt,
+            createdAt: "2026-04-12T11:00:00.000Z",
+            updatedAt: offlineHeartbeatAt,
+          },
+          leaseSummary: {
+            totalCount: 1,
+            activeCount: 1,
+            expiredCount: 0,
+            releasedCount: 0,
+            revokedCount: 0,
+          },
+          activeExecutionLeases: [],
+          recentExecutionLeases: [],
+        }));
+        return;
+      }
+
+      res.writeHead(404);
+      res.end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+
+    if (!address || typeof address === "string") {
+      throw new Error("test server failed to bind");
+    }
+
+    const result = await runCliAsync([
+      "doctor",
+      "worker-fleet",
+      "--platform",
+      `http://127.0.0.1:${address.port}`,
+      "--owner-principal",
+      "principal-owner",
+      "--token",
+      "secret-token",
+      "--json",
+      "--fail-on",
+      "error",
+    ], workspace);
+
+    assert.equal(result.code, 1);
+    const summary = JSON.parse(result.stdout) as {
+      counts: { errorCount: number; warningCount: number };
+      primaryDiagnosis: { id: string; severity: string };
+    };
+    assert.equal(summary.counts.errorCount, 1);
+    assert.equal(summary.counts.warningCount, 0);
+    assert.equal(summary.primaryDiagnosis.id, "worker_fleet_attention_error");
+    assert.equal(summary.primaryDiagnosis.severity, "error");
+  } finally {
+    if (server) {
+      server.closeAllConnections?.();
+      server.closeIdleConnections?.();
+      server.unref();
+      server.close();
+    }
+
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("themis worker-fleet reclaim 缺少 --yes 会拒绝执行治理动作", () => {
   const workspace = mkdtempSync(resolve(tmpdir(), "themis-worker-fleet-cli-confirm-"));
 
@@ -444,16 +557,8 @@ test("themis worker-fleet reclaim 会逐节点输出治理结果摘要", async (
     server = createServer((req, res) => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
-      if (req.method === "POST" && url.pathname === "/api/web-auth/login") {
-        res.writeHead(200, {
-          "content-type": "application/json",
-          "set-cookie": "themis_web_session=session-worker-fleet-govern-cli; Path=/; HttpOnly",
-        });
-        res.end(JSON.stringify({ ok: true }));
-        return;
-      }
-
       if (req.method === "POST" && url.pathname === "/api/platform/nodes/reclaim") {
+        assert.equal(req.headers.authorization, "Bearer secret-token");
         let body = "";
         req.on("data", (chunk) => {
           body += chunk.toString();

@@ -228,6 +228,146 @@ test("Web 登录审计只使用 socket 来源 IP，不信任伪造的 X-Forwarde
   });
 });
 
+test("平台服务 Bearer 令牌可以直接访问允许的 /api/platform/* 接口", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    runtimeStore.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "平台负责人",
+      organizationId: "org-platform",
+      createdAt: "2026-04-12T12:00:00.000Z",
+      updatedAt: "2026-04-12T12:00:00.000Z",
+    });
+    runtimeStore.saveOrganization({
+      organizationId: "org-platform",
+      ownerPrincipalId: "principal-owner",
+      displayName: "平台组织",
+      slug: "platform-org",
+      createdAt: "2026-04-12T12:00:00.000Z",
+      updatedAt: "2026-04-12T12:00:00.000Z",
+    });
+
+    const service = new WebAccessService({ registry: runtimeStore });
+    service.createPlatformServiceToken({
+      label: "worker-node",
+      secret: "platform-worker-secret",
+      ownerPrincipalId: "principal-owner",
+      serviceRole: "worker",
+      remoteIp: "127.0.0.1",
+    });
+
+    const allowed = await fetch(`${baseUrl}/api/platform/nodes/list`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer platform-worker-secret",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ownerPrincipalId: "principal-owner",
+      }),
+    });
+
+    assert.equal(allowed.status, 200);
+    assert.deepEqual(await allowed.json(), {
+      ok: true,
+      nodes: [],
+    });
+  });
+});
+
+test("平台服务 Bearer 令牌会校验 ownerPrincipalId 绑定", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    runtimeStore.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "平台负责人",
+      organizationId: "org-platform",
+      createdAt: "2026-04-12T12:10:00.000Z",
+      updatedAt: "2026-04-12T12:10:00.000Z",
+    });
+    runtimeStore.saveOrganization({
+      organizationId: "org-platform",
+      ownerPrincipalId: "principal-owner",
+      displayName: "平台组织",
+      slug: "platform-org",
+      createdAt: "2026-04-12T12:10:00.000Z",
+      updatedAt: "2026-04-12T12:10:00.000Z",
+    });
+
+    const service = new WebAccessService({ registry: runtimeStore });
+    service.createPlatformServiceToken({
+      label: "worker-node",
+      secret: "platform-worker-secret",
+      ownerPrincipalId: "principal-owner",
+      serviceRole: "worker",
+    });
+
+    const mismatched = await fetch(`${baseUrl}/api/platform/nodes/list`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer platform-worker-secret",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ownerPrincipalId: "principal-other",
+      }),
+    });
+
+    assert.equal(mismatched.status, 403);
+    assert.deepEqual(await mismatched.json(), {
+      error: {
+        code: "PLATFORM_SERVICE_OWNER_MISMATCH",
+        message: "平台服务令牌与 ownerPrincipalId 不匹配。",
+      },
+    });
+  });
+});
+
+test("平台服务 Bearer 令牌会按角色限制可访问的 /api/platform/* 路径", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    runtimeStore.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "平台负责人",
+      organizationId: "org-platform",
+      createdAt: "2026-04-12T12:20:00.000Z",
+      updatedAt: "2026-04-12T12:20:00.000Z",
+    });
+    runtimeStore.saveOrganization({
+      organizationId: "org-platform",
+      ownerPrincipalId: "principal-owner",
+      displayName: "平台组织",
+      slug: "platform-org",
+      createdAt: "2026-04-12T12:20:00.000Z",
+      updatedAt: "2026-04-12T12:20:00.000Z",
+    });
+
+    const service = new WebAccessService({ registry: runtimeStore });
+    service.createPlatformServiceToken({
+      label: "gateway-service",
+      secret: "platform-gateway-secret",
+      ownerPrincipalId: "principal-owner",
+      serviceRole: "gateway",
+    });
+
+    const forbidden = await fetch(`${baseUrl}/api/platform/nodes/list`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer platform-gateway-secret",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ownerPrincipalId: "principal-owner",
+      }),
+    });
+
+    assert.equal(forbidden.status, 403);
+    assert.deepEqual(await forbidden.json(), {
+      error: {
+        code: "PLATFORM_SERVICE_FORBIDDEN",
+        message: "当前平台服务令牌无权访问该接口。",
+      },
+    });
+  });
+});
+
 function extractCookie(setCookieHeader: string, name: string): string {
   const prefix = `${name}=`;
 

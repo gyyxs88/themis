@@ -43,6 +43,23 @@ interface WorkerHarness {
   close: () => Promise<void>;
 }
 
+interface WorkerRuntimeHarness {
+  root: string;
+  runtimeStore: SqliteCodexSessionRegistry;
+  runtime: AppServerTaskRuntime;
+}
+
+interface DualWorkerHarness {
+  platformRoot: string;
+  platformRuntimeStore: SqliteCodexSessionRegistry;
+  platformRuntime: CodexTaskRuntime;
+  workerA: WorkerRuntimeHarness;
+  workerB: WorkerRuntimeHarness;
+  baseUrl: string;
+  secret: string;
+  close: () => Promise<void>;
+}
+
 function createCompletionSessionFactory(): {
   state: SessionDoubleState;
   sessionFactory: AppServerTaskRuntimeOptions["sessionFactory"];
@@ -187,9 +204,11 @@ async function createWorkerHarness(
   });
   const secret = "worker-daemon-secret";
   const webAccess = new WebAccessService({ registry: platformRuntimeStore });
-  webAccess.createToken({
+  webAccess.createPlatformServiceToken({
     label: "worker-daemon",
     secret,
+    ownerPrincipalId: "principal-owner",
+    serviceRole: "worker",
   });
   const server = createThemisHttpServer({
     runtime: platformRuntime,
@@ -214,6 +233,89 @@ async function createWorkerHarness(
       await closeServer(listeningServer);
       rmSync(platformRoot, { recursive: true, force: true });
       rmSync(workerRoot, { recursive: true, force: true });
+    },
+  };
+}
+
+function createWorkerRuntimeHarness(
+  rootPrefix: string,
+  sessionFactory: AppServerTaskRuntimeOptions["sessionFactory"],
+): WorkerRuntimeHarness {
+  const root = mkdtempSync(join(tmpdir(), rootPrefix));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  runtimeStore.saveAuthAccount({
+    accountId: "default",
+    label: "默认账号",
+    codexHome: join(root, "infra/local/codex-auth/default"),
+    isActive: true,
+    createdAt: "2026-04-12T22:59:00.000Z",
+    updatedAt: "2026-04-12T22:59:00.000Z",
+  });
+
+  return {
+    root,
+    runtimeStore,
+    runtime: new AppServerTaskRuntime({
+      workingDirectory: root,
+      runtimeStore,
+      ...(sessionFactory ? { sessionFactory } : {}),
+    }),
+  };
+}
+
+async function createDualWorkerHarness(
+  workerASessionFactory: AppServerTaskRuntimeOptions["sessionFactory"],
+  workerBSessionFactory: AppServerTaskRuntimeOptions["sessionFactory"],
+): Promise<DualWorkerHarness> {
+  const platformRoot = mkdtempSync(join(tmpdir(), "themis-platform-worker-daemon-dual-platform-"));
+  const platformRuntimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(platformRoot, "infra/local/themis.db"),
+  });
+  const platformRuntime = new CodexTaskRuntime({
+    workingDirectory: platformRoot,
+    runtimeStore: platformRuntimeStore,
+  });
+  const workerA = createWorkerRuntimeHarness(
+    "themis-platform-worker-daemon-dual-worker-a-",
+    workerASessionFactory,
+  );
+  const workerB = createWorkerRuntimeHarness(
+    "themis-platform-worker-daemon-dual-worker-b-",
+    workerBSessionFactory,
+  );
+  const secret = "worker-daemon-secret";
+  const webAccess = new WebAccessService({ registry: platformRuntimeStore });
+  webAccess.createPlatformServiceToken({
+    label: "worker-daemon-dual",
+    secret,
+    ownerPrincipalId: "principal-owner",
+    serviceRole: "worker",
+  });
+  const server = createThemisHttpServer({
+    runtime: platformRuntime,
+  });
+  const listeningServer = await listenServer(server);
+  const address = listeningServer.address();
+
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to resolve dual worker test server address.");
+  }
+
+  return {
+    platformRoot,
+    platformRuntimeStore,
+    platformRuntime,
+    workerA,
+    workerB,
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    secret,
+    close: async () => {
+      await closeServer(listeningServer);
+      rmSync(platformRoot, { recursive: true, force: true });
+      rmSync(workerA.root, { recursive: true, force: true });
+      rmSync(workerB.root, { recursive: true, force: true });
     },
   };
 }
@@ -410,6 +512,196 @@ test("ManagedAgentWorkerDaemon 会把 waiting_action 通过平台 HTTP 回传并
       (backendMailbox[0]?.message.payload as { status?: string } | undefined)?.status,
       "waiting_action",
     );
+  } finally {
+    await harness.close();
+  }
+});
+
+test("ManagedAgentWorkerDaemon 双节点演练会完成双节点派工，并在一台离线后由另一台接管恢复", async () => {
+  const { state: stateA, sessionFactory: sessionFactoryA } = createCompletionSessionFactory();
+  const { state: stateB, sessionFactory: sessionFactoryB } = createCompletionSessionFactory();
+  const harness = await createDualWorkerHarness(sessionFactoryA, sessionFactoryB);
+
+  try {
+    harness.platformRuntimeStore.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "平台负责人",
+      kind: "human_user",
+      createdAt: "2026-04-12T23:20:00.000Z",
+      updatedAt: "2026-04-12T23:20:00.000Z",
+    });
+
+    const backend = harness.platformRuntime.getManagedAgentsService().createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "后端·双节点",
+      departmentRole: "后端",
+      mission: "负责双节点演练派工。",
+      now: "2026-04-12T23:21:00.000Z",
+    });
+    const workerAgentA = harness.platformRuntime.getManagedAgentsService().createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "执行·双节点-A",
+      departmentRole: "执行",
+      mission: "负责双节点平台演练 A。",
+      now: "2026-04-12T23:22:00.000Z",
+    });
+    const workerAgentB = harness.platformRuntime.getManagedAgentsService().createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "执行·双节点-B",
+      departmentRole: "执行",
+      mission: "负责双节点平台演练 B。",
+      now: "2026-04-12T23:22:30.000Z",
+    });
+
+    const sharedWorkspace = harness.platformRoot;
+    const clientA = new ManagedAgentPlatformWorkerClient({
+      baseUrl: harness.baseUrl,
+      ownerPrincipalId: "principal-owner",
+      webAccessToken: harness.secret,
+    });
+    const clientB = new ManagedAgentPlatformWorkerClient({
+      baseUrl: harness.baseUrl,
+      ownerPrincipalId: "principal-owner",
+      webAccessToken: harness.secret,
+    });
+    const daemonA = new ManagedAgentWorkerDaemon({
+      client: clientA,
+      runtime: harness.workerA.runtime,
+      node: {
+        displayName: "Worker Node A",
+        slotCapacity: 1,
+        slotAvailable: 1,
+        credentialCapabilities: ["default"],
+        workspaceCapabilities: [sharedWorkspace],
+      },
+    });
+    const daemonB = new ManagedAgentWorkerDaemon({
+      client: clientB,
+      runtime: harness.workerB.runtime,
+      node: {
+        displayName: "Worker Node B",
+        slotCapacity: 1,
+        slotAvailable: 1,
+        credentialCapabilities: ["default"],
+        workspaceCapabilities: [sharedWorkspace],
+      },
+    });
+
+    const idleA = await daemonA.runOnce();
+    const idleB = await daemonB.runOnce();
+    assert.equal(idleA.result, "idle");
+    assert.equal(idleB.result, "idle");
+    assert.notEqual(idleA.nodeId, idleB.nodeId);
+
+    const nodes = await clientA.listNodes();
+    assert.equal(nodes.length, 2);
+
+    const workItemA = harness.platformRuntime.getManagedAgentCoordinationService().dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: workerAgentA.agent.agentId,
+      sourceType: "agent",
+      sourceAgentId: backend.agent.agentId,
+      sourcePrincipalId: backend.principal.principalId,
+      dispatchReason: "dual-node-drill-a",
+      goal: "验证双节点演练第一条任务。",
+      workspacePolicySnapshot: {
+        workspacePath: sharedWorkspace,
+      },
+      now: "2026-04-12T23:23:00.000Z",
+    });
+    const workItemB = harness.platformRuntime.getManagedAgentCoordinationService().dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: workerAgentB.agent.agentId,
+      sourceType: "agent",
+      sourceAgentId: backend.agent.agentId,
+      sourcePrincipalId: backend.principal.principalId,
+      dispatchReason: "dual-node-drill-b",
+      goal: "验证双节点演练第二条任务。",
+      workspacePolicySnapshot: {
+        workspacePath: sharedWorkspace,
+      },
+      now: "2026-04-12T23:24:00.000Z",
+    });
+
+    const claimA = harness.platformRuntime.getManagedAgentSchedulerService().claimNextRunnableWorkItem({
+      schedulerId: "scheduler-dual-a",
+    });
+    const claimB = harness.platformRuntime.getManagedAgentSchedulerService().claimNextRunnableWorkItem({
+      schedulerId: "scheduler-dual-b",
+    });
+
+    const claimedNodeIds = [claimA?.node?.nodeId, claimB?.node?.nodeId]
+      .filter((value): value is string => Boolean(value))
+      .sort();
+    const registeredNodeIds = [idleA.nodeId, idleB.nodeId]
+      .filter((value): value is string => Boolean(value))
+      .sort();
+
+    assert.equal(claimedNodeIds.length, 2);
+    assert.notEqual(claimA?.node?.nodeId, claimB?.node?.nodeId);
+    assert.deepEqual(claimedNodeIds, registeredNodeIds);
+
+    const completedA = await daemonA.runOnce();
+    const completedB = await daemonB.runOnce();
+    assert.equal(completedA.result, "completed");
+    assert.equal(completedB.result, "completed");
+    assert.equal(stateA.started.length, 1);
+    assert.equal(stateB.started.length, 1);
+
+    const failureDrill = harness.platformRuntime.getManagedAgentCoordinationService().dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: workerAgentA.agent.agentId,
+      sourceType: "agent",
+      sourceAgentId: backend.agent.agentId,
+      sourcePrincipalId: backend.principal.principalId,
+      dispatchReason: "dual-node-drill-failover",
+      goal: "验证 Worker Node A 离线后，由 Worker Node B 接管恢复。",
+      workspacePolicySnapshot: {
+        workspacePath: sharedWorkspace,
+      },
+      now: "2026-04-12T23:25:00.000Z",
+    });
+
+    const claimFailure = harness.platformRuntime.getManagedAgentSchedulerService().claimNextRunnableWorkItem({
+      schedulerId: "scheduler-dual-failover-a",
+    });
+
+    const failedNodeId = claimFailure?.node?.nodeId ?? null;
+    assert.ok(failedNodeId);
+
+    const standbyNodeId = failedNodeId === idleA.nodeId ? idleB.nodeId : idleA.nodeId;
+    const failedClient = failedNodeId === idleA.nodeId ? clientA : clientB;
+    const standbyDaemon = standbyNodeId === idleA.nodeId ? daemonA : daemonB;
+    const standbyState = standbyNodeId === idleA.nodeId ? stateA : stateB;
+    const failedState = failedNodeId === idleA.nodeId ? stateA : stateB;
+
+    const offline = await failedClient.offlineNode(failedNodeId);
+    assert.equal(offline.node.status, "offline");
+
+    const reclaimed = await failedClient.reclaimNodeLeases(failedNodeId, {
+      failureCode: "DUAL_NODE_DRILL",
+      failureMessage: "模拟 Worker Node A 离线，验证平台回收与再派发。",
+    });
+    assert.equal(reclaimed.summary.requeuedWorkItemCount, 1);
+    assert.equal(reclaimed.summary.reclaimedRunCount, 1);
+
+    const claimRecovered = harness.platformRuntime.getManagedAgentSchedulerService().claimNextRunnableWorkItem({
+      schedulerId: "scheduler-dual-failover-b",
+    });
+    assert.equal(claimRecovered?.node?.nodeId, standbyNodeId);
+
+    const recovered = await standbyDaemon.runOnce();
+    assert.equal(recovered.result, "completed");
+
+    const finalWorkItem = harness.platformRuntimeStore.getAgentWorkItem(failureDrill.workItem.workItemId);
+    assert.equal(finalWorkItem?.status, "completed");
+    assert.equal(standbyState.started.length, 2);
+    assert.equal(failedState.started.length, 1);
+
+    const completedWorkItemA = harness.platformRuntimeStore.getAgentWorkItem(workItemA.workItem.workItemId);
+    const completedWorkItemB = harness.platformRuntimeStore.getAgentWorkItem(workItemB.workItem.workItemId);
+    assert.equal(completedWorkItemA?.status, "completed");
+    assert.equal(completedWorkItemB?.status, "completed");
   } finally {
     await harness.close();
   }
