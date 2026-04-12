@@ -5,7 +5,12 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
-import { resolveCodexAuthFilePath, resolveDefaultCodexHome } from "../core/auth-accounts.js";
+import {
+  ensureAuthAccountCodexHome,
+  resolveCodexAuthFilePath,
+  resolveDefaultCodexHome,
+  resolveManagedCodexHome,
+} from "../core/auth-accounts.js";
 import {
   RuntimeDiagnosticsService,
   type RuntimeDiagnosticFileStatus,
@@ -27,6 +32,9 @@ import { runManagedThemisUpdateWorker } from "../diagnostics/update-service.js";
 import { RuntimeSmokeService, type RuntimeSmokeProgressEvent } from "../diagnostics/runtime-smoke.js";
 import { McpInspector } from "../mcp/mcp-inspector.js";
 import { runThemisMcpServer } from "../mcp/themis-mcp-server.js";
+import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
+import { ManagedAgentPlatformWorkerClient } from "../core/managed-agent-platform-worker-client.js";
+import { ManagedAgentWorkerDaemon } from "../core/managed-agent-worker-daemon.js";
 import { PrincipalSkillsService } from "../core/principal-skills-service.js";
 import { WebAccessService } from "../core/web-access.js";
 import { readOpenAICompatibleProviderConfigs } from "../core/openai-compatible-provider.js";
@@ -114,8 +122,11 @@ async function main(args: string[]): Promise<void> {
     case "mcp-server":
       await handleMcpServer([...(subcommand ? [subcommand] : []), ...rest]);
       return;
+    case "worker-node":
+      await handleWorkerNode(subcommand, rest);
+      return;
     default:
-      throw new Error(`不支持的命令：${command}。可用命令：init / status / check / update / doctor / config / auth / skill / mcp-server / help。`);
+      throw new Error(`不支持的命令：${command}。可用命令：init / status / check / update / doctor / config / auth / skill / mcp-server / worker-node / help。`);
   }
 }
 
@@ -803,6 +814,131 @@ async function handleMcpServer(args: string[]): Promise<void> {
   });
 }
 
+async function handleWorkerNode(subcommand: string | undefined, args: string[]): Promise<void> {
+  const action = subcommand?.trim().toLowerCase();
+
+  if (action !== "run") {
+    throw new Error(
+      "用法：themis worker-node run --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --name <displayName> [--node-id <nodeId>] [--organization <organizationId>] [--workspace <path>] [--credential <id>] [--provider <id>] [--label <label>] [--slot-capacity <n>] [--slot-available <n>] [--heartbeat-ttl-seconds <n>] [--poll-interval-ms <n>] [--heartbeat-interval-ms <n>] [--once]",
+    );
+  }
+
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(
+      "用法：themis worker-node run --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --name <displayName> [--node-id <nodeId>] [--organization <organizationId>] [--workspace <path>] [--credential <id>] [--provider <id>] [--label <label>] [--slot-capacity <n>] [--slot-available <n>] [--heartbeat-ttl-seconds <n>] [--poll-interval-ms <n>] [--heartbeat-interval-ms <n>] [--once]",
+    );
+    console.log("说明：以轻量 Worker Node 形态连接平台，执行 register -> heartbeat -> pull -> execute -> report 最小闭环。");
+    return;
+  }
+
+  const valueOptions = [
+    "--platform",
+    "--owner-principal",
+    "--token",
+    "--name",
+    "--node-id",
+    "--organization",
+    "--workspace",
+    "--credential",
+    "--provider",
+    "--label",
+    "--slot-capacity",
+    "--slot-available",
+    "--heartbeat-ttl-seconds",
+    "--poll-interval-ms",
+    "--heartbeat-interval-ms",
+  ];
+  const flagOptions = ["--once"];
+  const unknownArgs = collectUnknownOptions(args, valueOptions, flagOptions);
+
+  if (unknownArgs.length > 0) {
+    throw new Error(`worker-node run 不支持这些参数：${unknownArgs.join(", ")}`);
+  }
+
+  const platformBaseUrl = readOptionValue(args, "--platform");
+  const ownerPrincipalId = readOptionValue(args, "--owner-principal");
+  const webAccessToken = readOptionValue(args, "--token");
+  const displayName = readOptionValue(args, "--name");
+
+  if (!platformBaseUrl || !ownerPrincipalId || !webAccessToken || !displayName) {
+    throw new Error(
+      "用法：themis worker-node run --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --name <displayName> [--node-id <nodeId>] [--organization <organizationId>] [--workspace <path>] [--credential <id>] [--provider <id>] [--label <label>] [--slot-capacity <n>] [--slot-available <n>] [--heartbeat-ttl-seconds <n>] [--poll-interval-ms <n>] [--heartbeat-interval-ms <n>] [--once]",
+    );
+  }
+
+  const slotCapacity = readOptionPositiveInteger(args, "--slot-capacity") ?? 1;
+  const slotAvailable = readOptionPositiveInteger(args, "--slot-available") ?? slotCapacity;
+  const heartbeatTtlSeconds = readOptionPositiveInteger(args, "--heartbeat-ttl-seconds") ?? 30;
+  const pollIntervalMs = readOptionPositiveInteger(args, "--poll-interval-ms") ?? 5_000;
+  const heartbeatIntervalMs = readOptionPositiveInteger(args, "--heartbeat-interval-ms") ?? 10_000;
+  const workspaceCapabilities = readOptionValues(args, "--workspace");
+  const credentialCapabilities = readOptionValues(args, "--credential");
+  const providerCapabilities = readOptionValues(args, "--provider");
+  const labels = readOptionValues(args, "--label");
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: cliDatabasePath,
+  });
+  ensureWorkerNodeCredentialAccounts(runtimeStore, cwd, credentialCapabilities);
+  const runtime = new AppServerTaskRuntime({
+    workingDirectory: cwd,
+    runtimeStore,
+  });
+  const client = new ManagedAgentPlatformWorkerClient({
+    baseUrl: platformBaseUrl,
+    ownerPrincipalId,
+    webAccessToken,
+  });
+  const daemon = new ManagedAgentWorkerDaemon({
+    client,
+    runtime,
+    node: {
+      ...(readOptionValue(args, "--node-id") ? { nodeId: readOptionValue(args, "--node-id") as string } : {}),
+      ...(readOptionValue(args, "--organization") ? { organizationId: readOptionValue(args, "--organization") as string } : {}),
+      displayName,
+      slotCapacity,
+      slotAvailable,
+      labels,
+      workspaceCapabilities: workspaceCapabilities.length > 0 ? workspaceCapabilities : [cwd],
+      credentialCapabilities,
+      providerCapabilities,
+      heartbeatTtlSeconds,
+    },
+    pollIntervalMs,
+    heartbeatIntervalMs,
+    log: (message) => {
+      console.log(message);
+    },
+  });
+
+  if (args.includes("--once")) {
+    const result = await daemon.runOnce();
+    console.log(`Worker Node：${result.nodeId}`);
+    console.log(`结果：${result.result}`);
+    if (result.executedRunId) {
+      console.log(`runId：${result.executedRunId}`);
+    }
+    return;
+  }
+
+  const controller = new AbortController();
+  const stop = () => {
+    if (!controller.signal.aborted) {
+      controller.abort();
+    }
+  };
+
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  console.log(`Worker Node 已启动：${displayName}`);
+
+  try {
+    await daemon.runLoop(controller.signal);
+  } finally {
+    process.removeListener("SIGINT", stop);
+    process.removeListener("SIGTERM", stop);
+  }
+}
+
 async function handleDoctorSmoke(args: string[]): Promise<number> {
   if (args.length !== 1) {
     throw new Error("用法：themis doctor smoke <web|feishu|all>");
@@ -1041,6 +1177,7 @@ function printHelp(): void {
   console.log("- ./themis skill remove <SKILL_NAME>");
   console.log("- ./themis skill sync <SKILL_NAME> [--force]");
   console.log("- ./themis mcp-server [--channel <channel>] [--user <channelUserId>] [--name <displayName>] [--session <sessionId>] [--channel-session-key <key>]");
+  console.log("- ./themis worker-node run --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --name <displayName> [--once]");
   console.log("");
   console.log("如果希望像 codex/openclaw 一样直接输入 `themis`，建议执行 `./themis install`。");
 }
@@ -2286,4 +2423,107 @@ function readOptionValue(args: string[], key: string): string | null {
 
   const value = args[index + 1];
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readOptionValues(args: string[], key: string): string[] {
+  const values: string[] = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] !== key) {
+      continue;
+    }
+
+    const value = args[index + 1];
+
+    if (typeof value === "string" && value.trim()) {
+      values.push(value.trim());
+    }
+  }
+
+  return [...new Set(values)];
+}
+
+function ensureWorkerNodeCredentialAccounts(
+  runtimeStore: SqliteCodexSessionRegistry,
+  workingDirectory: string,
+  credentialIds: string[],
+): void {
+  const uniqueCredentialIds = [...new Set(credentialIds.map((value) => value.trim()).filter(Boolean))];
+
+  if (uniqueCredentialIds.length === 0) {
+    return;
+  }
+
+  const shouldBootstrapActive = runtimeStore.listAuthAccounts().length === 0;
+  const bootstrappedActiveId = shouldBootstrapActive
+    ? (uniqueCredentialIds.includes("default") ? "default" : (uniqueCredentialIds[0] ?? null))
+    : null;
+  const now = new Date().toISOString();
+
+  for (const credentialId of uniqueCredentialIds) {
+    if (runtimeStore.getAuthAccount(credentialId)) {
+      continue;
+    }
+
+    const codexHome = credentialId === "default"
+      ? resolveDefaultCodexHome()
+      : resolveManagedCodexHome(workingDirectory, credentialId);
+
+    if (credentialId !== "default") {
+      ensureAuthAccountCodexHome(workingDirectory, codexHome);
+    }
+
+    runtimeStore.saveAuthAccount({
+      accountId: credentialId,
+      label: credentialId === "default" ? "默认账号" : `Worker Node 凭据 ${credentialId}`,
+      codexHome,
+      isActive: bootstrappedActiveId === credentialId,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+}
+
+function readOptionPositiveInteger(args: string[], key: string): number | null {
+  const value = readOptionValue(args, key);
+
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${key} 必须是正整数。`);
+  }
+
+  return parsed;
+}
+
+function collectUnknownOptions(args: string[], valueOptions: string[], flagOptions: string[]): string[] {
+  const valueOptionSet = new Set(valueOptions);
+  const flagOptionSet = new Set(flagOptions);
+  const unknown: string[] = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const value = args[index];
+
+    if (!value?.startsWith("-")) {
+      unknown.push(value ?? "");
+      continue;
+    }
+
+    if (flagOptionSet.has(value)) {
+      continue;
+    }
+
+    if (valueOptionSet.has(value)) {
+      index += 1;
+      continue;
+    }
+
+    unknown.push(value);
+  }
+
+  return unknown.filter(Boolean);
 }

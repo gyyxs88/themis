@@ -107,11 +107,28 @@ interface PlatformWorkerRunStatusPayload extends PlatformWorkerPullPayload {
   status: "starting" | "running" | "heartbeat" | "waiting_human" | "waiting_agent" | "failed" | "cancelled";
   failureCode?: string;
   failureMessage?: string;
+  waitingAction?: {
+    actionType?: string;
+    actionId?: string;
+    prompt?: string;
+    message?: string;
+    choices?: unknown;
+    inputSchema?: unknown;
+    requestId?: string;
+    taskId?: string;
+  };
 }
 
 interface PlatformWorkerRunCompletePayload extends PlatformWorkerPullPayload {
   runId: string;
   leaseToken: string;
+  result?: {
+    summary: string;
+    output?: unknown;
+    touchedFiles?: string[];
+    structuredOutput?: Record<string, unknown> | null;
+    completedAt?: string;
+  };
 }
 
 async function readAndNormalizePayload<T>(
@@ -509,6 +526,7 @@ export async function handlePlatformWorkerRunPull(
         workItem: assigned.workItem,
         run: assigned.run,
         executionLease: assigned.executionLease,
+        executionContract: assigned.executionContract,
       } : {
         organization: null,
         node: null,
@@ -516,6 +534,7 @@ export async function handlePlatformWorkerRunPull(
         workItem: null,
         run: null,
         executionLease: null,
+        executionContract: null,
       }),
     });
   } catch (error) {
@@ -813,6 +832,7 @@ function normalizePlatformWorkerRunStatusPayload(value: unknown): PlatformWorker
 
   const failureCode = readOptionalString(value.failureCode);
   const failureMessage = readOptionalString(value.failureMessage);
+  const waitingAction = normalizePlatformWorkerWaitingAction(value.waitingAction);
 
   return {
     ...normalizePlatformWorkerPullPayload(value),
@@ -821,6 +841,7 @@ function normalizePlatformWorkerRunStatusPayload(value: unknown): PlatformWorker
     status,
     ...(failureCode ? { failureCode } : {}),
     ...(failureMessage ? { failureMessage } : {}),
+    ...(waitingAction && Object.keys(waitingAction).length > 0 ? { waitingAction } : {}),
   };
 }
 
@@ -829,10 +850,56 @@ function normalizePlatformWorkerRunCompletePayload(value: unknown): PlatformWork
     throw new Error("Request body must be an object.");
   }
 
+  const result = normalizePlatformWorkerCompletionResult(value.result);
+
   return {
     ...normalizePlatformWorkerPullPayload(value),
     runId: readRequiredString(value.runId, "runId"),
     leaseToken: readRequiredString(value.leaseToken, "leaseToken"),
+    ...(result ? { result } : {}),
+  };
+}
+
+function normalizePlatformWorkerWaitingAction(value: unknown): PlatformWorkerRunStatusPayload["waitingAction"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const actionType = readOptionalString(value.actionType);
+  const actionId = readOptionalString(value.actionId);
+  const prompt = readOptionalString(value.prompt);
+  const message = readOptionalString(value.message);
+  const requestId = readOptionalString(value.requestId);
+  const taskId = readOptionalString(value.taskId);
+
+  const waitingAction = {
+    ...(actionType ? { actionType } : {}),
+    ...(actionId ? { actionId } : {}),
+    ...(prompt ? { prompt } : {}),
+    ...(message ? { message } : {}),
+    ...(hasOwn(value, "choices") ? { choices: value.choices } : {}),
+    ...(hasOwn(value, "inputSchema") ? { inputSchema: value.inputSchema } : {}),
+    ...(requestId ? { requestId } : {}),
+    ...(taskId ? { taskId } : {}),
+  };
+
+  return Object.keys(waitingAction).length > 0 ? waitingAction : undefined;
+}
+
+function normalizePlatformWorkerCompletionResult(value: unknown): PlatformWorkerRunCompletePayload["result"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const completedAt = readOptionalString(value.completedAt);
+  return {
+    summary: readRequiredString(value.summary, "result.summary"),
+    ...(hasOwn(value, "output") ? { output: value.output } : {}),
+    ...(Array.isArray(value.touchedFiles) ? { touchedFiles: readStringArray(value.touchedFiles) } : {}),
+    ...(isRecord(value.structuredOutput) || value.structuredOutput === null
+      ? { structuredOutput: value.structuredOutput as Record<string, unknown> | null }
+      : {}),
+    ...(completedAt ? { completedAt } : {}),
   };
 }
 

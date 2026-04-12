@@ -136,6 +136,7 @@ export type ManagedAgentWorkerStore = Pick<SqliteCodexSessionRegistry,
   | "getManagedAgentNode"
   | "getOrganization"
   | "getPrincipal"
+  | "listAgentMessagesByWorkItem"
   | "listAgentExecutionLeasesByNode"
   | "listAgentExecutionLeasesByRun"
   | "listManagedAgentNodesByOrganization"
@@ -144,4 +145,5 @@ export type ManagedAgentWorkerStore = Pick<SqliteCodexSessionRegistry,
   | "saveAgentExecutionLease"
   | "saveAgentRun"
   | "saveAgentWorkItem"
+  | "saveManagedAgent"
 >;

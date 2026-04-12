@@ -1,6 +1,6 @@
 # Themis 局域网多节点硅基员工平台 / Phase 3 远端执行闭环实施计划
 
-更新时间：2026-04-12 15:08 CST
+更新时间：2026-04-12 15:56 CST
 文档性质：实施计划稿。目标是把平台化路线里的 `Phase 3 / 远端执行闭环` 收成可开工的第一版方案。
 
 当前状态补充（2026-04-12）：
@@ -11,7 +11,6 @@
   - SQLite/MySQL 节点与租约 schema 已补齐
   - 平台 API 已新增 `/api/platform/nodes/register|heartbeat|list|detail|drain|offline`
   - scheduler 已接入最小节点匹配、`execution_lease` 回填，以及 TTL 过期节点自动收敛为 `offline`
-- 当前还没有完成的是：**真正把一个已绑定到某个节点的 `run` 交给对应 Worker Node 去执行，并把执行状态回传到平台。**
 - 当前第一刀已补到“平台侧 worker 协议”这一层：
   - 新增 `ManagedAgentWorkerService`
   - 平台 API 已新增：
@@ -23,7 +22,14 @@
   - 新增 `ManagedAgentWorkerExecutionService`
   - 已能在 Worker 侧复用现有 `ManagedAgentExecutionService.executeClaim(...)`，把 `pull assigned run -> 本地执行 -> 既有 run/work_item/lease 状态机收口` 接成最小闭环
   - `waiting_human / waiting_agent` 恢复时，旧 `execution_lease` 会先释放，scheduler 会优先把同一 `work item` 重新派回最近一次 `WAITING_RESUME_TRIGGERED` 对应的原节点
-- 当前还没有完成的是：**真正独立跑起来的 Worker Node daemon / HTTP client**。也就是说，当前已经验证了 Worker 执行形态与 waiting node affinity，但还没有把它拆成独立进程、通过平台 HTTP 协议去跑。
+- 当前第三刀也已补上“真正独立跑起来的 Worker Node daemon / HTTP client / CLI 首版”：
+  - 新增 `ManagedAgentPlatformWorkerClient`
+  - 新增 `ManagedAgentWorkerDaemon`
+  - 新增 `themis worker-node run`
+  - Worker Node 现在已经会通过平台 HTTP 完成 `register / heartbeat / pull / update / complete`
+  - 节点本地会按派工快照同步 `managed_agent / workspace policy / runtime profile`，并在 CLI 启动时把 `--credential` 声明的 auth account 预写到本地 runtime store
+  - 平台侧 worker `update/complete` 也已直接驱动 waiting / 完成 / 失败副作用收口
+- 当前下一步已经切到运维闭环：补齐节点部署方式、credential/provider 准备说明，以及更完整的 lease 失联恢复与诊断，而不是再重复设计 daemon 协议。
 
 ## 1. 目标
 
@@ -63,13 +69,13 @@
 - 任务恢复时最好优先回原节点
 - `execution_lease` 不能只是“调度瞬间变量”，而要继续参与恢复逻辑
 
-### 2.4 当前还没有真正的 Worker Node 运行形态
+### 2.4 当前已有 Worker Node 运行形态首版，但部署与运维面还没收口
 
-虽然平台现在已经知道“应该去哪台 node 跑”，但没有真正的轻量节点进程负责：
+虽然平台现在已经有真正的轻量节点进程首版，但后续仍需要把部署前提与运维动作固定清楚：
 
-- 拉取被分配给自己的 run
-- 调起本地 runtime 执行
-- 把状态和结果回传平台
+- 节点本地凭据、provider 与 capability 声明要保持一致
+- daemon 部署和启动参数要有固定说明
+- 节点失联后的 lease 恢复、诊断和治理动作还要继续补齐
 
 ## 3. Phase 3 范围
 
