@@ -440,9 +440,9 @@ function mapComparisonStatusToOutcome(status: string | null): ThemisUpdateOutcom
   switch (status) {
     case "identical":
       return "up_to_date";
-    case "behind":
-      return "update_available";
     case "ahead":
+      return "update_available";
+    case "behind":
       return "local_ahead";
     case "diverged":
       return "local_diverged";
@@ -484,9 +484,9 @@ function buildComparisonSummary(channel: ThemisUpdateChannel, status: string | n
     switch (status) {
       case "identical":
         return "当前已经是 GitHub 最新正式 release。";
-      case "behind":
-        return "发现新的 GitHub 正式 release，可安排升级。";
       case "ahead":
+        return "发现新的 GitHub 正式 release，可安排升级。";
+      case "behind":
         return "当前实例比 GitHub 最新正式 release 更新，暂时不建议直接覆盖。";
       case "diverged":
         return "当前实例与 GitHub 最新正式 release 对应提交已经分叉，升级前需要先确认本地改动去留。";
@@ -498,9 +498,9 @@ function buildComparisonSummary(channel: ThemisUpdateChannel, status: string | n
   switch (status) {
     case "identical":
       return "当前已经是 GitHub 默认分支的最新提交。";
-    case "behind":
-      return "发现 GitHub 新提交，可安排升级。";
     case "ahead":
+      return "发现 GitHub 新提交，可安排升级。";
+    case "behind":
       return "当前实例比 GitHub 默认分支更新，暂时不建议直接覆盖。";
     case "diverged":
       return "当前实例与 GitHub 默认分支已经分叉，升级前需要先确认本地改动去留。";

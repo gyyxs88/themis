@@ -128,7 +128,7 @@ test("themis status 会输出 GitHub 检查更新结果", async () => {
           "content-type": "application/json; charset=utf-8",
         });
         res.end(JSON.stringify({
-          status: "behind",
+          status: "ahead",
         }));
         return;
       }
@@ -167,7 +167,7 @@ test("themis status 会输出 GitHub 检查更新结果", async () => {
     assert.match(result.stdout, /- 更新源：gyyxs88\/themis/);
     assert.match(result.stdout, /- 更新源默认分支：main/);
     assert.match(result.stdout, /- GitHub 最新提交：2222222 \(2026-04-09T04:20:00Z\)/);
-    assert.match(result.stdout, /- 对比结果：behind/);
+    assert.match(result.stdout, /- 对比结果：ahead/);
     assert.match(result.stdout, /- 判断：发现 GitHub 新提交，可安排升级。/);
     assert.match(result.stdout, /\.\/themis update apply/);
   } finally {

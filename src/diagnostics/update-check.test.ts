@@ -42,7 +42,7 @@ test("checkThemisUpdates 会在当前提交落后时返回 update_available", as
 
       if (url === `https://updates.example.test/repos/gyyxs88/themis/compare/${CURRENT_COMMIT}...${LATEST_COMMIT}`) {
         return new Response(JSON.stringify({
-          status: "behind",
+          status: "ahead",
         }), {
           status: 200,
           headers: {
@@ -57,7 +57,7 @@ test("checkThemisUpdates 会在当前提交落后时返回 update_available", as
 
   assert.equal(result.outcome, "update_available");
   assert.equal(result.updateChannel, "branch");
-  assert.equal(result.comparisonStatus, "behind");
+  assert.equal(result.comparisonStatus, "ahead");
   assert.equal(result.currentCommit, CURRENT_COMMIT);
   assert.equal(result.latestCommit, LATEST_COMMIT);
   assert.equal(result.currentCommitSource, "env");
@@ -156,7 +156,7 @@ test("checkThemisUpdates 支持 release 渠道并读取 latest release 对应提
 
       if (url === `https://updates.example.test/repos/gyyxs88/themis/compare/${CURRENT_COMMIT}...${LATEST_COMMIT}`) {
         return new Response(JSON.stringify({
-          status: "behind",
+          status: "ahead",
         }), {
           status: 200,
           headers: {
