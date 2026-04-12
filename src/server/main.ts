@@ -117,6 +117,10 @@ const runManagedAgentSchedulerTick = async (): Promise<void> => {
       schedulerId: "scheduler-main",
     });
 
+    if (tick.reclaimedLeases.length > 0) {
+      console.warn(`[themis/agents] 自动回收了 ${tick.reclaimedLeases.length} 条失联节点 execution lease`);
+    }
+
     if (tick.execution?.result === "failed") {
       console.error(`[themis/agents] 执行失败：${tick.execution.failureMessage ?? "unknown error"}`);
     }

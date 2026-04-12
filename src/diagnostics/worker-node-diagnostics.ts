@@ -1,5 +1,10 @@
 import { existsSync, lstatSync } from "node:fs";
 import { join, resolve } from "node:path";
+import {
+  resolveCodexAuthFilePath,
+  resolveDefaultCodexHome,
+  resolveManagedCodexHome,
+} from "../core/auth-accounts.js";
 import { ManagedAgentPlatformWorkerClient } from "../core/managed-agent-platform-worker-client.js";
 import { readOpenAICompatibleProviderConfigs } from "../core/openai-compatible-provider.js";
 import type { SqliteCodexSessionRegistry } from "../storage/index.js";
@@ -86,7 +91,7 @@ export class WorkerNodeDiagnosticsService {
       summarizeWorkspacePath(this.workingDirectory, workspacePath)
     );
     const credentials = dedupeStrings(input.credentialCapabilities).map((credentialId) =>
-      summarizeCredential(this.runtimeStore, credentialId)
+      summarizeCredential(this.runtimeStore, this.workingDirectory, credentialId)
     );
     const providers = summarizeProviders(
       this.workingDirectory,
@@ -212,9 +217,25 @@ function summarizeWorkspacePath(
 
 function summarizeCredential(
   runtimeStore: SqliteCodexSessionRegistry | null,
+  workingDirectory: string,
   credentialId: string,
 ): WorkerNodeDiagnosticsCredentialSummary {
   const account = runtimeStore?.getAuthAccount(credentialId) ?? null;
+
+  if (!account) {
+    const codexHome = credentialId === "default"
+      ? resolveDefaultCodexHome()
+      : resolveManagedCodexHome(workingDirectory, credentialId);
+
+    if (existsSync(resolveCodexAuthFilePath(codexHome))) {
+      return {
+        credentialId,
+        status: "ok",
+        isActive: false,
+        codexHome,
+      };
+    }
+  }
 
   return {
     credentialId,

@@ -79,6 +79,30 @@ http://localhost:3100
 ./themis mcp-server
 ```
 
+如果你要把某台机器接成局域网执行节点，推荐先按这个顺序验证：
+
+```bash
+./themis doctor worker-node \
+  --platform <baseUrl> \
+  --owner-principal <principalId> \
+  --token <webAccessToken> \
+  --workspace <absolutePath> \
+  --credential <id>
+
+./themis worker-node run \
+  --platform <baseUrl> \
+  --owner-principal <principalId> \
+  --token <webAccessToken> \
+  --name <displayName> \
+  --workspace <absolutePath> \
+  --credential <id> \
+  --once
+```
+
+长期常驻、`systemd --user` 模板和常见坑，见下文的 Worker Node 部署说明。
+
+如果这是台 fresh 节点，但对应默认 `CODEX_HOME` 或托管 credential 目录里已经有真实 `auth.json`，`./themis doctor worker-node` 现在会直接把该 credential 判成可用，不需要先跑一次 daemon 才过预检。
+
 如果你希望像 `codex` 一样直接输入 `themis`，可以在仓库根目录执行一次：
 
 ```bash
@@ -139,6 +163,7 @@ npm run themis -- config set FEISHU_APP_SECRET xxx
 - [公开发布边界与导出规则](./docs/repository/github-safe-publish.md)
 - [systemd 正式常驻示例](./docs/repository/themis-systemd-prod-service.md)
 - [systemd 开发常驻示例](./docs/repository/themis-systemd-dev-service.md)
+- [Worker Node 常驻部署说明](./docs/repository/themis-worker-node-systemd-service.md)
 
 ## 许可证
 
@@ -233,3 +258,8 @@ THEMIS_UPDATE_CHANNEL=release
 
 - [正式版 systemd service 示例](./infra/systemd/themis-prod.service.example)
 - [正式版部署说明](./docs/repository/themis-systemd-prod-service.md)
+
+如果你要把另一台机器部署成 `Worker Node daemon`，可参考：
+
+- [Worker Node systemd service 示例](./infra/systemd/themis-worker-node.service.example)
+- [Worker Node 常驻部署说明](./docs/repository/themis-worker-node-systemd-service.md)

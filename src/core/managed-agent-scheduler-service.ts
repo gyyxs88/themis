@@ -1,4 +1,9 @@
 import type { ManagedAgentSchedulerStore, StoredPrincipalRecord } from "../storage/index.js";
+import {
+  reclaimManagedAgentExecutionLease,
+  resolveWorkItemStatusAfterInterruptedRun,
+  type ManagedAgentReclaimedLeaseContext,
+} from "./managed-agent-lease-recovery.js";
 import { isManagedAgentNodeHeartbeatExpired } from "./managed-agent-node-service.js";
 import type {
   StoredAgentExecutionLeaseRecord,
@@ -14,6 +19,8 @@ import type {
 const DEFAULT_SCHEDULER_ID = "scheduler-local";
 const DEFAULT_LEASE_TTL_MS = 5 * 60 * 1000;
 const ACTIVE_RUN_STATUSES = new Set<AgentRunStatus>(["created", "starting", "running", "waiting_action"]);
+const NODE_OFFLINE_AUTO_RECLAIM_FAILURE_CODE = "NODE_OFFLINE_LEASE_RECLAIMED";
+const NODE_OFFLINE_AUTO_RECLAIM_FAILURE_MESSAGE = "Execution lease was reclaimed because the assigned node is offline.";
 
 export interface ManagedAgentSchedulerServiceOptions {
   registry: ManagedAgentSchedulerStore;
@@ -44,6 +51,7 @@ export interface ManagedAgentRunListInput {
 }
 
 export interface ManagedAgentSchedulerTickResult {
+  reclaimedLeases: ManagedAgentReclaimedLeaseContext[];
   recoveredRuns: StoredAgentRunRecord[];
   claimed: ManagedAgentSchedulerClaim | null;
 }
@@ -119,6 +127,7 @@ export class ManagedAgentSchedulerService {
 
   tick(input: ClaimNextRunnableWorkItemInput = {}): ManagedAgentSchedulerTickResult {
     const now = normalizeNow(input.now);
+    const reclaimedLeases = this.reclaimOfflineNodeLeases(now);
     const recoveredRuns = this.recoverStaleRuns(now);
     const claimed = this.claimNextRunnableWorkItem({
       ...input,
@@ -126,6 +135,7 @@ export class ManagedAgentSchedulerService {
     });
 
     return {
+      reclaimedLeases,
       recoveredRuns,
       claimed,
     };
@@ -383,6 +393,27 @@ export class ManagedAgentSchedulerService {
     return matched[0] ?? null;
   }
 
+  private reclaimOfflineNodeLeases(now: string): ManagedAgentReclaimedLeaseContext[] {
+    const reclaimedLeases: ManagedAgentReclaimedLeaseContext[] = [];
+    const activeLeases = this.registry.listActiveAgentExecutionLeases()
+      .sort(compareLeasesByUpdatedAtDesc);
+
+    for (const lease of activeLeases) {
+      const node = this.resolveNodeForActiveLeaseRecovery(lease.nodeId, now);
+
+      if (node && node.status !== "offline") {
+        continue;
+      }
+
+      reclaimedLeases.push(reclaimManagedAgentExecutionLease(this.registry, lease, now, {
+        failureCode: NODE_OFFLINE_AUTO_RECLAIM_FAILURE_CODE,
+        failureMessage: NODE_OFFLINE_AUTO_RECLAIM_FAILURE_MESSAGE,
+      }));
+    }
+
+    return reclaimedLeases;
+  }
+
   private createExecutionLease(input: {
     run: StoredAgentRunRecord;
     workItem: StoredAgentWorkItemRecord;
@@ -463,21 +494,33 @@ export class ManagedAgentSchedulerService {
     const nodes = this.registry.listManagedAgentNodesByOrganization(organizationId);
 
     for (const node of nodes) {
-      if (!isManagedAgentNodeHeartbeatExpired(node, now)) {
-        continue;
-      }
-
-      if (node.status === "offline" && node.slotAvailable === 0) {
-        continue;
-      }
-
-      this.registry.saveManagedAgentNode({
-        ...node,
-        status: "offline",
-        slotAvailable: 0,
-        updatedAt: now,
-      });
+      this.resolveNodeForActiveLeaseRecovery(node.nodeId, now);
     }
+  }
+
+  private resolveNodeForActiveLeaseRecovery(nodeId: string, now: string): StoredManagedAgentNodeRecord | null {
+    const node = this.registry.getManagedAgentNode(nodeId);
+
+    if (!node) {
+      return null;
+    }
+
+    if (!isManagedAgentNodeHeartbeatExpired(node, now)) {
+      return node;
+    }
+
+    if (node.status === "offline" && node.slotAvailable === 0) {
+      return node;
+    }
+
+    const offlineNode: StoredManagedAgentNodeRecord = {
+      ...node,
+      status: "offline",
+      slotAvailable: 0,
+      updatedAt: now,
+    };
+    this.registry.saveManagedAgentNode(offlineNode);
+    return this.registry.getManagedAgentNode(node.nodeId) ?? offlineNode;
   }
 
   private saveRunTransition(run: StoredAgentRunRecord, patch: Partial<StoredAgentRunRecord>): StoredAgentRunRecord {
@@ -575,14 +618,6 @@ function normalizeRequiredText(value: string | undefined | null, message: string
   }
 
   return normalized;
-}
-
-function resolveWorkItemStatusAfterInterruptedRun(status: ManagedAgentWorkItemStatus): ManagedAgentWorkItemStatus {
-  if (status === "planning" || status === "running") {
-    return "queued";
-  }
-
-  return status;
 }
 
 function computeLeaseExpiry(now: string, leaseTtlMs: number): string {

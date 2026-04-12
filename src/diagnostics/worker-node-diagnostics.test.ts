@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
@@ -7,14 +7,17 @@ import { join } from "node:path";
 import test from "node:test";
 import { WorkerNodeDiagnosticsService } from "./worker-node-diagnostics.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
+import { resolveCodexAuthFilePath, resolveManagedCodexHome } from "../core/auth-accounts.js";
 
 test("WorkerNodeDiagnosticsService 会识别本地缺失的 workspace / credential / provider 能力", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-worker-node-diagnostics-missing-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
+  const originalCodexHome = process.env.CODEX_HOME;
 
   try {
+    process.env.CODEX_HOME = join(root, "missing-codex-home");
     const service = new WorkerNodeDiagnosticsService({
       workingDirectory: root,
       runtimeStore,
@@ -33,6 +36,11 @@ test("WorkerNodeDiagnosticsService 会识别本地缺失的 workspace / credenti
     assert.equal(summary.primaryDiagnosis.id, "workspace_capability_invalid");
     assert.ok(summary.recommendedNextSteps.some((step) => step.includes("--workspace")));
   } finally {
+    if (originalCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = originalCodexHome;
+    }
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -113,6 +121,49 @@ test("WorkerNodeDiagnosticsService 会探测平台可达性并汇总本地 ok �
     assert.equal(summary.primaryDiagnosis.id, "healthy");
   } finally {
     server?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("WorkerNodeDiagnosticsService 会把本地已存在 auth.json 的 fresh credential 判定为 ok", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-worker-node-diagnostics-auth-file-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const originalCodexHome = process.env.CODEX_HOME;
+
+  try {
+    const defaultCodexHome = join(root, "codex-home-default");
+    const opsCodexHome = resolveManagedCodexHome(root, "ops");
+    mkdirSync(defaultCodexHome, { recursive: true });
+    mkdirSync(opsCodexHome, { recursive: true });
+    writeFileSync(resolveCodexAuthFilePath(defaultCodexHome), "{\"token\":\"default\"}", "utf8");
+    writeFileSync(resolveCodexAuthFilePath(opsCodexHome), "{\"token\":\"ops\"}", "utf8");
+    process.env.CODEX_HOME = defaultCodexHome;
+
+    const service = new WorkerNodeDiagnosticsService({
+      workingDirectory: root,
+      runtimeStore,
+    });
+    const summary = await service.readSummary({
+      workspaceCapabilities: [],
+      credentialCapabilities: ["default", "ops"],
+      providerCapabilities: [],
+    });
+
+    assert.equal(summary.credentials[0]?.credentialId, "default");
+    assert.equal(summary.credentials[0]?.status, "ok");
+    assert.equal(summary.credentials[0]?.codexHome, defaultCodexHome);
+    assert.equal(summary.credentials[1]?.credentialId, "ops");
+    assert.equal(summary.credentials[1]?.status, "ok");
+    assert.equal(summary.credentials[1]?.codexHome, opsCodexHome);
+    assert.equal(summary.primaryDiagnosis.id, "healthy");
+  } finally {
+    if (originalCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = originalCodexHome;
+    }
     rmSync(root, { recursive: true, force: true });
   }
 });

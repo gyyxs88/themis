@@ -3657,6 +3657,32 @@ export class SqliteCodexSessionRegistry {
     return row ? mapAgentExecutionLeaseRow(row) : null;
   }
 
+  listActiveAgentExecutionLeases(): StoredAgentExecutionLeaseRecord[] {
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            lease_id,
+            run_id,
+            work_item_id,
+            target_agent_id,
+            node_id,
+            status,
+            lease_token,
+            lease_expires_at,
+            last_heartbeat_at,
+            created_at,
+            updated_at
+          FROM themis_agent_execution_leases
+          WHERE status = 'active'
+          ORDER BY updated_at DESC, lease_id ASC
+        `,
+      )
+      .all() as AgentExecutionLeaseRow[];
+
+    return rows.map(mapAgentExecutionLeaseRow);
+  }
+
   listAgentExecutionLeasesByRun(runId: string): StoredAgentExecutionLeaseRecord[] {
     const normalizedRunId = runId.trim();
 
