@@ -1,11 +1,16 @@
 import type { ManagedAgentNodeStore } from "../storage/index.js";
 import type {
+  StoredAgentExecutionLeaseRecord,
+  StoredAgentRunRecord,
+  StoredAgentWorkItemRecord,
+  StoredManagedAgentRecord,
   ManagedAgentNodeStatus,
   StoredManagedAgentNodeRecord,
   StoredOrganizationRecord,
 } from "../types/index.js";
 
 const DEFAULT_NODE_HEARTBEAT_TTL_SECONDS = 30;
+const NODE_DETAIL_RECENT_LEASE_LIMIT = 20;
 
 export interface ManagedAgentNodeServiceOptions {
   registry: ManagedAgentNodeStore;
@@ -44,6 +49,35 @@ export interface ManagedAgentNodeMutationResult {
   node: StoredManagedAgentNodeRecord;
 }
 
+export interface ManagedAgentNodeGovernanceInput {
+  ownerPrincipalId: string;
+  nodeId: string;
+  now?: string;
+}
+
+export interface ManagedAgentNodeExecutionLeaseContext {
+  lease: StoredAgentExecutionLeaseRecord;
+  run: StoredAgentRunRecord | null;
+  workItem: StoredAgentWorkItemRecord | null;
+  targetAgent: StoredManagedAgentRecord | null;
+}
+
+export interface ManagedAgentNodeLeaseSummary {
+  totalCount: number;
+  activeCount: number;
+  expiredCount: number;
+  releasedCount: number;
+  revokedCount: number;
+}
+
+export interface ManagedAgentNodeDetailView {
+  organization: StoredOrganizationRecord;
+  node: StoredManagedAgentNodeRecord;
+  leaseSummary: ManagedAgentNodeLeaseSummary;
+  activeExecutionLeases: ManagedAgentNodeExecutionLeaseContext[];
+  recentExecutionLeases: ManagedAgentNodeExecutionLeaseContext[];
+}
+
 export function isManagedAgentNodeHeartbeatExpired(node: StoredManagedAgentNodeRecord, now: string): boolean {
   const lastHeartbeatAt = Date.parse(node.lastHeartbeatAt);
   const currentTimestamp = Date.parse(now);
@@ -79,6 +113,31 @@ export class ManagedAgentNodeService {
     this.requireOwnedOrganization(ownerPrincipalId, node.organizationId);
     this.markStaleNodesOffline(node.organizationId, normalizeTimestamp(now));
     return this.registry.getManagedAgentNode(normalizedNodeId);
+  }
+
+  getNodeDetailView(ownerPrincipalId: string, nodeId: string, now?: string): ManagedAgentNodeDetailView | null {
+    const node = this.getNode(ownerPrincipalId, nodeId, now);
+
+    if (!node) {
+      return null;
+    }
+
+    const organization = this.requireOwnedOrganization(ownerPrincipalId, node.organizationId);
+    const executionLeases = this.registry.listAgentExecutionLeasesByNode(node.nodeId).sort(compareByUpdatedAtDesc);
+    const executionLeaseContexts = executionLeases.map((lease) => ({
+      lease,
+      run: this.registry.getAgentRun(lease.runId),
+      workItem: this.registry.getAgentWorkItem(lease.workItemId),
+      targetAgent: this.registry.getManagedAgent(lease.targetAgentId),
+    }));
+
+    return {
+      organization,
+      node,
+      leaseSummary: summarizeExecutionLeases(executionLeases),
+      activeExecutionLeases: executionLeaseContexts.filter((context) => context.lease.status === "active"),
+      recentExecutionLeases: executionLeaseContexts.slice(0, NODE_DETAIL_RECENT_LEASE_LIMIT),
+    };
   }
 
   registerNode(input: RegisterManagedAgentNodeInput): ManagedAgentNodeMutationResult {
@@ -160,6 +219,14 @@ export class ManagedAgentNodeService {
     };
   }
 
+  markNodeDraining(input: ManagedAgentNodeGovernanceInput): ManagedAgentNodeMutationResult {
+    return this.updateNodeStatus(input, "draining");
+  }
+
+  markNodeOffline(input: ManagedAgentNodeGovernanceInput): ManagedAgentNodeMutationResult {
+    return this.updateNodeStatus(input, "offline");
+  }
+
   private markStaleNodesOffline(organizationId: string, now: string): void {
     const nodes = this.registry.listManagedAgentNodesByOrganization(organizationId);
 
@@ -179,6 +246,34 @@ export class ManagedAgentNodeService {
         updatedAt: now,
       });
     }
+  }
+
+  private updateNodeStatus(
+    input: ManagedAgentNodeGovernanceInput,
+    status: ManagedAgentNodeStatus,
+  ): ManagedAgentNodeMutationResult {
+    const now = normalizeTimestamp(input.now);
+    const normalizedNodeId = normalizeRequiredText(input.nodeId, "nodeId is required.");
+    const node = this.getNode(input.ownerPrincipalId, normalizedNodeId, now);
+
+    if (!node) {
+      throw new Error("Managed agent node not found.");
+    }
+
+    const organization = this.requireOwnedOrganization(input.ownerPrincipalId, node.organizationId);
+    const updated: StoredManagedAgentNodeRecord = {
+      ...node,
+      status,
+      slotAvailable: status === "offline" ? 0 : node.slotAvailable,
+      updatedAt: now,
+    };
+
+    this.registry.saveManagedAgentNode(updated);
+
+    return {
+      organization,
+      node: this.registry.getManagedAgentNode(updated.nodeId) ?? updated,
+    };
   }
 
   private resolveOwnedOrganization(ownerPrincipalId: string, organizationId?: string): StoredOrganizationRecord {
@@ -257,6 +352,52 @@ function normalizeStringArray(values: string[] | undefined): string[] {
 
 function normalizeTimestamp(value: string | undefined): string {
   return normalizeOptionalText(value) ?? new Date().toISOString();
+}
+
+function compareByUpdatedAtDesc<T extends { updatedAt: string; createdAt: string }>(a: T, b: T): number {
+  const updatedDelta = toTimestamp(b.updatedAt) - toTimestamp(a.updatedAt);
+
+  if (updatedDelta !== 0) {
+    return updatedDelta;
+  }
+
+  return toTimestamp(b.createdAt) - toTimestamp(a.createdAt);
+}
+
+function summarizeExecutionLeases(executionLeases: StoredAgentExecutionLeaseRecord[]): ManagedAgentNodeLeaseSummary {
+  const summary: ManagedAgentNodeLeaseSummary = {
+    totalCount: executionLeases.length,
+    activeCount: 0,
+    expiredCount: 0,
+    releasedCount: 0,
+    revokedCount: 0,
+  };
+
+  for (const lease of executionLeases) {
+    if (lease.status === "active") {
+      summary.activeCount += 1;
+      continue;
+    }
+
+    if (lease.status === "expired") {
+      summary.expiredCount += 1;
+      continue;
+    }
+
+    if (lease.status === "released") {
+      summary.releasedCount += 1;
+      continue;
+    }
+
+    summary.revokedCount += 1;
+  }
+
+  return summary;
+}
+
+function toTimestamp(value: string): number {
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
 function createId(prefix: string): string {

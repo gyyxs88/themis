@@ -93,6 +93,10 @@ interface PlatformNodeListPayload extends PlatformAgentListPayload {
   organizationId?: string;
 }
 
+interface PlatformNodeDetailPayload extends PlatformAgentListPayload {
+  nodeId: string;
+}
+
 async function readAndNormalizePayload<T>(
   request: IncomingMessage,
   response: ServerResponse,
@@ -422,6 +426,51 @@ export async function handlePlatformNodeList(
   }
 }
 
+export async function handlePlatformNodeDetail(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformNodeDetailPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const detail = facade.getNodeDetailView(payload.ownerPrincipalId, payload.nodeId);
+    if (!detail) {
+      throw new Error("Managed agent node not found.");
+    }
+
+    writeJson(response, 200, {
+      ok: true,
+      organization: detail.organization,
+      node: detail.node,
+      leaseSummary: detail.leaseSummary,
+      activeExecutionLeases: detail.activeExecutionLeases,
+      recentExecutionLeases: detail.recentExecutionLeases,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformNodeDrain(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  await handlePlatformNodeGovernanceAction(request, response, facade, "draining");
+}
+
+export async function handlePlatformNodeOffline(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  await handlePlatformNodeGovernanceAction(request, response, facade, "offline");
+}
+
 function normalizePlatformAgentCreatePayload(value: unknown): PlatformAgentCreatePayload {
   if (!isRecord(value) || !isRecord(value.agent)) {
     throw new Error("Request body.agent must be an object.");
@@ -621,6 +670,17 @@ function normalizePlatformNodeListPayload(value: unknown): PlatformNodeListPaylo
   };
 }
 
+function normalizePlatformNodeDetailPayload(value: unknown): PlatformNodeDetailPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    nodeId: readRequiredString(value.nodeId, "nodeId"),
+  };
+}
+
 function readRequiredString(value: unknown, fieldName: string): string {
   const normalized = readOptionalString(value);
 
@@ -698,4 +758,36 @@ function hasOwn(value: Record<string, unknown>, key: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+async function handlePlatformNodeGovernanceAction(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+  action: "draining" | "offline",
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformNodeDetailPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const result = action === "draining"
+      ? facade.markNodeDraining({
+        ownerPrincipalId: payload.ownerPrincipalId,
+        nodeId: payload.nodeId,
+      })
+      : facade.markNodeOffline({
+        ownerPrincipalId: payload.ownerPrincipalId,
+        nodeId: payload.nodeId,
+      });
+
+    writeJson(response, 200, {
+      ok: true,
+      organization: result.organization,
+      node: result.node,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
 }

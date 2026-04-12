@@ -359,6 +359,133 @@ test("POST /api/platform/nodes/* 会暴露节点注册、续心跳与列表能�
   });
 });
 
+test("POST /api/platform/nodes/detail|drain|offline 会暴露节点治理动作与详情视图", async () => {
+  await withHttpServer(async ({ baseUrl, runtime, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+    const ownerPrincipalId = "principal-platform-node-governance-owner";
+    const now = new Date().toISOString();
+
+    runtimeStore.savePrincipal({
+      principalId: ownerPrincipalId,
+      displayName: "Platform Node Governance Owner",
+      kind: "human_user",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const createResponse = await postJson(baseUrl, "/api/platform/agents/create", {
+      ownerPrincipalId,
+      agent: {
+        departmentRole: "平台工程",
+        displayName: "平台值班经理",
+        mission: "负责节点治理动作验证。",
+      },
+    }, authHeaders);
+
+    assert.equal(createResponse.status, 200);
+    const createPayload = await createResponse.json() as {
+      organization?: { organizationId?: string };
+      agent?: { agentId?: string };
+    };
+    assert.ok(createPayload.organization?.organizationId);
+    assert.ok(createPayload.agent?.agentId);
+
+    const executionBoundary = runtime.getManagedAgentsService().getManagedAgentExecutionBoundary(
+      ownerPrincipalId,
+      createPayload.agent?.agentId ?? "",
+    );
+    assert.ok(executionBoundary);
+
+    const registerResponse = await postJson(baseUrl, "/api/platform/nodes/register", {
+      ownerPrincipalId,
+      node: {
+        organizationId: createPayload.organization?.organizationId,
+        displayName: "Node Gov",
+        slotCapacity: 2,
+        slotAvailable: 1,
+        workspaceCapabilities: [
+          executionBoundary?.workspacePolicy.workspacePath ?? runtime.getWorkingDirectory(),
+          ...(executionBoundary?.workspacePolicy.additionalDirectories ?? []),
+        ],
+        credentialCapabilities: executionBoundary?.runtimeProfile.authAccountId
+          ? [executionBoundary.runtimeProfile.authAccountId]
+          : [],
+        providerCapabilities: executionBoundary?.runtimeProfile.thirdPartyProviderId
+          ? [executionBoundary.runtimeProfile.thirdPartyProviderId]
+          : [],
+      },
+    }, authHeaders);
+
+    assert.equal(registerResponse.status, 200);
+    const registerPayload = await registerResponse.json() as {
+      node?: { nodeId?: string };
+    };
+    assert.ok(registerPayload.node?.nodeId);
+
+    const dispatchResponse = await postJson(baseUrl, "/api/platform/work-items/dispatch", {
+      ownerPrincipalId,
+      workItem: {
+        targetAgentId: createPayload.agent?.agentId,
+        dispatchReason: "platform-node-detail-smoke",
+        goal: "验证节点 detail 与治理动作。",
+      },
+    }, authHeaders);
+    assert.equal(dispatchResponse.status, 200);
+
+    const claim = runtime.getManagedAgentSchedulerService().claimNextRunnableWorkItem({
+      schedulerId: "scheduler-platform-node-governance",
+    });
+    assert.ok(claim?.executionLease?.leaseId);
+    assert.equal(claim?.node?.nodeId, registerPayload.node?.nodeId);
+
+    const detailResponse = await postJson(baseUrl, "/api/platform/nodes/detail", {
+      ownerPrincipalId,
+      nodeId: registerPayload.node?.nodeId,
+    }, authHeaders);
+    assert.equal(detailResponse.status, 200);
+    const detailPayload = await detailResponse.json() as {
+      organization?: { organizationId?: string };
+      node?: { nodeId?: string; status?: string };
+      leaseSummary?: { totalCount?: number; activeCount?: number };
+      activeExecutionLeases?: Array<{
+        lease?: { leaseId?: string; nodeId?: string };
+        run?: { runId?: string };
+        targetAgent?: { agentId?: string };
+      }>;
+    };
+    assert.equal(detailPayload.organization?.organizationId, createPayload.organization?.organizationId);
+    assert.equal(detailPayload.node?.nodeId, registerPayload.node?.nodeId);
+    assert.equal(detailPayload.node?.status, "online");
+    assert.equal(detailPayload.leaseSummary?.totalCount, 1);
+    assert.equal(detailPayload.leaseSummary?.activeCount, 1);
+    assert.equal(detailPayload.activeExecutionLeases?.[0]?.lease?.leaseId, claim?.executionLease?.leaseId);
+    assert.equal(detailPayload.activeExecutionLeases?.[0]?.lease?.nodeId, registerPayload.node?.nodeId);
+    assert.equal(detailPayload.activeExecutionLeases?.[0]?.run?.runId, claim?.run.runId);
+    assert.equal(detailPayload.activeExecutionLeases?.[0]?.targetAgent?.agentId, createPayload.agent?.agentId);
+
+    const drainResponse = await postJson(baseUrl, "/api/platform/nodes/drain", {
+      ownerPrincipalId,
+      nodeId: registerPayload.node?.nodeId,
+    }, authHeaders);
+    assert.equal(drainResponse.status, 200);
+    const drainPayload = await drainResponse.json() as {
+      node?: { status?: string };
+    };
+    assert.equal(drainPayload.node?.status, "draining");
+
+    const offlineResponse = await postJson(baseUrl, "/api/platform/nodes/offline", {
+      ownerPrincipalId,
+      nodeId: registerPayload.node?.nodeId,
+    }, authHeaders);
+    assert.equal(offlineResponse.status, 200);
+    const offlinePayload = await offlineResponse.json() as {
+      node?: { status?: string; slotAvailable?: number };
+    };
+    assert.equal(offlinePayload.node?.status, "offline");
+    assert.equal(offlinePayload.node?.slotAvailable, 0);
+  });
+});
+
 function listenServer(server: Server): Promise<Server> {
   return new Promise((resolve, reject) => {
     server.once("error", reject);

@@ -28,5 +28,6 @@
 - [Themis 局域网多节点硅基员工平台 / 分阶段落地计划](./themis-silicon-employee-platform-roadmap-plan.md)
 - [Themis 局域网多节点硅基员工平台 / Phase 1 控制面底座实施计划](./themis-silicon-employee-platform-phase-1-control-plane-plan.md)
 - [Themis 局域网多节点硅基员工平台 / Phase 2 节点模型与调度租约实施计划](./themis-silicon-employee-platform-phase-2-node-model-plan.md)
+- [Themis 局域网多节点硅基员工平台 / Phase 3 远端执行闭环实施计划](./themis-silicon-employee-platform-phase-3-remote-execution-plan.md)
 - [Themis P6 / manager 治理面 / 组织级跨父任务汇总台计划](./themis-p6-manager-governance-dashboard-plan.md)
 - [Themis P6 / manager 治理面 v2 / 组织级摘要、筛选与治理动作计划](./themis-p6-manager-governance-v2-plan.md)

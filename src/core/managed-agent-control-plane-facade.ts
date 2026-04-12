@@ -21,6 +21,8 @@ import {
 import {
   ManagedAgentNodeService,
   type HeartbeatManagedAgentNodeInput,
+  type ManagedAgentNodeDetailView,
+  type ManagedAgentNodeGovernanceInput,
   type ManagedAgentNodeMutationResult,
   type RegisterManagedAgentNodeInput,
 } from "./managed-agent-node-service.js";
@@ -118,5 +120,17 @@ export class ManagedAgentControlPlaneFacade {
 
   listNodes(ownerPrincipalId: string, organizationId?: string) {
     return this.nodeService.listNodes(ownerPrincipalId, organizationId);
+  }
+
+  getNodeDetailView(ownerPrincipalId: string, nodeId: string): ManagedAgentNodeDetailView | null {
+    return this.nodeService.getNodeDetailView(ownerPrincipalId, nodeId);
+  }
+
+  markNodeDraining(input: ManagedAgentNodeGovernanceInput): ManagedAgentNodeMutationResult {
+    return this.nodeService.markNodeDraining(input);
+  }
+
+  markNodeOffline(input: ManagedAgentNodeGovernanceInput): ManagedAgentNodeMutationResult {
+    return this.nodeService.markNodeOffline(input);
   }
 }

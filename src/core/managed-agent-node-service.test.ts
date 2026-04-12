@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
+import { ManagedAgentCoordinationService } from "./managed-agent-coordination-service.js";
 import { ManagedAgentsService } from "./managed-agents-service.js";
 import { ManagedAgentNodeService } from "./managed-agent-node-service.js";
+import { ManagedAgentSchedulerService } from "./managed-agent-scheduler-service.js";
 
 function createServiceContext() {
   const root = mkdtempSync(join(tmpdir(), "themis-managed-agent-node-service-"));
@@ -15,12 +17,16 @@ function createServiceContext() {
     registry,
     workingDirectory: root,
   });
+  const coordinationService = new ManagedAgentCoordinationService({ registry });
+  const schedulerService = new ManagedAgentSchedulerService({ registry });
   const nodeService = new ManagedAgentNodeService({ registry });
 
   return {
     root,
     registry,
     managedAgentsService,
+    coordinationService,
+    schedulerService,
     nodeService,
   };
 }
@@ -162,6 +168,118 @@ test("ManagedAgentNodeService 会在读取时把 TTL 过期节点收敛为 offli
     });
     assert.equal(heartbeat.node.status, "online");
     assert.equal(heartbeat.node.slotAvailable, 3);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ManagedAgentNodeService 支持显式 draining/offline 治理动作，并返回节点详情里的租约上下文", () => {
+  const {
+    root,
+    registry,
+    managedAgentsService,
+    coordinationService,
+    nodeService,
+  } = createServiceContext();
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "平台负责人",
+      createdAt: "2026-04-12T08:00:00.000Z",
+      updatedAt: "2026-04-12T08:00:00.000Z",
+    });
+
+    const created = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "平台经理",
+      departmentRole: "平台工程",
+      mission: "负责节点治理动作验证。",
+      now: "2026-04-12T08:01:00.000Z",
+    });
+
+    const registered = nodeService.registerNode({
+      ownerPrincipalId: "principal-owner",
+      organizationId: created.organization.organizationId,
+      displayName: "Node Gov",
+      slotCapacity: 2,
+      slotAvailable: 1,
+      workspaceCapabilities: [root],
+      heartbeatTtlSeconds: 300,
+      now: "2026-04-12T08:02:00.000Z",
+    });
+
+    const dispatched = coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: created.agent.agentId,
+      sourcePrincipalId: "principal-owner",
+      dispatchReason: "node-governance-test",
+      goal: "验证节点治理动作与 detail。",
+      now: "2026-04-12T08:03:00.000Z",
+    });
+    registry.saveManagedAgentNode({
+      ...registered.node,
+      slotAvailable: 0,
+      updatedAt: "2026-04-12T08:04:00.000Z",
+    });
+    registry.saveAgentRun({
+      runId: "run-node-governance-test",
+      organizationId: created.organization.organizationId,
+      targetAgentId: created.agent.agentId,
+      workItemId: dispatched.workItem.workItemId,
+      schedulerId: "scheduler-node-governance-test",
+      status: "running",
+      leaseToken: "run-lease-node-governance-test",
+      leaseExpiresAt: "2026-04-12T08:10:00.000Z",
+      startedAt: "2026-04-12T08:04:00.000Z",
+      lastHeartbeatAt: "2026-04-12T08:04:00.000Z",
+      createdAt: "2026-04-12T08:04:00.000Z",
+      updatedAt: "2026-04-12T08:04:00.000Z",
+    });
+    registry.saveAgentExecutionLease({
+      leaseId: "execution-lease-node-governance-test",
+      runId: "run-node-governance-test",
+      workItemId: dispatched.workItem.workItemId,
+      targetAgentId: created.agent.agentId,
+      nodeId: registered.node.nodeId,
+      status: "active",
+      leaseToken: "run-lease-node-governance-test",
+      leaseExpiresAt: "2026-04-12T08:10:00.000Z",
+      lastHeartbeatAt: "2026-04-12T08:04:00.000Z",
+      createdAt: "2026-04-12T08:04:00.000Z",
+      updatedAt: "2026-04-12T08:04:00.000Z",
+    });
+
+    const draining = nodeService.markNodeDraining({
+      ownerPrincipalId: "principal-owner",
+      nodeId: registered.node.nodeId,
+      now: "2026-04-12T08:05:00.000Z",
+    });
+    assert.equal(draining.node.status, "draining");
+    assert.equal(draining.node.slotAvailable, 0);
+
+    const detail = nodeService.getNodeDetailView(
+      "principal-owner",
+      registered.node.nodeId,
+      "2026-04-12T08:05:30.000Z",
+    );
+    assert.equal(detail?.organization.organizationId, created.organization.organizationId);
+    assert.equal(detail?.node.status, "draining");
+    assert.equal(detail?.leaseSummary.totalCount, 1);
+    assert.equal(detail?.leaseSummary.activeCount, 1);
+    assert.equal(detail?.activeExecutionLeases.length, 1);
+    assert.equal(detail?.activeExecutionLeases[0]?.lease.nodeId, registered.node.nodeId);
+    assert.equal(detail?.activeExecutionLeases[0]?.run?.runId, "run-node-governance-test");
+    assert.equal(detail?.activeExecutionLeases[0]?.workItem?.workItemId, dispatched.workItem.workItemId);
+    assert.equal(detail?.activeExecutionLeases[0]?.targetAgent?.agentId, created.agent.agentId);
+
+    const offline = nodeService.markNodeOffline({
+      ownerPrincipalId: "principal-owner",
+      nodeId: registered.node.nodeId,
+      now: "2026-04-12T08:06:00.000Z",
+    });
+    assert.equal(offline.node.status, "offline");
+    assert.equal(offline.node.slotAvailable, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
