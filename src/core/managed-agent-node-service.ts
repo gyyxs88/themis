@@ -44,6 +44,17 @@ export interface ManagedAgentNodeMutationResult {
   node: StoredManagedAgentNodeRecord;
 }
 
+export function isManagedAgentNodeHeartbeatExpired(node: StoredManagedAgentNodeRecord, now: string): boolean {
+  const lastHeartbeatAt = Date.parse(node.lastHeartbeatAt);
+  const currentTimestamp = Date.parse(now);
+
+  if (Number.isNaN(lastHeartbeatAt) || Number.isNaN(currentTimestamp)) {
+    return false;
+  }
+
+  return currentTimestamp - lastHeartbeatAt > node.heartbeatTtlSeconds * 1000;
+}
+
 export class ManagedAgentNodeService {
   private readonly registry: ManagedAgentNodeStore;
 
@@ -51,12 +62,13 @@ export class ManagedAgentNodeService {
     this.registry = options.registry;
   }
 
-  listNodes(ownerPrincipalId: string, organizationId?: string): StoredManagedAgentNodeRecord[] {
+  listNodes(ownerPrincipalId: string, organizationId?: string, now?: string): StoredManagedAgentNodeRecord[] {
     const organization = this.resolveOwnedOrganization(ownerPrincipalId, organizationId);
+    this.markStaleNodesOffline(organization.organizationId, normalizeTimestamp(now));
     return this.registry.listManagedAgentNodesByOrganization(organization.organizationId);
   }
 
-  getNode(ownerPrincipalId: string, nodeId: string): StoredManagedAgentNodeRecord | null {
+  getNode(ownerPrincipalId: string, nodeId: string, now?: string): StoredManagedAgentNodeRecord | null {
     const normalizedNodeId = normalizeRequiredText(nodeId, "Node id is required.");
     const node = this.registry.getManagedAgentNode(normalizedNodeId);
 
@@ -65,7 +77,8 @@ export class ManagedAgentNodeService {
     }
 
     this.requireOwnedOrganization(ownerPrincipalId, node.organizationId);
-    return node;
+    this.markStaleNodesOffline(node.organizationId, normalizeTimestamp(now));
+    return this.registry.getManagedAgentNode(normalizedNodeId);
   }
 
   registerNode(input: RegisterManagedAgentNodeInput): ManagedAgentNodeMutationResult {
@@ -124,10 +137,11 @@ export class ManagedAgentNodeService {
     const heartbeatTtlSeconds = input.heartbeatTtlSeconds === undefined
       ? node.heartbeatTtlSeconds
       : normalizePositiveInteger(input.heartbeatTtlSeconds, "heartbeatTtlSeconds");
+    const nextStatus = input.status ?? (node.status === "offline" ? "online" : node.status);
 
     const updated: StoredManagedAgentNodeRecord = {
       ...node,
-      ...(input.status ? { status: input.status } : {}),
+      status: nextStatus,
       slotAvailable,
       ...(input.labels ? { labels: normalizeStringArray(input.labels) } : {}),
       ...(input.workspaceCapabilities ? { workspaceCapabilities: normalizeStringArray(input.workspaceCapabilities) } : {}),
@@ -144,6 +158,27 @@ export class ManagedAgentNodeService {
       organization,
       node: this.registry.getManagedAgentNode(updated.nodeId) ?? updated,
     };
+  }
+
+  private markStaleNodesOffline(organizationId: string, now: string): void {
+    const nodes = this.registry.listManagedAgentNodesByOrganization(organizationId);
+
+    for (const node of nodes) {
+      if (!isManagedAgentNodeHeartbeatExpired(node, now)) {
+        continue;
+      }
+
+      if (node.status === "offline" && node.slotAvailable === 0) {
+        continue;
+      }
+
+      this.registry.saveManagedAgentNode({
+        ...node,
+        status: "offline",
+        slotAvailable: 0,
+        updatedAt: now,
+      });
+    }
   }
 
   private resolveOwnedOrganization(ownerPrincipalId: string, organizationId?: string): StoredOrganizationRecord {

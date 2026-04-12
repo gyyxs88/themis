@@ -1,4 +1,5 @@
 import type { ManagedAgentSchedulerStore, StoredPrincipalRecord } from "../storage/index.js";
+import { isManagedAgentNodeHeartbeatExpired } from "./managed-agent-node-service.js";
 import type {
   StoredAgentExecutionLeaseRecord,
   AgentRunStatus,
@@ -197,7 +198,7 @@ export class ManagedAgentSchedulerService {
       throw new Error("Claimed agent work item lost its organization or target agent.");
     }
 
-    const node = this.selectExecutionNode(claim.workItem);
+    const node = this.selectExecutionNode(claim.workItem, now);
     const executionLease = node
       ? this.createExecutionLease({
         run: claim.run,
@@ -365,7 +366,8 @@ export class ManagedAgentSchedulerService {
     return nextRun;
   }
 
-  private selectExecutionNode(workItem: StoredAgentWorkItemRecord): StoredManagedAgentNodeRecord | null {
+  private selectExecutionNode(workItem: StoredAgentWorkItemRecord, now: string): StoredManagedAgentNodeRecord | null {
+    this.markStaleNodesOffline(workItem.organizationId, now);
     const nodes = this.registry.listManagedAgentNodesByOrganization(workItem.organizationId);
     const matched = nodes.filter((node) => canNodeRunWorkItem(node, workItem));
 
@@ -444,6 +446,27 @@ export class ManagedAgentSchedulerService {
       slotAvailable: Math.max(0, Math.min(node.slotCapacity, Math.floor(slotAvailable))),
       updatedAt: now,
     });
+  }
+
+  private markStaleNodesOffline(organizationId: string, now: string): void {
+    const nodes = this.registry.listManagedAgentNodesByOrganization(organizationId);
+
+    for (const node of nodes) {
+      if (!isManagedAgentNodeHeartbeatExpired(node, now)) {
+        continue;
+      }
+
+      if (node.status === "offline" && node.slotAvailable === 0) {
+        continue;
+      }
+
+      this.registry.saveManagedAgentNode({
+        ...node,
+        status: "offline",
+        slotAvailable: 0,
+        updatedAt: now,
+      });
+    }
   }
 
   private saveRunTransition(run: StoredAgentRunRecord, patch: Partial<StoredAgentRunRecord>): StoredAgentRunRecord {

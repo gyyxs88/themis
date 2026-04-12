@@ -1,11 +1,16 @@
 # Themis 局域网多节点硅基员工平台 / Phase 2 节点模型与调度租约实施计划
 
-更新时间：2026-04-12 15:46 CST
+更新时间：2026-04-12 17:28 CST
 文档性质：实施计划稿。目标是把平台化路线里的 `Phase 2 / 节点模型与调度租约` 收成可开工的第一版实现方案。
 
 当前状态补充（2026-04-12）：
 
 - 第一包现在已经全部完成：`node / execution_lease` 类型与 store 接口、SQLite 节点与租约 schema/适配器、`/api/platform/nodes/register|heartbeat|list` 平台 API，以及 scheduler 最小节点匹配都已落地。
+- 节点 TTL 过期后的最小治理也已完成：
+  - `ManagedAgentNodeService` 会在 `list/get` 读路径上把心跳超时节点自动收敛为 `offline`
+  - `ManagedAgentSchedulerService` 会在 claim 前先收敛 TTL 过期节点，避免继续把过期节点选为执行节点
+  - 节点被 TTL 收敛为 `offline` 时会同步把 `slotAvailable` 归零
+  - 处于 `offline` 的节点在后续 heartbeat 未显式指定状态时，会默认恢复成 `online`
 - 当前 scheduler 已支持：
   - claim 时只挑 `online` 且 `slotAvailable > 0` 的节点
   - 按 `workspaceCapabilities / credentialCapabilities / providerCapabilities` 做最小精确匹配
@@ -16,10 +21,11 @@
   - `npm run typecheck`
   - `node --test --import tsx src/core/managed-agent-node-service.test.ts src/storage/codex-session-registry-managed-agent-node.test.ts src/core/managed-agents-service.test.ts src/core/managed-agent-coordination-service.test.ts src/core/managed-agent-scheduler-service.test.ts src/server/http-agents.test.ts src/server/http-platform.test.ts`
   - `git diff --check`
-- 当前还没做的是节点治理补充，而不是基础匹配本身。也就是说，平台已经能认识节点、最小匹配节点并持久化租约；后续更值得继续的是：
-  - 节点失联 / TTL 过期后的 `offline` 治理
-  - 更明确的 `draining` / 下线控制面动作
-  - MySQL 节点/租约 schema 与 store 对齐也已完成，并已通过本地 `mysql:8.4` round-trip 烟测
+- MySQL 节点/租约 schema 与 store 对齐也已完成，并已通过本地 `mysql:8.4` round-trip 烟测。
+- 当前还没做的是更明确的节点治理动作，而不是基础匹配、MySQL 对齐或 TTL 下线本身。也就是说，平台已经能认识节点、最小匹配节点、持久化租约，并在 TTL 过期后把节点自动收敛为 `offline`；后续更值得继续的是：
+  - 更明确的 `draining` / 人工下线控制面动作
+  - 节点 detail 视图与治理上下文
+  - 后续 Worker Node 真执行前的治理边界收口
 
 ## 1. 目标
 
@@ -193,9 +199,9 @@ SQLite 和 MySQL 都先给最小实现。
 
 而下一刀的重点会切到：
 
-- MySQL 节点/租约 schema 是否和 SQLite 对齐
-- `draining / offline` 状态是否进入治理主链
-- 节点 TTL 过期后是否能自动进入更可解释的下线状态
+- `draining / offline / detail` 是否进入治理主链
+- 节点治理动作和当前调度过滤语义是否保持一致
+- 为后续 Worker Node 真执行预留可解释的节点详情视图
 
 ## 7. 完成标准
 
