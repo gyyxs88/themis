@@ -1,13 +1,13 @@
 # Themis 局域网多节点硅基员工平台 / 分阶段落地计划
 
-更新时间：2026-04-12 18:52 CST
+更新时间：2026-04-12 19:34 CST
 文档性质：路线拆解稿。基于《Themis 局域网多节点硅基员工平台方案（V1 草案）》继续下收，回答“接下来应该按什么顺序推进、每阶段做到什么算完成”。
 
 当前状态补充（2026-04-12）：
 
 - `Phase 1 / 控制面底座` 已按当前计划范围完成，已落地控制面 `store` 抽象、SQLite/MySQL 原型、控制面门面，以及 `/api/platform/*` 最小平台 API 原型。
 - `Phase 2 / 节点模型与调度租约` 当前计划范围已基本收口：当前已固定 `node / execution_lease` 类型与 store 接口，SQLite/MySQL 都已补齐节点/租约 schema 与适配器，平台 API 已新增 `/api/platform/nodes/register|heartbeat|list|detail|drain|offline`，scheduler 也已接入最小节点匹配、`execution_lease` 回填，以及 TTL 过期节点自动收敛为 `offline` 的语义。
-- 当前主线已从 `Phase 2` 切到 `Phase 3 / 远端执行闭环`，而且 `Phase 3` 的前八刀都已落地：平台 worker 协议、进程内 Worker Execution 原型、真正的 `Worker Node daemon / 平台 HTTP client / CLI` 首版、`themis doctor worker-node` 预检诊断、`POST /api/platform/nodes/reclaim` 这条显式 lease 回收治理动作、scheduler tick 对 `offline` / TTL 过期节点的 active lease 自动回收、`Worker Node` 的部署 / `systemd --user` 常驻文档，以及独立目录上的真实 `systemd --user` 演练与 fresh credential 预检补齐都已经接通。当前下一步不再是“先把 daemon 写出来”或“再补一套恢复协议”，而是继续把常驻巡检、排障动作和多节点运维手册收口。详细实施计划见独立文档。
+- 当前主线已从 `Phase 2` 切到 `Phase 3 / 远端执行闭环`，而且 `Phase 3` 的前九刀都已落地：平台 worker 协议、进程内 Worker Execution 原型、真正的 `Worker Node daemon / 平台 HTTP client / CLI` 首版、`themis doctor worker-node` 预检诊断、`POST /api/platform/nodes/reclaim` 这条显式 lease 回收治理动作、scheduler tick 对 `offline` / TTL 过期节点的 active lease 自动回收、`Worker Node` 的部署 / `systemd --user` 常驻文档、独立目录上的真实 `systemd --user` 演练与 fresh credential 预检补齐，以及常驻巡检 / 排障 / 多节点值守手册都已经接通。当前下一步不再是“先把 daemon 写出来”或“再补一套恢复协议”，而是继续把运维手册往更贴近真实值班的方向收口。详细实施计划见独立文档。
 
 ## 1. 这份计划解决什么问题
 

@@ -99,7 +99,7 @@ http://localhost:3100
   --once
 ```
 
-长期常驻、`systemd --user` 模板和常见坑，见下文的 Worker Node 部署说明。
+长期常驻、`systemd --user` 模板和常见坑，见下文的 Worker Node 部署说明；日常巡检、排障和多节点值守顺序，见 Worker Node 运维手册。
 
 如果这是台 fresh 节点，但对应默认 `CODEX_HOME` 或托管 credential 目录里已经有真实 `auth.json`，`./themis doctor worker-node` 现在会直接把该 credential 判成可用，不需要先跑一次 daemon 才过预检。
 
