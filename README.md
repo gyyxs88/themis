@@ -178,6 +178,8 @@ git push origin main
 ./themis update apply
 ```
 
+如果你的正式目录还不是 `git clone`，先按 `docs/repository/themis-systemd-prod-service.md` 里的迁移步骤切到公开仓 clone，再使用这条受控升级链。
+
 如果你已经登录了 Web，也可以在“运行参数 -> 实例升级”里直接触发后台升级或回滚；Themis 会把进度写到 `infra/local/themis-update-operation.json`，版本切换完成后再请求重启当前 `systemd --user` 服务。飞书侧也已支持 `/update`、`/update apply confirm`、`/update rollback confirm` 作为运维入口，其中高风险动作默认要求显式 `confirm`。
 
 当前受控升级已经支持两条更新轨道：
