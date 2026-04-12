@@ -36,31 +36,129 @@ export interface ManagedAgentPlatformWorkerNodeHeartbeatInput {
   heartbeatTtlSeconds?: number;
 }
 
-export interface ManagedAgentPlatformWorkerNodeMutationResult {
-  organization: {
-    organizationId: string;
-    ownerPrincipalId: string;
-    displayName: string;
-    slug: string;
-    createdAt: string;
-    updatedAt: string;
-  };
-  node: {
+export interface ManagedAgentPlatformWorkerOrganizationRecord {
+  organizationId: string;
+  ownerPrincipalId: string;
+  displayName: string;
+  slug: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ManagedAgentPlatformWorkerNodeRecord {
+  nodeId: string;
+  organizationId: string;
+  displayName: string;
+  status: "online" | "draining" | "offline";
+  slotCapacity: number;
+  slotAvailable: number;
+  labels: string[];
+  workspaceCapabilities: string[];
+  credentialCapabilities: string[];
+  providerCapabilities: string[];
+  heartbeatTtlSeconds: number;
+  lastHeartbeatAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ManagedAgentPlatformWorkerNodeLeaseSummary {
+  totalCount: number;
+  activeCount: number;
+  expiredCount: number;
+  releasedCount: number;
+  revokedCount: number;
+}
+
+export interface ManagedAgentPlatformWorkerNodeExecutionLeaseContext {
+  lease: {
+    leaseId: string;
+    runId: string;
+    workItemId: string;
+    targetAgentId: string;
     nodeId: string;
-    organizationId: string;
-    displayName: string;
-    status: "online" | "draining" | "offline";
-    slotCapacity: number;
-    slotAvailable: number;
-    labels: string[];
-    workspaceCapabilities: string[];
-    credentialCapabilities: string[];
-    providerCapabilities: string[];
-    heartbeatTtlSeconds: number;
-    lastHeartbeatAt: string;
+    status: string;
+    leaseToken: string;
+    leaseExpiresAt: string;
+    lastHeartbeatAt?: string;
     createdAt: string;
     updatedAt: string;
   };
+  run: {
+    runId: string;
+    status: string;
+    failureCode?: string;
+    failureMessage?: string;
+  } | null;
+  workItem: {
+    workItemId: string;
+    status: string;
+  } | null;
+  targetAgent: {
+    agentId: string;
+    displayName: string;
+  } | null;
+}
+
+export type ManagedAgentPlatformWorkerNodeLeaseRecoveryAction = "requeued" | "waiting_preserved" | "lease_revoked";
+
+export interface ManagedAgentPlatformWorkerNodeMutationResult {
+  organization: ManagedAgentPlatformWorkerOrganizationRecord;
+  node: ManagedAgentPlatformWorkerNodeRecord;
+}
+
+export interface ManagedAgentPlatformWorkerReclaimedLeaseContext {
+  lease: {
+    leaseId: string;
+    runId?: string;
+    workItemId?: string;
+    targetAgentId?: string;
+    nodeId?: string;
+    status: string;
+    leaseToken?: string;
+    leaseExpiresAt?: string;
+    lastHeartbeatAt?: string;
+    createdAt?: string;
+    updatedAt?: string;
+  };
+  run: {
+    runId: string;
+    status: string;
+    failureCode?: string;
+    failureMessage?: string;
+  } | null;
+  workItem: {
+    workItemId: string;
+    status: string;
+  } | null;
+  targetAgent: {
+    agentId: string;
+    displayName: string;
+  } | null;
+  recoveryAction: ManagedAgentPlatformWorkerNodeLeaseRecoveryAction;
+}
+
+export interface ManagedAgentPlatformWorkerNodeLeaseRecoverySummary {
+  activeLeaseCount: number;
+  reclaimedRunCount: number;
+  requeuedWorkItemCount: number;
+  preservedWaitingCount: number;
+  revokedLeaseOnlyCount: number;
+}
+
+export interface ManagedAgentPlatformWorkerNodeDetailResult {
+  organization: ManagedAgentPlatformWorkerOrganizationRecord;
+  node: ManagedAgentPlatformWorkerNodeRecord;
+  leaseSummary: ManagedAgentPlatformWorkerNodeLeaseSummary;
+  activeExecutionLeases: ManagedAgentPlatformWorkerNodeExecutionLeaseContext[];
+  recentExecutionLeases: ManagedAgentPlatformWorkerNodeExecutionLeaseContext[];
+}
+
+export interface ManagedAgentPlatformWorkerNodeLeaseRecoveryResult {
+  organization: ManagedAgentPlatformWorkerOrganizationRecord;
+  node: ManagedAgentPlatformWorkerNodeRecord;
+  summary: ManagedAgentPlatformWorkerNodeLeaseRecoverySummary;
+  reclaimedLeases: ManagedAgentPlatformWorkerReclaimedLeaseContext[];
 }
 
 export interface ManagedAgentPlatformWorkerProbeResult {
@@ -96,6 +194,53 @@ export class ManagedAgentPlatformWorkerClient {
     return await this.requestJson("/api/platform/nodes/heartbeat", {
       ownerPrincipalId: this.ownerPrincipalId,
       node: input,
+    });
+  }
+
+  async listNodes(input: { organizationId?: string } = {}): Promise<ManagedAgentPlatformWorkerNodeRecord[]> {
+    const payload = await this.requestJson<{
+      nodes?: ManagedAgentPlatformWorkerNodeRecord[];
+    }>("/api/platform/nodes/list", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      ...(input.organizationId ? { organizationId: input.organizationId } : {}),
+    });
+
+    return Array.isArray(payload.nodes) ? payload.nodes : [];
+  }
+
+  async getNodeDetail(nodeId: string): Promise<ManagedAgentPlatformWorkerNodeDetailResult> {
+    return await this.requestJson("/api/platform/nodes/detail", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      nodeId,
+    });
+  }
+
+  async drainNode(nodeId: string): Promise<ManagedAgentPlatformWorkerNodeMutationResult> {
+    return await this.requestJson("/api/platform/nodes/drain", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      nodeId,
+    });
+  }
+
+  async offlineNode(nodeId: string): Promise<ManagedAgentPlatformWorkerNodeMutationResult> {
+    return await this.requestJson("/api/platform/nodes/offline", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      nodeId,
+    });
+  }
+
+  async reclaimNodeLeases(
+    nodeId: string,
+    input: {
+      failureCode?: string;
+      failureMessage?: string;
+    } = {},
+  ): Promise<ManagedAgentPlatformWorkerNodeLeaseRecoveryResult> {
+    return await this.requestJson("/api/platform/nodes/reclaim", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      nodeId,
+      ...(input.failureCode ? { failureCode: input.failureCode } : {}),
+      ...(input.failureMessage ? { failureMessage: input.failureMessage } : {}),
     });
   }
 
@@ -153,15 +298,9 @@ export class ManagedAgentPlatformWorkerClient {
   }
 
   async probeAccess(input: { organizationId?: string } = {}): Promise<ManagedAgentPlatformWorkerProbeResult> {
-    const payload = await this.requestJson<{
-      nodes?: unknown[];
-    }>("/api/platform/nodes/list", {
-      ownerPrincipalId: this.ownerPrincipalId,
-      ...(input.organizationId ? { organizationId: input.organizationId } : {}),
-    });
-
+    const nodes = await this.listNodes(input);
     return {
-      nodeCount: Array.isArray(payload.nodes) ? payload.nodes.length : 0,
+      nodeCount: nodes.length,
     };
   }
 

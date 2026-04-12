@@ -71,11 +71,13 @@ http://localhost:3100
 ./themis update rollback
 ./themis doctor
 ./themis doctor worker-node
+./themis doctor worker-fleet
 ./themis doctor smoke web
 ./themis doctor smoke feishu
 ./themis doctor smoke all
 ./themis doctor release
 ./themis worker-node run --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --name <displayName> [--once]
+./themis worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --node <nodeId> [--node <nodeId> ...] --yes
 ./themis mcp-server
 ```
 
@@ -100,6 +102,30 @@ http://localhost:3100
 ```
 
 长期常驻、`systemd --user` 模板和常见坑，见下文的 Worker Node 部署说明；日常巡检、排障和多节点值守顺序，见 Worker Node 运维手册。
+
+如果你已经有多台节点在线，想先从平台侧看一眼整体现状，可以直接运行：
+
+```bash
+./themis doctor worker-fleet \
+  --platform <baseUrl> \
+  --owner-principal <principalId> \
+  --token <webAccessToken>
+```
+
+这条命令会批量读取 `nodes/list + nodes/detail`，汇总每台节点的 `status / heartbeat / active lease`，并直接给出值班建议动作。
+
+如果已经确认要对节点做平台侧治理，可以直接运行：
+
+```bash
+./themis worker-fleet drain \
+  --platform <baseUrl> \
+  --owner-principal <principalId> \
+  --token <webAccessToken> \
+  --node <nodeId> \
+  --yes
+```
+
+同一组参数下也支持 `offline` 和 `reclaim`；`reclaim` 还可以额外传 `--failure-code` 与 `--failure-message`。当前 CLI 会逐节点输出成功/失败摘要，不需要再手工登录平台取 cookie 后拼 `curl`。
 
 如果这是台 fresh 节点，但对应默认 `CODEX_HOME` 或托管 credential 目录里已经有真实 `auth.json`，`./themis doctor worker-node` 现在会直接把该 credential 判成可用，不需要先跑一次 daemon 才过预检。
 

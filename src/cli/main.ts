@@ -22,6 +22,8 @@ import {
   describeFeishuTakeoverGuidance,
   type FeishuDiagnosticsSummary,
 } from "../diagnostics/feishu-diagnostics.js";
+import { WorkerFleetGovernanceService } from "../diagnostics/worker-fleet-governance.js";
+import { WorkerFleetDiagnosticsService } from "../diagnostics/worker-fleet-diagnostics.js";
 import { WorkerNodeDiagnosticsService } from "../diagnostics/worker-node-diagnostics.js";
 import { applyThemisUpdate, rollbackThemisUpdate } from "../diagnostics/update-apply.js";
 import {
@@ -126,8 +128,11 @@ async function main(args: string[]): Promise<void> {
     case "worker-node":
       await handleWorkerNode(subcommand, rest);
       return;
+    case "worker-fleet":
+      await handleWorkerFleet(subcommand, rest);
+      return;
     default:
-      throw new Error(`不支持的命令：${command}。可用命令：init / status / check / update / doctor / config / auth / skill / mcp-server / worker-node / help。`);
+      throw new Error(`不支持的命令：${command}。可用命令：init / status / check / update / doctor / config / auth / skill / mcp-server / worker-node / worker-fleet / help。`);
   }
 }
 
@@ -535,14 +540,21 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
     return;
   }
 
+  if (selected === "worker-fleet") {
+    await handleDoctorWorkerFleet(args);
+    return;
+  }
+
   const sections = [subcommand, ...args].filter((item): item is string => Boolean(item && item.trim()));
   if (sections.length > 1) {
-    throw new Error("用法：themis doctor [context|auth|provider|memory|service|mcp|feishu|worker-node|release|smoke]");
+    throw new Error("用法：themis doctor [context|auth|provider|memory|service|mcp|feishu|worker-node|worker-fleet|release|smoke]");
   }
 
   const selectedSection = sections[0]?.trim().toLowerCase();
-  if (selectedSection && !["context", "auth", "provider", "memory", "service", "mcp", "feishu", "worker-node", "release"].includes(selectedSection)) {
-    throw new Error("doctor 子命令仅支持 context / auth / provider / memory / service / mcp / feishu / worker-node / release。");
+  if (selectedSection
+    && !["context", "auth", "provider", "memory", "service", "mcp", "feishu", "worker-node", "worker-fleet", "release"]
+      .includes(selectedSection)) {
+    throw new Error("doctor 子命令仅支持 context / auth / provider / memory / service / mcp / feishu / worker-node / worker-fleet / release。");
   }
 
   const dbPath = resolve(cwd, "infra/local/themis.db");
@@ -859,6 +871,79 @@ async function handleDoctorWorkerNode(args: string[]): Promise<void> {
   }
 }
 
+async function handleDoctorWorkerFleet(args: string[]): Promise<void> {
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(
+      "用法：themis doctor worker-fleet --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> [--organization <organizationId>]",
+    );
+    console.log("说明：批量读取平台节点列表与 detail，输出当前 Worker Node 集群的值守摘要与建议动作。");
+    return;
+  }
+
+  const valueOptions = ["--platform", "--owner-principal", "--token", "--organization"];
+  const unknownArgs = collectUnknownOptions(args, valueOptions, []);
+
+  if (unknownArgs.length > 0) {
+    throw new Error(`doctor worker-fleet 不支持这些参数：${unknownArgs.join(", ")}`);
+  }
+
+  const platformBaseUrl = readOptionValue(args, "--platform");
+  const ownerPrincipalId = readOptionValue(args, "--owner-principal");
+  const webAccessToken = readOptionValue(args, "--token");
+
+  if (!platformBaseUrl || !ownerPrincipalId || !webAccessToken) {
+    throw new Error(
+      "用法：themis doctor worker-fleet --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> [--organization <organizationId>]",
+    );
+  }
+
+  const diagnostics = new WorkerFleetDiagnosticsService();
+  const summary = await diagnostics.readSummary({
+    platformBaseUrl,
+    ownerPrincipalId,
+    webAccessToken,
+    organizationId: readOptionValue(args, "--organization"),
+  });
+
+  console.log("Themis 诊断 - worker-fleet");
+  console.log(`platform.baseUrl：${summary.platformBaseUrl}`);
+  console.log(`platform.organizationId：${summary.organizationId ?? "<none>"}`);
+  console.log(`nodeCount：${summary.nodeCount}`);
+  console.log(`status.online：${summary.counts.online}`);
+  console.log(`status.draining：${summary.counts.draining}`);
+  console.log(`status.offline：${summary.counts.offline}`);
+  console.log(`heartbeat.stale：${summary.counts.stale}`);
+  console.log(`heartbeat.expired：${summary.counts.expired}`);
+  console.log(`attention.errorCount：${summary.counts.errorCount}`);
+  console.log(`attention.warningCount：${summary.counts.warningCount}`);
+
+  for (const node of summary.nodes) {
+    console.log(`node[${node.node.displayName}|${node.node.nodeId}]：${node.node.status}`);
+    console.log(`  slots：${node.node.slotAvailable}/${node.node.slotCapacity}`);
+    console.log(
+      `  heartbeat：${node.heartbeatFreshness} (age=${formatOptionalSeconds(node.heartbeatAgeSeconds)}, ttl=${node.node.heartbeatTtlSeconds}s, remaining=${formatOptionalSeconds(node.heartbeatRemainingSeconds)})`,
+    );
+    console.log(
+      `  leases：active=${node.leaseSummary?.activeCount ?? "<unknown>"}, revoked=${node.leaseSummary?.revokedCount ?? "<unknown>"}, total=${node.leaseSummary?.totalCount ?? "<unknown>"}`,
+    );
+    if (node.detailError) {
+      console.log(`  detailError：${node.detailError}`);
+    }
+    if (node.attention) {
+      console.log(`  attention：${node.attention.severity} - ${node.attention.summary}`);
+      console.log(`  nextStep：${node.attention.recommendedAction}`);
+    }
+  }
+
+  console.log("问题判断");
+  console.log(`主诊断：${summary.primaryDiagnosis.title}`);
+  console.log(`诊断摘要：${summary.primaryDiagnosis.summary}`);
+  console.log("建议动作：");
+  for (const [index, step] of summary.recommendedNextSteps.entries()) {
+    console.log(`${index + 1}. ${step}`);
+  }
+}
+
 async function handleMcpServer(args: string[]): Promise<void> {
   if (args.includes("--help") || args.includes("-h")) {
     console.log("用法：themis mcp-server [--channel <channel>] [--user <channelUserId>] [--name <displayName>] [--session <sessionId>] [--channel-session-key <key>]");
@@ -1017,6 +1102,95 @@ async function handleWorkerNode(subcommand: string | undefined, args: string[]):
   } finally {
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);
+  }
+}
+
+async function handleWorkerFleet(subcommand: string | undefined, args: string[]): Promise<void> {
+  const action = subcommand?.trim().toLowerCase();
+
+  if (action !== "drain" && action !== "offline" && action !== "reclaim") {
+    throw new Error(
+      "用法：themis worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --node <nodeId> [--node <nodeId> ...] [--failure-code <code>] [--failure-message <message>] --yes",
+    );
+  }
+
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(
+      "用法：themis worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --node <nodeId> [--node <nodeId> ...] [--failure-code <code>] [--failure-message <message>] --yes",
+    );
+    console.log("说明：面向值班的 Worker Node 平台治理入口；支持对多个 nodeId 顺序执行 drain / offline / reclaim。");
+    return;
+  }
+
+  const valueOptions = ["--platform", "--owner-principal", "--token", "--node", "--failure-code", "--failure-message"];
+  const flagOptions = ["--yes"];
+  const unknownArgs = collectUnknownOptions(args, valueOptions, flagOptions);
+
+  if (unknownArgs.length > 0) {
+    throw new Error(`worker-fleet ${action} 不支持这些参数：${unknownArgs.join(", ")}`);
+  }
+
+  const platformBaseUrl = readOptionValue(args, "--platform");
+  const ownerPrincipalId = readOptionValue(args, "--owner-principal");
+  const webAccessToken = readOptionValue(args, "--token");
+  const nodeIds = readOptionValues(args, "--node");
+
+  if (!platformBaseUrl || !ownerPrincipalId || !webAccessToken || nodeIds.length === 0) {
+    throw new Error(
+      "用法：themis worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --node <nodeId> [--node <nodeId> ...] [--failure-code <code>] [--failure-message <message>] --yes",
+    );
+  }
+
+  if (!args.includes("--yes")) {
+    throw new Error(`worker-fleet ${action} 是治理动作，必须显式追加 --yes。`);
+  }
+
+  if ((action === "drain" || action === "offline") && (readOptionValue(args, "--failure-code") || readOptionValue(args, "--failure-message"))) {
+    throw new Error(`worker-fleet ${action} 不支持 --failure-code / --failure-message；它们只适用于 reclaim。`);
+  }
+
+  const service = new WorkerFleetGovernanceService();
+  const summary = await service.execute({
+    platformBaseUrl,
+    ownerPrincipalId,
+    webAccessToken,
+    action,
+    nodeIds,
+    ...(action === "reclaim" && readOptionValue(args, "--failure-code")
+      ? { failureCode: readOptionValue(args, "--failure-code") }
+      : {}),
+    ...(action === "reclaim" && readOptionValue(args, "--failure-message")
+      ? { failureMessage: readOptionValue(args, "--failure-message") }
+      : {}),
+  });
+
+  console.log(`Themis Worker Fleet 治理 - ${summary.action}`);
+  console.log(`platform.baseUrl：${summary.platformBaseUrl}`);
+  console.log(`requestedNodeCount：${summary.requestedNodeIds.length}`);
+  console.log(`requestedNodeIds：${summary.requestedNodeIds.join(", ")}`);
+  console.log(`result.successCount：${summary.successCount}`);
+  console.log(`result.failureCount：${summary.failureCount}`);
+
+  for (const result of summary.results) {
+    console.log(`node[${result.nodeId}]：${result.outcome}`);
+    if (result.node) {
+      console.log(`  status：${result.node.status}`);
+      console.log(`  slots：${result.node.slotAvailable}/${result.node.slotCapacity}`);
+    }
+    if (result.reclaim) {
+      console.log(`  reclaimed.activeLeaseCount：${result.reclaim.summary.activeLeaseCount}`);
+      console.log(`  reclaimed.reclaimedRunCount：${result.reclaim.summary.reclaimedRunCount}`);
+      console.log(`  reclaimed.requeuedWorkItemCount：${result.reclaim.summary.requeuedWorkItemCount}`);
+      console.log(`  reclaimed.preservedWaitingCount：${result.reclaim.summary.preservedWaitingCount}`);
+      console.log(`  reclaimed.revokedLeaseOnlyCount：${result.reclaim.summary.revokedLeaseOnlyCount}`);
+    }
+    if (result.errorMessage) {
+      console.log(`  error：${result.errorMessage}`);
+    }
+  }
+
+  if (summary.failureCount > 0) {
+    process.exitCode = 1;
   }
 }
 
@@ -1240,7 +1414,7 @@ function printHelp(): void {
   console.log("- ./themis update apply [--service <systemd-user-service>] [--no-restart]");
   console.log("- ./themis update rollback [--service <systemd-user-service>] [--no-restart]");
   console.log("- ./themis doctor");
-  console.log("- ./themis doctor <context|auth|provider|memory|service|mcp|feishu|worker-node|release>");
+  console.log("- ./themis doctor <context|auth|provider|memory|service|mcp|feishu|worker-node|worker-fleet|release>");
   console.log("- ./themis doctor smoke <web|feishu|all>");
   console.log("- ./themis config list [--show-secrets]");
   console.log("- ./themis config set <KEY> <VALUE>");
@@ -1259,8 +1433,17 @@ function printHelp(): void {
   console.log("- ./themis skill sync <SKILL_NAME> [--force]");
   console.log("- ./themis mcp-server [--channel <channel>] [--user <channelUserId>] [--name <displayName>] [--session <sessionId>] [--channel-session-key <key>]");
   console.log("- ./themis worker-node run --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --name <displayName> [--once]");
+  console.log("- ./themis worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --node <nodeId> [--node <nodeId> ...] --yes");
   console.log("");
   console.log("如果希望像 codex/openclaw 一样直接输入 `themis`，建议执行 `./themis install`。");
+}
+
+function formatOptionalSeconds(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) {
+    return "<unknown>";
+  }
+
+  return `${value}s`;
 }
 
 function printReleaseReadinessSummary(summary: ReleaseReadinessSummary): void {

@@ -232,6 +232,350 @@ test("themis doctor worker-node 会输出本地 capability 与平台探测摘要
   }
 });
 
+test("themis doctor worker-fleet 会输出平台节点批量巡检摘要", async () => {
+  const workspace = mkdtempSync(resolve(tmpdir(), "themis-doctor-cli-worker-fleet-"));
+  const freshHeartbeatAt = new Date(Date.now() - 5_000).toISOString();
+  const offlineHeartbeatAt = new Date(Date.now() - 60_000).toISOString();
+  let server: ReturnType<typeof createServer> | null = null;
+
+  try {
+    server = createServer((req, res) => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+
+      if (req.method === "POST" && url.pathname === "/api/web-auth/login") {
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "set-cookie": "themis_web_session=session-worker-fleet-cli; Path=/; HttpOnly",
+        });
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/platform/nodes/list") {
+        res.writeHead(200, {
+          "content-type": "application/json",
+        });
+        res.end(JSON.stringify({
+          ok: true,
+          nodes: [
+            {
+              nodeId: "node-a",
+              organizationId: "org-1",
+              displayName: "worker-node-a",
+              status: "online",
+              slotCapacity: 1,
+              slotAvailable: 1,
+              labels: [],
+              workspaceCapabilities: ["/workspace/a"],
+              credentialCapabilities: ["default"],
+              providerCapabilities: [],
+              heartbeatTtlSeconds: 30,
+              lastHeartbeatAt: freshHeartbeatAt,
+              createdAt: "2026-04-12T11:00:00.000Z",
+              updatedAt: freshHeartbeatAt,
+            },
+            {
+              nodeId: "node-b",
+              organizationId: "org-1",
+              displayName: "worker-node-b",
+              status: "offline",
+              slotCapacity: 1,
+              slotAvailable: 0,
+              labels: [],
+              workspaceCapabilities: ["/workspace/b"],
+              credentialCapabilities: ["default"],
+              providerCapabilities: [],
+              heartbeatTtlSeconds: 30,
+              lastHeartbeatAt: offlineHeartbeatAt,
+              createdAt: "2026-04-12T11:00:00.000Z",
+              updatedAt: offlineHeartbeatAt,
+            },
+          ],
+        }));
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/platform/nodes/detail") {
+        let body = "";
+        req.on("data", (chunk) => {
+          body += chunk.toString();
+        });
+        req.on("end", () => {
+          const payload = JSON.parse(body || "{}") as { nodeId?: string };
+          res.writeHead(200, {
+            "content-type": "application/json",
+          });
+          res.end(JSON.stringify({
+            ok: true,
+            organization: {
+              organizationId: "org-1",
+              ownerPrincipalId: "principal-owner",
+              displayName: "团队",
+              slug: "team",
+              createdAt: "2026-04-12T11:00:00.000Z",
+              updatedAt: "2026-04-12T11:00:00.000Z",
+            },
+            node: payload.nodeId === "node-a"
+              ? {
+                nodeId: "node-a",
+                organizationId: "org-1",
+                displayName: "worker-node-a",
+                status: "online",
+                slotCapacity: 1,
+                slotAvailable: 1,
+                labels: [],
+                workspaceCapabilities: ["/workspace/a"],
+                credentialCapabilities: ["default"],
+                providerCapabilities: [],
+                heartbeatTtlSeconds: 30,
+                lastHeartbeatAt: freshHeartbeatAt,
+                createdAt: "2026-04-12T11:00:00.000Z",
+                updatedAt: freshHeartbeatAt,
+              }
+              : {
+                nodeId: "node-b",
+                organizationId: "org-1",
+                displayName: "worker-node-b",
+                status: "offline",
+                slotCapacity: 1,
+                slotAvailable: 0,
+                labels: [],
+                workspaceCapabilities: ["/workspace/b"],
+                credentialCapabilities: ["default"],
+                providerCapabilities: [],
+                heartbeatTtlSeconds: 30,
+                lastHeartbeatAt: offlineHeartbeatAt,
+                createdAt: "2026-04-12T11:00:00.000Z",
+                updatedAt: offlineHeartbeatAt,
+              },
+            leaseSummary: payload.nodeId === "node-a"
+              ? {
+                totalCount: 0,
+                activeCount: 0,
+                expiredCount: 0,
+                releasedCount: 0,
+                revokedCount: 0,
+              }
+              : {
+                totalCount: 1,
+                activeCount: 1,
+                expiredCount: 0,
+                releasedCount: 0,
+                revokedCount: 0,
+              },
+            activeExecutionLeases: [],
+            recentExecutionLeases: [],
+          }));
+        });
+        return;
+      }
+
+      res.writeHead(404);
+      res.end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+
+    if (!address || typeof address === "string") {
+      throw new Error("test server failed to bind");
+    }
+
+    const result = await runCliAsync([
+      "doctor",
+      "worker-fleet",
+      "--platform",
+      `http://127.0.0.1:${address.port}`,
+      "--owner-principal",
+      "principal-owner",
+      "--token",
+      "secret-token",
+    ], workspace);
+
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /Themis 诊断 - worker-fleet/);
+    assert.match(result.stdout, /nodeCount：2/);
+    assert.match(result.stdout, /attention\.errorCount：1/);
+    assert.match(result.stdout, /node\[worker-node-b\|node-b\]：offline/);
+    assert.match(result.stdout, /attention：error - 节点已 offline，但仍挂着 active lease。/);
+    assert.match(result.stdout, /POST \/api\/platform\/nodes\/reclaim/);
+    assert.match(result.stdout, /主诊断：Worker Node 集群存在需要立即治理的节点/);
+  } finally {
+    if (server) {
+      server.closeAllConnections?.();
+      server.closeIdleConnections?.();
+      server.unref();
+      server.close();
+    }
+
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("themis worker-fleet reclaim 缺少 --yes 会拒绝执行治理动作", () => {
+  const workspace = mkdtempSync(resolve(tmpdir(), "themis-worker-fleet-cli-confirm-"));
+
+  try {
+    const result = runCli([
+      "worker-fleet",
+      "reclaim",
+      "--platform",
+      "http://127.0.0.1:3100",
+      "--owner-principal",
+      "principal-owner",
+      "--token",
+      "secret-token",
+      "--node",
+      "node-a",
+    ], workspace);
+
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /必须显式追加 --yes/);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("themis worker-fleet reclaim 会逐节点输出治理结果摘要", async () => {
+  const workspace = mkdtempSync(resolve(tmpdir(), "themis-worker-fleet-cli-reclaim-"));
+  let server: ReturnType<typeof createServer> | null = null;
+
+  try {
+    server = createServer((req, res) => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+
+      if (req.method === "POST" && url.pathname === "/api/web-auth/login") {
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "set-cookie": "themis_web_session=session-worker-fleet-govern-cli; Path=/; HttpOnly",
+        });
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/platform/nodes/reclaim") {
+        let body = "";
+        req.on("data", (chunk) => {
+          body += chunk.toString();
+        });
+        req.on("end", () => {
+          const payload = JSON.parse(body || "{}") as { nodeId?: string; failureCode?: string; failureMessage?: string };
+
+          if (payload.nodeId === "node-a") {
+            res.writeHead(200, {
+              "content-type": "application/json",
+            });
+            res.end(JSON.stringify({
+              ok: true,
+              organization: {
+                organizationId: "org-1",
+                ownerPrincipalId: "principal-owner",
+                displayName: "团队",
+                slug: "team",
+                createdAt: "2026-04-12T11:00:00.000Z",
+                updatedAt: "2026-04-12T11:00:00.000Z",
+              },
+              node: {
+                nodeId: "node-a",
+                organizationId: "org-1",
+                displayName: "worker-node-a",
+                status: "offline",
+                slotCapacity: 1,
+                slotAvailable: 0,
+                labels: [],
+                workspaceCapabilities: ["/workspace/a"],
+                credentialCapabilities: ["default"],
+                providerCapabilities: [],
+                heartbeatTtlSeconds: 30,
+                lastHeartbeatAt: "2026-04-12T11:57:00.000Z",
+                createdAt: "2026-04-12T11:00:00.000Z",
+                updatedAt: "2026-04-12T11:59:00.000Z",
+              },
+              summary: {
+                activeLeaseCount: 1,
+                reclaimedRunCount: 1,
+                requeuedWorkItemCount: 1,
+                waitingLeaseCount: 0,
+                waitingRunCount: 0,
+                releasedLeaseCount: 1,
+              },
+              reclaimedLeases: [
+                {
+                  lease: { leaseId: "lease-a", status: "revoked" },
+                  run: { runId: "run-a", status: "interrupted", failureCode: payload.failureCode ?? "NODE_LEASE_RECLAIMED" },
+                  workItem: { workItemId: "work-item-a", status: "queued" },
+                  recoveryAction: "requeued",
+                },
+              ],
+            }));
+            return;
+          }
+
+          res.writeHead(400, {
+            "content-type": "application/json",
+          });
+          res.end(JSON.stringify({
+            ok: false,
+            error: {
+              message: "Managed agent node must be offline before reclaiming leases.",
+            },
+          }));
+        });
+        return;
+      }
+
+      res.writeHead(404);
+      res.end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+
+    if (!address || typeof address === "string") {
+      throw new Error("test server failed to bind");
+    }
+
+    const result = await runCliAsync([
+      "worker-fleet",
+      "reclaim",
+      "--platform",
+      `http://127.0.0.1:${address.port}`,
+      "--owner-principal",
+      "principal-owner",
+      "--token",
+      "secret-token",
+      "--node",
+      "node-a",
+      "--node",
+      "node-b",
+      "--failure-code",
+      "MANUAL_RECLAIM",
+      "--failure-message",
+      "manual reclaim by operator",
+      "--yes",
+    ], workspace);
+
+    assert.equal(result.code, 1);
+    assert.match(result.stdout, /Themis Worker Fleet 治理 - reclaim/);
+    assert.match(result.stdout, /requestedNodeCount：2/);
+    assert.match(result.stdout, /result.successCount：1/);
+    assert.match(result.stdout, /result.failureCount：1/);
+    assert.match(result.stdout, /node\[node-a\]：ok/);
+    assert.match(result.stdout, /reclaimed.activeLeaseCount：1/);
+    assert.match(result.stdout, /node\[node-b\]：failed/);
+    assert.match(result.stdout, /Managed agent node must be offline before reclaiming leases\./);
+  } finally {
+    if (server) {
+      server.closeAllConnections?.();
+      server.closeIdleConnections?.();
+      server.unref();
+      server.close();
+    }
+
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("themis doctor smoke web 会输出真实 Web smoke 结果", async () => {
   const workspace = mkdtempSync(join(tmpdir(), "themis-doctor-cli-smoke-web-"));
   let server: ReturnType<typeof createServer> | null = null;

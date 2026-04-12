@@ -51,15 +51,17 @@ CLI 不承担下面这些职责：
 
 - `themis init`
 - `themis status`
+- `themis doctor`
 - `themis config`
+- `themis auth`
 - `themis skill`
+- `themis worker-node`
+- `themis worker-fleet`
 
 后续优先考虑补的命令组：
 
-- `themis auth`
 - `themis provider`
 - `themis service`
-- `themis doctor`
 - `themis export`
 
 ## 命令组说明
@@ -148,6 +150,28 @@ CLI 不承担下面这些职责：
 - 飞书配置不完整
 
 它的目标不是替代所有子命令，而是给用户一个“一键看主要问题”的入口。
+
+### `themis worker-node`
+
+用于把某台机器接成轻量 Worker Node，例如：
+
+- 向平台注册节点
+- 定时 heartbeat
+- 拉取分配给本节点的 run
+- 在本机执行后回传状态
+
+它属于运维与部署入口，不是给人直接发任务的入口。
+
+### `themis worker-fleet`
+
+用于平台侧的多节点值守治理，例如：
+
+- 先通过 `doctor worker-fleet` 看集群总览
+- 再执行 `worker-fleet drain`
+- 必要时执行 `worker-fleet offline`
+- 最后才执行 `worker-fleet reclaim`
+
+它的职责是把“先巡检、再治理”的值班顺序收进 CLI，而不是替代平台业务面。
 
 ### `themis export`
 
