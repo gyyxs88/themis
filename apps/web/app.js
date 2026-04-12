@@ -15,6 +15,7 @@ import { createDefaultRuntimeConfigState, createRuntimeConfigController } from "
 import { createSessionSettingsController } from "./modules/session-settings.js";
 import { createDefaultSkillsState, createSkillsController } from "./modules/skills.js";
 import { createStore } from "./modules/store.js";
+import { createDefaultUpdateManagerState, createUpdateManagerController } from "./modules/update-manager.js";
 import {
   createDefaultThirdPartyEndpointProbeState,
   createThirdPartyEndpointProbeController,
@@ -58,6 +59,7 @@ const app = {
     plugins: createDefaultPluginsState(),
     skills: createDefaultSkillsState(),
     runtimeConfig: createDefaultRuntimeConfigState(),
+    updateManager: createDefaultUpdateManagerState(),
     modeSwitchDraft: createDefaultModeSwitchDraftState(),
     thirdPartyEditor: createDefaultThirdPartyEditorState(),
     thirdPartyEndpointProbe: createDefaultThirdPartyEndpointProbeState(),
@@ -77,6 +79,7 @@ app.memoryCandidates = createMemoryCandidatesController(app);
 app.mcp = createMcpController(app);
 app.plugins = createPluginsController(app);
 app.runtimeConfig = createRuntimeConfigController(app);
+app.updateManager = createUpdateManagerController(app);
 app.sessionSettings = createSessionSettingsController(app);
 app.skills = createSkillsController(app);
 app.mcp.bindControls();

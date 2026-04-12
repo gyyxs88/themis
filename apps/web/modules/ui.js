@@ -131,6 +131,7 @@ export function createRenderer(app) {
     renderNetworkAccessSelect(effectiveSettings);
     renderAssistantStyleNote(effectiveSettings);
     renderRuntimeConfigNote(settings, effectiveSettings);
+    renderUpdateManagerState();
     renderIdentityState();
     renderAgentsState();
     renderMemoryCandidatesState();
@@ -1298,6 +1299,67 @@ export function createRenderer(app) {
     }
 
     dom.runtimeConfigNote.textContent = parts.join(" ");
+  }
+
+  function renderUpdateManagerState() {
+    const updateState = app.runtime.updateManager;
+    const check = updateState.check;
+    const operation = updateState.operation;
+    const rollbackAnchor = updateState.rollbackAnchor;
+    const currentVersion = check
+      ? [check.packageVersion || "未检测到版本号", check.currentCommit ? `提交 ${shortCommit(check.currentCommit)}` : null]
+        .filter(Boolean)
+        .join(" · ")
+      : "正在读取";
+    const targetVersion = !check
+      ? "正在读取"
+      : check.updateChannel === "release"
+        ? check.latestReleaseTag
+          ? `${check.latestReleaseTag}${check.latestCommit ? ` · ${shortCommit(check.latestCommit)}` : ""}`
+          : "当前还没有正式 release"
+        : check.latestCommit
+          ? shortCommit(check.latestCommit)
+          : "未检测到远端提交";
+    const rollbackText = rollbackAnchor?.available
+      ? `${shortCommit(rollbackAnchor.previousCommit)}${rollbackAnchor.appliedReleaseTag ? ` · 来自 ${rollbackAnchor.appliedReleaseTag}` : ""}`
+      : "当前没有最近一次成功升级记录";
+    const operationText = !operation
+      ? "当前没有运行中的升级任务。"
+      : operation.status === "running"
+        ? `${operation.action === "apply" ? "升级" : "回滚"}进行中：${operation.progressMessage || operation.progressStep || "正在执行"}`
+        : operation.status === "failed"
+          ? `最近一次${operation.action === "apply" ? "升级" : "回滚"}失败：${operation.errorMessage || "未知错误"}`
+          : operation.result?.summary || `最近一次${operation.action === "apply" ? "升级" : "回滚"}已完成。`;
+
+    dom.updateManagerCurrent.textContent = currentVersion;
+    dom.updateManagerTarget.textContent = targetVersion;
+    dom.updateManagerRollback.textContent = rollbackText;
+    dom.updateManagerOperation.textContent = operationText;
+
+    if (updateState.status === "loading") {
+      dom.updateManagerNote.textContent = "正在检查 GitHub 更新源与本地升级状态。";
+    } else if (updateState.status === "error") {
+      dom.updateManagerNote.textContent = updateState.errorMessage
+        ? `读取升级状态失败：${updateState.errorMessage}`
+        : "读取升级状态失败。";
+    } else if (check?.summary) {
+      dom.updateManagerNote.textContent = check.summary;
+    } else {
+      dom.updateManagerNote.textContent = "正式实例可在这里检查 GitHub 更新、执行后台升级或回滚上一版。";
+    }
+
+    dom.updateManagerActionNote.textContent = updateState.errorMessage
+      ? updateState.errorMessage
+      : updateState.noticeMessage
+        ? updateState.noticeMessage
+        : operation?.result?.restartStatus === "failed"
+          ? `版本切换已完成，但请求重启失败：${operation.result.restartErrorMessage || "未知错误"}`
+          : "Web 入口会在后台执行受控升级，版本切换完成后再请求重启当前服务。";
+    dom.updateManagerRefreshButton.disabled = updateState.busyAction === "apply" || updateState.busyAction === "rollback";
+    dom.updateManagerApplyButton.disabled = updateState.busyAction === "apply" || operation?.status === "running";
+    dom.updateManagerRollbackButton.disabled = updateState.busyAction === "rollback"
+      || operation?.status === "running"
+      || !rollbackAnchor?.available;
   }
 
   function renderThirdPartyNotes(settings, effectiveSettings) {
@@ -5030,9 +5092,13 @@ function buildComposerAuthNote({ auth, settings, accessMode, thirdPartySelection
   return "";
 }
 
-function toBooleanSelectValue(value) {
+  function toBooleanSelectValue(value) {
   if (value === true) {
     return "true";
+  }
+
+  function shortCommit(value) {
+    return typeof value === "string" && value ? value.slice(0, 7) : "未检测到";
   }
 
   if (value === false) {

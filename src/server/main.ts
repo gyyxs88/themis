@@ -8,6 +8,7 @@ import {
   ScheduledTaskExecutionService,
 } from "../core/index.js";
 import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
+import { ThemisUpdateService } from "../diagnostics/update-service.js";
 import { createThemisHttpServer, resolveListenAddresses } from "./http-server.js";
 
 const DEFAULT_PRIVATE_ASSISTANT_PRINCIPAL_ID = "principal-local-owner";
@@ -77,11 +78,15 @@ const authRuntime = new CodexAuthRuntime({
     }
   },
 });
+const updateService = new ThemisUpdateService({
+  workingDirectory: runtime.getWorkingDirectory(),
+});
 feishuService = new FeishuChannelService({
   runtime,
   runtimeRegistry: feishuRuntimeRegistry,
   actionBridge,
   authRuntime,
+  updateService,
   taskTimeoutMs,
 });
 const server = createThemisHttpServer({
@@ -94,6 +99,7 @@ const server = createThemisHttpServer({
   actionBridge,
   managedAgentExecutionService,
   feishuService,
+  updateService,
 });
 
 let agentSchedulerTickRunning = false;

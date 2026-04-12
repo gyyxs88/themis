@@ -76,6 +76,8 @@ import {
   buildLegacyAttachmentsFromEnvelope,
   createTaskInputEnvelope,
 } from "../../core/task-input.js";
+import { formatShortCommitHash } from "../../diagnostics/update-check.js";
+import { ThemisUpdateService, type ThemisManagedUpdateOverview } from "../../diagnostics/update-service.js";
 import {
   downloadFeishuMessageResources,
   extractFeishuMessageResources,
@@ -184,6 +186,7 @@ export interface FeishuChannelServiceOptions {
   diagnosticsStateStore?: FeishuDiagnosticsStateStore;
   chatSettingsStore?: FeishuChatSettingsStore;
   approvalCardStore?: FeishuApprovalCardStateStore;
+  updateService?: ThemisUpdateService;
   logger?: FeishuChannelLogger;
 }
 
@@ -218,6 +221,7 @@ export class FeishuChannelService {
   private readonly attachmentDraftStore: FeishuAttachmentDraftStore;
   private readonly chatSettingsStore: FeishuChatSettingsStore;
   private readonly approvalCardStore: FeishuApprovalCardStateStore;
+  private readonly updateService: ThemisUpdateService;
   private readonly logger: FeishuChannelLogger;
   private readonly cardActionHandler: Lark.CardActionHandler;
   private readonly client: Lark.Client | null;
@@ -259,6 +263,9 @@ export class FeishuChannelService {
     });
     this.chatSettingsStore = options.chatSettingsStore ?? new FeishuChatSettingsStore({
       filePath: join(this.runtime.getWorkingDirectory(), "infra/local/feishu-chat-settings.json"),
+    });
+    this.updateService = options.updateService ?? new ThemisUpdateService({
+      workingDirectory: this.runtime.getWorkingDirectory(),
     });
     this.approvalCardStore = options.approvalCardStore ?? new FeishuApprovalCardStateStore({
       filePath: join(this.runtime.getWorkingDirectory(), "infra/local/feishu-approval-cards.json"),
@@ -1227,6 +1234,10 @@ export class FeishuChannelService {
       case "plugins":
       case "plugin":
         await this.handlePluginsCommand(command.args, context);
+        return;
+      case "update":
+      case "upgrade":
+        await this.handleUpdateCommand(command.args, context);
         return;
       case "current":
         await this.sendCurrentSession(context.chatId, context);
@@ -2544,6 +2555,7 @@ export class FeishuChannelService {
       "/workspace 查看或设置当前会话工作区",
       "/settings 查看设置树",
       "/group 查看当前群聊设置、路由和管理员控制",
+      "/update 查看实例更新状态，或发起后台升级 / 回滚",
       "/skills 查看和维护当前 principal 的 skills",
       "/mcp 查看和维护当前 principal 的 MCP server",
       "/plugins 查看和维护当前 principal 的 plugins",
@@ -2560,6 +2572,117 @@ export class FeishuChannelService {
     ].join("\n");
 
     await this.safeSendText(chatId, helpText);
+  }
+
+  private async handleUpdateCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const subcommand = normalizeText(args[0])?.toLowerCase() ?? "";
+
+    switch (subcommand) {
+      case "":
+      case "check":
+      case "status":
+        await this.sendUpdateOverview(context.chatId);
+        return;
+      case "apply":
+      case "upgrade":
+        if (!await this.ensureUpdateMutationAllowed(context, "/update apply")) {
+          return;
+        }
+
+        if (!isResetConfirmed(args.slice(1))) {
+          await this.safeSendText(
+            context.chatId,
+            [
+              "这是高风险操作，会拉代码、装依赖、编译并请求重启当前服务。",
+              "确认执行：/update apply confirm",
+              "先看当前状态：/update",
+            ].join("\n"),
+          );
+          return;
+        }
+
+        await this.updateService.startApply({
+          initiatedBy: {
+            channel: "feishu",
+            channelUserId: context.userId,
+            displayName: context.openId ?? context.userId,
+            chatId: context.chatId,
+          },
+        });
+        await this.safeSendText(
+          context.chatId,
+          [
+            "后台升级已启动。",
+            "Themis 会在版本切换完成后请求重启当前服务，Web/飞书会短暂中断。",
+            "稍后可发送 /update 查看最终状态。",
+          ].join("\n"),
+        );
+        return;
+      case "rollback":
+        if (!await this.ensureUpdateMutationAllowed(context, "/update rollback")) {
+          return;
+        }
+
+        if (!isResetConfirmed(args.slice(1))) {
+          await this.safeSendText(
+            context.chatId,
+            [
+              "这是高风险操作，会把实例退回最近一次成功升级前的版本，并请求重启当前服务。",
+              "确认执行：/update rollback confirm",
+              "先看当前状态：/update",
+            ].join("\n"),
+          );
+          return;
+        }
+
+        await this.updateService.startRollback({
+          initiatedBy: {
+            channel: "feishu",
+            channelUserId: context.userId,
+            displayName: context.openId ?? context.userId,
+            chatId: context.chatId,
+          },
+        });
+        await this.safeSendText(
+          context.chatId,
+          [
+            "后台回滚已启动。",
+            "Themis 会在回滚完成后请求重启当前服务，Web/飞书会短暂中断。",
+            "稍后可发送 /update 查看最终状态。",
+          ].join("\n"),
+        );
+        return;
+      default:
+        await this.safeSendText(
+          context.chatId,
+          [
+            "/update 查看当前更新状态",
+            "/update apply confirm 后台执行受控升级",
+            "/update rollback confirm 回退到最近一次成功升级前的版本",
+          ].join("\n"),
+        );
+        return;
+    }
+  }
+
+  private async sendUpdateOverview(chatId: string): Promise<void> {
+    const overview = await this.updateService.readOverview();
+    await this.safeSendText(chatId, formatFeishuUpdateOverview(overview));
+  }
+
+  private async ensureUpdateMutationAllowed(
+    context: FeishuIncomingContext,
+    commandLabel: string,
+  ): Promise<boolean> {
+    if (context.chatType && context.chatType !== "p2p") {
+      await this.safeSendText(
+        context.chatId,
+        `${commandLabel} 只允许在和 Themis 的单聊里执行，避免群聊误触导致实例升级或重启。`,
+      );
+      return false;
+    }
+
+    return true;
   }
 
   private async handleSkillsCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
@@ -5016,6 +5139,43 @@ function extractFeishuText(event: FeishuMessageReceiveEvent): string | null {
   } catch {
     return null;
   }
+}
+
+function formatFeishuUpdateOverview(overview: ThemisManagedUpdateOverview): string {
+  const targetLabel = overview.check.updateChannel === "release"
+    ? overview.check.latestReleaseTag
+      ? `最新 release：${overview.check.latestReleaseTag} (${formatShortCommitHash(overview.check.latestCommit)})`
+      : "最新 release：未检测到"
+    : overview.check.latestCommit
+      ? `远端提交：${formatShortCommitHash(overview.check.latestCommit)}`
+      : "远端提交：未检测到";
+  const rollbackLabel = overview.rollbackAnchor.available
+    ? `可回退到：${formatShortCommitHash(overview.rollbackAnchor.previousCommit)}（记录于 ${overview.rollbackAnchor.recordedAt ?? "未知时间"}）`
+    : "可回退到：当前没有最近一次成功升级记录";
+  const operationLabel = !overview.operation
+    ? "后台任务：当前没有运行中的升级任务"
+    : overview.operation.status === "running"
+      ? `后台任务：${overview.operation.action === "apply" ? "升级" : "回滚"}进行中，当前步骤 ${overview.operation.progressStep ?? "unknown"}`
+      : overview.operation.status === "failed"
+        ? `后台任务：最近一次${overview.operation.action === "apply" ? "升级" : "回滚"}失败`
+        : `后台任务：最近一次${overview.operation.action === "apply" ? "升级" : "回滚"}已完成`;
+
+  return [
+    "Themis 更新状态：",
+    `当前版本：${overview.check.packageVersion ?? "未检测到"}`,
+    `当前提交：${formatShortCommitHash(overview.check.currentCommit)}`,
+    `更新渠道：${overview.check.updateChannel}`,
+    targetLabel,
+    `检查结果：${overview.check.summary}`,
+    rollbackLabel,
+    operationLabel,
+    overview.operation?.progressMessage ? `任务说明：${overview.operation.progressMessage}` : null,
+    overview.operation?.result?.summary ? `任务结果：${overview.operation.result.summary}` : null,
+    overview.operation?.errorMessage ? `失败原因：${overview.operation.errorMessage}` : null,
+    "",
+    "执行升级：/update apply confirm",
+    "执行回滚：/update rollback confirm",
+  ].filter((line): line is string => Boolean(line)).join("\n");
 }
 
 function parseFeishuCommand(text: string): ParsedFeishuCommand | null {

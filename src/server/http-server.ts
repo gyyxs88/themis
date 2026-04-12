@@ -7,6 +7,7 @@ import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import type { RuntimeEngine, TaskRuntimeFacade } from "../types/index.js";
 import { WebAccessService } from "../core/web-access.js";
+import { ThemisUpdateService } from "../diagnostics/update-service.js";
 import { serveWebAsset } from "./http-assets.js";
 import {
   handleAgentArchive,
@@ -78,6 +79,11 @@ import {
   type CreateMcpInspector,
 } from "./http-diagnostics.js";
 import {
+  handleUpdateApplyHttp,
+  handleUpdatesOverview,
+  handleUpdateRollbackHttp,
+} from "./http-updates.js";
+import {
   handleSkillsCuratedCatalog,
   handleSkillsInstall,
   handleSkillsList,
@@ -143,6 +149,7 @@ export interface ThemisHttpServerOptions {
   feishuService?: {
     handleCardActionWebhook(request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean>;
   };
+  updateService?: ThemisUpdateService;
 }
 
 export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): Server {
@@ -180,6 +187,9 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
   });
   const runtimeStore = runtime.getRuntimeStore();
   const webAccessService = new WebAccessService({ registry: runtimeStore });
+  const updateService = options.updateService ?? new ThemisUpdateService({
+    workingDirectory: runtime.getWorkingDirectory(),
+  });
   const taskTimeoutMs = options.taskTimeoutMs ?? resolveTaskTimeoutMs();
 
   return createServer(async (request, response) => {
@@ -214,6 +224,10 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
         return handleDiagnostics(response, runtime, authRuntime, options.createMcpInspector, isHeadRequest);
       }
 
+      if ((request.method === "GET" || isHeadRequest) && url.pathname === "/api/updates") {
+        return handleUpdatesOverview(response, updateService, isHeadRequest);
+      }
+
       if ((request.method === "GET" || isHeadRequest) && url.pathname === "/api/diagnostics/mcp") {
         return handleDiagnosticsMcp(response, runtime, authRuntime, options.createMcpInspector, isHeadRequest);
       }
@@ -224,6 +238,14 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/diagnostics/mcp/reload") {
         return handleDiagnosticsMcpReload(response, runtime, options.createMcpInspector);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/updates/apply") {
+        return handleUpdateApplyHttp(request, response, runtime, updateService);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/updates/rollback") {
+        return handleUpdateRollbackHttp(request, response, runtime, updateService);
       }
 
       if (request.method === "POST" && url.pathname === "/api/runtime/third-party/probe") {

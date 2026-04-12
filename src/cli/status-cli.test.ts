@@ -161,6 +161,7 @@ test("themis status 会输出 GitHub 检查更新结果", async () => {
     assert.match(result.stdout, /Themis 配置状态/);
     assert.match(result.stdout, /版本更新/);
     assert.match(result.stdout, /- package\.json 版本：9\.9\.9/);
+    assert.match(result.stdout, /- 更新渠道：GitHub 默认分支/);
     assert.match(result.stdout, /- 当前提交：1111111 \(THEMIS_BUILD_COMMIT\)/);
     assert.match(result.stdout, /- 当前分支：prod\/main/);
     assert.match(result.stdout, /- 更新源：gyyxs88\/themis/);
@@ -168,7 +169,7 @@ test("themis status 会输出 GitHub 检查更新结果", async () => {
     assert.match(result.stdout, /- GitHub 最新提交：2222222 \(2026-04-09T04:20:00Z\)/);
     assert.match(result.stdout, /- 对比结果：behind/);
     assert.match(result.stdout, /- 判断：发现 GitHub 新提交，可安排升级。/);
-    assert.match(result.stdout, /git pull && npm install && npm run build/);
+    assert.match(result.stdout, /\.\/themis update apply/);
   } finally {
     if (server) {
       server.closeAllConnections?.();

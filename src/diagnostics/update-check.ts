@@ -7,6 +7,8 @@ const DEFAULT_UPDATE_DEFAULT_BRANCH = "main";
 const DEFAULT_UPDATE_API_BASE_URL = "https://api.github.com";
 const DEFAULT_UPDATE_TIMEOUT_MS = 15000;
 
+export type ThemisUpdateChannel = "branch" | "release";
+
 export type ThemisUpdateOutcome =
   | "up_to_date"
   | "update_available"
@@ -15,17 +17,25 @@ export type ThemisUpdateOutcome =
   | "comparison_unavailable"
   | "check_failed";
 
-export interface ThemisUpdateCheckResult {
+export interface ThemisUpdateTarget {
+  updateChannel: ThemisUpdateChannel;
+  updateSourceRepo: string;
+  updateSourceUrl: string;
+  updateSourceDefaultBranch: string;
+  latestCommit: string | null;
+  latestCommitDate: string | null;
+  latestCommitUrl: string | null;
+  latestReleaseTag: string | null;
+  latestReleaseName: string | null;
+  latestReleasePublishedAt: string | null;
+  latestReleaseUrl: string | null;
+}
+
+export interface ThemisUpdateCheckResult extends ThemisUpdateTarget {
   packageVersion: string | null;
   currentCommit: string | null;
   currentBranch: string | null;
   currentCommitSource: "git" | "env" | "unknown";
-  updateSourceRepo: string;
-  updateSourceUrl: string;
-  updateSourceDefaultBranch: string | null;
-  latestCommit: string | null;
-  latestCommitDate: string | null;
-  latestCommitUrl: string | null;
   comparisonStatus: string | null;
   outcome: ThemisUpdateOutcome;
   summary: string;
@@ -46,158 +56,213 @@ interface GitHubComparePayload {
   status?: unknown;
 }
 
+interface GitHubReleasePayload {
+  tag_name?: unknown;
+  html_url?: unknown;
+  name?: unknown;
+  published_at?: unknown;
+}
+
 export async function checkThemisUpdates(input: {
   workingDirectory: string;
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
 }): Promise<ThemisUpdateCheckResult> {
   const env = input.env ?? process.env;
-  const fetchImpl = input.fetchImpl ?? globalThis.fetch.bind(globalThis);
   const packageVersion = readPackageVersion(input.workingDirectory);
   const localBuild = readLocalBuildSnapshot(input.workingDirectory, env);
-  const updateSourceRepo = normalizeRepoSlug(env.THEMIS_UPDATE_REPO);
-  const updateSourceUrl = `https://github.com/${updateSourceRepo}`;
-  const updateSourceDefaultBranch = normalizeDefaultBranch(env.THEMIS_UPDATE_DEFAULT_BRANCH);
-  const apiBaseUrl = normalizeApiBaseUrl(env.THEMIS_UPDATE_API_BASE_URL);
-  const requestHeaders = buildGitHubRequestHeaders(env);
+
+  let target: ThemisUpdateTarget;
 
   try {
-    const latestCommit = await readGitHubJson<GitHubCommitPayload>({
-      fetchImpl,
-      url: buildGitHubApiUrl(apiBaseUrl, `/repos/${updateSourceRepo}/commits/${encodeURIComponent(updateSourceDefaultBranch)}`),
-      headers: requestHeaders,
-    });
-    const latestCommitSha = normalizeOptionalText(latestCommit.sha);
-    const latestCommitUrl = normalizeOptionalText(latestCommit.html_url);
-    const latestCommitDate = normalizeOptionalText(latestCommit.commit?.author?.date);
-
-    if (!latestCommitSha) {
-      return {
-        packageVersion,
-        currentCommit: localBuild.commit,
-        currentBranch: localBuild.branch,
-        currentCommitSource: localBuild.source,
-        updateSourceRepo,
-        updateSourceUrl,
-        updateSourceDefaultBranch,
-        latestCommit: null,
-        latestCommitDate,
-        latestCommitUrl,
-        comparisonStatus: null,
-        outcome: "check_failed",
-        summary: "GitHub 已响应，但没有返回最新提交 SHA。",
-        errorMessage: "missing_latest_commit_sha",
-      };
-    }
-
-    if (!localBuild.commit) {
-      return {
-        packageVersion,
-        currentCommit: null,
-        currentBranch: localBuild.branch,
-        currentCommitSource: localBuild.source,
-        updateSourceRepo,
-        updateSourceUrl,
-        updateSourceDefaultBranch,
-        latestCommit: latestCommitSha,
-        latestCommitDate,
-        latestCommitUrl,
-        comparisonStatus: null,
-        outcome: "comparison_unavailable",
-        summary: "已读到 GitHub 最新提交，但当前实例没有可比较的本地提交。",
-        errorMessage: null,
-      };
-    }
-
-    if (localBuild.commit === latestCommitSha) {
-      return {
-        packageVersion,
-        currentCommit: localBuild.commit,
-        currentBranch: localBuild.branch,
-        currentCommitSource: localBuild.source,
-        updateSourceRepo,
-        updateSourceUrl,
-        updateSourceDefaultBranch,
-        latestCommit: latestCommitSha,
-        latestCommitDate,
-        latestCommitUrl,
-        comparisonStatus: "identical",
-        outcome: "up_to_date",
-        summary: "当前已经是 GitHub 默认分支的最新提交。",
-        errorMessage: null,
-      };
-    }
-
-    try {
-      const comparison = await readGitHubJson<GitHubComparePayload>({
-        fetchImpl,
-        url: buildGitHubApiUrl(
-          apiBaseUrl,
-          `/repos/${updateSourceRepo}/compare/${encodeURIComponent(localBuild.commit)}...${encodeURIComponent(latestCommitSha)}`,
-        ),
-        headers: requestHeaders,
-      });
-      const comparisonStatus = normalizeOptionalText(comparison.status);
-
-      return {
-        packageVersion,
-        currentCommit: localBuild.commit,
-        currentBranch: localBuild.branch,
-        currentCommitSource: localBuild.source,
-        updateSourceRepo,
-        updateSourceUrl,
-        updateSourceDefaultBranch,
-        latestCommit: latestCommitSha,
-        latestCommitDate,
-        latestCommitUrl,
-        comparisonStatus,
-        outcome: mapComparisonStatusToOutcome(comparisonStatus),
-        summary: buildComparisonSummary(comparisonStatus),
-        errorMessage: null,
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const isNotFound = /\b404\b/.test(message);
-
-      return {
-        packageVersion,
-        currentCommit: localBuild.commit,
-        currentBranch: localBuild.branch,
-        currentCommitSource: localBuild.source,
-        updateSourceRepo,
-        updateSourceUrl,
-        updateSourceDefaultBranch,
-        latestCommit: latestCommitSha,
-        latestCommitDate,
-        latestCommitUrl,
-        comparisonStatus: null,
-        outcome: "comparison_unavailable",
-        summary: isNotFound
-          ? "当前本地提交不在公开更新源上；开发仓出现这种情况是正常的，正式部署建议使用公开仓 clone。"
-          : "GitHub 已返回最新提交，但当前本地提交无法直接和远端比较。",
-        errorMessage: message,
-      };
-    }
+    target = await resolveThemisUpdateTarget(input);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const config = resolveThemisUpdateSourceConfig(env);
 
     return {
       packageVersion,
       currentCommit: localBuild.commit,
       currentBranch: localBuild.branch,
       currentCommitSource: localBuild.source,
-      updateSourceRepo,
-      updateSourceUrl,
-      updateSourceDefaultBranch,
+      updateChannel: config.updateChannel,
+      updateSourceRepo: config.updateSourceRepo,
+      updateSourceUrl: config.updateSourceUrl,
+      updateSourceDefaultBranch: config.updateSourceDefaultBranch,
       latestCommit: null,
       latestCommitDate: null,
       latestCommitUrl: null,
+      latestReleaseTag: null,
+      latestReleaseName: null,
+      latestReleasePublishedAt: null,
+      latestReleaseUrl: null,
       comparisonStatus: null,
       outcome: "check_failed",
-      summary: "检查更新失败，暂时无法确认 GitHub 是否有新版本。",
+      summary: buildTargetFetchFailedSummary(config.updateChannel, message),
       errorMessage: message,
     };
   }
+
+  if (!target.latestCommit) {
+    return {
+      packageVersion,
+      currentCommit: localBuild.commit,
+      currentBranch: localBuild.branch,
+      currentCommitSource: localBuild.source,
+      ...target,
+      comparisonStatus: null,
+      outcome: "check_failed",
+      summary: target.updateChannel === "release"
+        ? "GitHub 已响应 latest release，但没有返回可比较的提交 SHA。"
+        : "GitHub 已响应，但没有返回最新提交 SHA。",
+      errorMessage: target.updateChannel === "release" ? "missing_release_commit_sha" : "missing_latest_commit_sha",
+    };
+  }
+
+  if (!localBuild.commit) {
+    return {
+      packageVersion,
+      currentCommit: null,
+      currentBranch: localBuild.branch,
+      currentCommitSource: localBuild.source,
+      ...target,
+      comparisonStatus: null,
+      outcome: "comparison_unavailable",
+      summary: buildMissingLocalCommitSummary(target.updateChannel),
+      errorMessage: null,
+    };
+  }
+
+  if (localBuild.commit === target.latestCommit) {
+    return {
+      packageVersion,
+      currentCommit: localBuild.commit,
+      currentBranch: localBuild.branch,
+      currentCommitSource: localBuild.source,
+      ...target,
+      comparisonStatus: "identical",
+      outcome: "up_to_date",
+      summary: buildComparisonSummary(target.updateChannel, "identical"),
+      errorMessage: null,
+    };
+  }
+
+  try {
+    const comparison = await readGitHubJson<GitHubComparePayload>({
+      fetchImpl: input.fetchImpl ?? globalThis.fetch.bind(globalThis),
+      url: buildGitHubApiUrl(
+        normalizeApiBaseUrl(env.THEMIS_UPDATE_API_BASE_URL),
+        `/repos/${target.updateSourceRepo}/compare/${encodeURIComponent(localBuild.commit)}...${encodeURIComponent(target.latestCommit)}`,
+      ),
+      headers: buildGitHubRequestHeaders(env),
+    });
+    const comparisonStatus = normalizeOptionalText(comparison.status);
+
+    return {
+      packageVersion,
+      currentCommit: localBuild.commit,
+      currentBranch: localBuild.branch,
+      currentCommitSource: localBuild.source,
+      ...target,
+      comparisonStatus,
+      outcome: mapComparisonStatusToOutcome(comparisonStatus),
+      summary: buildComparisonSummary(target.updateChannel, comparisonStatus),
+      errorMessage: null,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const isNotFound = /\b404\b/.test(message);
+
+    return {
+      packageVersion,
+      currentCommit: localBuild.commit,
+      currentBranch: localBuild.branch,
+      currentCommitSource: localBuild.source,
+      ...target,
+      comparisonStatus: null,
+      outcome: "comparison_unavailable",
+      summary: buildComparisonUnavailableSummary(target.updateChannel, isNotFound),
+      errorMessage: message,
+    };
+  }
+}
+
+export async function resolveThemisUpdateTarget(input: {
+  workingDirectory: string;
+  env?: NodeJS.ProcessEnv;
+  fetchImpl?: typeof fetch;
+}): Promise<ThemisUpdateTarget> {
+  const env = input.env ?? process.env;
+  const fetchImpl = input.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const config = resolveThemisUpdateSourceConfig(env);
+  const requestHeaders = buildGitHubRequestHeaders(env);
+  const apiBaseUrl = normalizeApiBaseUrl(env.THEMIS_UPDATE_API_BASE_URL);
+
+  if (config.updateChannel === "release") {
+    const latestRelease = await readGitHubJson<GitHubReleasePayload>({
+      fetchImpl,
+      url: buildGitHubApiUrl(apiBaseUrl, `/repos/${config.updateSourceRepo}/releases/latest`),
+      headers: requestHeaders,
+    });
+    const latestReleaseTag = normalizeOptionalText(latestRelease.tag_name);
+    const latestReleaseName = normalizeOptionalText(latestRelease.name);
+    const latestReleasePublishedAt = normalizeOptionalText(latestRelease.published_at);
+    const latestReleaseUrl = normalizeOptionalText(latestRelease.html_url);
+
+    if (!latestReleaseTag) {
+      throw new Error("GitHub latest release 缺少 tag_name。");
+    }
+
+    const latestCommit = await readGitHubJson<GitHubCommitPayload>({
+      fetchImpl,
+      url: buildGitHubApiUrl(apiBaseUrl, `/repos/${config.updateSourceRepo}/commits/${encodeURIComponent(latestReleaseTag)}`),
+      headers: requestHeaders,
+    });
+
+    return {
+      ...config,
+      latestCommit: normalizeOptionalText(latestCommit.sha),
+      latestCommitDate: normalizeOptionalText(latestCommit.commit?.author?.date),
+      latestCommitUrl: normalizeOptionalText(latestCommit.html_url),
+      latestReleaseTag,
+      latestReleaseName,
+      latestReleasePublishedAt,
+      latestReleaseUrl,
+    };
+  }
+
+  const latestCommit = await readGitHubJson<GitHubCommitPayload>({
+    fetchImpl,
+    url: buildGitHubApiUrl(apiBaseUrl, `/repos/${config.updateSourceRepo}/commits/${encodeURIComponent(config.updateSourceDefaultBranch)}`),
+    headers: requestHeaders,
+  });
+
+  return {
+    ...config,
+    latestCommit: normalizeOptionalText(latestCommit.sha),
+    latestCommitDate: normalizeOptionalText(latestCommit.commit?.author?.date),
+    latestCommitUrl: normalizeOptionalText(latestCommit.html_url),
+    latestReleaseTag: null,
+    latestReleaseName: null,
+    latestReleasePublishedAt: null,
+    latestReleaseUrl: null,
+  };
+}
+
+export function resolveThemisUpdateSourceConfig(env: NodeJS.ProcessEnv): {
+  updateChannel: ThemisUpdateChannel;
+  updateSourceRepo: string;
+  updateSourceUrl: string;
+  updateSourceDefaultBranch: string;
+} {
+  const updateSourceRepo = normalizeRepoSlug(env.THEMIS_UPDATE_REPO);
+
+  return {
+    updateChannel: normalizeUpdateChannel(env.THEMIS_UPDATE_CHANNEL),
+    updateSourceRepo,
+    updateSourceUrl: `https://github.com/${updateSourceRepo}`,
+    updateSourceDefaultBranch: normalizeDefaultBranch(env.THEMIS_UPDATE_DEFAULT_BRANCH),
+  };
 }
 
 export function formatShortCommitHash(commit: string | null): string {
@@ -306,6 +371,20 @@ function normalizeDefaultBranch(value: string | undefined): string {
   return normalizeOptionalText(value) ?? DEFAULT_UPDATE_DEFAULT_BRANCH;
 }
 
+function normalizeUpdateChannel(value: string | undefined): ThemisUpdateChannel {
+  const normalized = normalizeOptionalText(value);
+
+  if (!normalized || normalized === "branch") {
+    return "branch";
+  }
+
+  if (normalized === "release") {
+    return "release";
+  }
+
+  throw new Error("THEMIS_UPDATE_CHANNEL 仅支持 branch / release。");
+}
+
 function buildGitHubApiUrl(apiBaseUrl: string, pathname: string): string {
   return `${apiBaseUrl}${pathname.startsWith("/") ? pathname : `/${pathname}`}`;
 }
@@ -372,7 +451,50 @@ function mapComparisonStatusToOutcome(status: string | null): ThemisUpdateOutcom
   }
 }
 
-function buildComparisonSummary(status: string | null): string {
+function buildTargetFetchFailedSummary(channel: ThemisUpdateChannel, message: string): string {
+  if (channel === "release" && /\b404\b/.test(message)) {
+    return "当前更新源还没有正式 release；release 渠道暂时无法使用。";
+  }
+
+  return channel === "release"
+    ? "检查 release 更新失败，暂时无法确认 GitHub 是否有新的正式版本。"
+    : "检查更新失败，暂时无法确认 GitHub 是否有新版本。";
+}
+
+function buildMissingLocalCommitSummary(channel: ThemisUpdateChannel): string {
+  return channel === "release"
+    ? "已读到 GitHub 最新正式 release 对应提交，但当前实例没有可比较的本地提交。"
+    : "已读到 GitHub 最新提交，但当前实例没有可比较的本地提交。";
+}
+
+function buildComparisonUnavailableSummary(channel: ThemisUpdateChannel, isNotFound: boolean): string {
+  if (!isNotFound) {
+    return channel === "release"
+      ? "GitHub 已返回最新正式 release，但当前本地提交无法直接和远端比较。"
+      : "GitHub 已返回最新提交，但当前本地提交无法直接和远端比较。";
+  }
+
+  return channel === "release"
+    ? "当前本地提交不在公开 release 轨道上；开发仓或手动推进到 release 之外的提交时出现这种情况是正常的。"
+    : "当前本地提交不在公开更新源上；开发仓出现这种情况是正常的，正式部署建议使用公开仓 clone。";
+}
+
+function buildComparisonSummary(channel: ThemisUpdateChannel, status: string | null): string {
+  if (channel === "release") {
+    switch (status) {
+      case "identical":
+        return "当前已经是 GitHub 最新正式 release。";
+      case "behind":
+        return "发现新的 GitHub 正式 release，可安排升级。";
+      case "ahead":
+        return "当前实例比 GitHub 最新正式 release 更新，暂时不建议直接覆盖。";
+      case "diverged":
+        return "当前实例与 GitHub 最新正式 release 对应提交已经分叉，升级前需要先确认本地改动去留。";
+      default:
+        return "GitHub 已返回最新正式 release，但比较结果不明确。";
+    }
+  }
+
   switch (status) {
     case "identical":
       return "当前已经是 GitHub 默认分支的最新提交。";

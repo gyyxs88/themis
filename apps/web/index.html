@@ -509,6 +509,49 @@
                     <p id="identity-link-code" class="settings-probe-note hidden"></p>
                   </div>
                 </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>实例升级</h3>
+                    <span class="meta-label">GitHub 检查、后台升级与回滚</span>
+                  </div>
+
+                  <p id="update-manager-note" class="settings-section-copy">正在检查当前实例版本与升级状态。</p>
+
+                  <div class="settings-stack">
+                    <div class="settings-grid">
+                      <div class="settings-field">
+                        <span>当前版本</span>
+                        <p id="update-manager-current" class="settings-section-copy">正在读取</p>
+                      </div>
+
+                      <div class="settings-field">
+                        <span>远端目标</span>
+                        <p id="update-manager-target" class="settings-section-copy">正在读取</p>
+                      </div>
+                    </div>
+
+                    <div class="settings-grid">
+                      <div class="settings-field">
+                        <span>回滚锚点</span>
+                        <p id="update-manager-rollback" class="settings-section-copy">正在读取</p>
+                      </div>
+
+                      <div class="settings-field">
+                        <span>后台任务</span>
+                        <p id="update-manager-operation" class="settings-section-copy">当前没有运行中的升级任务。</p>
+                      </div>
+                    </div>
+
+                    <div class="settings-inline-actions">
+                      <button id="update-manager-refresh-button" type="button" class="ghost-button">刷新状态</button>
+                      <button id="update-manager-apply-button" type="button" class="toolbar-button subtle">后台升级</button>
+                      <button id="update-manager-rollback-button" type="button" class="ghost-button">回滚上一版</button>
+                    </div>
+
+                    <p id="update-manager-action-note" class="settings-section-copy">Web 入口会在后台执行受控升级，版本切换完成后再请求重启当前服务。</p>
+                  </div>
+                </section>
               </section>
 
               <section

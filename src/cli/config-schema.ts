@@ -27,6 +27,47 @@ export const PROJECT_CONFIG_DEFINITIONS: ProjectConfigDefinition[] = [
     defaultValue: "300000",
   },
   {
+    key: "THEMIS_BUILD_COMMIT",
+    section: "版本更新",
+    description: "可选。显式标记当前构建提交；非 git 部署或需要固定版本比较时使用。",
+  },
+  {
+    key: "THEMIS_BUILD_BRANCH",
+    section: "版本更新",
+    description: "可选。与 THEMIS_BUILD_COMMIT 配套记录当前构建分支。",
+  },
+  {
+    key: "THEMIS_UPDATE_REPO",
+    section: "版本更新",
+    description: "更新源 GitHub 仓库，支持 owner/repo、HTTPS URL 或 SSH URL。",
+    defaultValue: "gyyxs88/themis",
+  },
+  {
+    key: "THEMIS_UPDATE_CHANNEL",
+    section: "版本更新",
+    description: "更新渠道。",
+    defaultValue: "branch",
+    note: "当前仅支持 branch（默认分支头提交）或 release（GitHub latest release）。",
+  },
+  {
+    key: "THEMIS_UPDATE_DEFAULT_BRANCH",
+    section: "版本更新",
+    description: "更新源默认分支。",
+    defaultValue: "main",
+  },
+  {
+    key: "THEMIS_UPDATE_SYSTEMD_SERVICE",
+    section: "版本更新",
+    description: "受控升级成功后默认要重启的 systemd --user 服务名。",
+    defaultValue: "themis-prod.service",
+  },
+  {
+    key: "THEMIS_GITHUB_TOKEN",
+    section: "版本更新",
+    description: "可选。用于提高 GitHub 更新检查配额或访问受限更新源。",
+    secret: true,
+  },
+  {
     key: "CODEX_HOME",
     section: "Codex 认证",
     description: "显式指定 Codex 认证目录；未配置时使用 ~/.codex。",
@@ -116,6 +157,7 @@ export const PROJECT_CONFIG_DEFINITIONS: ProjectConfigDefinition[] = [
 
 const SECTION_ORDER = [
   "服务监听",
+  "版本更新",
   "Codex 认证",
   "飞书渠道",
   "第三方兼容 Provider",

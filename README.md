@@ -65,6 +65,10 @@ http://localhost:3100
 
 ```bash
 ./themis status
+./themis update
+./themis update check
+./themis update apply
+./themis update rollback
 ./themis doctor
 ./themis doctor smoke web
 ./themis doctor smoke feishu
@@ -84,6 +88,7 @@ http://localhost:3100
 ```bash
 themis
 themis status
+themis update
 themis mcp-server
 ```
 
@@ -117,8 +122,12 @@ npm run themis -- config set FEISHU_APP_SECRET xxx
 - `THEMIS_OPENAI_COMPAT_API_KEY`
 - `THEMIS_OPENAI_COMPAT_MODEL`
 - `THEMIS_BUILD_COMMIT`
+- `THEMIS_BUILD_BRANCH`
 - `THEMIS_UPDATE_REPO`
+- `THEMIS_UPDATE_CHANNEL`
 - `THEMIS_UPDATE_DEFAULT_BRANCH`
+- `THEMIS_UPDATE_SYSTEMD_SERVICE`
+- `THEMIS_GITHUB_TOKEN`
 
 ## 公开文档
 
@@ -162,6 +171,50 @@ git push origin main
 ```
 
 它会显示当前提交、GitHub 最新提交、比较结果和升级建议。
+
+如果当前实例就是公开仓 `git clone` 的正式目录，也可以直接执行受控升级：
+
+```bash
+./themis update apply
+```
+
+如果你已经登录了 Web，也可以在“运行参数 -> 实例升级”里直接触发后台升级或回滚；Themis 会把进度写到 `infra/local/themis-update-operation.json`，版本切换完成后再请求重启当前 `systemd --user` 服务。飞书侧也已支持 `/update`、`/update apply confirm`、`/update rollback confirm` 作为运维入口，其中高风险动作默认要求显式 `confirm`。
+
+当前受控升级已经支持两条更新轨道：
+
+- `THEMIS_UPDATE_CHANNEL=branch`
+  含义：跟随更新源默认分支的最新提交。
+- `THEMIS_UPDATE_CHANNEL=release`
+  含义：跟随 GitHub `latest release` 对应的提交，适合更稳的正式发布节奏。
+
+默认仍是 `branch`。如果你要让正式实例只跟正式 release，直接在 `.env.local` 写：
+
+```bash
+THEMIS_UPDATE_CHANNEL=release
+```
+
+前提是公开 GitHub 仓已经至少发布过一条 published full release；如果还没有，`./themis update check` 会明确提示 “当前更新源还没有正式 release”。
+
+当前版本的受控升级有这些边界：
+
+- 只支持公开仓 `git clone` 的正式实例。
+- 只支持默认分支上的 `ff-only` 快进升级。
+- 工作区必须干净；有本地改动会直接拒绝继续。
+- `release` 渠道当前只跟随 GitHub 最新正式 release，不含 prerelease / draft，也还不支持固定某个 tag。
+- 默认会在成功后尝试重启 `systemd --user` 下的 `themis-prod.service`；如服务名不同，可通过 `THEMIS_UPDATE_SYSTEMD_SERVICE` 或 `./themis update apply --service <name>` 指定。
+- 升级成功后会自动执行 `npm ci`、`npm run build`，并把 `.env.local` 里的 `THEMIS_BUILD_COMMIT / THEMIS_BUILD_BRANCH` 回写到新提交。
+
+当前还支持一条“只回退最近一次成功升级”的受控回滚：
+
+```bash
+./themis update rollback
+```
+
+回滚的第一版边界：
+
+- 只会回退最近一次成功升级记录，不支持多级历史选择。
+- 只有当当前 `git HEAD` 仍然等于那次升级后的提交时，才允许继续回滚。
+- 回滚成功后会清掉这条“最近一次升级记录”；如果还想再次回退，需要先执行新的受控升级或手工处理。
 
 ## 开发模式补充
 

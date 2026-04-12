@@ -54,6 +54,15 @@ npm run build
 THEMIS_BASE_URL=http://127.0.0.1:3100
 ```
 
+如果你计划直接使用 `./themis update apply` 做受控升级，也建议在 `.env.local` 里固定：
+
+```bash
+THEMIS_UPDATE_CHANNEL=release
+THEMIS_UPDATE_SYSTEMD_SERVICE=themis-prod.service
+```
+
+这样正式实例会跟随 GitHub 最新正式 release，而不是默认分支头提交；升级成功后，CLI 也会直接重启这条 `systemd --user` 服务。如果你的正式服务名不是 `themis-prod.service`，就在这里改成真实名字。
+
 正式实例通常不需要开发仓里的 `TODOIST_API_TOKEN` 之类本地运维变量，建议不要直接原样复制整份 `.env.local`。
 
 如果你希望正式实例自动继承当前系统用户已有的 Codex / ChatGPT 登录态，也不要显式设置 `CODEX_HOME`。保持未配置时，Themis 会按默认逻辑读取 `~/.codex`。
@@ -149,18 +158,58 @@ journalctl --user -u themis-prod.service -f
 
 ## 7. 升级
 
-正式版目录保留 `git clone`，这样可以直接检查更新并执行受控升级：
+正式版目录保留 `git clone`，这样可以直接检查更新并执行受控升级。
+
+先检查是否有新版本：
 
 ```bash
 cd ~/services/themis-prod
-git fetch origin
-git status -sb
-./themis status
-git pull --ff-only
-npm ci
-npm run build
-systemctl --user restart themis-prod.service
+./themis update check
 ```
+
+如果你走的是 `THEMIS_UPDATE_CHANNEL=release`，这里看到的会是 “GitHub 最新 release + 对应提交”；如果不配，默认仍是“默认分支最新提交”。
+
+如果这里直接提示“当前更新源还没有正式 release”，说明公开仓还没发布第一条 published full release；这时要么先在 GitHub 发 release，要么临时切回 `THEMIS_UPDATE_CHANNEL=branch`。
+
+如果确认要升级，第一版推荐直接走受控升级：
+
+```bash
+cd ~/services/themis-prod
+./themis update apply
+```
+
+如果你已经能登录这台正式实例的 Web，也可以直接在“运行参数 -> 实例升级”里点“后台升级 / 回滚上一版”；飞书单聊里也可以用 `/update`、`/update apply confirm`、`/update rollback confirm` 作为同一条受控升级链的入口。它们不会在 HTTP / 飞书请求里直接执行重活，而是会把进度落到 `infra/local/themis-update-operation.json`，后台完成版本切换后再请求重启当前 `systemd --user` 服务。
+
+它会按顺序执行：
+
+- 校验当前目录仍是公开仓 `git clone`
+- 拒绝脏工作区、非默认分支或分叉状态
+- `git fetch origin <default-branch>`
+- `git pull --ff-only origin <default-branch>`
+- `npm ci`
+- `npm run build`
+- 回写 `.env.local` 里的 `THEMIS_BUILD_COMMIT / THEMIS_BUILD_BRANCH`
+- 重启 `systemd --user` 服务
+
+如果你临时不想自动重启，也可以：
+
+```bash
+cd ~/services/themis-prod
+./themis update apply --no-restart
+```
+
+如果新版本已经拉起但确认要立刻退回上一版，第一版也支持受控回滚：
+
+```bash
+cd ~/services/themis-prod
+./themis update rollback
+```
+
+当前回滚边界：
+
+- 只回退最近一次成功升级。
+- 只在当前 `HEAD` 仍然等于那次升级后的提交时允许继续。
+- 回滚成功后会清掉这条最近升级记录，避免重复对同一条记录来回切换。
 
 升级后按同样顺序复跑：
 

@@ -23,6 +23,7 @@ import type {
   TaskRuntimeRunHooks,
 } from "../../types/index.js";
 import { SqliteCodexSessionRegistry } from "../../storage/index.js";
+import type { ThemisUpdateService } from "../../diagnostics/update-service.js";
 import { FeishuDiagnosticsStateStore } from "./diagnostics-state-store.js";
 import { FeishuChannelService } from "./service.js";
 import { FeishuSessionStore } from "./session-store.js";
@@ -41,6 +42,143 @@ test("/help 只展示第一层命令", async () => {
     assert.doesNotMatch(message, /\/sandbox /);
     assert.doesNotMatch(message, /\/account list/);
     assert.doesNotMatch(message, /\/settings network/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/update 会展示当前实例更新状态", async () => {
+  const harness = createHarness({
+    updateService: {
+      async readOverview() {
+        return {
+          check: {
+            packageVersion: "0.1.0",
+            currentCommit: "1234567890abcdef",
+            currentBranch: "main",
+            currentCommitSource: "git",
+            updateChannel: "release",
+            updateSourceRepo: "gyyxs88/themis",
+            updateSourceUrl: "https://github.com/gyyxs88/themis",
+            updateSourceDefaultBranch: "main",
+            latestCommit: "abcdef1234567890",
+            latestCommitDate: "2026-04-11T00:00:00.000Z",
+            latestCommitUrl: "https://github.com/gyyxs88/themis/commit/abcdef1234567890",
+            latestReleaseTag: "v0.1.0",
+            latestReleaseName: "v0.1.0",
+            latestReleasePublishedAt: "2026-04-11T00:00:00.000Z",
+            latestReleaseUrl: "https://github.com/gyyxs88/themis/releases/tag/v0.1.0",
+            comparisonStatus: "identical",
+            outcome: "up_to_date",
+            summary: "当前已经是 GitHub 最新正式 release。",
+            errorMessage: null,
+          },
+          operation: null,
+          rollbackAnchor: {
+            available: false,
+            previousCommit: null,
+            currentCommit: null,
+            appliedReleaseTag: null,
+            recordedAt: null,
+          },
+        };
+      },
+      async startApply() {
+        throw new Error("not used");
+      },
+      async startRollback() {
+        throw new Error("not used");
+      },
+    },
+  });
+
+  try {
+    await harness.handleCommand("update", []);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /Themis 更新状态：/);
+    assert.match(message, /更新渠道：release/);
+    assert.match(message, /最新 release：v0\.1\.0/);
+    assert.match(message, /执行升级：\/update apply confirm/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/update apply 在缺少 confirm 时只返回安全提示，不会真正启动升级", async () => {
+  const calls: string[] = [];
+  const harness = createHarness({
+    updateService: {
+      async readOverview() {
+        throw new Error("not used");
+      },
+      async startApply() {
+        calls.push("apply");
+        throw new Error("not used");
+      },
+      async startRollback() {
+        throw new Error("not used");
+      },
+    },
+  });
+
+  try {
+    await harness.handleCommand("update", ["apply"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /这是高风险操作/);
+    assert.match(message, /确认执行：\/update apply confirm/);
+    assert.deepEqual(calls, []);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/update apply confirm 会启动后台升级", async () => {
+  const calls: Array<{ channel?: string; channelUserId?: string; chatId?: string | null }> = [];
+  const harness = createHarness({
+    updateService: {
+      async readOverview() {
+        throw new Error("not used");
+      },
+      async startApply(input) {
+        calls.push(input.initiatedBy);
+        return {
+          action: "apply",
+          status: "running",
+          startedAt: "2026-04-11T00:00:00.000Z",
+          updatedAt: "2026-04-11T00:00:00.000Z",
+          finishedAt: null,
+          initiatedBy: {
+            channel: "feishu",
+            channelUserId: "user-1",
+            displayName: "user-1",
+            chatId: "chat-1",
+          },
+          progressStep: "preflight",
+          progressMessage: "已受理后台升级请求，正在准备执行。",
+          result: null,
+          errorMessage: null,
+        };
+      },
+      async startRollback() {
+        throw new Error("not used");
+      },
+    },
+  });
+
+  try {
+    await harness.handleCommand("update", ["apply", "confirm"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /后台升级已启动。/);
+    assert.match(message, /稍后可发送 \/update 查看最终状态。/);
+    assert.deepEqual(calls, [{
+      channel: "feishu",
+      channelUserId: "user-1",
+      displayName: "user-1",
+      chatId: "chat-1",
+    }]);
   } finally {
     harness.cleanup();
   }
@@ -6231,6 +6369,7 @@ type FeishuHarnessConfig = {
   listItems?: Array<FeishuHarnessSkillItem>;
   curatedItems?: Array<FeishuHarnessCuratedItem>;
   pluginService?: FeishuHarnessPluginService;
+  updateService?: Pick<ThemisUpdateService, "readOverview" | "startApply" | "startRollback">;
 };
 
 type FeishuHarnessSkillCall =
@@ -6479,6 +6618,7 @@ function createHarness(
       || "appServerRuntimeFactory" in runtimeCatalogOrSkillsOverrides
       || "resolveFailureActionIds" in runtimeCatalogOrSkillsOverrides
       || "pluginService" in runtimeCatalogOrSkillsOverrides
+      || "updateService" in runtimeCatalogOrSkillsOverrides
     )
       ? runtimeCatalogOrSkillsOverrides as FeishuHarnessConfig
       : null;
@@ -7180,6 +7320,7 @@ function createHarness(
     taskTimeoutMs: 5_000,
     sessionStore,
     diagnosticsStateStore,
+    ...(harnessConfig?.updateService ? { updateService: harnessConfig.updateService as never } : {}),
     logger: loggerState.logger,
   });
   const messages: string[] = [];

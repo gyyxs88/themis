@@ -19,6 +19,7 @@ Themis 已接入飞书长连接渠道，特点如下：
 - 群聊会话策略支持 `personal / shared`：`personal` 继续按人隔离当前会话与附件草稿，`shared` 则改为整群共用一条当前会话和同一份附件草稿
 - 飞书已补 `/group` 最小管理员控制：可查看和修改当前群的路由、会话策略与管理员名单；当前群还没有管理员时，首次成功修改群设置的人会自动成为首个管理员
 - 当群聊处于 `shared` 会话策略时，只有群管理员可以执行 `/new`、`/use`、`/workspace`，避免整群当前会话被随手切乱
+- 飞书已补 `/update` 运维入口：`/update` 可查看当前实例更新状态，`/update apply confirm` / `/update rollback confirm` 可在单聊里触发后台升级或回滚；高风险动作默认要求显式 `confirm`
 - 飞书发任务前会读取当前 principal 保存的 Themis 默认任务配置，并带上对应 `options`
 - 飞书支持会话级工作区：`/workspace`（别名 `/ws`）会写当前激活会话的 `workspacePath`，不改 principal 默认配置
 - 如果当前 principal 还没有长期协作档案，首次普通消息会先进入一次性人格 bootstrap
@@ -303,6 +304,18 @@ infra/local/feishu-attachment-drafts.json
 - `/group admin list|add|remove`：查看或维护群管理员名单。
 - 当前群还没有管理员时，首次成功修改群设置的人会自动成为首个 Themis 群管理员。
 - 当当前群是 `shared` 会话时，只有群管理员可以执行 `/new`、`/use`、`/workspace`。
+
+### `/update`
+
+查看当前实例的版本状态，或在单聊里触发后台升级 / 回滚。
+
+规则：
+
+- `/update`、`/update check`、`/update status`：读取当前版本、GitHub 目标版本、最近一次回滚锚点，以及后台升级任务状态。
+- `/update apply confirm`：后台执行受控升级。流程仍然复用 `git fetch/pull(or release tag) + npm ci + npm run build + 请求 systemd --user restart` 这条正式实例升级链。
+- `/update rollback confirm`：后台回滚到最近一次成功升级前的版本，再请求重启当前服务。
+- `apply / rollback` 只允许在和 Themis 的单聊里执行，避免群聊误触导致实例重启。
+- 飞书这里只负责“发起”和“看状态”；进度文件固定写在 `infra/local/themis-update-operation.json`，服务重启期间飞书会短暂中断，稍后再发 `/update` 即可查看最终结果。
 
 ### `/link <绑定码>`
 

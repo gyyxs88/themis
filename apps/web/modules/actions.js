@@ -19,6 +19,7 @@ export function createActions(app) {
     sidebarActions.bindSidebarControls();
     bindThreadRiskBannerControls();
     app.auth.bindControls();
+    app.updateManager.bindControls();
     app.modeSwitch.bindControls();
     app.thirdPartyEditor.bindControls();
     app.thirdPartyEndpointProbe.bindControls();
@@ -31,6 +32,7 @@ export function createActions(app) {
     void app.auth.load();
     void app.identity.load({ quiet: true });
     void app.runtimeConfig.load();
+    void app.updateManager.load({ quiet: true });
     void app.sessionSettings.loadThreadSettings(store.state.activeThreadId, { quiet: true });
   }
 

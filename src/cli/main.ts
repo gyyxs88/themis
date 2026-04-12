@@ -17,7 +17,13 @@ import {
   describeFeishuTakeoverGuidance,
   type FeishuDiagnosticsSummary,
 } from "../diagnostics/feishu-diagnostics.js";
-import { checkThemisUpdates, formatShortCommitHash } from "../diagnostics/update-check.js";
+import { applyThemisUpdate, rollbackThemisUpdate } from "../diagnostics/update-apply.js";
+import {
+  checkThemisUpdates,
+  formatShortCommitHash,
+  type ThemisUpdateCheckResult,
+} from "../diagnostics/update-check.js";
+import { runManagedThemisUpdateWorker } from "../diagnostics/update-service.js";
 import { RuntimeSmokeService, type RuntimeSmokeProgressEvent } from "../diagnostics/runtime-smoke.js";
 import { McpInspector } from "../mcp/mcp-inspector.js";
 import { runThemisMcpServer } from "../mcp/themis-mcp-server.js";
@@ -86,6 +92,9 @@ async function main(args: string[]): Promise<void> {
     case "check":
       await handleStatus();
       return;
+    case "update":
+      await handleUpdate(subcommand, rest);
+      return;
     case "doctor":
       if (subcommand?.trim().toLowerCase() === "smoke") {
         process.exit(await handleDoctorSmoke(rest));
@@ -106,7 +115,7 @@ async function main(args: string[]): Promise<void> {
       await handleMcpServer([...(subcommand ? [subcommand] : []), ...rest]);
       return;
     default:
-      throw new Error(`不支持的命令：${command}。可用命令：init / status / check / doctor / config / auth / skill / mcp-server / help。`);
+      throw new Error(`不支持的命令：${command}。可用命令：init / status / check / update / doctor / config / auth / skill / mcp-server / help。`);
   }
 }
 
@@ -251,28 +260,7 @@ async function handleStatus(): Promise<void> {
     console.log("- 当前可用供应商：暂无");
   }
 
-  console.log("");
-  console.log("版本更新");
-  console.log(`- package.json 版本：${updateCheck.packageVersion ?? "未知"}`);
-  console.log(
-    `- 当前提交：${formatShortCommitHash(updateCheck.currentCommit)} (${formatCurrentCommitSource(updateCheck.currentCommitSource)})`,
-  );
-  console.log(`- 当前分支：${updateCheck.currentBranch ?? "未知"}`);
-  console.log(`- 更新源：${updateCheck.updateSourceRepo}`);
-  console.log(`- 更新源默认分支：${updateCheck.updateSourceDefaultBranch ?? "未知"}`);
-  console.log(
-    `- GitHub 最新提交：${formatShortCommitHash(updateCheck.latestCommit)}${updateCheck.latestCommitDate ? ` (${updateCheck.latestCommitDate})` : ""}`,
-  );
-  console.log(`- 判断：${updateCheck.summary}`);
-  if (updateCheck.comparisonStatus) {
-    console.log(`- 对比结果：${updateCheck.comparisonStatus}`);
-  }
-  if (updateCheck.latestCommitUrl) {
-    console.log(`- 最新提交地址：${updateCheck.latestCommitUrl}`);
-  }
-  if (updateCheck.errorMessage) {
-    console.log(`- 检查详情：${updateCheck.errorMessage}`);
-  }
+  printUpdateCheckSummary(updateCheck);
   console.log("");
   console.log("建议下一步");
 
@@ -282,7 +270,9 @@ async function handleStatus(): Promise<void> {
     !feishuReady ? "如果需要飞书 bot，请补齐 FEISHU_APP_ID 和 FEISHU_APP_SECRET。" : null,
     !envProviderReady && !dbProviders.length ? "如果需要第三方模型，可在 Web 设置页添加供应商，或先写入 THEMIS_OPENAI_COMPAT_*。" : null,
     updateCheck.outcome === "update_available"
-      ? "检测到 GitHub 有新提交；正式实例可执行 `git pull && npm install && npm run build` 后重启服务。"
+      ? updateCheck.updateChannel === "release"
+        ? "检测到新的 GitHub 正式 release；正式实例可执行 `./themis update apply` 做受控升级。"
+        : "检测到 GitHub 有新提交；正式实例可执行 `./themis update apply` 做受控升级，或继续手工走 git pull / npm ci / build / restart。"
       : null,
     updateCheck.outcome === "comparison_unavailable"
       ? "如果希望稳定比较版本，正式部署建议保留 git clone，或在启动环境写入 THEMIS_BUILD_COMMIT。"
@@ -293,6 +283,231 @@ async function handleStatus(): Promise<void> {
   for (const [index, step] of nextSteps.entries()) {
     console.log(`${index + 1}. ${step}`);
   }
+}
+
+async function handleUpdate(subcommand: string | undefined, args: string[]): Promise<void> {
+  const selected = subcommand?.trim().toLowerCase();
+
+  if (!selected || selected === "check") {
+    if (args.length > 0) {
+      throw new Error("用法：themis update [check]");
+    }
+
+    await handleUpdateCheck();
+    return;
+  }
+
+  if (selected === "apply") {
+    await handleUpdateApply(args);
+    return;
+  }
+
+  if (selected === "rollback") {
+    await handleUpdateRollback(args);
+    return;
+  }
+
+  if (selected === "worker") {
+    await handleUpdateWorker(args);
+    return;
+  }
+
+  throw new Error("update 子命令仅支持 check / apply / rollback。");
+}
+
+async function handleUpdateCheck(): Promise<void> {
+  const updateCheck = await checkThemisUpdates({
+    workingDirectory: cwd,
+    env: process.env,
+  });
+
+  console.log("Themis 更新检查");
+  printUpdateCheckSummary(updateCheck);
+  console.log("");
+  console.log("建议下一步");
+
+  const nextSteps = [
+    updateCheck.outcome === "update_available"
+      ? updateCheck.updateChannel === "release"
+        ? "运行 `./themis update apply` 对齐到最新正式 release。"
+        : "运行 `./themis update apply` 执行受控升级。"
+      : null,
+    updateCheck.outcome === "check_failed" && updateCheck.updateChannel === "release" && /\b404\b/.test(updateCheck.errorMessage ?? "")
+      ? "先在 GitHub 发布第一条正式 release，或临时切回 `THEMIS_UPDATE_CHANNEL=branch`。"
+      : null,
+    updateCheck.outcome === "comparison_unavailable"
+      ? "当前实例无法稳定比较远端版本；正式部署建议保留 git clone，或补齐 THEMIS_BUILD_COMMIT。"
+      : null,
+    updateCheck.outcome === "check_failed" && !(updateCheck.updateChannel === "release" && /\b404\b/.test(updateCheck.errorMessage ?? ""))
+      ? "先排查网络、GitHub API 或更新源配置，再重试 `./themis update check`。"
+      : null,
+  ].filter((item): item is string => Boolean(item));
+
+  if (nextSteps.length === 0) {
+    console.log("1. 当前无需额外操作。");
+    return;
+  }
+
+  for (const [index, step] of nextSteps.entries()) {
+    console.log(`${index + 1}. ${step}`);
+  }
+}
+
+async function handleUpdateApply(args: string[]): Promise<void> {
+  const { skipRestart, serviceUnitOverride } = parseUpdateRuntimeOptions(
+    args,
+    "用法：themis update apply [--service <systemd-user-service>] [--no-restart]",
+  );
+
+  console.log("Themis 受控升级");
+
+  const result = await applyThemisUpdate({
+    workingDirectory: cwd,
+    env: process.env,
+    serviceUnitOverride,
+    skipRestart,
+    onProgress: (event) => {
+      console.log(`- ${event.message}`);
+    },
+  });
+
+  if (result.outcome === "already_up_to_date") {
+    console.log("");
+    console.log("结果");
+    console.log(`- 更新渠道：${formatUpdateChannelLabel(result.updateChannel)}`);
+    console.log(`- 当前提交：${formatShortCommitHash(result.currentCommit)}`);
+    if (result.appliedReleaseTag) {
+      console.log(`- 当前 release：${result.appliedReleaseTag}`);
+    }
+    console.log("- 状态：已经是最新版本，无需升级。");
+    return;
+  }
+
+  console.log("");
+  console.log("结果");
+  console.log(`- 更新渠道：${formatUpdateChannelLabel(result.updateChannel)}`);
+  console.log(`- 升级前提交：${formatShortCommitHash(result.previousCommit)}`);
+  console.log(`- 升级后提交：${formatShortCommitHash(result.currentCommit)}`);
+  console.log(`- 当前分支：${result.branch}`);
+  if (result.appliedReleaseTag) {
+    console.log(`- 对齐 release：${result.appliedReleaseTag}`);
+  }
+  console.log(`- .env.local 构建提交回写：${result.buildMetadataUpdated ? "已完成" : "已跳过"}`);
+  console.log(`- systemd 自动重启：${result.restartedService ? `已重启 ${result.serviceUnit}` : skipRestart ? "按参数跳过" : "未执行"}`);
+}
+
+async function handleUpdateRollback(args: string[]): Promise<void> {
+  const { skipRestart, serviceUnitOverride } = parseUpdateRuntimeOptions(
+    args,
+    "用法：themis update rollback [--service <systemd-user-service>] [--no-restart]",
+  );
+
+  console.log("Themis 受控回滚");
+
+  const result = await rollbackThemisUpdate({
+    workingDirectory: cwd,
+    env: process.env,
+    serviceUnitOverride,
+    skipRestart,
+    onProgress: (event) => {
+      console.log(`- ${event.message}`);
+    },
+  });
+
+  console.log("");
+  console.log("结果");
+  console.log(`- 回滚前提交：${formatShortCommitHash(result.previousCommit)}`);
+  console.log(`- 回滚后提交：${formatShortCommitHash(result.currentCommit)}`);
+  console.log(`- 当前分支：${result.branch}`);
+  if (result.rolledBackReleaseTag) {
+    console.log(`- 回退来源 release：${result.rolledBackReleaseTag}`);
+  }
+  console.log(`- .env.local 构建提交回写：${result.buildMetadataUpdated ? "已完成" : "已跳过"}`);
+  console.log(`- systemd 自动重启：${result.restartedService ? `已重启 ${result.serviceUnit}` : skipRestart ? "按参数跳过" : "未执行"}`);
+}
+
+async function handleUpdateWorker(args: string[]): Promise<void> {
+  const action = args[0]?.trim().toLowerCase();
+
+  if (action !== "apply" && action !== "rollback") {
+    throw new Error("用法：themis update worker <apply|rollback> [--channel <web|feishu|cli>] [--user <id>] [--name <displayName>] [--chat <chatId>] [--service <systemd-user-service>] [--no-restart]");
+  }
+
+  const { skipRestart, serviceUnitOverride } = parseUpdateRuntimeOptions(
+    args.slice(1),
+    "用法：themis update worker <apply|rollback> [--channel <web|feishu|cli>] [--user <id>] [--name <displayName>] [--chat <chatId>] [--service <systemd-user-service>] [--no-restart]",
+    {
+      passthroughValueOptions: ["--channel", "--user", "--name", "--chat"],
+    },
+  );
+  const channel = readOptionValue(args.slice(1), "--channel")?.trim().toLowerCase();
+  const normalizedChannel = channel === "web" || channel === "feishu" || channel === "cli" ? channel : "cli";
+
+  await runManagedThemisUpdateWorker({
+    action,
+    workingDirectory: cwd,
+    env: process.env,
+    initiatedBy: {
+      channel: normalizedChannel,
+      channelUserId: readOptionValue(args.slice(1), "--user") ?? "codex",
+      ...(readOptionValue(args.slice(1), "--name") ? { displayName: readOptionValue(args.slice(1), "--name") } : {}),
+      ...(readOptionValue(args.slice(1), "--chat") ? { chatId: readOptionValue(args.slice(1), "--chat") } : {}),
+    },
+    serviceUnitOverride,
+    skipRestart,
+  });
+}
+
+function parseUpdateRuntimeOptions(
+  args: string[],
+  usage: string,
+  options: {
+    passthroughValueOptions?: string[];
+  } = {},
+): {
+  skipRestart: boolean;
+  serviceUnitOverride: string | null;
+} {
+  let skipRestart = false;
+  let serviceUnitOverride: string | null = null;
+  const passthroughValueOptions = new Set(options.passthroughValueOptions ?? []);
+
+  for (let index = 0; index < args.length; index += 1) {
+    const value = args[index];
+
+    if (value === "--no-restart") {
+      skipRestart = true;
+      continue;
+    }
+
+    if (value === "--service") {
+      const next = args[index + 1];
+      if (!next?.trim()) {
+        throw new Error(usage);
+      }
+
+      serviceUnitOverride = next.trim();
+      index += 1;
+      continue;
+    }
+
+    if (passthroughValueOptions.has(value ?? "")) {
+      const next = args[index + 1];
+      if (!next?.trim()) {
+        throw new Error(usage);
+      }
+
+      index += 1;
+      continue;
+    }
+
+    throw new Error(usage);
+  }
+
+  return {
+    skipRestart,
+    serviceUnitOverride,
+  };
 }
 
 async function handleDoctor(subcommand: string | undefined, args: string[]): Promise<void> {
@@ -803,6 +1018,10 @@ function printHelp(): void {
   console.log("- ./themis init");
   console.log("- ./themis status");
   console.log("- ./themis check");
+  console.log("- ./themis update");
+  console.log("- ./themis update check");
+  console.log("- ./themis update apply [--service <systemd-user-service>] [--no-restart]");
+  console.log("- ./themis update rollback [--service <systemd-user-service>] [--no-restart]");
   console.log("- ./themis doctor");
   console.log("- ./themis doctor <context|auth|provider|memory|service|mcp|feishu|release>");
   console.log("- ./themis doctor smoke <web|feishu|all>");
@@ -1304,6 +1523,58 @@ function formatDisplayValue(
 ): string {
   const value = secret ? maskSecretValue(resolved.value) : (resolved.value || "未配置");
   return `${value} (${resolved.sourceLabel})`;
+}
+
+function printUpdateCheckSummary(updateCheck: ThemisUpdateCheckResult): void {
+  console.log("");
+  console.log("版本更新");
+  console.log(`- package.json 版本：${updateCheck.packageVersion ?? "未知"}`);
+  console.log(`- 更新渠道：${formatUpdateChannelLabel(updateCheck.updateChannel)}`);
+  console.log(
+    `- 当前提交：${formatShortCommitHash(updateCheck.currentCommit)} (${formatCurrentCommitSource(updateCheck.currentCommitSource)})`,
+  );
+  console.log(`- 当前分支：${updateCheck.currentBranch ?? "未知"}`);
+  console.log(`- 更新源：${updateCheck.updateSourceRepo}`);
+  console.log(`- 更新源默认分支：${updateCheck.updateSourceDefaultBranch ?? "未知"}`);
+
+  if (updateCheck.updateChannel === "release" && updateCheck.latestReleaseTag) {
+    const releaseSummary = [
+      updateCheck.latestReleaseTag,
+      updateCheck.latestReleaseName,
+      updateCheck.latestReleasePublishedAt ? `published ${updateCheck.latestReleasePublishedAt}` : null,
+    ].filter((item): item is string => Boolean(item)).join(" / ");
+    console.log(`- GitHub 最新 release：${releaseSummary}`);
+    if (updateCheck.latestReleaseUrl) {
+      console.log(`- release 地址：${updateCheck.latestReleaseUrl}`);
+    }
+    console.log(
+      `- release 对应提交：${formatShortCommitHash(updateCheck.latestCommit)}${updateCheck.latestCommitDate ? ` (${updateCheck.latestCommitDate})` : ""}`,
+    );
+    if (updateCheck.latestCommitUrl) {
+      console.log(`- 提交地址：${updateCheck.latestCommitUrl}`);
+    }
+  } else if (updateCheck.updateChannel === "release") {
+    console.log("- GitHub 最新 release：未检测到");
+  } else {
+    console.log(
+      `- GitHub 最新提交：${formatShortCommitHash(updateCheck.latestCommit)}${updateCheck.latestCommitDate ? ` (${updateCheck.latestCommitDate})` : ""}`,
+    );
+    if (updateCheck.latestCommitUrl) {
+      console.log(`- 最新提交地址：${updateCheck.latestCommitUrl}`);
+    }
+  }
+
+  console.log(`- 判断：${updateCheck.summary}`);
+  if (updateCheck.comparisonStatus) {
+    console.log(`- 对比结果：${updateCheck.comparisonStatus}`);
+  }
+  if (updateCheck.errorMessage) {
+    console.log(`- 检查详情：${updateCheck.errorMessage}`);
+  }
+}
+
+function formatUpdateChannelLabel(channel: ThemisUpdateCheckResult["updateChannel"]): string {
+  return channel === "release" ? "GitHub latest release" : "GitHub 默认分支";
 }
 
 function formatCurrentCommitSource(source: "git" | "env" | "unknown"): string {
@@ -1904,10 +2175,11 @@ async function runInteractiveShell(): Promise<void> {
       console.log("4. 写入一个配置项");
       console.log("5. 移除一个配置项");
       console.log("6. 安装 themis 到用户目录");
-      console.log("7. 查看帮助");
+      console.log("7. 检查 GitHub 更新");
+      console.log("8. 查看帮助");
       console.log("0. 退出");
 
-      const choice = (await rl.question("选择一个操作 [1-7，默认 1]：")).trim() || "1";
+      const choice = (await rl.question("选择一个操作 [1-8，默认 1]：")).trim() || "1";
 
       switch (choice) {
         case "1":
@@ -1929,6 +2201,9 @@ async function runInteractiveShell(): Promise<void> {
           handleInstall([]);
           break;
         case "7":
+          await handleUpdateCheck();
+          break;
+        case "8":
           printHelp();
           break;
         case "0":
