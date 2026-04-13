@@ -226,6 +226,7 @@
 当前进展：
 
 - `2026-04-13` 已补 `Phase 4` 第一刀：当前仓库已新增 `src/contracts/managed-agent-platform-worker.ts`，先把 `nodes/register|heartbeat|list|detail|reclaim` 与 `worker/runs/pull|update|complete` 这组共享 DTO / payload 收到独立契约文件里；`src/server/http-platform.ts` 与 `src/core/managed-agent-platform-worker-client.ts` 已改成共同依赖这份契约，`ManagedAgentWorkerDaemon` 也不再继续传那些只为迁就旧 client 签名而存在的 `ownerPrincipalId` 空占位。当前这一步还没有覆盖 `gateway` DTO、平台错误码全集和 `ProjectWorkspaceBinding` schema，但已经先把平台层与 Worker 层最重的协议耦合点从业务实现里缝开。
+- `2026-04-13` 同日已继续补 `Phase 4` 第二刀：当前仓库又新增 `src/contracts/managed-agent-platform-projects.ts`，把 `projects/workspace-binding/list|detail|upsert` 这组 DTO / payload 也从 `http-platform` 里抽出；与此同时，`ManagedAgentPlatformGatewayClient` 已正式补上 `list/get/upsert project workspace binding` 三个方法，并通过独立的 fake-fetch 测试把请求 shape 固定下来。到这一步，跨平台层 / 主 Themis / Worker 的共享契约已经不再只覆盖节点协议，也开始覆盖 `ProjectWorkspaceBinding` 这类真正的跨层连续性对象。
 
 说明：
 

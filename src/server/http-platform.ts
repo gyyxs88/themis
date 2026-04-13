@@ -2,6 +2,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ManagedAgentControlPlaneFacadeLike } from "../core/managed-agent-control-plane-facade.js";
 import type { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
 import type {
+  ManagedAgentPlatformProjectWorkspaceBindingDetailPayload,
+  ManagedAgentPlatformProjectWorkspaceBindingListPayload,
+  ManagedAgentPlatformProjectWorkspaceBindingUpsertPayload,
+} from "../contracts/managed-agent-platform-projects.js";
+import type {
   ManagedAgentPlatformNodeDetailPayload,
   ManagedAgentPlatformNodeHeartbeatPayload,
   ManagedAgentPlatformNodeListPayload,
@@ -24,7 +29,6 @@ import {
   type ManagedAgentIdleRecoveryAction,
   type MemoryMode,
   type ManagedAgentPriority,
-  type ProjectWorkspaceContinuityMode,
   type ManagedAgentWorkItemSourceType,
   type ReasoningLevel,
   type SandboxMode,
@@ -88,31 +92,6 @@ interface PlatformAgentSpawnPolicyUpdatePayload extends PlatformAgentListPayload
     organizationId?: string;
     maxActiveAgents: number;
     maxActiveAgentsPerRole: number;
-  };
-}
-
-interface PlatformProjectWorkspaceBindingListPayload extends PlatformAgentListPayload {
-  organizationId?: string;
-}
-
-interface PlatformProjectWorkspaceBindingDetailPayload extends PlatformAgentListPayload {
-  projectId: string;
-}
-
-interface PlatformProjectWorkspaceBindingUpsertPayload extends PlatformAgentListPayload {
-  binding: {
-    projectId: string;
-    displayName: string;
-    organizationId?: string;
-    owningAgentId?: string;
-    workspaceRootId?: string;
-    workspacePolicyId?: string;
-    canonicalWorkspacePath?: string;
-    preferredNodeId?: string;
-    preferredNodePool?: string;
-    lastActiveNodeId?: string;
-    lastActiveWorkspacePath?: string;
-    continuityMode?: ProjectWorkspaceContinuityMode;
   };
 }
 
@@ -1643,7 +1622,9 @@ function normalizePlatformAgentSpawnApprovePayload(value: unknown): PlatformAgen
   };
 }
 
-function normalizePlatformProjectWorkspaceBindingListPayload(value: unknown): PlatformProjectWorkspaceBindingListPayload {
+function normalizePlatformProjectWorkspaceBindingListPayload(
+  value: unknown,
+): ManagedAgentPlatformProjectWorkspaceBindingListPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -1658,7 +1639,7 @@ function normalizePlatformProjectWorkspaceBindingListPayload(value: unknown): Pl
 
 function normalizePlatformProjectWorkspaceBindingDetailPayload(
   value: unknown,
-): PlatformProjectWorkspaceBindingDetailPayload {
+): ManagedAgentPlatformProjectWorkspaceBindingDetailPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -1671,7 +1652,7 @@ function normalizePlatformProjectWorkspaceBindingDetailPayload(
 
 function normalizePlatformProjectWorkspaceBindingUpsertPayload(
   value: unknown,
-): PlatformProjectWorkspaceBindingUpsertPayload {
+): ManagedAgentPlatformProjectWorkspaceBindingUpsertPayload {
   if (!isRecord(value) || !isRecord(value.binding)) {
     throw new Error("Request body.binding must be an object.");
   }

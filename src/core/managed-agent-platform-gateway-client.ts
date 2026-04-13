@@ -41,12 +41,30 @@ import type {
 } from "./managed-agents-service.js";
 import type { ManagedAgentRunDetailView, ManagedAgentRunListInput } from "./managed-agent-scheduler-service.js";
 import type {
+  ManagedAgentPlatformProjectWorkspaceBindingDetailResult,
+  ManagedAgentPlatformProjectWorkspaceBindingListInput,
+  ManagedAgentPlatformProjectWorkspaceBindingListResult,
+  ManagedAgentPlatformProjectWorkspaceBindingRecord,
+  ManagedAgentPlatformProjectWorkspaceBindingUpsertInput,
+  ManagedAgentPlatformProjectWorkspaceBindingUpsertResult,
+} from "../contracts/managed-agent-platform-projects.js";
+import type {
   StoredAgentMailboxEntryRecord,
   StoredAgentMessageRecord,
   StoredAgentRunRecord,
   StoredAgentSpawnPolicyRecord,
   StoredAgentWorkItemRecord,
 } from "../types/index.js";
+
+export type {
+  ManagedAgentPlatformProjectWorkspaceBindingDetailInput,
+  ManagedAgentPlatformProjectWorkspaceBindingDetailResult,
+  ManagedAgentPlatformProjectWorkspaceBindingListInput,
+  ManagedAgentPlatformProjectWorkspaceBindingListResult,
+  ManagedAgentPlatformProjectWorkspaceBindingRecord,
+  ManagedAgentPlatformProjectWorkspaceBindingUpsertInput,
+  ManagedAgentPlatformProjectWorkspaceBindingUpsertResult,
+} from "../contracts/managed-agent-platform-projects.js";
 
 export interface ManagedAgentPlatformGatewayConfig {
   baseUrl: string;
@@ -110,6 +128,59 @@ export class ManagedAgentPlatformGatewayClient {
     this.ownerPrincipalId = options.ownerPrincipalId;
     this.webAccessToken = options.webAccessToken;
     this.fetchImpl = options.fetchImpl ?? fetch;
+  }
+
+  async listProjectWorkspaceBindings(
+    input: ManagedAgentPlatformProjectWorkspaceBindingListInput = {},
+  ): Promise<ManagedAgentPlatformProjectWorkspaceBindingRecord[]> {
+    const payload = await this.requestJson<ManagedAgentPlatformProjectWorkspaceBindingListResult>(
+      "/api/platform/projects/workspace-binding/list",
+      {
+        ownerPrincipalId: this.ownerPrincipalId,
+        ...(input.organizationId ? { organizationId: input.organizationId } : {}),
+      },
+    );
+
+    return Array.isArray(payload.bindings) ? payload.bindings : [];
+  }
+
+  async getProjectWorkspaceBinding(projectId: string): Promise<ManagedAgentPlatformProjectWorkspaceBindingRecord | null> {
+    const payload = await this.requestJson<ManagedAgentPlatformProjectWorkspaceBindingDetailResult>(
+      "/api/platform/projects/workspace-binding/detail",
+      {
+        ownerPrincipalId: this.ownerPrincipalId,
+        projectId,
+      },
+    );
+
+    return payload.binding ?? null;
+  }
+
+  async upsertProjectWorkspaceBinding(
+    input: ManagedAgentPlatformProjectWorkspaceBindingUpsertInput,
+  ): Promise<ManagedAgentPlatformProjectWorkspaceBindingRecord> {
+    const payload = await this.requestJson<ManagedAgentPlatformProjectWorkspaceBindingUpsertResult>(
+      "/api/platform/projects/workspace-binding/upsert",
+      {
+        ownerPrincipalId: this.ownerPrincipalId,
+        binding: {
+          projectId: input.projectId,
+          displayName: input.displayName,
+          ...(input.organizationId ? { organizationId: input.organizationId } : {}),
+          ...(input.owningAgentId ? { owningAgentId: input.owningAgentId } : {}),
+          ...(input.workspaceRootId ? { workspaceRootId: input.workspaceRootId } : {}),
+          ...(input.workspacePolicyId ? { workspacePolicyId: input.workspacePolicyId } : {}),
+          ...(input.canonicalWorkspacePath ? { canonicalWorkspacePath: input.canonicalWorkspacePath } : {}),
+          ...(input.preferredNodeId ? { preferredNodeId: input.preferredNodeId } : {}),
+          ...(input.preferredNodePool ? { preferredNodePool: input.preferredNodePool } : {}),
+          ...(input.lastActiveNodeId ? { lastActiveNodeId: input.lastActiveNodeId } : {}),
+          ...(input.lastActiveWorkspacePath ? { lastActiveWorkspacePath: input.lastActiveWorkspacePath } : {}),
+          ...(input.continuityMode ? { continuityMode: input.continuityMode } : {}),
+        },
+      },
+    );
+
+    return payload.binding;
   }
 
   async listManagedAgents(): Promise<ManagedAgentPlatformGatewayListResult> {
