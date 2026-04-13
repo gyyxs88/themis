@@ -129,6 +129,7 @@ Environment="THEMIS_WORKER_PLATFORM=http://127.0.0.1:3100"
 Environment="THEMIS_WORKER_OWNER_PRINCIPAL=principal-owner"
 Environment="THEMIS_WORKER_TOKEN=replace-with-platform-worker-token"
 Environment="THEMIS_WORKER_NAME=worker-node-a"
+Environment="THEMIS_WORKER_NODE_ID=node-worker-a"
 Environment="THEMIS_WORKER_WORKSPACE=%h/services/themis-worker-node"
 Environment="THEMIS_WORKER_CREDENTIAL=default"
 Environment="THEMIS_WORKER_SLOT_CAPACITY=1"
@@ -142,11 +143,14 @@ ExecStart=%h/services/themis-worker-node/themis worker-node run ...
 - `THEMIS_WORKER_OWNER_PRINCIPAL`
 - `THEMIS_WORKER_TOKEN`
 - `THEMIS_WORKER_NAME`
+- `THEMIS_WORKER_NODE_ID`
 - `THEMIS_WORKER_WORKSPACE`
 - `THEMIS_WORKER_CREDENTIAL`
 - `THEMIS_WORKER_SLOT_CAPACITY`
 
 `THEMIS_WORKER_NAME` 建议直接用不带空格的稳定标识，例如 `worker-node-a`，这样 systemd 模板和手工命令都更不容易踩到参数转义问题。
+
+`THEMIS_WORKER_NODE_ID` 也建议固定下来，例如 `node-worker-a`。如果长期常驻节点不传稳定 `--node-id`，每次重启都会注册成新的 node 记录，平台里会留下同名但不同 `nodeId` 的 offline 节点，后续值班和诊断会变乱。
 
 如果你还要声明更多能力，可以继续往 `ExecStart` 里追加：
 
