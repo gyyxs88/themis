@@ -18,6 +18,7 @@ import type {
 
 const DEFAULT_SCHEDULER_ID = "scheduler-local";
 const DEFAULT_LEASE_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_RUNNABLE_SCAN_LIMIT = 100;
 const ACTIVE_RUN_STATUSES = new Set<AgentRunStatus>(["created", "starting", "running", "waiting_action"]);
 const NODE_OFFLINE_AUTO_RECLAIM_FAILURE_CODE = "NODE_OFFLINE_LEASE_RECLAIMED";
 const NODE_OFFLINE_AUTO_RECLAIM_FAILURE_MESSAGE = "Execution lease was reclaimed because the assigned node is offline.";
@@ -26,6 +27,8 @@ export interface ManagedAgentSchedulerServiceOptions {
   registry: ManagedAgentSchedulerStore;
   defaultSchedulerId?: string;
   leaseTtlMs?: number;
+  allowNodelessClaims?: boolean;
+  runnableScanLimit?: number;
 }
 
 export interface ManagedAgentSchedulerClaim {
@@ -69,6 +72,8 @@ export class ManagedAgentSchedulerService {
   private readonly registry: ManagedAgentSchedulerStore;
   private readonly defaultSchedulerId: string;
   private readonly leaseTtlMs: number;
+  private readonly allowNodelessClaims: boolean;
+  private readonly runnableScanLimit: number;
 
   constructor(options: ManagedAgentSchedulerServiceOptions) {
     this.registry = options.registry;
@@ -76,6 +81,10 @@ export class ManagedAgentSchedulerService {
     this.leaseTtlMs = Number.isFinite(options.leaseTtlMs) && (options.leaseTtlMs as number) > 0
       ? Math.floor(options.leaseTtlMs as number)
       : DEFAULT_LEASE_TTL_MS;
+    this.allowNodelessClaims = options.allowNodelessClaims ?? true;
+    this.runnableScanLimit = Number.isFinite(options.runnableScanLimit) && (options.runnableScanLimit as number) > 0
+      ? Math.floor(options.runnableScanLimit as number)
+      : DEFAULT_RUNNABLE_SCAN_LIMIT;
   }
 
   listRuns(input: ManagedAgentRunListInput): StoredAgentRunRecord[] {
@@ -188,14 +197,17 @@ export class ManagedAgentSchedulerService {
   claimNextRunnableWorkItem(input: ClaimNextRunnableWorkItemInput = {}): ManagedAgentSchedulerClaim | null {
     const schedulerId = normalizeOptionalText(input.schedulerId) ?? this.defaultSchedulerId;
     const now = normalizeNow(input.now);
-    const claim = this.registry.claimNextRunnableAgentWorkItem({
+    const claimInput = {
       schedulerId,
       leaseToken: createId("run-lease"),
       leaseExpiresAt: computeLeaseExpiry(now, this.leaseTtlMs),
       now,
       ...(normalizeOptionalText(input.organizationId) ? { organizationId: input.organizationId } : {}),
       ...(normalizeOptionalText(input.targetAgentId) ? { targetAgentId: input.targetAgentId } : {}),
-    });
+    };
+    const claim = this.allowNodelessClaims
+      ? this.registry.claimNextRunnableAgentWorkItem(claimInput)
+      : this.claimNextRunnableWorkItemRequiringNode(claimInput);
 
     if (!claim) {
       return null;
@@ -226,6 +238,42 @@ export class ManagedAgentSchedulerService {
       node,
       executionLease,
     };
+  }
+
+  private claimNextRunnableWorkItemRequiringNode(input: {
+    schedulerId: string;
+    leaseToken: string;
+    leaseExpiresAt: string;
+    now: string;
+    organizationId?: string;
+    targetAgentId?: string;
+  }): { workItem: StoredAgentWorkItemRecord; run: StoredAgentRunRecord } | null {
+    const candidates = this.registry.listRunnableAgentWorkItems({
+      now: input.now,
+      ...(normalizeOptionalText(input.organizationId) ? { organizationId: input.organizationId } : {}),
+      ...(normalizeOptionalText(input.targetAgentId) ? { targetAgentId: input.targetAgentId } : {}),
+      limit: this.runnableScanLimit,
+    });
+
+    for (const candidate of candidates) {
+      if (!this.selectExecutionNode(candidate, input.now)) {
+        continue;
+      }
+
+      const claimed = this.registry.claimRunnableAgentWorkItemById({
+        workItemId: candidate.workItemId,
+        schedulerId: input.schedulerId,
+        leaseToken: input.leaseToken,
+        leaseExpiresAt: input.leaseExpiresAt,
+        now: input.now,
+      });
+
+      if (claimed) {
+        return claimed;
+      }
+    }
+
+    return null;
   }
 
   markRunStarting(runId: string, leaseToken: string, now?: string): StoredAgentRunRecord {

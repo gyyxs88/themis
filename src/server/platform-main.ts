@@ -7,6 +7,7 @@ import {
   createManagedAgentControlPlaneFacadeAsyncAdapter,
   createManagedAgentControlPlaneRuntimeFromEnv,
   ManagedAgentExecutionService,
+  ManagedAgentSchedulerService,
 } from "../core/index.js";
 import { ThemisUpdateService } from "../diagnostics/update-service.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
@@ -38,10 +39,15 @@ const appServerRuntime = new AppServerTaskRuntime({
   actionBridge,
   managedAgentControlPlaneStore: managedAgentControlPlaneRuntime.controlPlaneStore,
 });
+const platformSchedulerService = new ManagedAgentSchedulerService({
+  registry: appServerRuntime.getManagedAgentControlPlaneStore().schedulerStore,
+  defaultSchedulerId: "scheduler-platform-main",
+  allowNodelessClaims: false,
+});
 const managedAgentExecutionService = new ManagedAgentExecutionService({
   registry: appServerRuntime.getManagedAgentControlPlaneStore().executionStateStore,
   runtime: appServerRuntime,
-  schedulerService: appServerRuntime.getManagedAgentSchedulerService(),
+  schedulerService: platformSchedulerService,
   coordinationService: appServerRuntime.getManagedAgentCoordinationService(),
 });
 const platformControlPlaneFacade = managedAgentControlPlaneRuntime.mirror

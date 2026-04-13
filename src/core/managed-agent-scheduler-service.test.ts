@@ -9,7 +9,9 @@ import { ManagedAgentCoordinationService } from "./managed-agent-coordination-se
 import { ManagedAgentsService } from "./managed-agents-service.js";
 import { ManagedAgentSchedulerService } from "./managed-agent-scheduler-service.js";
 
-function createServiceContext() {
+function createServiceContext(options: {
+  schedulerOptions?: Partial<ConstructorParameters<typeof ManagedAgentSchedulerService>[0]>;
+} = {}) {
   const root = mkdtempSync(join(tmpdir(), "themis-managed-agent-scheduler-"));
   const databaseFile = join(root, "infra/local/themis.db");
   const registry = new SqliteCodexSessionRegistry({ databaseFile });
@@ -18,6 +20,7 @@ function createServiceContext() {
   const schedulerService = new ManagedAgentSchedulerService({
     registry,
     leaseTtlMs: 60_000,
+    ...(options.schedulerOptions ?? {}),
   });
 
   return {
@@ -274,6 +277,198 @@ test("ManagedAgentSchedulerService 在节点能力不满足时会回退为无节
     assert.equal(claim?.executionLease, null);
     assert.equal(registry.getActiveAgentExecutionLeaseByRun(claim?.run.runId ?? ""), null);
     assert.equal(registry.getManagedAgentNode("node-platform-b")?.slotAvailable, 2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ManagedAgentSchedulerService 在禁止 node-less claim 时会把无可用节点的 work item 保持为 queued", () => {
+  const { root, registry, managedAgentsService, coordinationService, schedulerService } = createServiceContext({
+    schedulerOptions: {
+      allowNodelessClaims: false,
+    },
+  });
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "老板",
+      createdAt: "2026-04-13T14:00:00.000Z",
+      updatedAt: "2026-04-13T14:00:00.000Z",
+    });
+
+    registry.saveAuthAccount({
+      accountId: "acct-node-required",
+      label: "节点专用账号",
+      codexHome: join(root, "infra/local/codex-auth/acct-node-required"),
+      isActive: true,
+      createdAt: "2026-04-13T14:00:10.000Z",
+      updatedAt: "2026-04-13T14:00:10.000Z",
+    });
+
+    const backend = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "后端·稳",
+      departmentRole: "后端",
+      mission: "负责平台模式下的队列保持。",
+      now: "2026-04-13T14:01:00.000Z",
+    });
+
+    const isolatedWorkspace = join(root, "workspace/sticky-only");
+    mkdirSync(isolatedWorkspace, { recursive: true });
+    managedAgentsService.updateManagedAgentExecutionBoundary({
+      ownerPrincipalId: "principal-owner",
+      agentId: backend.agent.agentId,
+      workspacePolicy: {
+        workspacePath: isolatedWorkspace,
+        additionalDirectories: [],
+        allowNetworkAccess: true,
+      },
+      runtimeProfile: {
+        accessMode: "auth",
+        authAccountId: "acct-node-required",
+      },
+      now: "2026-04-13T14:01:30.000Z",
+    });
+
+    registry.saveManagedAgentNode({
+      nodeId: "node-platform-a",
+      organizationId: backend.organization.organizationId,
+      displayName: "Platform Node A",
+      status: "online",
+      slotCapacity: 1,
+      slotAvailable: 1,
+      labels: ["linux"],
+      workspaceCapabilities: [root],
+      credentialCapabilities: [],
+      providerCapabilities: [],
+      heartbeatTtlSeconds: 300,
+      lastHeartbeatAt: "2026-04-13T14:02:00.000Z",
+      createdAt: "2026-04-13T14:02:00.000Z",
+      updatedAt: "2026-04-13T14:02:00.000Z",
+    });
+
+    const dispatched = coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: backend.agent.agentId,
+      dispatchReason: "platform-node-required-queued",
+      goal: "验证平台模式下没有匹配节点时不应误 claim。",
+      now: "2026-04-13T14:03:00.000Z",
+    });
+
+    const claim = schedulerService.claimNextRunnableWorkItem({
+      schedulerId: "scheduler-platform-node-required",
+      now: "2026-04-13T14:04:00.000Z",
+    });
+
+    assert.equal(claim, null);
+    assert.equal(registry.getAgentWorkItem(dispatched.workItem.workItemId)?.status, "queued");
+    assert.equal(registry.listAgentRunsByWorkItem(dispatched.workItem.workItemId).length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ManagedAgentSchedulerService 在禁止 node-less claim 时会跳过不可调度任务，继续 claim 后续可执行任务", () => {
+  const { root, registry, managedAgentsService, coordinationService, schedulerService } = createServiceContext({
+    schedulerOptions: {
+      allowNodelessClaims: false,
+    },
+  });
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "老板",
+      createdAt: "2026-04-13T14:10:00.000Z",
+      updatedAt: "2026-04-13T14:10:00.000Z",
+    });
+
+    registry.saveAuthAccount({
+      accountId: "acct-node-required",
+      label: "节点专用账号",
+      codexHome: join(root, "infra/local/codex-auth/acct-node-required"),
+      isActive: true,
+      createdAt: "2026-04-13T14:10:10.000Z",
+      updatedAt: "2026-04-13T14:10:10.000Z",
+    });
+
+    const blockedAgent = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "后端·堵塞",
+      departmentRole: "后端",
+      mission: "负责制造不可调度任务。",
+      now: "2026-04-13T14:11:00.000Z",
+    });
+    const runnableAgent = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "后端·可跑",
+      departmentRole: "后端",
+      mission: "负责验证 scheduler 会继续往后找可执行任务。",
+      now: "2026-04-13T14:11:30.000Z",
+    });
+
+    const isolatedWorkspace = join(root, "workspace/sticky-only");
+    mkdirSync(isolatedWorkspace, { recursive: true });
+    managedAgentsService.updateManagedAgentExecutionBoundary({
+      ownerPrincipalId: "principal-owner",
+      agentId: blockedAgent.agent.agentId,
+      workspacePolicy: {
+        workspacePath: isolatedWorkspace,
+        additionalDirectories: [],
+        allowNetworkAccess: true,
+      },
+      runtimeProfile: {
+        accessMode: "auth",
+        authAccountId: "acct-node-required",
+      },
+      now: "2026-04-13T14:12:00.000Z",
+    });
+
+    registry.saveManagedAgentNode({
+      nodeId: "node-platform-a",
+      organizationId: blockedAgent.organization.organizationId,
+      displayName: "Platform Node A",
+      status: "online",
+      slotCapacity: 1,
+      slotAvailable: 1,
+      labels: ["linux"],
+      workspaceCapabilities: [root],
+      credentialCapabilities: ["acct-node-required"],
+      providerCapabilities: [],
+      heartbeatTtlSeconds: 300,
+      lastHeartbeatAt: "2026-04-13T14:12:30.000Z",
+      createdAt: "2026-04-13T14:12:30.000Z",
+      updatedAt: "2026-04-13T14:12:30.000Z",
+    });
+
+    const blocked = coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: blockedAgent.agent.agentId,
+      dispatchReason: "platform-node-required-blocked",
+      goal: "验证前面这条任务不可调度。",
+      priority: "urgent",
+      now: "2026-04-13T14:13:00.000Z",
+    });
+    const runnable = coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: runnableAgent.agent.agentId,
+      dispatchReason: "platform-node-required-runnable",
+      goal: "验证 scheduler 还能 claim 到后面的可执行任务。",
+      priority: "normal",
+      now: "2026-04-13T14:13:30.000Z",
+    });
+
+    const claim = schedulerService.claimNextRunnableWorkItem({
+      schedulerId: "scheduler-platform-skip-blocked",
+      now: "2026-04-13T14:14:00.000Z",
+    });
+
+    assert.equal(claim?.workItem.workItemId, runnable.workItem.workItemId);
+    assert.equal(claim?.node?.nodeId, "node-platform-a");
+    assert.equal(claim?.executionLease?.status, "active");
+    assert.equal(registry.getAgentWorkItem(blocked.workItem.workItemId)?.status, "queued");
+    assert.equal(registry.listAgentRunsByWorkItem(blocked.workItem.workItemId).length, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

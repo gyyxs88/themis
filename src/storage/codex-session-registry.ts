@@ -4383,6 +4383,191 @@ export class SqliteCodexSessionRegistry {
     return claim();
   }
 
+  listRunnableAgentWorkItems(input: {
+    now: string;
+    organizationId?: string;
+    targetAgentId?: string;
+    limit?: number;
+  }): StoredAgentWorkItemRecord[] {
+    const now = input.now.trim();
+    const organizationId = normalizeText(input.organizationId);
+    const targetAgentId = normalizeText(input.targetAgentId);
+    const limit = Number.isFinite(input.limit) && (input.limit as number) > 0
+      ? Math.floor(input.limit as number)
+      : 100;
+
+    if (!now) {
+      throw new Error("Runnable work item listing requires now.");
+    }
+
+    const filters: string[] = [
+      "work_item.status = 'queued'",
+      "agent.status IN ('active', 'bootstrapping')",
+      "(work_item.scheduled_at IS NULL OR work_item.scheduled_at <= @now)",
+      `
+      NOT EXISTS (
+        SELECT 1
+        FROM themis_agent_runs active_run
+        WHERE active_run.work_item_id = work_item.work_item_id
+          AND active_run.status IN ('created', 'starting', 'running', 'waiting_action')
+      )
+      `,
+      `
+      NOT EXISTS (
+        SELECT 1
+        FROM themis_agent_runs active_run
+        WHERE active_run.target_agent_id = work_item.target_agent_id
+          AND active_run.status IN ('created', 'starting', 'running', 'waiting_action')
+      )
+      `,
+    ];
+    const params: Record<string, string | number> = {
+      now,
+      limit,
+    };
+
+    if (organizationId) {
+      filters.push("work_item.organization_id = @organization_id");
+      params.organization_id = organizationId;
+    }
+
+    if (targetAgentId) {
+      filters.push("work_item.target_agent_id = @target_agent_id");
+      params.target_agent_id = targetAgentId;
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT work_item.work_item_id
+          FROM themis_agent_work_items work_item
+          INNER JOIN themis_managed_agents agent
+            ON agent.agent_id = work_item.target_agent_id
+          WHERE ${filters.join("\n            AND ")}
+          ORDER BY
+            CASE work_item.priority
+              WHEN 'urgent' THEN 0
+              WHEN 'high' THEN 1
+              WHEN 'normal' THEN 2
+              ELSE 3
+            END ASC,
+            COALESCE(work_item.scheduled_at, work_item.created_at) ASC,
+            work_item.created_at ASC,
+            work_item.work_item_id ASC
+          LIMIT @limit
+        `,
+      )
+      .all(params) as Array<{ work_item_id: string }>;
+
+    return rows
+      .map((row) => this.getAgentWorkItem(row.work_item_id))
+      .filter((value): value is StoredAgentWorkItemRecord => Boolean(value));
+  }
+
+  claimRunnableAgentWorkItemById(input: {
+    workItemId: string;
+    schedulerId: string;
+    leaseToken: string;
+    leaseExpiresAt: string;
+    now: string;
+  }): { workItem: StoredAgentWorkItemRecord; run: StoredAgentRunRecord } | null {
+    const workItemId = input.workItemId.trim();
+    const schedulerId = input.schedulerId.trim();
+    const leaseToken = input.leaseToken.trim();
+    const leaseExpiresAt = input.leaseExpiresAt.trim();
+    const now = input.now.trim();
+
+    if (!workItemId || !schedulerId || !leaseToken || !leaseExpiresAt || !now) {
+      throw new Error("Specific agent work item claim input is incomplete.");
+    }
+
+    const claim = this.db.transaction(() => {
+      const candidate = this.db
+        .prepare(
+          `
+            SELECT work_item.work_item_id
+            FROM themis_agent_work_items work_item
+            INNER JOIN themis_managed_agents agent
+              ON agent.agent_id = work_item.target_agent_id
+            WHERE work_item.work_item_id = @work_item_id
+              AND work_item.status = 'queued'
+              AND agent.status IN ('active', 'bootstrapping')
+              AND (work_item.scheduled_at IS NULL OR work_item.scheduled_at <= @now)
+              AND NOT EXISTS (
+                SELECT 1
+                FROM themis_agent_runs active_run
+                WHERE active_run.work_item_id = work_item.work_item_id
+                  AND active_run.status IN ('created', 'starting', 'running', 'waiting_action')
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM themis_agent_runs active_run
+                WHERE active_run.target_agent_id = work_item.target_agent_id
+                  AND active_run.status IN ('created', 'starting', 'running', 'waiting_action')
+              )
+            LIMIT 1
+          `,
+        )
+        .get({
+          work_item_id: workItemId,
+          now,
+        }) as { work_item_id: string } | undefined;
+
+      if (!candidate?.work_item_id) {
+        return null;
+      }
+
+      const updateResult = this.db
+        .prepare(
+          `
+            UPDATE themis_agent_work_items
+            SET
+              status = 'planning',
+              started_at = COALESCE(started_at, @started_at),
+              updated_at = @updated_at
+            WHERE work_item_id = @work_item_id
+              AND status = 'queued'
+          `,
+        )
+        .run({
+          work_item_id: workItemId,
+          started_at: now,
+          updated_at: now,
+        });
+
+      if (updateResult.changes === 0) {
+        return null;
+      }
+
+      const workItem = this.getAgentWorkItem(workItemId);
+
+      if (!workItem) {
+        throw new Error("Claimed work item disappeared.");
+      }
+
+      const run: StoredAgentRunRecord = {
+        runId: createId("run"),
+        organizationId: workItem.organizationId,
+        workItemId: workItem.workItemId,
+        targetAgentId: workItem.targetAgentId,
+        schedulerId,
+        leaseToken,
+        leaseExpiresAt,
+        status: "created",
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      this.saveAgentRun(run);
+      return {
+        workItem,
+        run: this.getAgentRun(run.runId) ?? run,
+      };
+    });
+
+    return claim();
+  }
+
   getScheduledTask(scheduledTaskId: string): StoredScheduledTaskRecord | null {
     const normalizedScheduledTaskId = scheduledTaskId.trim();
 
