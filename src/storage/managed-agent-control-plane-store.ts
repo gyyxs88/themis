@@ -1,5 +1,19 @@
 import type { SqliteCodexSessionRegistry } from "./codex-session-registry.js";
 
+export type Awaitable<T> = T | Promise<T>;
+
+export type AwaitableMethods<T extends object> = {
+  [K in keyof T]: T[K] extends (...args: infer TArgs) => infer TResult
+    ? (...args: TArgs) => Awaitable<Awaited<TResult>>
+    : T[K];
+};
+
+export type AsyncMethods<T extends object> = {
+  [K in keyof T]: T[K] extends (...args: infer TArgs) => infer TResult
+    ? (...args: TArgs) => Promise<Awaited<TResult>>
+    : T[K];
+};
+
 export type ManagedAgentsStore = Pick<SqliteCodexSessionRegistry,
   | "deleteAgentSpawnSuggestionState"
   | "getActiveAuthAccount"
@@ -193,6 +207,26 @@ export interface ManagedAgentControlPlaneStore {
 export interface CompositeManagedAgentControlPlaneStoreOptions {
   sharedStore: ManagedAgentControlPlaneSharedStore;
   executionStateStore: ManagedAgentExecutionStateStore;
+}
+
+export function createAsyncMethodAdapter<T extends object>(target: T): AsyncMethods<T> {
+  return new Proxy(target, {
+    get(originalTarget, property, receiver) {
+      const value = Reflect.get(originalTarget, property, receiver);
+
+      if (typeof value !== "function") {
+        return value;
+      }
+
+      return (...args: unknown[]) => {
+        try {
+          return Promise.resolve(Reflect.apply(value, originalTarget, args));
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      };
+    },
+  }) as AsyncMethods<T>;
 }
 
 export interface SplitManagedAgentExecutionStateStoreOptions {

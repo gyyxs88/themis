@@ -138,6 +138,25 @@ test("允许 app-server runtime 注入独立的 managed agent 控制面 store", 
   }
 });
 
+test("app-server runtime 会暴露可 await 的 managed agent 控制面 facade", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-app-server-control-plane-async-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/runtime.db"),
+  });
+  const runtime = new AppServerTaskRuntime({
+    workingDirectory: root,
+    runtimeStore,
+  });
+
+  try {
+    const result = await runtime.getManagedAgentControlPlaneFacadeAsync().listManagedAgents("principal-owner");
+    assert.deepEqual(result.organizations, []);
+    assert.deepEqual(result.agents, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function seedCompletedPrincipalPersona(
   runtime: AppServerTaskRuntime,
   input: {

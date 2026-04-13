@@ -234,7 +234,7 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
   });
   const runtimeStore = runtime.getRuntimeStore();
   const webAccessService = new WebAccessService({ registry: runtimeStore });
-  const platformControlPlaneFacade = defaultAppServerRuntime.getManagedAgentControlPlaneFacade();
+  const platformControlPlaneFacade = defaultAppServerRuntime.getManagedAgentControlPlaneFacadeAsync();
   const updateService = options.updateService ?? new ThemisUpdateService({
     workingDirectory: runtime.getWorkingDirectory(),
   });

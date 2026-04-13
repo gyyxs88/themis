@@ -22,6 +22,11 @@ import {
   type UpsertProjectWorkspaceBindingInput,
 } from "./managed-agents-service.js";
 import {
+  createAsyncMethodAdapter,
+  type AsyncMethods,
+  type AwaitableMethods,
+} from "../storage/index.js";
+import {
   type CancelWorkItemInput,
   type CancelWorkItemResult,
   ManagedAgentCoordinationService,
@@ -115,6 +120,15 @@ export interface ManagedAgentHandoffListView {
 export interface ManagedAgentMailboxListView {
   agent: ManagedAgentDetailView["agent"];
   items: ManagedAgentMailboxItem[];
+}
+
+export type ManagedAgentControlPlaneFacadeLike = AwaitableMethods<ManagedAgentControlPlaneFacade>;
+export type ManagedAgentControlPlaneFacadeAsync = AsyncMethods<ManagedAgentControlPlaneFacade>;
+
+export function createManagedAgentControlPlaneFacadeAsyncAdapter(
+  facade: ManagedAgentControlPlaneFacade,
+): ManagedAgentControlPlaneFacadeAsync {
+  return createAsyncMethodAdapter(facade);
 }
 
 export class ManagedAgentControlPlaneFacade {

@@ -25,7 +25,11 @@ import { buildAssistantStyleSessionPayload } from "./assistant-style.js";
 import { ConversationService } from "./conversation-service.js";
 import { IdentityLinkService } from "./identity-link-service.js";
 import { ManagedAgentCoordinationService } from "./managed-agent-coordination-service.js";
-import { ManagedAgentControlPlaneFacade } from "./managed-agent-control-plane-facade.js";
+import {
+  createManagedAgentControlPlaneFacadeAsyncAdapter,
+  type ManagedAgentControlPlaneFacadeAsync,
+  ManagedAgentControlPlaneFacade,
+} from "./managed-agent-control-plane-facade.js";
 import { ManagedAgentNodeService } from "./managed-agent-node-service.js";
 import { ManagedAgentsService } from "./managed-agents-service.js";
 import { ManagedAgentSchedulerService } from "./managed-agent-scheduler-service.js";
@@ -128,6 +132,7 @@ export class CodexTaskRuntime {
   private readonly managedAgentControlPlaneStore: ManagedAgentControlPlaneStore;
   private readonly managedAgentCoordinationService: ManagedAgentCoordinationService;
   private readonly managedAgentControlPlaneFacade: ManagedAgentControlPlaneFacade;
+  private readonly managedAgentControlPlaneFacadeAsync: ManagedAgentControlPlaneFacadeAsync;
   private readonly managedAgentNodeService: ManagedAgentNodeService;
   private readonly managedAgentsService: ManagedAgentsService;
   private readonly managedAgentSchedulerService: ManagedAgentSchedulerService;
@@ -184,6 +189,9 @@ export class CodexTaskRuntime {
       nodeService: this.managedAgentNodeService,
       workerService: this.managedAgentWorkerService,
     });
+    this.managedAgentControlPlaneFacadeAsync = createManagedAgentControlPlaneFacadeAsyncAdapter(
+      this.managedAgentControlPlaneFacade,
+    );
     this.principalActorsService = new PrincipalActorsService({
       registry: this.runtimeStore,
     });
@@ -710,6 +718,10 @@ export class CodexTaskRuntime {
 
   getManagedAgentControlPlaneFacade(): ManagedAgentControlPlaneFacade {
     return this.managedAgentControlPlaneFacade;
+  }
+
+  getManagedAgentControlPlaneFacadeAsync(): ManagedAgentControlPlaneFacadeAsync {
+    return this.managedAgentControlPlaneFacadeAsync;
   }
 
   getIdentityLinkService(): IdentityLinkService {

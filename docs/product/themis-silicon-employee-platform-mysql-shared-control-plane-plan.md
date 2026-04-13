@@ -3,6 +3,15 @@
 更新时间：2026-04-13 11:10 CST  
 文档性质：实施计划稿。目标是把“平台层真正独立出来”的下一阶段收成可开工的工程任务，而不是继续停留在口头共识。
 
+## 0. 当前进展
+
+- `2026-04-13` 已完成 `Step A / 异步 shared control plane 契约` 的第一刀：
+  - `ManagedAgentControlPlaneStore` 新增 `Awaitable / AsyncMethods` 工具类型与 `createAsyncMethodAdapter(...)`
+  - `ManagedAgentControlPlaneFacade` 新增 async 适配器类型与工厂
+  - `CodexTaskRuntime` / `AppServerTaskRuntime` 都已暴露 `getManagedAgentControlPlaneFacadeAsync()`
+  - `createThemisHttpServer(...)` 与 `/api/platform/*` 已切到 awaitable facade
+- 这一刀的意义不是“现有 service 已全部 async 化”，而是先把平台路径和未来 MySQL shared store 之间的调用模型缝开出来，后续可以在不重写整套业务服务的前提下继续推进。
+
 ## 1. 这份计划解决什么问题
 
 上一轮已经完成两件关键准备：

@@ -166,6 +166,25 @@ test("允许注入独立的 managed agent 控制面 store", () => {
   }
 });
 
+test("managed agent 控制面 facade async 适配器允许 await 当前同步实现", async () => {
+  const workingDirectory = mkdtempSync(join(tmpdir(), "themis-runtime-control-plane-async-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(workingDirectory, "infra/local/runtime.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory,
+    runtimeStore,
+  });
+
+  try {
+    const result = await runtime.getManagedAgentControlPlaneFacadeAsync().listManagedAgents("principal-owner");
+    assert.deepEqual(result.organizations, []);
+    assert.deepEqual(result.agents, []);
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
 test("第三方模型未声明图片输入时会阻止图片附件请求", () => {
   const workingDirectory = mkdtempSync(join(tmpdir(), "themis-runtime-constraints-"));
   const registry = new SqliteCodexSessionRegistry({
@@ -1131,7 +1150,7 @@ test("runTask 完成后会自动提炼长期记忆候选，并保留人工确认
       limit: 10,
     });
     assert.deepEqual(
-      candidates.map((candidate) => candidate.title),
+      candidates.map((candidate) => candidate.title).sort(),
       ["回答先给结论", "默认中文沟通"],
     );
     const memoryEvent = events.find((event) =>

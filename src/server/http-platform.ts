@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { ManagedAgentControlPlaneFacade } from "../core/managed-agent-control-plane-facade.js";
+import type { ManagedAgentControlPlaneFacadeLike } from "../core/managed-agent-control-plane-facade.js";
 import type { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
 import {
   type ApprovalPolicy,
@@ -23,6 +23,8 @@ import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
 import { writeJson } from "./http-responses.js";
 import { getPlatformServiceAuthContext } from "./http-web-access.js";
+
+type ManagedAgentControlPlaneFacade = ManagedAgentControlPlaneFacadeLike;
 
 interface PlatformAgentCreatePayload {
   ownerPrincipalId: string;
@@ -376,7 +378,7 @@ export async function handlePlatformAgentCreate(
   }
 
   try {
-    const result = facade.createManagedAgent({
+    const result = await facade.createManagedAgent({
       ownerPrincipalId: payload.ownerPrincipalId,
       departmentRole: payload.agent.departmentRole,
       ...(payload.agent.displayName ? { displayName: payload.agent.displayName } : {}),
@@ -407,7 +409,7 @@ export async function handlePlatformAgentList(
   }
 
   try {
-    const result = facade.listManagedAgents(payload.ownerPrincipalId);
+    const result = await facade.listManagedAgents(payload.ownerPrincipalId);
     writeJson(response, 200, {
       ok: true,
       organizations: result.organizations,
@@ -429,7 +431,7 @@ export async function handlePlatformAgentDetail(
   }
 
   try {
-    const detail = facade.getManagedAgentDetailView(payload.ownerPrincipalId, payload.agentId);
+    const detail = await facade.getManagedAgentDetailView(payload.ownerPrincipalId, payload.agentId);
     if (!detail) {
       throw new Error("Managed agent does not exist.");
     }
@@ -460,7 +462,7 @@ export async function handlePlatformAgentExecutionBoundaryUpdate(
   }
 
   try {
-    const result = facade.updateManagedAgentExecutionBoundary({
+    const result = await facade.updateManagedAgentExecutionBoundary({
       ownerPrincipalId: payload.ownerPrincipalId,
       agentId: payload.agentId,
       ...(payload.boundary.workspacePolicy ? { workspacePolicy: payload.boundary.workspacePolicy } : {}),
@@ -489,7 +491,7 @@ export async function handlePlatformProjectWorkspaceBindingList(
   }
 
   try {
-    const bindings = facade.listProjectWorkspaceBindings(payload.ownerPrincipalId, payload.organizationId);
+    const bindings = await facade.listProjectWorkspaceBindings(payload.ownerPrincipalId, payload.organizationId);
     writeJson(response, 200, {
       ok: true,
       bindings,
@@ -510,7 +512,7 @@ export async function handlePlatformProjectWorkspaceBindingDetail(
   }
 
   try {
-    const binding = facade.getProjectWorkspaceBinding(payload.ownerPrincipalId, payload.projectId);
+    const binding = await facade.getProjectWorkspaceBinding(payload.ownerPrincipalId, payload.projectId);
     if (!binding) {
       throw new Error("Project workspace binding does not exist.");
     }
@@ -535,7 +537,7 @@ export async function handlePlatformProjectWorkspaceBindingUpsert(
   }
 
   try {
-    const binding = facade.upsertProjectWorkspaceBinding({
+    const binding = await facade.upsertProjectWorkspaceBinding({
       ownerPrincipalId: payload.ownerPrincipalId,
       projectId: payload.binding.projectId,
       displayName: payload.binding.displayName,
@@ -575,7 +577,7 @@ export async function handlePlatformAgentSpawnSuggestions(
   }
 
   try {
-    const result = facade.getSpawnSuggestionsView(payload.ownerPrincipalId);
+    const result = await facade.getSpawnSuggestionsView(payload.ownerPrincipalId);
     writeJson(response, 200, {
       ok: true,
       spawnPolicies: result.spawnPolicies,
@@ -599,7 +601,7 @@ export async function handlePlatformAgentIdleSuggestions(
   }
 
   try {
-    const result = facade.getIdleRecoverySuggestionsView(payload.ownerPrincipalId);
+    const result = await facade.getIdleRecoverySuggestionsView(payload.ownerPrincipalId);
     writeJson(response, 200, {
       ok: true,
       suggestions: result.suggestions,
@@ -621,7 +623,7 @@ export async function handlePlatformAgentSpawnPolicyUpdate(
   }
 
   try {
-    const policy = facade.updateSpawnPolicy({
+    const policy = await facade.updateSpawnPolicy({
       ownerPrincipalId: payload.ownerPrincipalId,
       ...(payload.policy.organizationId ? { organizationId: payload.policy.organizationId } : {}),
       maxActiveAgents: payload.policy.maxActiveAgents,
@@ -647,7 +649,7 @@ export async function handlePlatformAgentSpawnApprove(
   }
 
   try {
-    const result = facade.approveSpawnSuggestion({
+    const result = await facade.approveSpawnSuggestion({
       ownerPrincipalId: payload.ownerPrincipalId,
       departmentRole: payload.agent.departmentRole,
       ...(payload.agent.displayName ? { displayName: payload.agent.displayName } : {}),
@@ -682,11 +684,11 @@ async function handlePlatformAgentSpawnSuggestionDecision(
 
   try {
     const result = action === "ignore"
-      ? facade.ignoreSpawnSuggestion({
+      ? await facade.ignoreSpawnSuggestion({
         ownerPrincipalId: payload.ownerPrincipalId,
         ...payload.suggestion,
       })
-      : facade.rejectSpawnSuggestion({
+      : await facade.rejectSpawnSuggestion({
         ownerPrincipalId: payload.ownerPrincipalId,
         ...payload.suggestion,
       });
@@ -728,7 +730,7 @@ export async function handlePlatformAgentSpawnRestore(
   }
 
   try {
-    const auditLog = facade.restoreSpawnSuggestion({
+    const auditLog = await facade.restoreSpawnSuggestion({
       ownerPrincipalId: payload.ownerPrincipalId,
       suggestionId: payload.suggestion.suggestionId,
       ...(payload.suggestion.organizationId ? { organizationId: payload.suggestion.organizationId } : {}),
@@ -754,7 +756,7 @@ export async function handlePlatformAgentIdleApprove(
   }
 
   try {
-    const result = facade.approveIdleRecoverySuggestion({
+    const result = await facade.approveIdleRecoverySuggestion({
       ownerPrincipalId: payload.ownerPrincipalId,
       suggestionId: payload.suggestion.suggestionId,
       ...(payload.suggestion.organizationId ? { organizationId: payload.suggestion.organizationId } : {}),
@@ -785,7 +787,7 @@ async function handlePlatformAgentLifecycleAction(
   }
 
   try {
-    const ownerView = facade.updateManagedAgentLifecycle({
+    const ownerView = await facade.updateManagedAgentLifecycle({
       ownerPrincipalId: payload.ownerPrincipalId,
       agentId: payload.agentId,
       action,
@@ -841,7 +843,10 @@ export async function handlePlatformWaitingQueueList(
   }
 
   try {
-    const result = facade.listOrganizationWaitingQueue(payload.ownerPrincipalId, buildPlatformGovernanceFilters(payload));
+    const result = await facade.listOrganizationWaitingQueue(
+      payload.ownerPrincipalId,
+      buildPlatformGovernanceFilters(payload),
+    );
     writeJson(response, 200, {
       ok: true,
       summary: result.summary,
@@ -863,7 +868,7 @@ export async function handlePlatformGovernanceOverview(
   }
 
   try {
-    const overview = facade.getOrganizationGovernanceOverview(
+    const overview = await facade.getOrganizationGovernanceOverview(
       payload.ownerPrincipalId,
       buildPlatformGovernanceFilters(payload),
     );
@@ -887,7 +892,7 @@ export async function handlePlatformCollaborationDashboard(
   }
 
   try {
-    const result = facade.listOrganizationCollaborationDashboard(
+    const result = await facade.listOrganizationCollaborationDashboard(
       payload.ownerPrincipalId,
       buildPlatformGovernanceFilters(payload),
     );
@@ -912,7 +917,7 @@ export async function handlePlatformWorkItemList(
   }
 
   try {
-    const workItems = facade.listWorkItems(payload.ownerPrincipalId, payload.agentId);
+    const workItems = await facade.listWorkItems(payload.ownerPrincipalId, payload.agentId);
     writeJson(response, 200, {
       ok: true,
       workItems,
@@ -933,7 +938,7 @@ export async function handlePlatformWorkItemDispatch(
   }
 
   try {
-    const result = facade.dispatchWorkItem({
+    const result = await facade.dispatchWorkItem({
       ownerPrincipalId: payload.ownerPrincipalId,
       targetAgentId: payload.workItem.targetAgentId,
       ...(payload.workItem.projectId ? { projectId: payload.workItem.projectId } : {}),
@@ -1008,7 +1013,7 @@ export async function handlePlatformWorkItemRespond(
   }
 
   try {
-    const result = facade.respondToHumanWaitingWorkItem({
+    const result = await facade.respondToHumanWaitingWorkItem({
       ownerPrincipalId: payload.ownerPrincipalId,
       workItemId: payload.workItemId,
       ...(payload.response.decision ? { decision: payload.response.decision } : {}),
@@ -1040,7 +1045,7 @@ export async function handlePlatformWorkItemEscalate(
   }
 
   try {
-    const result = facade.escalateWaitingAgentWorkItemToHuman({
+    const result = await facade.escalateWaitingAgentWorkItemToHuman({
       ownerPrincipalId: payload.ownerPrincipalId,
       workItemId: payload.workItemId,
       ...(payload.escalation?.inputText ? { inputText: payload.escalation.inputText } : {}),
@@ -1070,7 +1075,7 @@ export async function handlePlatformWorkItemDetail(
   }
 
   try {
-    const detail = facade.getWorkItemDetailView(payload.ownerPrincipalId, payload.workItemId);
+    const detail = await facade.getWorkItemDetailView(payload.ownerPrincipalId, payload.workItemId);
     if (!detail) {
       throw new Error("Work item does not exist.");
     }
@@ -1101,7 +1106,7 @@ export async function handlePlatformHandoffList(
   }
 
   try {
-    const result = facade.getAgentHandoffListView(payload.ownerPrincipalId, {
+    const result = await facade.getAgentHandoffListView(payload.ownerPrincipalId, {
       agentId: payload.agentId,
       ...(payload.workItemId ? { workItemId: payload.workItemId } : {}),
       ...(payload.limit ? { limit: payload.limit } : {}),
@@ -1128,7 +1133,7 @@ export async function handlePlatformMailboxList(
   }
 
   try {
-    const result = facade.getAgentMailboxListView(payload.ownerPrincipalId, payload.agentId);
+    const result = await facade.getAgentMailboxListView(payload.ownerPrincipalId, payload.agentId);
     writeJson(response, 200, {
       ok: true,
       agent: result.agent,
@@ -1150,7 +1155,7 @@ export async function handlePlatformMailboxPull(
   }
 
   try {
-    const result = facade.pullMailboxEntry(payload.ownerPrincipalId, payload.agentId);
+    const result = await facade.pullMailboxEntry(payload.ownerPrincipalId, payload.agentId);
     writeJson(response, 200, {
       ok: true,
       agent: result.agent,
@@ -1172,12 +1177,12 @@ export async function handlePlatformMailboxAck(
   }
 
   try {
-    const mailboxEntry = facade.ackMailboxEntry(
+    const mailboxEntry = await facade.ackMailboxEntry(
       payload.ownerPrincipalId,
       payload.agentId,
       payload.mailboxEntryId,
     );
-    const result = facade.getAgentMailboxListView(payload.ownerPrincipalId, payload.agentId);
+    const result = await facade.getAgentMailboxListView(payload.ownerPrincipalId, payload.agentId);
     const message = result.items.find((item) => item.entry.mailboxEntryId === payload.mailboxEntryId)?.message;
 
     writeJson(response, 200, {
@@ -1202,7 +1207,7 @@ export async function handlePlatformMailboxRespond(
   }
 
   try {
-    const result = facade.respondToMailboxEntry({
+    const result = await facade.respondToMailboxEntry({
       ownerPrincipalId: payload.ownerPrincipalId,
       agentId: payload.agentId,
       mailboxEntryId: payload.mailboxEntryId,
@@ -1240,7 +1245,7 @@ export async function handlePlatformRunList(
   }
 
   try {
-    const runs = facade.listRuns({
+    const runs = await facade.listRuns({
       ownerPrincipalId: payload.ownerPrincipalId,
       ...(payload.agentId ? { agentId: payload.agentId } : {}),
       ...(payload.workItemId ? { workItemId: payload.workItemId } : {}),
@@ -1266,7 +1271,7 @@ export async function handlePlatformRunDetail(
   }
 
   try {
-    const detail = facade.getRunDetailView(payload.ownerPrincipalId, payload.runId);
+    const detail = await facade.getRunDetailView(payload.ownerPrincipalId, payload.runId);
     if (!detail) {
       throw new Error("Agent run does not exist.");
     }
@@ -1296,7 +1301,7 @@ export async function handlePlatformNodeRegister(
   }
 
   try {
-    const result = facade.registerNode({
+    const result = await facade.registerNode({
       ownerPrincipalId: payload.ownerPrincipalId,
       ...(payload.node.organizationId ? { organizationId: payload.node.organizationId } : {}),
       ...(payload.node.nodeId ? { nodeId: payload.node.nodeId } : {}),
@@ -1333,7 +1338,7 @@ export async function handlePlatformNodeHeartbeat(
   }
 
   try {
-    const result = facade.heartbeatNode({
+    const result = await facade.heartbeatNode({
       ownerPrincipalId: payload.ownerPrincipalId,
       nodeId: payload.node.nodeId,
       ...(payload.node.status ? { status: payload.node.status } : {}),
@@ -1368,7 +1373,7 @@ export async function handlePlatformNodeList(
   }
 
   try {
-    const nodes = facade.listNodes(payload.ownerPrincipalId, payload.organizationId);
+    const nodes = await facade.listNodes(payload.ownerPrincipalId, payload.organizationId);
     writeJson(response, 200, {
       ok: true,
       nodes,
@@ -1389,7 +1394,7 @@ export async function handlePlatformNodeDetail(
   }
 
   try {
-    const detail = facade.getNodeDetailView(payload.ownerPrincipalId, payload.nodeId);
+    const detail = await facade.getNodeDetailView(payload.ownerPrincipalId, payload.nodeId);
     if (!detail) {
       throw new Error("Managed agent node not found.");
     }
@@ -1434,7 +1439,7 @@ export async function handlePlatformNodeReclaim(
   }
 
   try {
-    const result = facade.reclaimNodeLeases({
+    const result = await facade.reclaimNodeLeases({
       ownerPrincipalId: payload.ownerPrincipalId,
       nodeId: payload.nodeId,
       ...(payload.failureCode ? { failureCode: payload.failureCode } : {}),
@@ -1464,7 +1469,7 @@ export async function handlePlatformWorkerRunPull(
   }
 
   try {
-    const assigned = facade.pullAssignedRun(payload);
+    const assigned = await facade.pullAssignedRun(payload);
     writeJson(response, 200, {
       ok: true,
       ...(assigned ? {
@@ -1501,7 +1506,7 @@ export async function handlePlatformWorkerRunUpdate(
   }
 
   try {
-    const result = facade.updateWorkerRunStatus(payload);
+    const result = await facade.updateWorkerRunStatus(payload);
     writeJson(response, 200, {
       ok: true,
       organization: result.organization,
@@ -1527,7 +1532,7 @@ export async function handlePlatformWorkerRunComplete(
   }
 
   try {
-    const result = facade.completeWorkerRun(payload);
+    const result = await facade.completeWorkerRun(payload);
     writeJson(response, 200, {
       ok: true,
       organization: result.organization,
@@ -2486,11 +2491,11 @@ async function handlePlatformNodeGovernanceAction(
 
   try {
     const result = action === "draining"
-      ? facade.markNodeDraining({
+      ? await facade.markNodeDraining({
         ownerPrincipalId: payload.ownerPrincipalId,
         nodeId: payload.nodeId,
       })
-      : facade.markNodeOffline({
+      : await facade.markNodeOffline({
         ownerPrincipalId: payload.ownerPrincipalId,
         nodeId: payload.nodeId,
       });
