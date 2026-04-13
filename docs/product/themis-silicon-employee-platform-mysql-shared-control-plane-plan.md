@@ -22,6 +22,10 @@
   - `ManagedAgentControlPlaneFacade` 的 async 适配器已支持 mutation runner；平台 API 写请求会在成功后回刷 MySQL，失败时回滚本地 shared cache
   - 已新增独立入口 `src/server/platform-main.ts` 与 `npm run dev:platform / start:platform`，可单独启动平台层进程
   - 已补单测 `managed-agent-control-plane-bootstrap.test.ts`、`managed-agent-control-plane-mirror.test.ts`、`managed-agent-control-plane-facade.test.ts`，并回归 `codex-runtime / app-server-task-runtime / http-platform`
+- `2026-04-13` 同日已完成 `Step E / MySQL 控制面烟测、回归与切换文档`：
+  - 已新增 Docker 真库烟测 `src/core/managed-agent-control-plane-mirror.mysql.test.ts`，覆盖“本地 shared cache -> MySQL bootstrap -> 第二份本地 cache restore -> 本地变更 flush 回 MySQL”闭环
+  - `MySqlManagedAgentControlPlaneStore` 的 snapshot replace 已补齐 datetime 规范化，保证从 SQLite snapshot 写回 MySQL 时不会因为 ISO 时间戳格式失败
+  - 已新增操作文档 `docs/repository/themis-platform-mysql-control-plane-cutover.md`，固定切换前准备、配置、启动、烟测和回退步骤
 
 ## 1. 这份计划解决什么问题
 
@@ -262,7 +266,7 @@
 - 主 Themis 与 Worker Node 不需要直连 MySQL
 - 有固定的切换、验收和回退步骤
 
-截至 `2026-04-13 14:35 CST`，前四条已经进入可运行首版；当前剩余主线集中在最后一条：补齐固定烟测、回归矩阵和切换/回退文档。
+截至 `2026-04-13 16:15 CST`，这五条都已完成首轮收口；后续如果继续推进，重点将转到多平台高可用、公网节点和更细粒度的值守自动化，而不是这条“MySQL shared control plane 第一阶段切主”主线本身。
 
 ## 9. 一句话结论
 

@@ -29,6 +29,7 @@
 + /docs/product/***
 + /docs/repository/
 + /docs/repository/github-safe-publish.md
++ /docs/repository/themis-platform-mysql-control-plane-cutover.md
 + /docs/repository/themis-systemd-dev-service.md
 + /docs/repository/themis-systemd-prod-service.md
 

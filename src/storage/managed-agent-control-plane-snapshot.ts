@@ -103,27 +103,6 @@ export const MANAGED_AGENT_CONTROL_PLANE_SNAPSHOT_TABLES: ManagedAgentControlPla
     orderBy: "updated_at DESC, profile_id ASC",
   },
   {
-    key: "projectWorkspaceBindings",
-    table: "themis_project_workspace_bindings",
-    columns: [
-      "project_id",
-      "organization_id",
-      "display_name",
-      "owning_agent_id",
-      "workspace_root_id",
-      "workspace_policy_id",
-      "canonical_workspace_path",
-      "preferred_node_id",
-      "preferred_node_pool",
-      "last_active_node_id",
-      "last_active_workspace_path",
-      "continuity_mode",
-      "created_at",
-      "updated_at",
-    ],
-    orderBy: "updated_at DESC, project_id ASC",
-  },
-  {
     key: "workItems",
     table: "themis_agent_work_items",
     columns: [
@@ -237,6 +216,27 @@ export const MANAGED_AGENT_CONTROL_PLANE_SNAPSHOT_TABLES: ManagedAgentControlPla
     orderBy: "updated_at DESC, node_id ASC",
   },
   {
+    key: "projectWorkspaceBindings",
+    table: "themis_project_workspace_bindings",
+    columns: [
+      "project_id",
+      "organization_id",
+      "display_name",
+      "owning_agent_id",
+      "workspace_root_id",
+      "workspace_policy_id",
+      "canonical_workspace_path",
+      "preferred_node_id",
+      "preferred_node_pool",
+      "last_active_node_id",
+      "last_active_workspace_path",
+      "continuity_mode",
+      "created_at",
+      "updated_at",
+    ],
+    orderBy: "updated_at DESC, project_id ASC",
+  },
+  {
     key: "executionLeases",
     table: "themis_agent_execution_leases",
     columns: [
@@ -343,9 +343,8 @@ export function replaceSqliteManagedAgentControlPlaneSnapshot(
   const db = new Database(databaseFile);
 
   try {
+    db.pragma("foreign_keys = OFF");
     const transaction = db.transaction(() => {
-      db.pragma("foreign_keys = OFF");
-
       for (const table of MANAGED_AGENT_CONTROL_PLANE_DELETE_ORDER) {
         db.prepare(`DELETE FROM ${table.table}`).run();
       }
@@ -367,12 +366,11 @@ export function replaceSqliteManagedAgentControlPlaneSnapshot(
           statement.run(...table.columns.map((column) => normalizeSqliteSnapshotValue(row[column] ?? null)));
         }
       }
-
-      db.pragma("foreign_keys = ON");
     });
 
     transaction();
   } finally {
+    db.pragma("foreign_keys = ON");
     db.close();
   }
 }

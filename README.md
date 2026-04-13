@@ -232,6 +232,7 @@ npm run dev:platform
 - [飞书通道说明](./docs/feishu/themis-feishu-channel.md)
 - [持久化 agent 架构](./docs/product/themis-persistent-agent-architecture.md)
 - [公开发布边界与导出规则](./docs/repository/github-safe-publish.md)
+- [平台层切 MySQL 操作说明](./docs/repository/themis-platform-mysql-control-plane-cutover.md)
 - [systemd 正式常驻示例](./docs/repository/themis-systemd-prod-service.md)
 - [systemd 开发常驻示例](./docs/repository/themis-systemd-dev-service.md)
 - [Worker Node 常驻部署说明](./docs/repository/themis-worker-node-systemd-service.md)

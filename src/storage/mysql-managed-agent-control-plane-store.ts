@@ -2335,6 +2335,10 @@ function isSnapshotJsonColumn(column: string): boolean {
 }
 
 function normalizeMySqlSnapshotValue(column: string, value: string | number | null): string | number | null {
+  if (isSnapshotDateTimeColumn(column) && typeof value === "string") {
+    return isMySqlDateTimeText(value) ? value : toMySqlDateTime(value);
+  }
+
   if (!isSnapshotJsonColumn(column)) {
     return value;
   }
@@ -2344,6 +2348,14 @@ function normalizeMySqlSnapshotValue(column: string, value: string | number | nu
   }
 
   return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function isSnapshotDateTimeColumn(column: string): boolean {
+  return column.endsWith("_at");
+}
+
+function isMySqlDateTimeText(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value);
 }
 
 function safeParseJson<T>(value: unknown): T | undefined {
