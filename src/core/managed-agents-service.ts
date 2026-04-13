@@ -44,7 +44,7 @@ import {
   readOpenAICompatibleProviderSummaries,
   type OpenAICompatibleProviderSummary,
 } from "./openai-compatible-provider.js";
-import { validateWorkspacePath } from "./session-workspace.js";
+import { normalizeAbsoluteWorkspacePath, validateWorkspacePath } from "./session-workspace.js";
 
 export interface ManagedAgentsServiceOptions {
   registry: ManagedAgentsStore;
@@ -1805,12 +1805,12 @@ export class ManagedAgentsService {
     input: ManagedAgentExecutionBoundaryWorkspacePolicyInput;
     now: string;
   }): StoredAgentWorkspacePolicyRecord {
-    const workspacePath = validateWorkspacePath(
+    const workspacePath = normalizeAbsoluteWorkspacePath(
       normalizeRequiredText(input.input.workspacePath, "工作区不能为空。"),
     );
     const additionalDirectories = normalizePathArray(input.input.additionalDirectories);
     const validatedAdditionalDirectories = additionalDirectories
-      .map((directory) => validateWorkspacePath(directory))
+      .map((directory) => normalizeAbsoluteWorkspacePath(directory))
       .filter((directory) => directory !== workspacePath);
 
     return {

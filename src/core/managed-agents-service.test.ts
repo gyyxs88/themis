@@ -290,6 +290,43 @@ test("ManagedAgentsService 支持持久化更新默认执行边界", () => {
   });
 });
 
+test("ManagedAgentsService 允许保存只存在于远端 worker 的工作区边界", () => {
+  const { root, registry, service } = createServiceContext();
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "Owner",
+      createdAt: "2026-04-13T09:00:00.000Z",
+      updatedAt: "2026-04-13T09:00:00.000Z",
+    });
+
+    const created = service.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "联调验证·远端工位",
+      departmentRole: "联调验证",
+      now: "2026-04-13T09:01:00.000Z",
+    });
+
+    const updated = service.updateManagedAgentExecutionBoundary({
+      ownerPrincipalId: "principal-owner",
+      agentId: created.agent.agentId,
+      workspacePolicy: {
+        workspacePath: "/srv/worker-only/site-a",
+        additionalDirectories: ["/mnt/shared/site-a", "/srv/worker-only/site-a"],
+        allowNetworkAccess: true,
+      },
+      now: "2026-04-13T09:02:00.000Z",
+    });
+
+    assert.equal(updated.workspacePolicy.workspacePath, "/srv/worker-only/site-a");
+    assert.deepEqual(updated.workspacePolicy.additionalDirectories, ["/mnt/shared/site-a"]);
+    assert.equal(updated.workspacePolicy.allowNetworkAccess, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("ManagedAgentsService 支持持久化项目工作区绑定", () => {
   const { root, registry, service } = createServiceContext();
 

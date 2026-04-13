@@ -10,16 +10,7 @@ export function normalizeWorkspacePath(value: unknown): string {
 }
 
 export function validateWorkspacePath(input: string): string {
-  const normalized = normalizeWorkspacePath(input);
-  if (!normalized) {
-    throw new Error("工作区不能为空。");
-  }
-
-  if (!isAbsolute(normalized)) {
-    throw new Error("只支持服务端本机绝对路径。");
-  }
-
-  const resolved = resolve(normalized);
+  const resolved = normalizeAbsoluteWorkspacePath(input);
   let stats: ReturnType<typeof statSync>;
 
   try {
@@ -43,4 +34,17 @@ export function validateWorkspacePath(input: string): string {
   }
 
   return resolved;
+}
+
+export function normalizeAbsoluteWorkspacePath(input: string): string {
+  const normalized = normalizeWorkspacePath(input);
+  if (!normalized) {
+    throw new Error("工作区不能为空。");
+  }
+
+  if (!isAbsolute(normalized)) {
+    throw new Error("只支持服务端本机绝对路径。");
+  }
+
+  return resolve(normalized);
 }
