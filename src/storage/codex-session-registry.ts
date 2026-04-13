@@ -10262,9 +10262,6 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_agent_work_items_parent_idx
       ON themis_agent_work_items(parent_work_item_id, created_at ASC, work_item_id ASC);
 
-      CREATE INDEX IF NOT EXISTS themis_agent_work_items_project_idx
-      ON themis_agent_work_items(project_id, updated_at DESC, work_item_id ASC);
-
       CREATE TABLE IF NOT EXISTS themis_agent_runs (
         run_id TEXT PRIMARY KEY,
         organization_id TEXT NOT NULL,

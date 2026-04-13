@@ -1084,3 +1084,79 @@ test("schema 25 迁移会为 principals 补 kind/org 列，并补齐 managed age
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("旧版 managed agent work_items 表缺 project_id 时，升级不会在索引初始化阶段失败", () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-managed-agents-project-id-migration-"));
+  const databaseFile = join(root, "infra/local/themis.db");
+  mkdirSync(join(root, "infra/local"), { recursive: true });
+  const bootstrap = new Database(databaseFile);
+
+  try {
+    bootstrap.exec(`
+      PRAGMA user_version = 24;
+
+      CREATE TABLE themis_agent_work_items (
+        work_item_id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        target_agent_id TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_principal_id TEXT,
+        source_agent_id TEXT,
+        parent_work_item_id TEXT,
+        dispatch_reason TEXT NOT NULL,
+        goal TEXT NOT NULL,
+        context_packet_json TEXT,
+        priority TEXT NOT NULL,
+        status TEXT NOT NULL,
+        waiting_for TEXT,
+        waiting_reason TEXT,
+        waiting_since TEXT,
+        latest_waiting_run_id TEXT,
+        latest_waiting_kind TEXT,
+        result_summary TEXT,
+        result_payload_json TEXT,
+        failure_code TEXT,
+        failure_message TEXT,
+        workspace_policy_snapshot_json TEXT,
+        runtime_profile_snapshot_json TEXT,
+        scheduled_at TEXT,
+        claimed_at TEXT,
+        started_at TEXT,
+        completed_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+  } finally {
+    bootstrap.close();
+  }
+
+  const registry = new SqliteCodexSessionRegistry({ databaseFile });
+  void registry;
+
+  const verify = new Database(databaseFile, { readonly: true });
+
+  try {
+    const workItemColumns = verify
+      .prepare(`PRAGMA table_info(themis_agent_work_items)`)
+      .all() as Array<{ name: string }>;
+    const workItemColumnNames = new Set(workItemColumns.map((column) => column.name));
+    assert.ok(workItemColumnNames.has("project_id"));
+    assert.ok(workItemColumnNames.has("waiting_action_request_json"));
+    assert.ok(workItemColumnNames.has("latest_human_response_json"));
+
+    const projectIndex = verify
+      .prepare(`
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'index'
+          AND name = 'themis_agent_work_items_project_idx'
+      `)
+      .get() as { name: string } | undefined;
+
+    assert.equal(projectIndex?.name, "themis_agent_work_items_project_idx");
+  } finally {
+    verify.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
