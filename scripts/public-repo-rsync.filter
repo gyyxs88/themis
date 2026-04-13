@@ -19,7 +19,9 @@
 + /infra/
 + /infra/systemd/
 + /infra/systemd/themis-dev.service.example
++ /infra/systemd/themis-platform.service.example
 + /infra/systemd/themis-prod.service.example
++ /infra/systemd/themis-worker-node.service.example
 
 + /docs/
 + /docs/feishu/
@@ -29,8 +31,11 @@
 + /docs/product/***
 + /docs/repository/
 + /docs/repository/github-safe-publish.md
++ /docs/repository/themis-first-lan-joint-test-checklist.md
 + /docs/repository/themis-platform-mysql-control-plane-cutover.md
++ /docs/repository/themis-platform-systemd-service.md
 + /docs/repository/themis-systemd-dev-service.md
 + /docs/repository/themis-systemd-prod-service.md
++ /docs/repository/themis-worker-node-systemd-service.md
 
 - *

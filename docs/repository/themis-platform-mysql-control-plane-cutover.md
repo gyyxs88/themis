@@ -89,6 +89,12 @@ npm run start:platform
 ExecStart=/usr/bin/npm run start:platform
 ```
 
+如果要直接套模板，使用：
+
+```text
+infra/systemd/themis-platform.service.example
+```
+
 ## 4. 切换后最小烟测
 
 先看启动日志里是否出现这两条关键信息：

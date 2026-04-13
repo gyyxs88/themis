@@ -331,7 +331,17 @@ THEMIS_UPDATE_CHANNEL=release
 - [正式版 systemd service 示例](./infra/systemd/themis-prod.service.example)
 - [正式版部署说明](./docs/repository/themis-systemd-prod-service.md)
 
+如果你要把平台层单独部署成独立控制面，可参考：
+
+- [平台层 systemd service 示例](./infra/systemd/themis-platform.service.example)
+- [平台层 systemd 使用说明](./docs/repository/themis-platform-systemd-service.md)
+- [平台层切 MySQL 操作说明](./docs/repository/themis-platform-mysql-control-plane-cutover.md)
+
 如果你要把另一台机器部署成 `Worker Node daemon`，可参考：
 
 - [Worker Node systemd service 示例](./infra/systemd/themis-worker-node.service.example)
 - [Worker Node 常驻部署说明](./docs/repository/themis-worker-node-systemd-service.md)
+
+如果你要做第一轮真实环境联调，可直接照着：
+
+- [首轮局域网联调清单](./docs/repository/themis-first-lan-joint-test-checklist.md)
