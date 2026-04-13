@@ -216,11 +216,16 @@
 
 ### D. 应提取到 `themis-contracts`
 
+- `src/contracts/managed-agent-platform-worker.ts`
 - `managed-agent-platform-gateway-client.ts` 里的 DTO 和请求 shape
 - `managed-agent-platform-worker-client.ts` 里的协议 shape
 - `/api/platform/*` 对应 DTO、错误码、鉴权头约定
 - Worker `pull / update / complete` 协议
 - `ProjectWorkspaceBinding`、`continuityMode` 等跨层对象的 schema
+
+当前进展：
+
+- `2026-04-13` 已补 `Phase 4` 第一刀：当前仓库已新增 `src/contracts/managed-agent-platform-worker.ts`，先把 `nodes/register|heartbeat|list|detail|reclaim` 与 `worker/runs/pull|update|complete` 这组共享 DTO / payload 收到独立契约文件里；`src/server/http-platform.ts` 与 `src/core/managed-agent-platform-worker-client.ts` 已改成共同依赖这份契约，`ManagedAgentWorkerDaemon` 也不再继续传那些只为迁就旧 client 签名而存在的 `ownerPrincipalId` 空占位。当前这一步还没有覆盖 `gateway` DTO、平台错误码全集和 `ProjectWorkspaceBinding` schema，但已经先把平台层与 Worker 层最重的协议耦合点从业务实现里缝开。
 
 说明：
 

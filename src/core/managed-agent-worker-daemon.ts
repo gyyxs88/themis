@@ -146,7 +146,6 @@ export class ManagedAgentWorkerDaemon {
       slotAvailable: busySlotAvailable,
     });
     await this.client.updateRunStatus({
-      ownerPrincipalId: "",
       nodeId,
       runId: assigned.run.runId,
       leaseToken: assigned.run.leaseToken,
@@ -165,7 +164,6 @@ export class ManagedAgentWorkerDaemon {
       }
 
       void this.client.updateRunStatus({
-        ownerPrincipalId: "",
         nodeId,
         runId: assigned.run.runId,
         leaseToken: assigned.run.leaseToken,
@@ -195,7 +193,6 @@ export class ManagedAgentWorkerDaemon {
 
       if (taskResult.status === "cancelled") {
         await this.client.updateRunStatus({
-          ownerPrincipalId: "",
           nodeId,
           runId: assigned.run.runId,
           leaseToken: assigned.run.leaseToken,
@@ -211,7 +208,6 @@ export class ManagedAgentWorkerDaemon {
       }
 
       await this.client.completeRun({
-        ownerPrincipalId: "",
         nodeId,
         runId: assigned.run.runId,
         leaseToken: assigned.run.leaseToken,
@@ -239,7 +235,6 @@ export class ManagedAgentWorkerDaemon {
 
       const failureMessage = toErrorMessage(error);
       await this.client.updateRunStatus({
-        ownerPrincipalId: "",
         nodeId,
         runId: assigned.run.runId,
         leaseToken: assigned.run.leaseToken,
@@ -273,7 +268,6 @@ export class ManagedAgentWorkerDaemon {
     if (input.event.type === "task.started") {
       input.onStatusChanged("running");
       await this.client.updateRunStatus({
-        ownerPrincipalId: "",
         nodeId: input.nodeId,
         runId: input.assigned.run.runId,
         leaseToken: input.assigned.run.leaseToken,
@@ -297,7 +291,6 @@ export class ManagedAgentWorkerDaemon {
     const taskId = normalizeOptionalText(input.event.taskId);
     input.onStatusChanged(status);
     await this.client.updateRunStatus({
-      ownerPrincipalId: "",
       nodeId: input.nodeId,
       runId: input.assigned.run.runId,
       leaseToken: input.assigned.run.leaseToken,

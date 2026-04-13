@@ -1,6 +1,19 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ManagedAgentControlPlaneFacadeLike } from "../core/managed-agent-control-plane-facade.js";
 import type { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
+import type {
+  ManagedAgentPlatformNodeDetailPayload,
+  ManagedAgentPlatformNodeHeartbeatPayload,
+  ManagedAgentPlatformNodeListPayload,
+  ManagedAgentPlatformNodeReclaimPayload,
+  ManagedAgentPlatformNodeRegisterPayload,
+  ManagedAgentPlatformOwnerPayload,
+  ManagedAgentPlatformWorkerCompletionResult,
+  ManagedAgentPlatformWorkerPullPayload,
+  ManagedAgentPlatformWorkerRunStatusPayload,
+  ManagedAgentPlatformWorkerWaitingActionPayload,
+  ManagedAgentPlatformWorkerRunCompletePayload,
+} from "../contracts/managed-agent-platform-worker.js";
 import {
   type ApprovalPolicy,
   MANAGED_AGENT_IDLE_RECOVERY_ACTIONS,
@@ -8,7 +21,6 @@ import {
   MANAGED_AGENT_PRIORITIES,
   MANAGED_AGENT_WORK_ITEM_SOURCE_TYPES,
   PROJECT_WORKSPACE_CONTINUITY_MODES,
-  type ManagedAgentNodeStatus,
   type ManagedAgentIdleRecoveryAction,
   type MemoryMode,
   type ManagedAgentPriority,
@@ -259,82 +271,7 @@ interface PlatformMailboxRespondPayload extends PlatformAgentListPayload {
   };
 }
 
-interface PlatformNodeRegisterPayload extends PlatformAgentListPayload {
-  node: {
-    nodeId?: string;
-    organizationId?: string;
-    displayName: string;
-    slotCapacity: number;
-    slotAvailable?: number;
-    labels?: string[];
-    workspaceCapabilities?: string[];
-    credentialCapabilities?: string[];
-    providerCapabilities?: string[];
-    heartbeatTtlSeconds?: number;
-  };
-}
-
-interface PlatformNodeHeartbeatPayload extends PlatformAgentListPayload {
-  node: {
-    nodeId: string;
-    status?: ManagedAgentNodeStatus;
-    slotAvailable?: number;
-    labels?: string[];
-    workspaceCapabilities?: string[];
-    credentialCapabilities?: string[];
-    providerCapabilities?: string[];
-    heartbeatTtlSeconds?: number;
-  };
-}
-
-interface PlatformNodeListPayload extends PlatformAgentListPayload {
-  organizationId?: string;
-}
-
-interface PlatformNodeDetailPayload extends PlatformAgentListPayload {
-  nodeId: string;
-}
-
-interface PlatformNodeReclaimPayload extends PlatformNodeDetailPayload {
-  failureCode?: string;
-  failureMessage?: string;
-}
-
-interface PlatformWorkerPullPayload extends PlatformAgentListPayload {
-  nodeId: string;
-}
-
-interface PlatformWorkerRunStatusPayload extends PlatformWorkerPullPayload {
-  runId: string;
-  leaseToken: string;
-  status: "starting" | "running" | "heartbeat" | "waiting_human" | "waiting_agent" | "failed" | "cancelled";
-  failureCode?: string;
-  failureMessage?: string;
-  waitingAction?: {
-    actionType?: string;
-    actionId?: string;
-    prompt?: string;
-    message?: string;
-    choices?: unknown;
-    inputSchema?: unknown;
-    requestId?: string;
-    taskId?: string;
-  };
-}
-
-interface PlatformWorkerRunCompletePayload extends PlatformWorkerPullPayload {
-  runId: string;
-  leaseToken: string;
-  result?: {
-    summary: string;
-    output?: unknown;
-    touchedFiles?: string[];
-    structuredOutput?: Record<string, unknown> | null;
-    completedAt?: string;
-  };
-}
-
-async function readAndNormalizePayload<T extends PlatformAgentListPayload>(
+async function readAndNormalizePayload<T extends ManagedAgentPlatformOwnerPayload>(
   request: IncomingMessage,
   response: ServerResponse,
   normalize: (value: unknown) => T,
@@ -2131,7 +2068,7 @@ function normalizePlatformMailboxRespondPayload(value: unknown): PlatformMailbox
   };
 }
 
-function normalizePlatformNodeRegisterPayload(value: unknown): PlatformNodeRegisterPayload {
+function normalizePlatformNodeRegisterPayload(value: unknown): ManagedAgentPlatformNodeRegisterPayload {
   if (!isRecord(value) || !isRecord(value.node)) {
     throw new Error("Request body.node must be an object.");
   }
@@ -2164,7 +2101,7 @@ function normalizePlatformNodeRegisterPayload(value: unknown): PlatformNodeRegis
   };
 }
 
-function normalizePlatformNodeHeartbeatPayload(value: unknown): PlatformNodeHeartbeatPayload {
+function normalizePlatformNodeHeartbeatPayload(value: unknown): ManagedAgentPlatformNodeHeartbeatPayload {
   if (!isRecord(value) || !isRecord(value.node)) {
     throw new Error("Request body.node must be an object.");
   }
@@ -2194,7 +2131,7 @@ function normalizePlatformNodeHeartbeatPayload(value: unknown): PlatformNodeHear
   };
 }
 
-function normalizePlatformNodeListPayload(value: unknown): PlatformNodeListPayload {
+function normalizePlatformNodeListPayload(value: unknown): ManagedAgentPlatformNodeListPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -2207,7 +2144,7 @@ function normalizePlatformNodeListPayload(value: unknown): PlatformNodeListPaylo
   };
 }
 
-function normalizePlatformNodeDetailPayload(value: unknown): PlatformNodeDetailPayload {
+function normalizePlatformNodeDetailPayload(value: unknown): ManagedAgentPlatformNodeDetailPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -2218,7 +2155,7 @@ function normalizePlatformNodeDetailPayload(value: unknown): PlatformNodeDetailP
   };
 }
 
-function normalizePlatformNodeReclaimPayload(value: unknown): PlatformNodeReclaimPayload {
+function normalizePlatformNodeReclaimPayload(value: unknown): ManagedAgentPlatformNodeReclaimPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -2234,7 +2171,7 @@ function normalizePlatformNodeReclaimPayload(value: unknown): PlatformNodeReclai
   };
 }
 
-function normalizePlatformWorkerPullPayload(value: unknown): PlatformWorkerPullPayload {
+function normalizePlatformWorkerPullPayload(value: unknown): ManagedAgentPlatformWorkerPullPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -2245,7 +2182,7 @@ function normalizePlatformWorkerPullPayload(value: unknown): PlatformWorkerPullP
   };
 }
 
-function normalizePlatformWorkerRunStatusPayload(value: unknown): PlatformWorkerRunStatusPayload {
+function normalizePlatformWorkerRunStatusPayload(value: unknown): ManagedAgentPlatformWorkerRunStatusPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -2275,7 +2212,7 @@ function normalizePlatformWorkerRunStatusPayload(value: unknown): PlatformWorker
   };
 }
 
-function normalizePlatformWorkerRunCompletePayload(value: unknown): PlatformWorkerRunCompletePayload {
+function normalizePlatformWorkerRunCompletePayload(value: unknown): ManagedAgentPlatformWorkerRunCompletePayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -2290,7 +2227,9 @@ function normalizePlatformWorkerRunCompletePayload(value: unknown): PlatformWork
   };
 }
 
-function normalizePlatformWorkerWaitingAction(value: unknown): PlatformWorkerRunStatusPayload["waitingAction"] | undefined {
+function normalizePlatformWorkerWaitingAction(
+  value: unknown,
+): ManagedAgentPlatformWorkerWaitingActionPayload | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -2316,7 +2255,9 @@ function normalizePlatformWorkerWaitingAction(value: unknown): PlatformWorkerRun
   return Object.keys(waitingAction).length > 0 ? waitingAction : undefined;
 }
 
-function normalizePlatformWorkerCompletionResult(value: unknown): PlatformWorkerRunCompletePayload["result"] | undefined {
+function normalizePlatformWorkerCompletionResult(
+  value: unknown,
+): ManagedAgentPlatformWorkerCompletionResult | undefined {
   if (!isRecord(value)) {
     return undefined;
   }

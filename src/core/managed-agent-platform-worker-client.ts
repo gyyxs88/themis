@@ -1,168 +1,52 @@
 import type {
-  CompleteManagedAgentWorkerRunInput,
-  ManagedAgentWorkerAssignedRun,
-  ManagedAgentWorkerRunMutationResult,
-  UpdateManagedAgentWorkerRunStatusInput,
-} from "./managed-agent-worker-service.js";
+  ManagedAgentPlatformWorkerAssignedRunResult,
+  ManagedAgentPlatformWorkerNodeDetailInput,
+  ManagedAgentPlatformWorkerNodeDetailResult,
+  ManagedAgentPlatformWorkerNodeHeartbeatInput,
+  ManagedAgentPlatformWorkerNodeLeaseReclaimInput,
+  ManagedAgentPlatformWorkerNodeLeaseRecoveryResult,
+  ManagedAgentPlatformWorkerNodeListInput,
+  ManagedAgentPlatformWorkerNodeMutationResult,
+  ManagedAgentPlatformWorkerNodeRecord,
+  ManagedAgentPlatformWorkerNodeRegistrationInput,
+  ManagedAgentPlatformWorkerProbeResult,
+  ManagedAgentPlatformWorkerRunCompleteInput,
+  ManagedAgentPlatformWorkerRunMutationResult,
+  ManagedAgentPlatformWorkerRunStatusInput,
+} from "../contracts/managed-agent-platform-worker.js";
+
+export type {
+  ManagedAgentPlatformWorkerAssignedRunResult,
+  ManagedAgentPlatformWorkerCompletionResult,
+  ManagedAgentPlatformWorkerNodeDetailInput,
+  ManagedAgentPlatformWorkerNodeDetailResult,
+  ManagedAgentPlatformWorkerNodeExecutionLeaseContext,
+  ManagedAgentPlatformWorkerNodeHeartbeatInput,
+  ManagedAgentPlatformWorkerNodeLeaseReclaimInput,
+  ManagedAgentPlatformWorkerNodeLeaseRecoveryAction,
+  ManagedAgentPlatformWorkerNodeLeaseRecoveryResult,
+  ManagedAgentPlatformWorkerNodeLeaseRecoverySummary,
+  ManagedAgentPlatformWorkerNodeLeaseSummary,
+  ManagedAgentPlatformWorkerNodeListInput,
+  ManagedAgentPlatformWorkerNodeMutationResult,
+  ManagedAgentPlatformWorkerNodeRecord,
+  ManagedAgentPlatformWorkerNodeRegistrationInput,
+  ManagedAgentPlatformWorkerOrganizationRecord,
+  ManagedAgentPlatformWorkerProbeResult,
+  ManagedAgentPlatformWorkerPullInput,
+  ManagedAgentPlatformWorkerReclaimedLeaseContext,
+  ManagedAgentPlatformWorkerRunCompleteInput,
+  ManagedAgentPlatformWorkerRunMutationResult,
+  ManagedAgentPlatformWorkerRunStatus,
+  ManagedAgentPlatformWorkerRunStatusInput,
+  ManagedAgentPlatformWorkerWaitingActionPayload,
+} from "../contracts/managed-agent-platform-worker.js";
 
 export interface ManagedAgentPlatformWorkerClientOptions {
   baseUrl: string;
   ownerPrincipalId: string;
   webAccessToken: string;
   fetchImpl?: typeof fetch;
-}
-
-export interface ManagedAgentPlatformWorkerNodeRegistrationInput {
-  nodeId?: string;
-  organizationId?: string;
-  displayName: string;
-  slotCapacity: number;
-  slotAvailable?: number;
-  labels?: string[];
-  workspaceCapabilities?: string[];
-  credentialCapabilities?: string[];
-  providerCapabilities?: string[];
-  heartbeatTtlSeconds?: number;
-}
-
-export interface ManagedAgentPlatformWorkerNodeHeartbeatInput {
-  nodeId: string;
-  status?: "online" | "draining" | "offline";
-  slotAvailable?: number;
-  labels?: string[];
-  workspaceCapabilities?: string[];
-  credentialCapabilities?: string[];
-  providerCapabilities?: string[];
-  heartbeatTtlSeconds?: number;
-}
-
-export interface ManagedAgentPlatformWorkerOrganizationRecord {
-  organizationId: string;
-  ownerPrincipalId: string;
-  displayName: string;
-  slug: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ManagedAgentPlatformWorkerNodeRecord {
-  nodeId: string;
-  organizationId: string;
-  displayName: string;
-  status: "online" | "draining" | "offline";
-  slotCapacity: number;
-  slotAvailable: number;
-  labels: string[];
-  workspaceCapabilities: string[];
-  credentialCapabilities: string[];
-  providerCapabilities: string[];
-  heartbeatTtlSeconds: number;
-  lastHeartbeatAt: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ManagedAgentPlatformWorkerNodeLeaseSummary {
-  totalCount: number;
-  activeCount: number;
-  expiredCount: number;
-  releasedCount: number;
-  revokedCount: number;
-}
-
-export interface ManagedAgentPlatformWorkerNodeExecutionLeaseContext {
-  lease: {
-    leaseId: string;
-    runId: string;
-    workItemId: string;
-    targetAgentId: string;
-    nodeId: string;
-    status: string;
-    leaseToken: string;
-    leaseExpiresAt: string;
-    lastHeartbeatAt?: string;
-    createdAt: string;
-    updatedAt: string;
-  };
-  run: {
-    runId: string;
-    status: string;
-    failureCode?: string;
-    failureMessage?: string;
-  } | null;
-  workItem: {
-    workItemId: string;
-    status: string;
-  } | null;
-  targetAgent: {
-    agentId: string;
-    displayName: string;
-  } | null;
-}
-
-export type ManagedAgentPlatformWorkerNodeLeaseRecoveryAction = "requeued" | "waiting_preserved" | "lease_revoked";
-
-export interface ManagedAgentPlatformWorkerNodeMutationResult {
-  organization: ManagedAgentPlatformWorkerOrganizationRecord;
-  node: ManagedAgentPlatformWorkerNodeRecord;
-}
-
-export interface ManagedAgentPlatformWorkerReclaimedLeaseContext {
-  lease: {
-    leaseId: string;
-    runId?: string;
-    workItemId?: string;
-    targetAgentId?: string;
-    nodeId?: string;
-    status: string;
-    leaseToken?: string;
-    leaseExpiresAt?: string;
-    lastHeartbeatAt?: string;
-    createdAt?: string;
-    updatedAt?: string;
-  };
-  run: {
-    runId: string;
-    status: string;
-    failureCode?: string;
-    failureMessage?: string;
-  } | null;
-  workItem: {
-    workItemId: string;
-    status: string;
-  } | null;
-  targetAgent: {
-    agentId: string;
-    displayName: string;
-  } | null;
-  recoveryAction: ManagedAgentPlatformWorkerNodeLeaseRecoveryAction;
-}
-
-export interface ManagedAgentPlatformWorkerNodeLeaseRecoverySummary {
-  activeLeaseCount: number;
-  reclaimedRunCount: number;
-  requeuedWorkItemCount: number;
-  preservedWaitingCount: number;
-  revokedLeaseOnlyCount: number;
-}
-
-export interface ManagedAgentPlatformWorkerNodeDetailResult {
-  organization: ManagedAgentPlatformWorkerOrganizationRecord;
-  node: ManagedAgentPlatformWorkerNodeRecord;
-  leaseSummary: ManagedAgentPlatformWorkerNodeLeaseSummary;
-  activeExecutionLeases: ManagedAgentPlatformWorkerNodeExecutionLeaseContext[];
-  recentExecutionLeases: ManagedAgentPlatformWorkerNodeExecutionLeaseContext[];
-}
-
-export interface ManagedAgentPlatformWorkerNodeLeaseRecoveryResult {
-  organization: ManagedAgentPlatformWorkerOrganizationRecord;
-  node: ManagedAgentPlatformWorkerNodeRecord;
-  summary: ManagedAgentPlatformWorkerNodeLeaseRecoverySummary;
-  reclaimedLeases: ManagedAgentPlatformWorkerReclaimedLeaseContext[];
-}
-
-export interface ManagedAgentPlatformWorkerProbeResult {
-  nodeCount: number;
 }
 
 export class ManagedAgentPlatformWorkerClient {
@@ -196,7 +80,7 @@ export class ManagedAgentPlatformWorkerClient {
     });
   }
 
-  async listNodes(input: { organizationId?: string } = {}): Promise<ManagedAgentPlatformWorkerNodeRecord[]> {
+  async listNodes(input: ManagedAgentPlatformWorkerNodeListInput = {}): Promise<ManagedAgentPlatformWorkerNodeRecord[]> {
     const payload = await this.requestJson<{
       nodes?: ManagedAgentPlatformWorkerNodeRecord[];
     }>("/api/platform/nodes/list", {
@@ -207,7 +91,7 @@ export class ManagedAgentPlatformWorkerClient {
     return Array.isArray(payload.nodes) ? payload.nodes : [];
   }
 
-  async getNodeDetail(nodeId: string): Promise<ManagedAgentPlatformWorkerNodeDetailResult> {
+  async getNodeDetail(nodeId: ManagedAgentPlatformWorkerNodeDetailInput["nodeId"]): Promise<ManagedAgentPlatformWorkerNodeDetailResult> {
     return await this.requestJson("/api/platform/nodes/detail", {
       ownerPrincipalId: this.ownerPrincipalId,
       nodeId,
@@ -230,10 +114,7 @@ export class ManagedAgentPlatformWorkerClient {
 
   async reclaimNodeLeases(
     nodeId: string,
-    input: {
-      failureCode?: string;
-      failureMessage?: string;
-    } = {},
+    input: Omit<ManagedAgentPlatformWorkerNodeLeaseReclaimInput, "nodeId"> = {},
   ): Promise<ManagedAgentPlatformWorkerNodeLeaseRecoveryResult> {
     return await this.requestJson("/api/platform/nodes/reclaim", {
       ownerPrincipalId: this.ownerPrincipalId,
@@ -243,15 +124,15 @@ export class ManagedAgentPlatformWorkerClient {
     });
   }
 
-  async pullAssignedRun(nodeId: string): Promise<ManagedAgentWorkerAssignedRun | null> {
+  async pullAssignedRun(nodeId: string): Promise<ManagedAgentPlatformWorkerAssignedRunResult | null> {
     const payload = await this.requestJson<{
-      organization: ManagedAgentWorkerAssignedRun["organization"] | null;
-      node: ManagedAgentWorkerAssignedRun["node"] | null;
-      targetAgent: ManagedAgentWorkerAssignedRun["targetAgent"] | null;
-      workItem: ManagedAgentWorkerAssignedRun["workItem"] | null;
-      run: ManagedAgentWorkerAssignedRun["run"] | null;
-      executionLease: ManagedAgentWorkerAssignedRun["executionLease"] | null;
-      executionContract: ManagedAgentWorkerAssignedRun["executionContract"] | null;
+      organization: ManagedAgentPlatformWorkerAssignedRunResult["organization"] | null;
+      node: ManagedAgentPlatformWorkerAssignedRunResult["node"] | null;
+      targetAgent: ManagedAgentPlatformWorkerAssignedRunResult["targetAgent"] | null;
+      workItem: ManagedAgentPlatformWorkerAssignedRunResult["workItem"] | null;
+      run: ManagedAgentPlatformWorkerAssignedRunResult["run"] | null;
+      executionLease: ManagedAgentPlatformWorkerAssignedRunResult["executionLease"] | null;
+      executionContract: ManagedAgentPlatformWorkerAssignedRunResult["executionContract"] | null;
     }>("/api/platform/worker/runs/pull", {
       ownerPrincipalId: this.ownerPrincipalId,
       nodeId,
@@ -273,7 +154,7 @@ export class ManagedAgentPlatformWorkerClient {
     };
   }
 
-  async updateRunStatus(input: UpdateManagedAgentWorkerRunStatusInput): Promise<ManagedAgentWorkerRunMutationResult> {
+  async updateRunStatus(input: ManagedAgentPlatformWorkerRunStatusInput): Promise<ManagedAgentPlatformWorkerRunMutationResult> {
     return await this.requestJson("/api/platform/worker/runs/update", {
       ownerPrincipalId: this.ownerPrincipalId,
       nodeId: input.nodeId,
@@ -286,7 +167,7 @@ export class ManagedAgentPlatformWorkerClient {
     });
   }
 
-  async completeRun(input: CompleteManagedAgentWorkerRunInput): Promise<ManagedAgentWorkerRunMutationResult> {
+  async completeRun(input: ManagedAgentPlatformWorkerRunCompleteInput): Promise<ManagedAgentPlatformWorkerRunMutationResult> {
     return await this.requestJson("/api/platform/worker/runs/complete", {
       ownerPrincipalId: this.ownerPrincipalId,
       nodeId: input.nodeId,
@@ -296,7 +177,7 @@ export class ManagedAgentPlatformWorkerClient {
     });
   }
 
-  async probeAccess(input: { organizationId?: string } = {}): Promise<ManagedAgentPlatformWorkerProbeResult> {
+  async probeAccess(input: ManagedAgentPlatformWorkerNodeListInput = {}): Promise<ManagedAgentPlatformWorkerProbeResult> {
     const nodes = await this.listNodes(input);
     return {
       nodeCount: nodes.length,
