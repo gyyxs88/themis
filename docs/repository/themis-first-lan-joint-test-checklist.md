@@ -159,6 +159,7 @@ npm run start:web
 - `projectId` 命中同一个项目绑定
 - 优先回到同一节点 / 同一工作区语义
 - 不会静默漂移到无关工作区
+- 如果当前要做双节点共享工作区，这两台节点当前最稳妥的做法仍是声明同一个绝对路径；仅凭“内容看起来是同一个仓库”还不够
 
 ### 验证三：waiting / resume
 
@@ -190,6 +191,7 @@ npm run start:web
 - 平台 lease 被回收
 - 后续可接管任务能被 `W2` 接住
 - `sticky` 项目如果没有可接受的新节点，不会偷偷乱漂
+- `sticky` 项目在首选节点离线时应保持 `queued`，不能被平台层后台 tick 本机 claim 后直接执行
 
 ### 验证五：平台进程重启
 
@@ -215,6 +217,7 @@ systemctl --user restart themis-platform.service
 - 至少 1 台 Worker 成功执行任务
 - 至少 2 台 Worker 成功完成节点治理 / 接管验证
 - 同一项目的再次派工能保住工作区连续性
+- `sticky` 项目在首选节点离线时会继续排队，等首选节点恢复后再执行
 - 平台重启后控制面事实不丢
 
 ## 8. 如果联调失败，优先记录这几类信息
@@ -226,6 +229,7 @@ systemctl --user restart themis-platform.service
 - `runs/detail`
 - `work-items/detail`
 - 是否命中了正确的 `projectId / workspace binding / preferred node`
+- 如果 `sticky` 项目在首选节点离线时直接 `failed`，先检查平台层是否误 claim 了没有匹配节点的 work item
 
 这轮联调里，最关键的不是 UI，而是：
 
