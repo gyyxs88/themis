@@ -60,6 +60,7 @@ import {
   MANAGED_AGENT_STATUSES,
   MANAGED_AGENT_WORK_ITEM_SOURCE_TYPES,
   MANAGED_AGENT_WORK_ITEM_STATUSES,
+  PROJECT_WORKSPACE_CONTINUITY_MODES,
   PRINCIPAL_ACTOR_STATUSES,
   PRINCIPAL_KINDS,
   PRINCIPAL_MAIN_MEMORY_CANDIDATE_STATUSES,
@@ -91,6 +92,7 @@ import type {
   ManagedAgentExposurePolicy,
   ManagedAgentNodeStatus,
   ManagedAgentPriority,
+  ProjectWorkspaceContinuityMode,
   ManagedAgentRuntimeProfileSnapshot,
   ManagedAgentStatus,
   ManagedAgentWorkItemSourceType,
@@ -123,6 +125,7 @@ import type {
   StoredAgentRuntimeProfileRecord,
   StoredAgentWorkspacePolicyRecord,
   StoredManagedAgentRecord,
+  StoredProjectWorkspaceBindingRecord,
   StoredOrganizationRecord,
   TaskAccessMode,
   TaskEvent,
@@ -140,7 +143,7 @@ import type {
   StoredScheduledTaskRunRecord,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 31;
+const DATABASE_SCHEMA_VERSION = 32;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -756,6 +759,7 @@ interface AgentWorkItemRow {
   work_item_id: string;
   organization_id: string;
   target_agent_id: string;
+  project_id: string | null;
   source_type: string;
   source_principal_id: string;
   source_agent_id: string | null;
@@ -773,6 +777,23 @@ interface AgentWorkItemRow {
   scheduled_at: string | null;
   started_at: string | null;
   completed_at: string | null;
+  updated_at: string;
+}
+
+interface ProjectWorkspaceBindingRow {
+  project_id: string;
+  organization_id: string;
+  display_name: string;
+  owning_agent_id: string | null;
+  workspace_root_id: string | null;
+  workspace_policy_id: string | null;
+  canonical_workspace_path: string | null;
+  preferred_node_id: string | null;
+  preferred_node_pool: string | null;
+  last_active_node_id: string | null;
+  last_active_workspace_path: string | null;
+  continuity_mode: string;
+  created_at: string;
   updated_at: string;
 }
 
@@ -2866,6 +2887,171 @@ export class SqliteCodexSessionRegistry {
     }
   }
 
+  getProjectWorkspaceBinding(projectId: string): StoredProjectWorkspaceBindingRecord | null {
+    const normalizedProjectId = projectId.trim();
+
+    if (!normalizedProjectId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            project_id,
+            organization_id,
+            display_name,
+            owning_agent_id,
+            workspace_root_id,
+            workspace_policy_id,
+            canonical_workspace_path,
+            preferred_node_id,
+            preferred_node_pool,
+            last_active_node_id,
+            last_active_workspace_path,
+            continuity_mode,
+            created_at,
+            updated_at
+          FROM themis_project_workspace_bindings
+          WHERE project_id = ?
+        `,
+      )
+      .get(normalizedProjectId) as ProjectWorkspaceBindingRow | undefined;
+
+    return row ? mapProjectWorkspaceBindingRow(row) : null;
+  }
+
+  listProjectWorkspaceBindingsByOrganization(organizationId: string): StoredProjectWorkspaceBindingRecord[] {
+    const normalizedOrganizationId = organizationId.trim();
+
+    if (!normalizedOrganizationId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            project_id,
+            organization_id,
+            display_name,
+            owning_agent_id,
+            workspace_root_id,
+            workspace_policy_id,
+            canonical_workspace_path,
+            preferred_node_id,
+            preferred_node_pool,
+            last_active_node_id,
+            last_active_workspace_path,
+            continuity_mode,
+            created_at,
+            updated_at
+          FROM themis_project_workspace_bindings
+          WHERE organization_id = ?
+          ORDER BY updated_at DESC, project_id ASC
+        `,
+      )
+      .all(normalizedOrganizationId) as ProjectWorkspaceBindingRow[];
+
+    return rows.map(mapProjectWorkspaceBindingRow);
+  }
+
+  saveProjectWorkspaceBinding(record: StoredProjectWorkspaceBindingRecord): void {
+    const projectId = record.projectId.trim();
+    const organizationId = record.organizationId.trim();
+    const displayName = record.displayName.trim();
+    const owningAgentId = normalizeText(record.owningAgentId);
+    const workspaceRootId = normalizeText(record.workspaceRootId);
+    const workspacePolicyId = normalizeText(record.workspacePolicyId);
+    const canonicalWorkspacePath = normalizeText(record.canonicalWorkspacePath);
+    const preferredNodeId = normalizeText(record.preferredNodeId);
+    const preferredNodePool = normalizeText(record.preferredNodePool);
+    const lastActiveNodeId = normalizeText(record.lastActiveNodeId);
+    const lastActiveWorkspacePath = normalizeText(record.lastActiveWorkspacePath);
+    const continuityMode = normalizeText(record.continuityMode);
+
+    if (
+      !projectId
+      || !organizationId
+      || !displayName
+      || !continuityMode
+      || !PROJECT_WORKSPACE_CONTINUITY_MODES.includes(continuityMode as ProjectWorkspaceContinuityMode)
+      || (!workspacePolicyId && !canonicalWorkspacePath)
+    ) {
+      throw new Error("Project workspace binding record is incomplete.");
+    }
+
+    const writeResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_project_workspace_bindings (
+            project_id,
+            organization_id,
+            display_name,
+            owning_agent_id,
+            workspace_root_id,
+            workspace_policy_id,
+            canonical_workspace_path,
+            preferred_node_id,
+            preferred_node_pool,
+            last_active_node_id,
+            last_active_workspace_path,
+            continuity_mode,
+            created_at,
+            updated_at
+          ) VALUES (
+            @project_id,
+            @organization_id,
+            @display_name,
+            @owning_agent_id,
+            @workspace_root_id,
+            @workspace_policy_id,
+            @canonical_workspace_path,
+            @preferred_node_id,
+            @preferred_node_pool,
+            @last_active_node_id,
+            @last_active_workspace_path,
+            @continuity_mode,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(project_id) DO UPDATE SET
+            organization_id = excluded.organization_id,
+            display_name = excluded.display_name,
+            owning_agent_id = excluded.owning_agent_id,
+            workspace_root_id = excluded.workspace_root_id,
+            workspace_policy_id = excluded.workspace_policy_id,
+            canonical_workspace_path = excluded.canonical_workspace_path,
+            preferred_node_id = excluded.preferred_node_id,
+            preferred_node_pool = excluded.preferred_node_pool,
+            last_active_node_id = excluded.last_active_node_id,
+            last_active_workspace_path = excluded.last_active_workspace_path,
+            continuity_mode = excluded.continuity_mode,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({
+        project_id: projectId,
+        organization_id: organizationId,
+        display_name: displayName,
+        owning_agent_id: owningAgentId ?? null,
+        workspace_root_id: workspaceRootId ?? null,
+        workspace_policy_id: workspacePolicyId ?? null,
+        canonical_workspace_path: canonicalWorkspacePath ?? null,
+        preferred_node_id: preferredNodeId ?? null,
+        preferred_node_pool: preferredNodePool ?? null,
+        last_active_node_id: lastActiveNodeId ?? null,
+        last_active_workspace_path: lastActiveWorkspacePath ?? null,
+        continuity_mode: continuityMode,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+
+    if (writeResult.changes === 0) {
+      throw new Error("Project workspace binding write did not apply.");
+    }
+  }
+
   getAgentWorkItem(workItemId: string): StoredAgentWorkItemRecord | null {
     const normalizedWorkItemId = workItemId.trim();
 
@@ -2880,6 +3066,7 @@ export class SqliteCodexSessionRegistry {
             work_item_id,
             organization_id,
             target_agent_id,
+            project_id,
             source_type,
             source_principal_id,
             source_agent_id,
@@ -2921,6 +3108,7 @@ export class SqliteCodexSessionRegistry {
             work_item_id,
             organization_id,
             target_agent_id,
+            project_id,
             source_type,
             source_principal_id,
             source_agent_id,
@@ -2963,6 +3151,7 @@ export class SqliteCodexSessionRegistry {
             work_item.work_item_id,
             work_item.organization_id,
             work_item.target_agent_id,
+            work_item.project_id,
             work_item.source_type,
             work_item.source_principal_id,
             work_item.source_agent_id,
@@ -3007,6 +3196,7 @@ export class SqliteCodexSessionRegistry {
             work_item_id,
             organization_id,
             target_agent_id,
+            project_id,
             source_type,
             source_principal_id,
             source_agent_id,
@@ -3039,6 +3229,7 @@ export class SqliteCodexSessionRegistry {
     const workItemId = record.workItemId.trim();
     const organizationId = record.organizationId.trim();
     const targetAgentId = record.targetAgentId.trim();
+    const projectId = normalizeText(record.projectId);
     const sourceType = normalizeText(record.sourceType);
     const sourcePrincipalId = record.sourcePrincipalId.trim();
     const sourceAgentId = normalizeText(record.sourceAgentId);
@@ -3086,6 +3277,7 @@ export class SqliteCodexSessionRegistry {
             work_item_id,
             organization_id,
             target_agent_id,
+            project_id,
             source_type,
             source_principal_id,
             source_agent_id,
@@ -3108,6 +3300,7 @@ export class SqliteCodexSessionRegistry {
             @work_item_id,
             @organization_id,
             @target_agent_id,
+            @project_id,
             @source_type,
             @source_principal_id,
             @source_agent_id,
@@ -3128,6 +3321,7 @@ export class SqliteCodexSessionRegistry {
             @updated_at
           )
           ON CONFLICT(work_item_id) DO UPDATE SET
+            project_id = excluded.project_id,
             source_type = excluded.source_type,
             source_principal_id = excluded.source_principal_id,
             source_agent_id = excluded.source_agent_id,
@@ -3153,6 +3347,7 @@ export class SqliteCodexSessionRegistry {
         work_item_id: workItemId,
         organization_id: organizationId,
         target_agent_id: targetAgentId,
+        project_id: projectId ?? null,
         source_type: sourceType,
         source_principal_id: sourcePrincipalId,
         source_agent_id: sourceAgentId ?? null,
@@ -10028,6 +10223,7 @@ export class SqliteCodexSessionRegistry {
         work_item_id TEXT PRIMARY KEY,
         organization_id TEXT NOT NULL,
         target_agent_id TEXT NOT NULL,
+        project_id TEXT,
         source_type TEXT NOT NULL,
         source_principal_id TEXT NOT NULL,
         source_agent_id TEXT,
@@ -10061,6 +10257,9 @@ export class SqliteCodexSessionRegistry {
 
       CREATE INDEX IF NOT EXISTS themis_agent_work_items_parent_idx
       ON themis_agent_work_items(parent_work_item_id, created_at ASC, work_item_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_agent_work_items_project_idx
+      ON themis_agent_work_items(project_id, updated_at DESC, work_item_id ASC);
 
       CREATE TABLE IF NOT EXISTS themis_agent_runs (
         run_id TEXT PRIMARY KEY,
@@ -10118,6 +10317,37 @@ export class SqliteCodexSessionRegistry {
 
       CREATE INDEX IF NOT EXISTS themis_agent_nodes_heartbeat_idx
       ON themis_agent_nodes(status, last_heartbeat_at DESC, node_id ASC);
+
+      CREATE TABLE IF NOT EXISTS themis_project_workspace_bindings (
+        project_id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        owning_agent_id TEXT,
+        workspace_root_id TEXT,
+        workspace_policy_id TEXT,
+        canonical_workspace_path TEXT,
+        preferred_node_id TEXT,
+        preferred_node_pool TEXT,
+        last_active_node_id TEXT,
+        last_active_workspace_path TEXT,
+        continuity_mode TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (organization_id) REFERENCES themis_organizations(organization_id) ON DELETE CASCADE,
+        FOREIGN KEY (owning_agent_id) REFERENCES themis_managed_agents(agent_id) ON DELETE SET NULL,
+        FOREIGN KEY (workspace_policy_id) REFERENCES themis_agent_workspace_policies(policy_id) ON DELETE SET NULL,
+        FOREIGN KEY (preferred_node_id) REFERENCES themis_agent_nodes(node_id) ON DELETE SET NULL,
+        FOREIGN KEY (last_active_node_id) REFERENCES themis_agent_nodes(node_id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_project_workspace_bindings_org_idx
+      ON themis_project_workspace_bindings(organization_id, updated_at DESC, project_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_project_workspace_bindings_owner_idx
+      ON themis_project_workspace_bindings(owning_agent_id, updated_at DESC, project_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_project_workspace_bindings_preferred_node_idx
+      ON themis_project_workspace_bindings(preferred_node_id, updated_at DESC, project_id ASC);
 
       CREATE TABLE IF NOT EXISTS themis_agent_execution_leases (
         lease_id TEXT PRIMARY KEY,
@@ -10722,6 +10952,18 @@ export class SqliteCodexSessionRegistry {
       `);
     }
 
+    if (!agentWorkItemColumnNames.has("project_id")) {
+      database.exec(`
+        ALTER TABLE themis_agent_work_items
+        ADD COLUMN project_id TEXT;
+      `);
+    }
+
+    database.exec(`
+      CREATE INDEX IF NOT EXISTS themis_agent_work_items_project_idx
+      ON themis_agent_work_items(project_id, updated_at DESC, work_item_id ASC);
+    `);
+
     const managedAgentColumns = database
       .prepare(`PRAGMA table_info(themis_managed_agents)`)
       .all() as Array<{ name: string }>;
@@ -11309,6 +11551,7 @@ function mapAgentWorkItemRow(row: AgentWorkItemRow): StoredAgentWorkItemRecord {
     workItemId: row.work_item_id,
     organizationId: row.organization_id,
     targetAgentId: row.target_agent_id,
+    ...(row.project_id ? { projectId: row.project_id } : {}),
     sourceType: row.source_type as ManagedAgentWorkItemSourceType,
     sourcePrincipalId: row.source_principal_id,
     ...(row.source_agent_id ? { sourceAgentId: row.source_agent_id } : {}),
@@ -11330,6 +11573,29 @@ function mapAgentWorkItemRow(row: AgentWorkItemRow): StoredAgentWorkItemRecord {
     ...(row.scheduled_at ? { scheduledAt: row.scheduled_at } : {}),
     ...(row.started_at ? { startedAt: row.started_at } : {}),
     ...(row.completed_at ? { completedAt: row.completed_at } : {}),
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapProjectWorkspaceBindingRow(row: ProjectWorkspaceBindingRow): StoredProjectWorkspaceBindingRecord {
+  const continuityMode = PROJECT_WORKSPACE_CONTINUITY_MODES.includes(row.continuity_mode as ProjectWorkspaceContinuityMode)
+    ? row.continuity_mode as ProjectWorkspaceContinuityMode
+    : "sticky";
+
+  return {
+    projectId: row.project_id,
+    organizationId: row.organization_id,
+    displayName: row.display_name,
+    ...(row.owning_agent_id ? { owningAgentId: row.owning_agent_id } : {}),
+    ...(row.workspace_root_id ? { workspaceRootId: row.workspace_root_id } : {}),
+    ...(row.workspace_policy_id ? { workspacePolicyId: row.workspace_policy_id } : {}),
+    ...(row.canonical_workspace_path ? { canonicalWorkspacePath: row.canonical_workspace_path } : {}),
+    ...(row.preferred_node_id ? { preferredNodeId: row.preferred_node_id } : {}),
+    ...(row.preferred_node_pool ? { preferredNodePool: row.preferred_node_pool } : {}),
+    ...(row.last_active_node_id ? { lastActiveNodeId: row.last_active_node_id } : {}),
+    ...(row.last_active_workspace_path ? { lastActiveWorkspacePath: row.last_active_workspace_path } : {}),
+    continuityMode,
+    createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }

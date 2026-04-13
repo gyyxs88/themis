@@ -19,6 +19,7 @@ import {
   type UpdateManagedAgentSpawnPolicyInput,
   type UpdateManagedAgentExecutionBoundaryInput,
   type ManagedAgentExecutionBoundaryView,
+  type UpsertProjectWorkspaceBindingInput,
 } from "./managed-agents-service.js";
 import {
   type CancelWorkItemInput,
@@ -166,6 +167,18 @@ export class ManagedAgentControlPlaneFacade {
     input: UpdateManagedAgentExecutionBoundaryInput,
   ): ManagedAgentExecutionBoundaryView {
     return this.managedAgentsService.updateManagedAgentExecutionBoundary(input);
+  }
+
+  listProjectWorkspaceBindings(ownerPrincipalId: string, organizationId?: string) {
+    return this.managedAgentsService.listProjectWorkspaceBindings(ownerPrincipalId, organizationId);
+  }
+
+  getProjectWorkspaceBinding(ownerPrincipalId: string, projectId: string) {
+    return this.managedAgentsService.getProjectWorkspaceBinding(ownerPrincipalId, projectId);
+  }
+
+  upsertProjectWorkspaceBinding(input: UpsertProjectWorkspaceBindingInput) {
+    return this.managedAgentsService.upsertProjectWorkspaceBinding(input);
   }
 
   updateSpawnPolicy(input: UpdateManagedAgentSpawnPolicyInput) {

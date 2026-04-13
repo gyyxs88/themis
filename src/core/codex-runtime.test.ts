@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import type { ThreadOptions } from "@openai/codex-sdk";
-import { SqliteCodexSessionRegistry } from "../storage/index.js";
+import { CompositeManagedAgentControlPlaneStore, SqliteCodexSessionRegistry } from "../storage/index.js";
 import type { TaskEvent, TaskRequest } from "../types/index.js";
 import type { CompiledTaskInput } from "./runtime-input-compiler.js";
 import { CodexTaskRuntime } from "./codex-runtime.js";
@@ -134,6 +134,33 @@ test("第三方模型未声明 search tool 时会阻止带联网搜索的请求"
         },
       }), createProviderConfig());
     }, /search tool/);
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test("允许注入独立的 managed agent 控制面 store", () => {
+  const workingDirectory = mkdtempSync(join(tmpdir(), "themis-runtime-control-plane-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(workingDirectory, "infra/local/runtime.db"),
+  });
+  const controlPlaneRegistry = new SqliteCodexSessionRegistry({
+    databaseFile: join(workingDirectory, "infra/local/control-plane.db"),
+  });
+  const controlPlaneStore = new CompositeManagedAgentControlPlaneStore({
+    sharedStore: controlPlaneRegistry,
+    executionStateStore: runtimeStore,
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory,
+    runtimeStore,
+    managedAgentControlPlaneStore: controlPlaneStore,
+  });
+
+  try {
+    assert.equal(runtime.getManagedAgentControlPlaneStore(), controlPlaneStore);
+    assert.equal(runtime.getManagedAgentControlPlaneStore().managedAgentsStore, controlPlaneRegistry);
+    assert.equal(runtime.getManagedAgentControlPlaneStore().executionStateStore, runtimeStore);
   } finally {
     rmSync(workingDirectory, { recursive: true, force: true });
   }

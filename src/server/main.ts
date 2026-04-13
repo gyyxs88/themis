@@ -4,11 +4,13 @@ import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import {
   CodexAuthRuntime,
   CodexTaskRuntime,
+  createManagedAgentControlPlaneStoreFromEnv,
   ManagedAgentExecutionService,
   ScheduledTaskExecutionService,
 } from "../core/index.js";
 import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { ThemisUpdateService } from "../diagnostics/update-service.js";
+import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createThemisHttpServer, resolveListenAddresses } from "./http-server.js";
 
 const DEFAULT_PRIVATE_ASSISTANT_PRINCIPAL_ID = "principal-local-owner";
@@ -20,12 +22,23 @@ const port = Number.parseInt(process.env.THEMIS_PORT ?? "3100", 10);
 const taskTimeoutMs = Number.parseInt(process.env.THEMIS_TASK_TIMEOUT_MS ?? "300000", 10);
 const agentSchedulerIntervalMs = Number.parseInt(process.env.THEMIS_AGENT_SCHEDULER_INTERVAL_MS ?? "5000", 10);
 const scheduledTaskSchedulerIntervalMs = Number.parseInt(process.env.THEMIS_SCHEDULED_TASK_SCHEDULER_INTERVAL_MS ?? "5000", 10);
-const runtime = new CodexTaskRuntime();
+const workingDirectory = process.cwd();
+const runtimeStore = new SqliteCodexSessionRegistry();
+const managedAgentControlPlaneStore = createManagedAgentControlPlaneStoreFromEnv({
+  workingDirectory,
+  runtimeStore,
+});
+const runtime = new CodexTaskRuntime({
+  workingDirectory,
+  runtimeStore,
+  managedAgentControlPlaneStore,
+});
 const actionBridge = new AppServerActionBridge();
 const appServerRuntime = new AppServerTaskRuntime({
   workingDirectory: runtime.getWorkingDirectory(),
-  runtimeStore: runtime.getRuntimeStore(),
+  runtimeStore,
   actionBridge,
+  managedAgentControlPlaneStore,
 });
 const managedAgentExecutionService = new ManagedAgentExecutionService({
   registry: appServerRuntime.getManagedAgentControlPlaneStore().executionStateStore,

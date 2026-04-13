@@ -1,5 +1,9 @@
 import { AppServerActionBridge } from "./app-server-action-bridge.js";
-import { SqliteCodexSessionRegistry, SqliteManagedAgentControlPlaneStore } from "../storage/index.js";
+import {
+  type ManagedAgentControlPlaneStore,
+  SqliteCodexSessionRegistry,
+  SqliteManagedAgentControlPlaneStore,
+} from "../storage/index.js";
 import {
   buildCodexProcessEnv,
   createCodexAuthStorageConfigOverrides,
@@ -141,6 +145,7 @@ export interface AppServerTaskRuntimeOptions {
   ) => Promise<AppServerTaskRuntimeSession> | AppServerTaskRuntimeSession;
   actionBridge?: AppServerActionBridge;
   runtimeCatalogReader?: () => Promise<CodexRuntimeCatalog>;
+  managedAgentControlPlaneStore?: ManagedAgentControlPlaneStore;
 }
 
 export interface AppServerInternalTaskContext {
@@ -204,7 +209,7 @@ export class AppServerTaskRuntime {
   private readonly identityLinkService: IdentityLinkService;
   private readonly conversationService: ConversationService;
   private readonly principalPersonaService: PrincipalPersonaService;
-  private readonly managedAgentControlPlaneStore: SqliteManagedAgentControlPlaneStore;
+  private readonly managedAgentControlPlaneStore: ManagedAgentControlPlaneStore;
   private readonly managedAgentCoordinationService: ManagedAgentCoordinationService;
   private readonly managedAgentControlPlaneFacade: ManagedAgentControlPlaneFacade;
   private readonly managedAgentNodeService: ManagedAgentNodeService;
@@ -229,7 +234,8 @@ export class AppServerTaskRuntime {
     this.identityLinkService = new IdentityLinkService(this.runtimeStore);
     this.conversationService = new ConversationService(this.runtimeStore, this.identityLinkService);
     this.principalPersonaService = new PrincipalPersonaService(this.runtimeStore);
-    this.managedAgentControlPlaneStore = new SqliteManagedAgentControlPlaneStore(this.runtimeStore);
+    this.managedAgentControlPlaneStore = options.managedAgentControlPlaneStore
+      ?? new SqliteManagedAgentControlPlaneStore(this.runtimeStore);
     this.managedAgentCoordinationService = new ManagedAgentCoordinationService({
       registry: this.managedAgentControlPlaneStore.coordinationStore,
     });
@@ -1023,7 +1029,7 @@ export class AppServerTaskRuntime {
     return this.workingDirectory;
   }
 
-  getManagedAgentControlPlaneStore(): SqliteManagedAgentControlPlaneStore {
+  getManagedAgentControlPlaneStore(): ManagedAgentControlPlaneStore {
     return this.managedAgentControlPlaneStore;
   }
 

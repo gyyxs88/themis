@@ -349,6 +349,7 @@ async function createMockPlatformGatewayServer(): Promise<{
     const platformDispatchedWorkItem = {
       ...platformWorkItem,
       workItemId: "work-item-platform-dispatch-1",
+      projectId: "project-site-foo",
       status: "queued",
       waitingActionRequest: undefined,
       updatedAt: "2026-04-12T12:27:00.000Z",
@@ -976,10 +977,11 @@ async function createMockPlatformGatewayServer(): Promise<{
     if (request.method === "POST" && url.pathname === "/api/platform/work-items/dispatch") {
       const payload = parseJson(body) as {
         ownerPrincipalId?: string;
-        workItem?: { targetAgentId?: string; dispatchReason?: string; goal?: string };
+        workItem?: { targetAgentId?: string; projectId?: string; dispatchReason?: string; goal?: string };
       };
       assert.equal(payload.ownerPrincipalId, "principal-platform-owner");
       assert.equal(payload.workItem?.targetAgentId, "agent-platform-1");
+      assert.equal(payload.workItem?.projectId, "project-site-foo");
       assert.equal(payload.workItem?.dispatchReason, "platform-gateway-write");
       assert.equal(payload.workItem?.goal, "验证 gateway 写路径派工。");
       response.writeHead(200, {
@@ -1827,16 +1829,18 @@ test("POST /api/agents 协作写面在配置平台上游后会统一改写 platf
           ...identity,
           workItem: {
             targetAgentId: "agent-platform-1",
+            projectId: "project-site-foo",
             dispatchReason: "platform-gateway-write",
             goal: "验证 gateway 写路径派工。",
           },
         }, authHeaders);
         assert.equal(dispatchResponse.status, 200);
         const dispatchPayload = await dispatchResponse.json() as {
-          workItem?: { workItemId?: string; status?: string };
+          workItem?: { workItemId?: string; projectId?: string; status?: string };
           dispatchMessage?: { messageId?: string };
         };
         assert.equal(dispatchPayload.workItem?.workItemId, "work-item-platform-dispatch-1");
+        assert.equal(dispatchPayload.workItem?.projectId, "project-site-foo");
         assert.equal(dispatchPayload.workItem?.status, "queued");
         assert.equal(dispatchPayload.dispatchMessage?.messageId, "message-platform-dispatch-1");
 

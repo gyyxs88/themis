@@ -46,6 +46,12 @@ export const PROJECT_CONFIG_DEFINITIONS: ProjectConfigDefinition[] = [
     note: "只有与 THEMIS_PLATFORM_BASE_URL / THEMIS_PLATFORM_OWNER_PRINCIPAL_ID 同时配置时才生效。",
   },
   {
+    key: "THEMIS_MANAGED_AGENT_CONTROL_PLANE_DATABASE_FILE",
+    section: "服务监听",
+    description: "可选。把 managed-agent 共享控制面 SQLite 指到独立文件；本地 session task settings 仍留在当前 runtime store。",
+    note: "适用于把平台层先独立成单独进程时的首轮 wiring；未配置时仍默认复用 infra/local/themis.db。",
+  },
+  {
     key: "THEMIS_BUILD_COMMIT",
     section: "版本更新",
     description: "可选。显式标记当前构建提交；非 git 部署或需要固定版本比较时使用。",

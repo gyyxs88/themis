@@ -12,6 +12,7 @@ export type ManagedAgentsStore = Pick<SqliteCodexSessionRegistry,
   | "getAgentWorkspacePolicyByOwnerAgent"
   | "getAuthAccount"
   | "getManagedAgent"
+  | "getProjectWorkspaceBinding"
   | "getOrganization"
   | "getPrincipal"
   | "listAgentAuditLogsByOrganization"
@@ -26,6 +27,7 @@ export type ManagedAgentsStore = Pick<SqliteCodexSessionRegistry,
   | "listManagedAgentsByOrganization"
   | "listManagedAgentsByOwnerPrincipal"
   | "listOrganizationsByOwnerPrincipal"
+  | "listProjectWorkspaceBindingsByOrganization"
   | "listThirdPartyProviderModels"
   | "listThirdPartyProviders"
   | "saveAgentAuditLog"
@@ -35,6 +37,7 @@ export type ManagedAgentsStore = Pick<SqliteCodexSessionRegistry,
   | "saveAgentWorkItem"
   | "saveAgentWorkspacePolicy"
   | "saveManagedAgent"
+  | "saveProjectWorkspaceBinding"
   | "saveOrganization"
   | "savePrincipal"
   | "saveThirdPartyProvider"
@@ -55,6 +58,7 @@ export type ManagedAgentCoordinationStore = Pick<SqliteCodexSessionRegistry,
   | "getAgentWorkspacePolicyByOwnerAgent"
   | "getManagedAgent"
   | "getManagedAgentNode"
+  | "getProjectWorkspaceBinding"
   | "getOrganization"
   | "getPrincipal"
   | "listAgentHandoffsByAgent"
@@ -83,6 +87,7 @@ export type ManagedAgentSchedulerStore = Pick<SqliteCodexSessionRegistry,
   | "getAgentRun"
   | "getAgentWorkItem"
   | "getManagedAgent"
+  | "getProjectWorkspaceBinding"
   | "getOrganization"
   | "getPrincipal"
   | "listActiveAgentExecutionLeases"
@@ -93,6 +98,7 @@ export type ManagedAgentSchedulerStore = Pick<SqliteCodexSessionRegistry,
   | "listStaleActiveAgentRuns"
   | "saveAgentExecutionLease"
   | "saveManagedAgentNode"
+  | "saveProjectWorkspaceBinding"
   | "saveAgentRun"
   | "saveAgentWorkItem"
 >;
@@ -141,6 +147,11 @@ export type ManagedAgentExecutionStateStore = Pick<SqliteCodexSessionRegistry,
   | "saveSessionTaskSettings"
 >;
 
+export type ManagedAgentExecutionStateLocalStore = Pick<SqliteCodexSessionRegistry,
+  | "getSessionTaskSettings"
+  | "saveSessionTaskSettings"
+>;
+
 export type ManagedAgentWorkerStore = Pick<SqliteCodexSessionRegistry,
   | "getActiveAgentExecutionLeaseByRun"
   | "getAgentRun"
@@ -160,3 +171,75 @@ export type ManagedAgentWorkerStore = Pick<SqliteCodexSessionRegistry,
   | "saveAgentWorkItem"
   | "saveManagedAgent"
 >;
+
+export type ManagedAgentControlPlaneSharedStore =
+  & ManagedAgentsStore
+  & ManagedAgentCoordinationStore
+  & ManagedAgentSchedulerStore
+  & ManagedAgentNodeStore
+  & ManagedAgentExecutionLeaseStore
+  & ManagedAgentWorkerStore;
+
+export interface ManagedAgentControlPlaneStore {
+  readonly managedAgentsStore: ManagedAgentsStore;
+  readonly coordinationStore: ManagedAgentCoordinationStore;
+  readonly schedulerStore: ManagedAgentSchedulerStore;
+  readonly nodeStore: ManagedAgentNodeStore;
+  readonly executionLeaseStore: ManagedAgentExecutionLeaseStore;
+  readonly executionStateStore: ManagedAgentExecutionStateStore;
+  readonly workerStore: ManagedAgentWorkerStore;
+}
+
+export interface CompositeManagedAgentControlPlaneStoreOptions {
+  sharedStore: ManagedAgentControlPlaneSharedStore;
+  executionStateStore: ManagedAgentExecutionStateStore;
+}
+
+export interface SplitManagedAgentExecutionStateStoreOptions {
+  sharedStore: Pick<ManagedAgentControlPlaneSharedStore,
+    | "getAgentWorkItem"
+    | "getManagedAgent"
+    | "getPrincipal"
+    | "listAgentMessagesByWorkItem"
+    | "saveAgentWorkItem"
+    | "saveManagedAgent"
+  >;
+  localExecutionStateStore: ManagedAgentExecutionStateLocalStore;
+}
+
+export function createSplitManagedAgentExecutionStateStore(
+  options: SplitManagedAgentExecutionStateStoreOptions,
+): ManagedAgentExecutionStateStore {
+  const { sharedStore, localExecutionStateStore } = options;
+
+  return {
+    getAgentWorkItem: sharedStore.getAgentWorkItem.bind(sharedStore),
+    getManagedAgent: sharedStore.getManagedAgent.bind(sharedStore),
+    getPrincipal: sharedStore.getPrincipal.bind(sharedStore),
+    getSessionTaskSettings: localExecutionStateStore.getSessionTaskSettings.bind(localExecutionStateStore),
+    listAgentMessagesByWorkItem: sharedStore.listAgentMessagesByWorkItem.bind(sharedStore),
+    saveAgentWorkItem: sharedStore.saveAgentWorkItem.bind(sharedStore),
+    saveManagedAgent: sharedStore.saveManagedAgent.bind(sharedStore),
+    saveSessionTaskSettings: localExecutionStateStore.saveSessionTaskSettings.bind(localExecutionStateStore),
+  };
+}
+
+export class CompositeManagedAgentControlPlaneStore implements ManagedAgentControlPlaneStore {
+  readonly managedAgentsStore: ManagedAgentsStore;
+  readonly coordinationStore: ManagedAgentCoordinationStore;
+  readonly schedulerStore: ManagedAgentSchedulerStore;
+  readonly nodeStore: ManagedAgentNodeStore;
+  readonly executionLeaseStore: ManagedAgentExecutionLeaseStore;
+  readonly executionStateStore: ManagedAgentExecutionStateStore;
+  readonly workerStore: ManagedAgentWorkerStore;
+
+  constructor(options: CompositeManagedAgentControlPlaneStoreOptions) {
+    this.managedAgentsStore = options.sharedStore;
+    this.coordinationStore = options.sharedStore;
+    this.schedulerStore = options.sharedStore;
+    this.nodeStore = options.sharedStore;
+    this.executionLeaseStore = options.sharedStore;
+    this.executionStateStore = options.executionStateStore;
+    this.workerStore = options.sharedStore;
+  }
+}

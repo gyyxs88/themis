@@ -290,6 +290,74 @@ test("ManagedAgentsService 支持持久化更新默认执行边界", () => {
   });
 });
 
+test("ManagedAgentsService 支持持久化项目工作区绑定", () => {
+  const { root, registry, service } = createServiceContext();
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "Owner",
+      createdAt: "2026-04-13T08:00:00.000Z",
+      updatedAt: "2026-04-13T08:00:00.000Z",
+    });
+
+    const created = service.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "前端·澄",
+      departmentRole: "前端",
+      mission: "负责网站项目开发。",
+      now: "2026-04-13T08:01:00.000Z",
+    });
+    const boundary = service.getManagedAgentExecutionBoundary("principal-owner", created.agent.agentId);
+    const workspacePolicyId = boundary?.workspacePolicy.policyId;
+    assert.ok(workspacePolicyId);
+    registry.saveManagedAgentNode({
+      nodeId: "node-site-a",
+      organizationId: created.organization.organizationId,
+      displayName: "Site Node A",
+      status: "online",
+      slotCapacity: 1,
+      slotAvailable: 1,
+      labels: ["linux"],
+      workspaceCapabilities: [boundary?.workspacePolicy.workspacePath ?? root],
+      credentialCapabilities: [],
+      providerCapabilities: [],
+      heartbeatTtlSeconds: 300,
+      lastHeartbeatAt: "2026-04-13T08:01:30.000Z",
+      createdAt: "2026-04-13T08:01:30.000Z",
+      updatedAt: "2026-04-13T08:01:30.000Z",
+    });
+
+    const binding = service.upsertProjectWorkspaceBinding({
+      ownerPrincipalId: "principal-owner",
+      projectId: "project-site-foo",
+      displayName: "官网 site-foo",
+      organizationId: created.organization.organizationId,
+      owningAgentId: created.agent.agentId,
+      workspacePolicyId,
+      preferredNodeId: "node-site-a",
+      continuityMode: "sticky",
+      now: "2026-04-13T08:02:00.000Z",
+    });
+
+    assert.equal(binding.projectId, "project-site-foo");
+    assert.equal(binding.owningAgentId, created.agent.agentId);
+    assert.equal(binding.workspacePolicyId, workspacePolicyId);
+    assert.equal(binding.canonicalWorkspacePath, boundary?.workspacePolicy.workspacePath);
+    assert.equal(binding.preferredNodeId, "node-site-a");
+    assert.equal(binding.continuityMode, "sticky");
+
+    const detail = service.getProjectWorkspaceBinding("principal-owner", "project-site-foo");
+    assert.equal(detail?.displayName, "官网 site-foo");
+
+    const listed = service.listProjectWorkspaceBindings("principal-owner");
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0]?.projectId, "project-site-foo");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("ManagedAgentsService 会基于当前负载给出自动创建建议，并预生成默认命名", () => {
   const { root, registry, service } = createServiceContext();
 

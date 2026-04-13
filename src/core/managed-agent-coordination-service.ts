@@ -29,6 +29,7 @@ export interface ManagedAgentCoordinationServiceOptions {
 export interface DispatchWorkItemInput {
   ownerPrincipalId: string;
   targetAgentId: string;
+  projectId?: string;
   sourceType?: ManagedAgentWorkItemSourceType;
   sourcePrincipalId?: string;
   sourceAgentId?: string;
@@ -379,11 +380,15 @@ export class ManagedAgentCoordinationService {
     const parentWorkItem = normalizeOptionalText(input.parentWorkItemId)
       ? this.requireWorkItemInOrganization(input.parentWorkItemId as string, organization.organizationId)
       : null;
+    const projectId = normalizeOptionalText(input.projectId);
+    const projectBinding = projectId
+      ? this.requireProjectWorkspaceBindingInOrganization(projectId, organization.organizationId)
+      : null;
     const workspacePolicySnapshot = input.workspacePolicySnapshot === null
       ? undefined
       : input.workspacePolicySnapshot !== undefined
         ? input.workspacePolicySnapshot as ManagedAgentWorkspacePolicySnapshot
-        : this.resolveWorkspacePolicySnapshot(targetAgent);
+        : this.resolveWorkspacePolicySnapshot(targetAgent, projectBinding);
     const runtimeProfileSnapshot = input.runtimeProfileSnapshot === null
       ? undefined
       : input.runtimeProfileSnapshot !== undefined
@@ -394,6 +399,7 @@ export class ManagedAgentCoordinationService {
       workItemId,
       organizationId: organization.organizationId,
       targetAgentId: targetAgent.agentId,
+      ...(projectId ? { projectId } : {}),
       sourceType,
       sourcePrincipalId,
       ...(sourceAgent ? { sourceAgentId: sourceAgent.agentId } : {}),
@@ -1354,6 +1360,21 @@ export class ManagedAgentCoordinationService {
     return workItem;
   }
 
+  private requireProjectWorkspaceBindingInOrganization(
+    projectId: string,
+    organizationId: string,
+  ) {
+    const binding = this.registry.getProjectWorkspaceBinding(
+      normalizeRequiredText(projectId, "Project id is required."),
+    );
+
+    if (!binding || binding.organizationId !== organizationId) {
+      throw new Error("Project workspace binding does not exist.");
+    }
+
+    return binding;
+  }
+
   private requireMessageInOrganization(messageId: string, organizationId: string): StoredAgentMessageRecord {
     const message = this.registry.getAgentMessage(normalizeRequiredText(messageId, "Message id is required."));
 
@@ -1371,7 +1392,28 @@ export class ManagedAgentCoordinationService {
 
   private resolveWorkspacePolicySnapshot(
     targetAgent: StoredManagedAgentRecord,
+    projectBinding?: {
+      workspacePolicyId?: string;
+      canonicalWorkspacePath?: string;
+    } | null,
   ): ManagedAgentWorkspacePolicySnapshot {
+    if (normalizeOptionalText(projectBinding?.workspacePolicyId)) {
+      const bindingPolicy = this.registry.getAgentWorkspacePolicy(projectBinding?.workspacePolicyId as string);
+
+      if (bindingPolicy) {
+        return bindingPolicy;
+      }
+    }
+
+    if (normalizeOptionalText(projectBinding?.canonicalWorkspacePath)) {
+      return {
+        displayName: "项目工作区绑定",
+        workspacePath: projectBinding?.canonicalWorkspacePath as string,
+        additionalDirectories: [],
+        allowNetworkAccess: true,
+      };
+    }
+
     const storedPolicy = (
       normalizeOptionalText(targetAgent.defaultWorkspacePolicyId)
         ? this.registry.getAgentWorkspacePolicy(targetAgent.defaultWorkspacePolicyId as string)

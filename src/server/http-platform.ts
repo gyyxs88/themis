@@ -7,10 +7,12 @@ import {
   MANAGED_AGENT_NODE_STATUSES,
   MANAGED_AGENT_PRIORITIES,
   MANAGED_AGENT_WORK_ITEM_SOURCE_TYPES,
+  PROJECT_WORKSPACE_CONTINUITY_MODES,
   type ManagedAgentNodeStatus,
   type ManagedAgentIdleRecoveryAction,
   type MemoryMode,
   type ManagedAgentPriority,
+  type ProjectWorkspaceContinuityMode,
   type ManagedAgentWorkItemSourceType,
   type ReasoningLevel,
   type SandboxMode,
@@ -71,6 +73,31 @@ interface PlatformAgentSpawnPolicyUpdatePayload extends PlatformAgentListPayload
     organizationId?: string;
     maxActiveAgents: number;
     maxActiveAgentsPerRole: number;
+  };
+}
+
+interface PlatformProjectWorkspaceBindingListPayload extends PlatformAgentListPayload {
+  organizationId?: string;
+}
+
+interface PlatformProjectWorkspaceBindingDetailPayload extends PlatformAgentListPayload {
+  projectId: string;
+}
+
+interface PlatformProjectWorkspaceBindingUpsertPayload extends PlatformAgentListPayload {
+  binding: {
+    projectId: string;
+    displayName: string;
+    organizationId?: string;
+    owningAgentId?: string;
+    workspaceRootId?: string;
+    workspacePolicyId?: string;
+    canonicalWorkspacePath?: string;
+    preferredNodeId?: string;
+    preferredNodePool?: string;
+    lastActiveNodeId?: string;
+    lastActiveWorkspacePath?: string;
+    continuityMode?: ProjectWorkspaceContinuityMode;
   };
 }
 
@@ -149,6 +176,7 @@ interface PlatformWorkItemListPayload extends PlatformAgentListPayload {
 interface PlatformWorkItemDispatchPayload extends PlatformAgentListPayload {
   workItem: {
     targetAgentId: string;
+    projectId?: string;
     sourceType?: ManagedAgentWorkItemSourceType;
     sourceAgentId?: string;
     sourcePrincipalId?: string;
@@ -444,6 +472,92 @@ export async function handlePlatformAgentExecutionBoundaryUpdate(
       agent: result.agent,
       workspacePolicy: result.workspacePolicy,
       runtimeProfile: result.runtimeProfile,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformProjectWorkspaceBindingList(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformProjectWorkspaceBindingListPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const bindings = facade.listProjectWorkspaceBindings(payload.ownerPrincipalId, payload.organizationId);
+    writeJson(response, 200, {
+      ok: true,
+      bindings,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformProjectWorkspaceBindingDetail(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformProjectWorkspaceBindingDetailPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const binding = facade.getProjectWorkspaceBinding(payload.ownerPrincipalId, payload.projectId);
+    if (!binding) {
+      throw new Error("Project workspace binding does not exist.");
+    }
+
+    writeJson(response, 200, {
+      ok: true,
+      binding,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformProjectWorkspaceBindingUpsert(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformProjectWorkspaceBindingUpsertPayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const binding = facade.upsertProjectWorkspaceBinding({
+      ownerPrincipalId: payload.ownerPrincipalId,
+      projectId: payload.binding.projectId,
+      displayName: payload.binding.displayName,
+      ...(payload.binding.organizationId ? { organizationId: payload.binding.organizationId } : {}),
+      ...(payload.binding.owningAgentId ? { owningAgentId: payload.binding.owningAgentId } : {}),
+      ...(payload.binding.workspaceRootId ? { workspaceRootId: payload.binding.workspaceRootId } : {}),
+      ...(payload.binding.workspacePolicyId ? { workspacePolicyId: payload.binding.workspacePolicyId } : {}),
+      ...(payload.binding.canonicalWorkspacePath
+        ? { canonicalWorkspacePath: payload.binding.canonicalWorkspacePath }
+        : {}),
+      ...(payload.binding.preferredNodeId ? { preferredNodeId: payload.binding.preferredNodeId } : {}),
+      ...(payload.binding.preferredNodePool ? { preferredNodePool: payload.binding.preferredNodePool } : {}),
+      ...(payload.binding.lastActiveNodeId ? { lastActiveNodeId: payload.binding.lastActiveNodeId } : {}),
+      ...(payload.binding.lastActiveWorkspacePath
+        ? { lastActiveWorkspacePath: payload.binding.lastActiveWorkspacePath }
+        : {}),
+      ...(payload.binding.continuityMode ? { continuityMode: payload.binding.continuityMode } : {}),
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      binding,
     });
   } catch (error) {
     writePlatformError(response, error);
@@ -822,6 +936,7 @@ export async function handlePlatformWorkItemDispatch(
     const result = facade.dispatchWorkItem({
       ownerPrincipalId: payload.ownerPrincipalId,
       targetAgentId: payload.workItem.targetAgentId,
+      ...(payload.workItem.projectId ? { projectId: payload.workItem.projectId } : {}),
       ...(payload.workItem.sourceType ? { sourceType: payload.workItem.sourceType } : {}),
       ...(payload.workItem.sourceAgentId ? { sourceAgentId: payload.workItem.sourceAgentId } : {}),
       sourcePrincipalId: payload.workItem.sourcePrincipalId ?? payload.ownerPrincipalId,
@@ -1585,6 +1700,73 @@ function normalizePlatformAgentSpawnApprovePayload(value: unknown): PlatformAgen
   };
 }
 
+function normalizePlatformProjectWorkspaceBindingListPayload(value: unknown): PlatformProjectWorkspaceBindingListPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  const organizationId = readOptionalString(value.organizationId);
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    ...(organizationId ? { organizationId } : {}),
+  };
+}
+
+function normalizePlatformProjectWorkspaceBindingDetailPayload(
+  value: unknown,
+): PlatformProjectWorkspaceBindingDetailPayload {
+  if (!isRecord(value)) {
+    throw new Error("Request body must be an object.");
+  }
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    projectId: readRequiredString(value.projectId, "projectId"),
+  };
+}
+
+function normalizePlatformProjectWorkspaceBindingUpsertPayload(
+  value: unknown,
+): PlatformProjectWorkspaceBindingUpsertPayload {
+  if (!isRecord(value) || !isRecord(value.binding)) {
+    throw new Error("Request body.binding must be an object.");
+  }
+
+  const organizationId = readOptionalString(value.binding.organizationId);
+  const owningAgentId = readOptionalString(value.binding.owningAgentId);
+  const workspaceRootId = readOptionalString(value.binding.workspaceRootId);
+  const workspacePolicyId = readOptionalString(value.binding.workspacePolicyId);
+  const canonicalWorkspacePath = readOptionalString(value.binding.canonicalWorkspacePath);
+  const preferredNodeId = readOptionalString(value.binding.preferredNodeId);
+  const preferredNodePool = readOptionalString(value.binding.preferredNodePool);
+  const lastActiveNodeId = readOptionalString(value.binding.lastActiveNodeId);
+  const lastActiveWorkspacePath = readOptionalString(value.binding.lastActiveWorkspacePath);
+  const continuityMode = readOptionalEnum(
+    value.binding.continuityMode,
+    PROJECT_WORKSPACE_CONTINUITY_MODES,
+    "binding.continuityMode",
+  );
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    binding: {
+      projectId: readRequiredString(value.binding.projectId, "binding.projectId"),
+      displayName: readRequiredString(value.binding.displayName, "binding.displayName"),
+      ...(organizationId ? { organizationId } : {}),
+      ...(owningAgentId ? { owningAgentId } : {}),
+      ...(workspaceRootId ? { workspaceRootId } : {}),
+      ...(workspacePolicyId ? { workspacePolicyId } : {}),
+      ...(canonicalWorkspacePath ? { canonicalWorkspacePath } : {}),
+      ...(preferredNodeId ? { preferredNodeId } : {}),
+      ...(preferredNodePool ? { preferredNodePool } : {}),
+      ...(lastActiveNodeId ? { lastActiveNodeId } : {}),
+      ...(lastActiveWorkspacePath ? { lastActiveWorkspacePath } : {}),
+      ...(continuityMode ? { continuityMode } : {}),
+    },
+  };
+}
+
 function normalizePlatformAgentSpawnSuggestionActionPayload(
   value: unknown,
 ): PlatformAgentSpawnSuggestionActionPayload {
@@ -1756,12 +1938,14 @@ function normalizePlatformWorkItemDispatchPayload(value: unknown): PlatformWorkI
   const sourceAgentId = readOptionalString(value.workItem.sourceAgentId);
   const sourcePrincipalId = readOptionalString(value.workItem.sourcePrincipalId);
   const parentWorkItemId = readOptionalString(value.workItem.parentWorkItemId);
+  const projectId = readOptionalString(value.workItem.projectId);
   const scheduledAt = readOptionalString(value.workItem.scheduledAt);
 
   return {
     ...normalizePlatformOwnerPayload(value),
     workItem: {
       targetAgentId: readRequiredString(value.workItem.targetAgentId, "workItem.targetAgentId"),
+      ...(projectId ? { projectId } : {}),
       ...(sourceType ? { sourceType } : {}),
       ...(sourceAgentId ? { sourceAgentId } : {}),
       ...(sourcePrincipalId ? { sourcePrincipalId } : {}),

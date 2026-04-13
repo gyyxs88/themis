@@ -309,6 +309,7 @@ export class ManagedAgentPlatformGatewayClient {
       ownerPrincipalId: this.ownerPrincipalId,
       workItem: {
         targetAgentId: input.targetAgentId,
+        ...(input.projectId ? { projectId: input.projectId } : {}),
         ...(input.sourceType ? { sourceType: input.sourceType } : {}),
         ...(input.sourceAgentId ? { sourceAgentId: input.sourceAgentId } : {}),
         ...(input.sourcePrincipalId ? { sourcePrincipalId: input.sourcePrincipalId } : {}),

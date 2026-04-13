@@ -61,6 +61,7 @@ import {
 } from "./codex-session-store.js";
 import { ContextBuilder } from "../context/context-builder.js";
 import {
+  type ManagedAgentControlPlaneStore,
   SqliteCodexSessionRegistry,
   SqliteManagedAgentControlPlaneStore,
   type StoredAuthAccountRecord,
@@ -100,6 +101,7 @@ export interface CodexTaskRuntimeOptions {
   createContextBuilder?: (workingDirectory: string) => ContextBuilder;
   createMemoryService?: (workingDirectory: string) => MemoryService;
   createSessionStore?: (options: CodexThreadSessionStoreOptions) => CodexThreadSessionStore;
+  managedAgentControlPlaneStore?: ManagedAgentControlPlaneStore;
 }
 
 interface ResolvedRuntimeTarget {
@@ -123,7 +125,7 @@ export class CodexTaskRuntime {
   private readonly identityLinkService: IdentityLinkService;
   private readonly conversationService: ConversationService;
   private readonly principalPersonaService: PrincipalPersonaService;
-  private readonly managedAgentControlPlaneStore: SqliteManagedAgentControlPlaneStore;
+  private readonly managedAgentControlPlaneStore: ManagedAgentControlPlaneStore;
   private readonly managedAgentCoordinationService: ManagedAgentCoordinationService;
   private readonly managedAgentControlPlaneFacade: ManagedAgentControlPlaneFacade;
   private readonly managedAgentNodeService: ManagedAgentNodeService;
@@ -155,7 +157,8 @@ export class CodexTaskRuntime {
     this.identityLinkService = new IdentityLinkService(this.runtimeStore);
     this.conversationService = new ConversationService(this.runtimeStore, this.identityLinkService);
     this.principalPersonaService = new PrincipalPersonaService(this.runtimeStore);
-    this.managedAgentControlPlaneStore = new SqliteManagedAgentControlPlaneStore(this.runtimeStore);
+    this.managedAgentControlPlaneStore = options.managedAgentControlPlaneStore
+      ?? new SqliteManagedAgentControlPlaneStore(this.runtimeStore);
     this.managedAgentCoordinationService = new ManagedAgentCoordinationService({
       registry: this.managedAgentControlPlaneStore.coordinationStore,
     });
@@ -701,7 +704,7 @@ export class CodexTaskRuntime {
     return this.workingDirectory;
   }
 
-  getManagedAgentControlPlaneStore(): SqliteManagedAgentControlPlaneStore {
+  getManagedAgentControlPlaneStore(): ManagedAgentControlPlaneStore {
     return this.managedAgentControlPlaneStore;
   }
 

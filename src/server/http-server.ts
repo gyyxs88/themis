@@ -115,6 +115,9 @@ import {
   handlePlatformAgentIdleApprove,
   handlePlatformAgentList,
   handlePlatformAgentPause,
+  handlePlatformProjectWorkspaceBindingDetail,
+  handlePlatformProjectWorkspaceBindingList,
+  handlePlatformProjectWorkspaceBindingUpsert,
   handlePlatformAgentResume,
   handlePlatformAgentSpawnApprove,
   handlePlatformAgentSpawnIgnore,
@@ -198,11 +201,12 @@ export interface ThemisHttpServerOptions {
 export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): Server {
   const runtime = options.runtime ?? new CodexTaskRuntime();
   const actionBridge = options.actionBridge ?? new AppServerActionBridge();
-  const defaultAppServerRuntime = new AppServerTaskRuntime({
-    workingDirectory: runtime.getWorkingDirectory(),
-    runtimeStore: runtime.getRuntimeStore(),
-    actionBridge,
-  });
+  const defaultAppServerRuntime = resolveAppServerRuntime(options.runtimeRegistry)
+    ?? new AppServerTaskRuntime({
+      workingDirectory: runtime.getWorkingDirectory(),
+      runtimeStore: runtime.getRuntimeStore(),
+      actionBridge,
+    });
   const syntheticSmokeRuntime = new SyntheticSmokeTaskRuntime({
     baseRuntime: runtime,
     actionBridge,
@@ -486,6 +490,18 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/platform/agents/execution-boundary/update") {
         return handlePlatformAgentExecutionBoundaryUpdate(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/projects/workspace-binding/list") {
+        return handlePlatformProjectWorkspaceBindingList(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/projects/workspace-binding/detail") {
+        return handlePlatformProjectWorkspaceBindingDetail(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/projects/workspace-binding/upsert") {
+        return handlePlatformProjectWorkspaceBindingUpsert(request, response, platformControlPlaneFacade);
       }
 
       if (request.method === "POST" && url.pathname === "/api/platform/agents/spawn-suggestions") {
@@ -897,6 +913,11 @@ function normalizeRuntimeRegistry(
   }
 
   return normalizedRegistry;
+}
+
+function resolveAppServerRuntime(runtimeRegistry: ThemisServerRuntimeRegistry | undefined): AppServerTaskRuntime | null {
+  const runtime = runtimeRegistry?.runtimes?.["app-server"] ?? runtimeRegistry?.defaultRuntime;
+  return runtime instanceof AppServerTaskRuntime ? runtime : null;
 }
 
 function resolveTaskTimeoutMs(): number {

@@ -392,6 +392,100 @@ test("ManagedAgentSchedulerService 会在 waiting 恢复后优先回原节点，
   }
 });
 
+test("ManagedAgentSchedulerService 会优先选择项目绑定声明的 preferred node", () => {
+  const { root, registry, managedAgentsService, coordinationService, schedulerService } = createServiceContext();
+
+  try {
+    registry.savePrincipal({
+      principalId: "principal-owner",
+      displayName: "老板",
+      createdAt: "2026-04-13T08:20:00.000Z",
+      updatedAt: "2026-04-13T08:20:00.000Z",
+    });
+
+    const frontend = managedAgentsService.createManagedAgent({
+      ownerPrincipalId: "principal-owner",
+      displayName: "前端·澄",
+      departmentRole: "前端",
+      mission: "负责官网项目调度。",
+      now: "2026-04-13T08:21:00.000Z",
+    });
+    const sharedWorkspace = join(root, "workspace/site-foo");
+    mkdirSync(sharedWorkspace, { recursive: true });
+
+    registry.saveManagedAgentNode({
+      nodeId: "node-worker-a",
+      organizationId: frontend.organization.organizationId,
+      displayName: "Worker Node A",
+      status: "online",
+      slotCapacity: 1,
+      slotAvailable: 1,
+      labels: ["linux"],
+      workspaceCapabilities: [sharedWorkspace],
+      credentialCapabilities: [],
+      providerCapabilities: [],
+      heartbeatTtlSeconds: 300,
+      lastHeartbeatAt: "2026-04-13T08:22:10.000Z",
+      createdAt: "2026-04-13T08:22:10.000Z",
+      updatedAt: "2026-04-13T08:22:10.000Z",
+    });
+    registry.saveManagedAgentNode({
+      nodeId: "node-worker-b",
+      organizationId: frontend.organization.organizationId,
+      displayName: "Worker Node B",
+      status: "online",
+      slotCapacity: 1,
+      slotAvailable: 1,
+      labels: ["linux"],
+      workspaceCapabilities: [sharedWorkspace],
+      credentialCapabilities: [],
+      providerCapabilities: [],
+      heartbeatTtlSeconds: 300,
+      lastHeartbeatAt: "2026-04-13T08:22:20.000Z",
+      createdAt: "2026-04-13T08:22:20.000Z",
+      updatedAt: "2026-04-13T08:22:20.000Z",
+    });
+
+    managedAgentsService.upsertProjectWorkspaceBinding({
+      ownerPrincipalId: "principal-owner",
+      projectId: "project-site-foo",
+      displayName: "官网 site-foo",
+      organizationId: frontend.organization.organizationId,
+      owningAgentId: frontend.agent.agentId,
+      canonicalWorkspacePath: sharedWorkspace,
+      preferredNodeId: "node-worker-b",
+      continuityMode: "sticky",
+      now: "2026-04-13T08:22:30.000Z",
+    });
+
+    coordinationService.dispatchWorkItem({
+      ownerPrincipalId: "principal-owner",
+      targetAgentId: frontend.agent.agentId,
+      projectId: "project-site-foo",
+      dispatchReason: "继续做 site-foo",
+      goal: "验证项目级 preferred node 会优先命中。",
+      now: "2026-04-13T08:23:00.000Z",
+    });
+
+    const claim = schedulerService.claimNextRunnableWorkItem({
+      schedulerId: "scheduler-project-sticky",
+      now: "2026-04-13T08:24:00.000Z",
+    });
+
+    assert.equal(claim?.node?.nodeId, "node-worker-b");
+    assert.equal(
+      registry.getProjectWorkspaceBinding("project-site-foo")?.lastActiveNodeId,
+      "node-worker-b",
+    );
+    assert.equal(
+      registry.getProjectWorkspaceBinding("project-site-foo")?.lastActiveWorkspacePath,
+      sharedWorkspace,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("ManagedAgentSchedulerService 不会选择 TTL 已过期的节点，并会把它落成 offline", () => {
   const { root, registry, managedAgentsService, coordinationService, schedulerService } = createServiceContext();
 

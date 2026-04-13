@@ -4,6 +4,8 @@ import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
+import { createManagedAgentControlPlaneStoreFromEnv, THEMIS_MANAGED_AGENT_CONTROL_PLANE_DATABASE_FILE_ENV_KEY } from "../core/managed-agent-control-plane-bootstrap.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createThemisHttpServer } from "./http-server.js";
@@ -43,6 +45,76 @@ async function withHttpServer(run: (context: TestServerContext) => Promise<void>
     rmSync(root, { recursive: true, force: true });
   }
 }
+
+test("createThemisHttpServer 会优先复用 runtimeRegistry 里的 app-server runtime 作为平台控制面", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-http-platform-runtime-registry-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: root,
+    runtimeStore,
+  });
+  const controlPlaneStore = createManagedAgentControlPlaneStoreFromEnv({
+    workingDirectory: root,
+    runtimeStore,
+    env: {
+      [THEMIS_MANAGED_AGENT_CONTROL_PLANE_DATABASE_FILE_ENV_KEY]: "infra/platform/control-plane.db",
+    },
+  });
+  const appServerRuntime = new AppServerTaskRuntime({
+    workingDirectory: root,
+    runtimeStore,
+    managedAgentControlPlaneStore: controlPlaneStore,
+  });
+  const server = createThemisHttpServer({
+    runtime,
+    runtimeRegistry: {
+      defaultRuntime: appServerRuntime,
+      runtimes: {
+        sdk: runtime,
+        "app-server": appServerRuntime,
+      },
+    },
+  });
+  const listeningServer = await listenServer(server);
+  const address = listeningServer.address();
+
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to resolve server address.");
+  }
+
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+  const ownerPrincipalId = "principal-platform-owner";
+  const now = new Date().toISOString();
+
+  try {
+    controlPlaneStore.managedAgentsStore.savePrincipal({
+      principalId: ownerPrincipalId,
+      displayName: "Platform Owner",
+      kind: "human_user",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const response = await postJson(baseUrl, "/api/platform/agents/create", {
+      ownerPrincipalId,
+      agent: {
+        departmentRole: "平台工程",
+        displayName: "平台运行时",
+        mission: "验证 server 会复用外部 app-server runtime。",
+      },
+    }, authHeaders);
+
+    assert.equal(response.status, 200);
+    assert.equal(runtimeStore.listManagedAgentsByOwnerPrincipal(ownerPrincipalId).length, 0);
+    assert.equal(controlPlaneStore.managedAgentsStore.listManagedAgentsByOwnerPrincipal(ownerPrincipalId).length, 1);
+  } finally {
+    await closeServer(listeningServer);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 async function postJson(
   baseUrl: string,
@@ -277,6 +349,111 @@ test("POST /api/platform/* 会暴露控制面最小主链", async () => {
     assert.equal(runDetailPayload.executionLease?.status, "active");
     assert.equal(runDetailPayload.node?.nodeId, nodeRegisterPayload.node?.nodeId);
     assert.equal(runDetailPayload.node?.displayName, "Platform Node A");
+  });
+});
+
+test("POST /api/platform/projects/workspace-binding/* 会持久化项目连续性，并让 dispatch 命中 projectId", async () => {
+  await withHttpServer(async ({ baseUrl, runtime, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+    const ownerPrincipalId = "principal-platform-project-owner";
+    const now = new Date().toISOString();
+
+    runtimeStore.savePrincipal({
+      principalId: ownerPrincipalId,
+      displayName: "Project Owner",
+      kind: "human_user",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const created = await createPlatformManagedAgent(baseUrl, authHeaders, ownerPrincipalId, {
+      departmentRole: "前端",
+      displayName: "前端·澄",
+      mission: "负责官网 site-foo。",
+    });
+    const boundary = runtime.getManagedAgentsService().getManagedAgentExecutionBoundary(
+      ownerPrincipalId,
+      created.agentId,
+    );
+    const nodeRegisterResponse = await postJson(baseUrl, "/api/platform/nodes/register", {
+      ownerPrincipalId,
+      node: {
+        organizationId: created.organizationId,
+        displayName: "Site Node A",
+        slotCapacity: 1,
+        workspaceCapabilities: [boundary?.workspacePolicy.workspacePath ?? runtime.getWorkingDirectory()],
+      },
+    }, authHeaders);
+    assert.equal(nodeRegisterResponse.status, 200);
+    const nodeRegisterPayload = await nodeRegisterResponse.json() as {
+      node?: { nodeId?: string };
+    };
+    assert.ok(nodeRegisterPayload.node?.nodeId);
+
+    const upsertResponse = await postJson(baseUrl, "/api/platform/projects/workspace-binding/upsert", {
+      ownerPrincipalId,
+      binding: {
+        projectId: "project-site-foo",
+        displayName: "官网 site-foo",
+        organizationId: created.organizationId,
+        owningAgentId: created.agentId,
+        workspacePolicyId: boundary?.workspacePolicy.policyId,
+        preferredNodeId: nodeRegisterPayload.node?.nodeId,
+        continuityMode: "sticky",
+      },
+    }, authHeaders);
+
+    assert.equal(upsertResponse.status, 200);
+    const upsertPayload = await upsertResponse.json() as {
+      binding?: {
+        projectId?: string;
+        workspacePolicyId?: string;
+        canonicalWorkspacePath?: string;
+        preferredNodeId?: string;
+      };
+    };
+    assert.equal(upsertPayload.binding?.projectId, "project-site-foo");
+    assert.equal(upsertPayload.binding?.workspacePolicyId, boundary?.workspacePolicy.policyId);
+    assert.equal(upsertPayload.binding?.canonicalWorkspacePath, boundary?.workspacePolicy.workspacePath);
+    assert.equal(upsertPayload.binding?.preferredNodeId, nodeRegisterPayload.node?.nodeId);
+
+    const listResponse = await postJson(baseUrl, "/api/platform/projects/workspace-binding/list", {
+      ownerPrincipalId,
+    }, authHeaders);
+    assert.equal(listResponse.status, 200);
+    const listPayload = await listResponse.json() as {
+      bindings?: Array<{ projectId?: string }>;
+    };
+    assert.equal(listPayload.bindings?.[0]?.projectId, "project-site-foo");
+
+    const detailResponse = await postJson(baseUrl, "/api/platform/projects/workspace-binding/detail", {
+      ownerPrincipalId,
+      projectId: "project-site-foo",
+    }, authHeaders);
+    assert.equal(detailResponse.status, 200);
+    const detailPayload = await detailResponse.json() as {
+      binding?: { displayName?: string };
+    };
+    assert.equal(detailPayload.binding?.displayName, "官网 site-foo");
+
+    const dispatchResponse = await postJson(baseUrl, "/api/platform/work-items/dispatch", {
+      ownerPrincipalId,
+      workItem: {
+        targetAgentId: created.agentId,
+        projectId: "project-site-foo",
+        dispatchReason: "continue-site-foo",
+        goal: "继续在原项目工作区推进开发。",
+      },
+    }, authHeaders);
+    assert.equal(dispatchResponse.status, 200);
+    const dispatchPayload = await dispatchResponse.json() as {
+      workItem?: {
+        projectId?: string;
+        workspacePolicySnapshot?: { workspacePath?: string };
+      };
+    };
+    assert.equal(dispatchPayload.workItem?.projectId, "project-site-foo");
+    assert.equal(dispatchPayload.workItem?.workspacePolicySnapshot?.workspacePath, boundary?.workspacePolicy.workspacePath);
   });
 });
 

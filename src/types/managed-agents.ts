@@ -216,6 +216,10 @@ export interface ManagedAgentRuntimeProfileSnapshot {
   thirdPartyProviderId?: string;
 }
 
+export const PROJECT_WORKSPACE_CONTINUITY_MODES = ["sticky", "replicated", "portable"] as const;
+
+export type ProjectWorkspaceContinuityMode = (typeof PROJECT_WORKSPACE_CONTINUITY_MODES)[number];
+
 export interface StoredAgentWorkspacePolicyRecord extends ManagedAgentWorkspacePolicySnapshot {
   policyId: string;
   organizationId: string;
@@ -263,6 +267,7 @@ export interface StoredAgentWorkItemRecord {
   workItemId: string;
   organizationId: string;
   targetAgentId: string;
+  projectId?: string;
   sourceType: ManagedAgentWorkItemSourceType;
   sourcePrincipalId: string;
   sourceAgentId?: string;
@@ -280,6 +285,23 @@ export interface StoredAgentWorkItemRecord {
   scheduledAt?: string;
   startedAt?: string;
   completedAt?: string;
+  updatedAt: string;
+}
+
+export interface StoredProjectWorkspaceBindingRecord {
+  projectId: string;
+  organizationId: string;
+  displayName: string;
+  owningAgentId?: string;
+  workspaceRootId?: string;
+  workspacePolicyId?: string;
+  canonicalWorkspacePath?: string;
+  preferredNodeId?: string;
+  preferredNodePool?: string;
+  lastActiveNodeId?: string;
+  lastActiveWorkspacePath?: string;
+  continuityMode: ProjectWorkspaceContinuityMode;
+  createdAt: string;
   updatedAt: string;
 }
 

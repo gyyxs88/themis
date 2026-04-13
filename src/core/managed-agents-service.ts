@@ -8,6 +8,7 @@ import type {
   ManagedAgentAutonomyLevel,
   ManagedAgentCreationMode,
   ManagedAgentExposurePolicy,
+  ProjectWorkspaceContinuityMode,
   ManagedAgentStatus,
   AgentSpawnSuggestionState,
   MemoryMode,
@@ -23,6 +24,7 @@ import type {
   StoredAgentSpawnPolicyRecord,
   StoredAgentWorkspacePolicyRecord,
   StoredManagedAgentRecord,
+  StoredProjectWorkspaceBindingRecord,
   StoredOrganizationRecord,
   TaskAccessMode,
   WebSearchMode,
@@ -90,6 +92,23 @@ export interface ManagedAgentDetailView extends ManagedAgentOwnerView {
   runtimeProfile: StoredAgentRuntimeProfileRecord | null;
   authAccounts: StoredAuthAccountRecord[];
   thirdPartyProviders: OpenAICompatibleProviderSummary[];
+}
+
+export interface UpsertProjectWorkspaceBindingInput {
+  ownerPrincipalId: string;
+  projectId: string;
+  displayName: string;
+  organizationId?: string;
+  owningAgentId?: string;
+  workspaceRootId?: string;
+  workspacePolicyId?: string;
+  canonicalWorkspacePath?: string;
+  preferredNodeId?: string;
+  preferredNodePool?: string;
+  lastActiveNodeId?: string;
+  lastActiveWorkspacePath?: string;
+  continuityMode?: ProjectWorkspaceContinuityMode;
+  now?: string;
 }
 
 export interface ManagedAgentExecutionBoundaryWorkspacePolicyInput {
@@ -1004,6 +1023,97 @@ export class ManagedAgentsService {
       workspacePolicy,
       runtimeProfile,
     };
+  }
+
+  listProjectWorkspaceBindings(
+    ownerPrincipalId: string,
+    organizationId?: string,
+  ): StoredProjectWorkspaceBindingRecord[] {
+    const owner = this.requirePrincipal(ownerPrincipalId);
+
+    if (normalizeOptionalText(organizationId)) {
+      const organization = this.requireOwnedOrganization(owner.principalId, organizationId as string);
+      return this.registry.listProjectWorkspaceBindingsByOrganization(organization.organizationId);
+    }
+
+    return this.registry.listOrganizationsByOwnerPrincipal(owner.principalId)
+      .flatMap((organization) => this.registry.listProjectWorkspaceBindingsByOrganization(organization.organizationId))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.projectId.localeCompare(right.projectId));
+  }
+
+  getProjectWorkspaceBinding(
+    ownerPrincipalId: string,
+    projectId: string,
+  ): StoredProjectWorkspaceBindingRecord | null {
+    const owner = this.requirePrincipal(ownerPrincipalId);
+    const binding = this.registry.getProjectWorkspaceBinding(normalizeRequiredText(projectId, "Project id is required."));
+
+    if (!binding || !this.isOrganizationOwnedBy(binding.organizationId, owner.principalId)) {
+      return null;
+    }
+
+    return binding;
+  }
+
+  upsertProjectWorkspaceBinding(input: UpsertProjectWorkspaceBindingInput): StoredProjectWorkspaceBindingRecord {
+    const owner = this.requirePrincipal(input.ownerPrincipalId);
+    const now = normalizeNow(input.now);
+    const projectId = normalizeRequiredText(input.projectId, "Project id is required.");
+    const displayName = normalizeRequiredText(input.displayName, "Display name is required.");
+    const continuityMode = input.continuityMode ?? "sticky";
+    const owningAgent = normalizeOptionalText(input.owningAgentId)
+      ? this.requireOwnedAgent(owner.principalId, input.owningAgentId as string)
+      : null;
+    const organization = input.organizationId
+      ? this.requireOwnedOrganization(owner.principalId, input.organizationId)
+      : owningAgent
+        ? this.requireOwnedOrganization(owner.principalId, owningAgent.organizationId)
+        : this.ensureDefaultOrganization(owner.principalId, now);
+    const workspacePolicy = normalizeOptionalText(input.workspacePolicyId)
+      ? this.registry.getAgentWorkspacePolicy(input.workspacePolicyId as string)
+      : null;
+
+    if (workspacePolicy && workspacePolicy.organizationId !== organization.organizationId) {
+      throw new Error("Workspace policy does not belong to the target organization.");
+    }
+
+    if (owningAgent && owningAgent.organizationId !== organization.organizationId) {
+      throw new Error("Owning agent does not belong to the target organization.");
+    }
+
+    const canonicalWorkspacePath = normalizeOptionalText(input.canonicalWorkspacePath)
+      ?? workspacePolicy?.workspacePath;
+
+    if (!workspacePolicy && !canonicalWorkspacePath) {
+      throw new Error("Workspace policy id or canonical workspace path is required.");
+    }
+
+    const existing = this.registry.getProjectWorkspaceBinding(projectId);
+    if (existing && existing.organizationId !== organization.organizationId) {
+      throw new Error("Project workspace binding belongs to another organization.");
+    }
+
+    const record: StoredProjectWorkspaceBindingRecord = {
+      projectId,
+      organizationId: organization.organizationId,
+      displayName,
+      ...(owningAgent ? { owningAgentId: owningAgent.agentId } : {}),
+      ...(normalizeOptionalText(input.workspaceRootId) ? { workspaceRootId: input.workspaceRootId } : {}),
+      ...(workspacePolicy ? { workspacePolicyId: workspacePolicy.policyId } : {}),
+      ...(canonicalWorkspacePath ? { canonicalWorkspacePath } : {}),
+      ...(normalizeOptionalText(input.preferredNodeId) ? { preferredNodeId: input.preferredNodeId } : {}),
+      ...(normalizeOptionalText(input.preferredNodePool) ? { preferredNodePool: input.preferredNodePool } : {}),
+      ...(normalizeOptionalText(input.lastActiveNodeId) ? { lastActiveNodeId: input.lastActiveNodeId } : {}),
+      ...(normalizeOptionalText(input.lastActiveWorkspacePath)
+        ? { lastActiveWorkspacePath: input.lastActiveWorkspacePath }
+        : {}),
+      continuityMode,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+
+    this.registry.saveProjectWorkspaceBinding(record);
+    return this.registry.getProjectWorkspaceBinding(projectId) ?? record;
   }
 
   pauseManagedAgent(ownerPrincipalId: string, agentId: string, now?: string): StoredManagedAgentRecord {

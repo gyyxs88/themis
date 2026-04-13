@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { TaskEvent } from "../types/index.js";
-import { SqliteCodexSessionRegistry } from "../storage/index.js";
+import { CompositeManagedAgentControlPlaneStore, SqliteCodexSessionRegistry } from "../storage/index.js";
 import { AppServerActionBridge } from "./app-server-action-bridge.js";
 import type {
   AppServerThreadStartParams,
@@ -83,6 +83,7 @@ function createRuntimeFixture(overrides: {
   runtimeCatalogReader?: AppServerTaskRuntimeOptions["runtimeCatalogReader"];
   createContextBuilder?: AppServerTaskRuntimeOptions["createContextBuilder"];
   createMemoryService?: AppServerTaskRuntimeOptions["createMemoryService"];
+  managedAgentControlPlaneStore?: AppServerTaskRuntimeOptions["managedAgentControlPlaneStore"];
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "themis-app-server-runtime-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
@@ -95,6 +96,9 @@ function createRuntimeFixture(overrides: {
     ...(overrides.runtimeCatalogReader ? { runtimeCatalogReader: overrides.runtimeCatalogReader } : {}),
     ...(overrides.createContextBuilder ? { createContextBuilder: overrides.createContextBuilder } : {}),
     ...(overrides.createMemoryService ? { createMemoryService: overrides.createMemoryService } : {}),
+    ...(overrides.managedAgentControlPlaneStore
+      ? { managedAgentControlPlaneStore: overrides.managedAgentControlPlaneStore }
+      : {}),
   });
 
   return {
@@ -106,6 +110,33 @@ function createRuntimeFixture(overrides: {
     },
   };
 }
+
+test("允许 app-server runtime 注入独立的 managed agent 控制面 store", () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-app-server-control-plane-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/runtime.db"),
+  });
+  const controlPlaneRegistry = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/control-plane.db"),
+  });
+  const controlPlaneStore = new CompositeManagedAgentControlPlaneStore({
+    sharedStore: controlPlaneRegistry,
+    executionStateStore: runtimeStore,
+  });
+  const runtime = new AppServerTaskRuntime({
+    workingDirectory: root,
+    runtimeStore,
+    managedAgentControlPlaneStore: controlPlaneStore,
+  });
+
+  try {
+    assert.equal(runtime.getManagedAgentControlPlaneStore(), controlPlaneStore);
+    assert.equal(runtime.getManagedAgentControlPlaneStore().managedAgentsStore, controlPlaneRegistry);
+    assert.equal(runtime.getManagedAgentControlPlaneStore().executionStateStore, runtimeStore);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function seedCompletedPrincipalPersona(
   runtime: AppServerTaskRuntime,

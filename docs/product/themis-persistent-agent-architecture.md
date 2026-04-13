@@ -741,9 +741,17 @@ agent 间通信不走自由文本聊天模型，而走结构化消息信封。
 
 当前实现里，`workspacePath` 是会话级字段，且执行后冻结。这个规则对单人聊天没问题，但对长期 agent 不够。
 
-新架构建议拆成三层：
+而且在多节点场景里，只靠“当前对话里提过哪个路径”也不够，因为主 Themis 后续再次安排同一个项目时，需要知道：
+
+- 这是不是同一个长期项目
+- 这个项目当前应该落在哪个工作区
+- 这个工作区通常由哪类节点承接
+- 后续是必须优先回原节点，还是允许在副本节点间切换
+
+新架构建议拆成四层：
 
 - `WorkspaceRootPolicy`
+- `ProjectWorkspaceBinding`
 - `AgentWorkspacePolicy`
 - `SessionWorkspaceBinding`
 
@@ -755,7 +763,66 @@ agent 间通信不走自由文本聊天模型，而走结构化消息信封。
 - `/srv/marketing-assets`
 - `/srv/ops-playbooks`
 
-### 11.3 AgentWorkspacePolicy
+### 11.3 ProjectWorkspaceBinding
+
+这是多节点长期连续性的关键层。
+
+它表达的不是“某个 agent 默认能访问哪些目录”，而是：
+
+- 某个长期项目当前归属哪套工作区事实
+- 后续新任务为什么应该继续回到同一工作区
+- 这个项目对节点连续性的要求是什么
+
+典型例子：
+
+- 某个网站一直在 `A` 服务器的 `/srv/site-foo` 目录开发
+- 主 Themis 后续再次安排“继续开发这个网站”
+- 不应该靠聊天历史猜“上次可能是在 A 上做的”
+- 而应该先命中这个网站对应的 `ProjectWorkspaceBinding`
+
+建议至少记录：
+
+- `projectId`
+- `organizationId`
+- `displayName`
+- `owningAgentId`
+- `workspaceRootId`
+- `workspacePolicyId` 或 `canonicalWorkspacePath`
+- `preferredNodeId` 或 `preferredNodePool`
+- `lastActiveNodeId`
+- `lastActiveWorkspacePath`
+- `continuityMode`
+
+`continuityMode` 建议至少支持：
+
+- `sticky`
+  默认优先同一节点同一路径，原节点不可用时先显式治理，不自动漂移
+- `replicated`
+  允许在多个已知副本节点间切换，但仍要求命中同一项目绑定
+- `portable`
+  工作区本身可迁移，节点约束最弱
+
+这层对象要解决的核心问题是：
+
+- “继续做那个网站”的后续任务，不能只靠 agent 默认工作区
+- 同一个 agent 可能同时负责多个项目，默认工作区不足以表达项目级连续性
+- 项目连续性应该成为平台控制面的结构化事实，而不是对话里的隐式记忆
+
+当前代码里，已经有两块可以直接沿用的地基：
+
+- 新 `work item` 会持久化 `workspacePolicySnapshot / runtimeProfileSnapshot`
+- `waiting / resume` 已经会优先回原节点
+
+但这两块仍然不等于“项目级工作区绑定”，因为它们主要解决：
+
+- 当前这条 `work item` 在哪执行
+- 这名 agent 默认倾向在哪执行
+
+而不是解决：
+
+- 下周新开一条“继续做这个网站”的任务时，为什么还能稳定回到同一项目工作区
+
+### 11.4 AgentWorkspacePolicy
 
 每个 agent 拥有自己的允许范围：
 
@@ -771,14 +838,21 @@ agent 间通信不走自由文本聊天模型，而走结构化消息信封。
 - 只读/可写
 - 是否允许网络
 
-### 11.4 SessionWorkspaceBinding
+### 11.5 SessionWorkspaceBinding
 
 真正执行时仍然落在具体会话：
 
 - 这样可以复用现有 session / thread / history 机制
 - 也方便 agent 长期维护多条任务线
 
-### 11.5 审批策略
+运行时建议按下面顺序解析：
+
+1. 主 Themis 或上级 agent 先判断这是不是已有长期项目
+2. 如果命中 `ProjectWorkspaceBinding`，优先取项目绑定的工作区与节点连续性策略
+3. 再校验目标 agent 的 `AgentWorkspacePolicy` 是否允许
+4. 最后才落到具体 `SessionWorkspaceBinding`
+
+### 11.6 审批策略
 
 审批需要从“只有人类审批”升级成三级：
 

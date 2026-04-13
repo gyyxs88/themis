@@ -390,6 +390,25 @@ export class ManagedAgentSchedulerService {
       }
     }
 
+    const projectBinding = resolveProjectWorkspaceBinding(this.registry, workItem);
+    const stickyProjectNodeIds = projectBinding
+      ? resolveProjectBindingStickyNodeIds(projectBinding)
+      : [];
+
+    if (stickyProjectNodeIds.length > 0) {
+      for (const nodeId of stickyProjectNodeIds) {
+        const preferredNode = matched.find((node) => node.nodeId === nodeId);
+
+        if (preferredNode) {
+          return preferredNode;
+        }
+      }
+
+      if (projectBinding?.continuityMode === "sticky") {
+        return null;
+      }
+    }
+
     return matched[0] ?? null;
   }
 
@@ -436,7 +455,29 @@ export class ManagedAgentSchedulerService {
 
     this.registry.saveAgentExecutionLease(executionLease);
     this.saveNodeSlotAvailability(input.node, input.node.slotAvailable - 1, input.now);
+    this.updateProjectWorkspaceBindingLastActiveNode(input.workItem, input.node.nodeId, input.now);
     return this.registry.getActiveAgentExecutionLeaseByRun(input.run.runId) ?? executionLease;
+  }
+
+  private updateProjectWorkspaceBindingLastActiveNode(
+    workItem: StoredAgentWorkItemRecord,
+    nodeId: string,
+    now: string,
+  ): void {
+    const binding = resolveProjectWorkspaceBinding(this.registry, workItem);
+
+    if (!binding) {
+      return;
+    }
+
+    this.registry.saveProjectWorkspaceBinding({
+      ...binding,
+      lastActiveNodeId: nodeId,
+      ...(workItem.workspacePolicySnapshot?.workspacePath
+        ? { lastActiveWorkspacePath: workItem.workspacePolicySnapshot.workspacePath }
+        : {}),
+      updatedAt: now,
+    });
   }
 
   private touchExecutionLease(run: StoredAgentRunRecord, now: string): void {
@@ -657,6 +698,35 @@ function resolveWaitingResumePreferredNodeId(
     .sort(compareLeasesByUpdatedAtDesc)[0];
 
   return executionLease?.nodeId ?? null;
+}
+
+function resolveProjectWorkspaceBinding(
+  registry: ManagedAgentSchedulerStore,
+  workItem: StoredAgentWorkItemRecord,
+) {
+  const projectId = normalizeOptionalText(workItem.projectId);
+
+  if (!projectId) {
+    return null;
+  }
+
+  const binding = registry.getProjectWorkspaceBinding(projectId);
+  return binding?.organizationId === workItem.organizationId ? binding : null;
+}
+
+function resolveProjectBindingStickyNodeIds(binding: {
+  continuityMode: string;
+  preferredNodeId?: string;
+  lastActiveNodeId?: string;
+}): string[] {
+  if (binding.continuityMode !== "sticky" && binding.continuityMode !== "replicated") {
+    return [];
+  }
+
+  return dedupeStrings([
+    binding.lastActiveNodeId,
+    binding.preferredNodeId,
+  ]);
 }
 
 function canNodeRunWorkItem(

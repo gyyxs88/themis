@@ -168,6 +168,7 @@ npm run themis -- config set FEISHU_APP_SECRET xxx
 - `THEMIS_PLATFORM_BASE_URL`
 - `THEMIS_PLATFORM_OWNER_PRINCIPAL_ID`
 - `THEMIS_PLATFORM_WEB_ACCESS_TOKEN`
+- `THEMIS_MANAGED_AGENT_CONTROL_PLANE_DATABASE_FILE`
 - `CODEX_HOME`
 - `CODEX_API_KEY`
 - `FEISHU_APP_ID`
@@ -183,6 +184,14 @@ npm run themis -- config set FEISHU_APP_SECRET xxx
 - `THEMIS_UPDATE_DEFAULT_BRANCH`
 - `THEMIS_UPDATE_SYSTEMD_SERVICE`
 - `THEMIS_GITHUB_TOKEN`
+
+如果要先把平台层独立成单独进程，但暂时还没把 shared control plane 切到 MySQL，可以额外配置：
+
+```bash
+THEMIS_MANAGED_AGENT_CONTROL_PLANE_DATABASE_FILE=infra/platform/control-plane.db
+```
+
+这会把 `managed_agent / work_item / run / node / execution_lease` 这类共享控制面事实切到独立 SQLite 文件；本地 `session task settings` 等执行态仍留在当前 runtime store，不会跟平台真相源混在一起。
 
 ## 公开文档
 

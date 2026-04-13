@@ -133,6 +133,7 @@ interface AgentLifecyclePayload extends IdentityPayload {
 interface AgentDispatchPayload extends IdentityPayload {
   workItem: {
     targetAgentId: string;
+    projectId?: string;
     sourceType?: ManagedAgentWorkItemSourceType;
     sourceAgentId?: string;
     sourcePrincipalId?: string;
@@ -836,6 +837,7 @@ export async function handleAgentDispatch(
     const result = gatewayClient
       ? await gatewayClient.dispatchWorkItem({
         targetAgentId: payload.workItem.targetAgentId,
+        ...(payload.workItem.projectId ? { projectId: payload.workItem.projectId } : {}),
         ...(payload.workItem.sourceType ? { sourceType: payload.workItem.sourceType } : {}),
         ...(payload.workItem.sourceAgentId ? { sourceAgentId: payload.workItem.sourceAgentId } : {}),
         ...(payload.workItem.sourcePrincipalId ? { sourcePrincipalId: payload.workItem.sourcePrincipalId } : {}),
@@ -855,6 +857,7 @@ export async function handleAgentDispatch(
       : runtime.getManagedAgentControlPlaneFacade().dispatchWorkItem({
         ownerPrincipalId: identity.principalId,
         targetAgentId: payload.workItem.targetAgentId,
+        ...(payload.workItem.projectId ? { projectId: payload.workItem.projectId } : {}),
         ...(payload.workItem.sourceType ? { sourceType: payload.workItem.sourceType } : {}),
         ...(payload.workItem.sourceAgentId ? { sourceAgentId: payload.workItem.sourceAgentId } : {}),
         ...(payload.workItem.sourcePrincipalId ? { sourcePrincipalId: payload.workItem.sourcePrincipalId } : {}),
@@ -1738,6 +1741,7 @@ function normalizeAgentDispatchPayload(value: unknown): AgentDispatchPayload {
   const sourceAgentId = readOptionalString(value.workItem.sourceAgentId);
   const sourcePrincipalId = readOptionalString(value.workItem.sourcePrincipalId);
   const parentWorkItemId = readOptionalString(value.workItem.parentWorkItemId);
+  const projectId = readOptionalString(value.workItem.projectId);
   const scheduledAt = readOptionalString(value.workItem.scheduledAt);
   const sourceType = readOptionalEnum(
     value.workItem.sourceType,
@@ -1754,6 +1758,7 @@ function normalizeAgentDispatchPayload(value: unknown): AgentDispatchPayload {
     ...normalizeIdentityPayload(value),
     workItem: {
       targetAgentId: readRequiredString(value.workItem.targetAgentId, "workItem.targetAgentId"),
+      ...(projectId ? { projectId } : {}),
       ...(sourceType ? { sourceType } : {}),
       ...(sourceAgentId ? { sourceAgentId } : {}),
       ...(sourcePrincipalId ? { sourcePrincipalId } : {}),
