@@ -11,6 +11,11 @@
   - `CodexTaskRuntime` / `AppServerTaskRuntime` 都已暴露 `getManagedAgentControlPlaneFacadeAsync()`
   - `createThemisHttpServer(...)` 与 `/api/platform/*` 已切到 awaitable facade
 - 这一刀的意义不是“现有 service 已全部 async 化”，而是先把平台路径和未来 MySQL shared store 之间的调用模型缝开出来，后续可以在不重写整套业务服务的前提下继续推进。
+- `2026-04-13` 同日已完成 `Step B / MySQL 控制面对象覆盖面补齐` 的主链收口：
+  - `MySqlManagedAgentControlPlaneStore` 已补齐 `spawn policy / spawn suggestion state / project workspace binding / message / mailbox / handoff / audit log`
+  - `work_item` 已补 `project_id` 持久化，MySQL 侧也已补 `listManagedAgentsByOwnerPrincipal`、`get*ByOwnerAgent`、`listAgentWorkItemsByOwnerPrincipal|Target|Parent`、`listAgentRunsByOwnerPrincipal|WorkItem`、`listStaleActiveAgentRuns`、`listActiveAgentExecutionLeases`
+  - `claimNextAgentMailboxEntry(...)` 与 `claimNextRunnableAgentWorkItem(...)` 也已在 MySQL 事务里落地
+  - 已新增 Docker + `mysql:8.4` 真库集成测试 `src/storage/mysql-managed-agent-control-plane-store.test.ts`
 
 ## 1. 这份计划解决什么问题
 
