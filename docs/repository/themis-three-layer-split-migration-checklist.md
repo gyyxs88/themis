@@ -235,6 +235,7 @@
 - `2026-04-13` 同日已进入真实迁仓第一阶段：当前 sibling repo `../themis-contracts` 已不再只是骨架，现已落入 standalone 首包，包含 `managed-agent-platform-worker / projects / work-items / collaboration / agents / access` 六组模块、包根 `exports`、声明文件输出、最小测试与 CI；并已真实通过 `npm run test`、`npm run typecheck`、`npm run build`。这说明拆仓当前已经不止“准备好新目录”，而是已经开始把跨层显式契约真正移出主仓。
 - `2026-04-13` 同日已继续推进真实迁仓第二阶段：当前 sibling repo `../themis-platform` 已开始直接通过 `file:../themis-contracts` 消费共享 `managed-agent-platform-access` 契约，落入独立 `src/server/platform-app.ts` 最小 server，并用共享 `PLATFORM_ROUTE_NOT_FOUND` 错误响应锁住非平台 API；这说明平台仓已经不再只是目录骨架，而是开始验证“平台 surface 直接依赖显式契约”的最小运行形态。
 - `2026-04-13` 同日已继续推进真实迁仓第三阶段：当前 sibling repo `../themis-main` 已开始直接通过 `file:../themis-contracts` 消费共享治理与访问契约，落入 `src/platform/platform-gateway.ts` 的 waiting queue gateway 请求装配；sibling repo `../themis-worker-node` 也已开始通过同一依赖消费共享节点协议契约，落入 `src/platform/platform-worker-access.ts` 的 `nodes/register|heartbeat` 请求装配。三仓当前均已真实通过各自的 `npm run test`、`npm run typecheck`、`npm run build`，说明主 Themis / Worker 对独立契约仓的最小消费链路已经成立。
+- `2026-04-13` 同日已确认远端仓映射：现有 `gyyxs88/themis` 直接作为 `themis-main` 正式仓继续收敛，不再额外新建一个同义的 `themis-main` GitHub 仓；本机 `../themis-main` 仅作为迁移演练 sibling repo 保留。与此同时，`../themis-platform` 与 `../themis-worker-node` 已分别接到 `gyyxs88/themis-platform` 与 `gyyxs88/themis-worker-node` 远端，并已把首个根提交推送到远端 `main`。
 
 说明：
 
