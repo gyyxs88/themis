@@ -14,6 +14,7 @@ import type {
   ManagedAgentPlatformWorkerRunMutationResult,
   ManagedAgentPlatformWorkerRunStatusInput,
 } from "../contracts/managed-agent-platform-worker.js";
+import { buildPlatformServiceAuthorizationHeader } from "../contracts/managed-agent-platform-access.js";
 
 export type {
   ManagedAgentPlatformWorkerAssignedRunResult,
@@ -189,7 +190,7 @@ export class ManagedAgentPlatformWorkerClient {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${this.webAccessToken}`,
+        Authorization: buildPlatformServiceAuthorizationHeader(this.webAccessToken),
       },
       body: JSON.stringify(payload),
     });

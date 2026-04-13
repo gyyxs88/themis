@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { buildPlatformServiceOwnerMismatchErrorResponse } from "../contracts/managed-agent-platform-access.js";
 import type { ManagedAgentControlPlaneFacadeLike } from "../core/managed-agent-control-plane-facade.js";
 import type { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
 import type {
@@ -85,12 +86,7 @@ async function readAndNormalizePayload<T extends ManagedAgentPlatformOwnerPayloa
     const authContext = getPlatformServiceAuthContext(request);
 
     if (authContext && payload.ownerPrincipalId !== authContext.ownerPrincipalId) {
-      writeJson(response, 403, {
-        error: {
-          code: "PLATFORM_SERVICE_OWNER_MISMATCH",
-          message: "平台服务令牌与 ownerPrincipalId 不匹配。",
-        },
-      });
+      writeJson(response, 403, buildPlatformServiceOwnerMismatchErrorResponse());
       return null;
     }
 

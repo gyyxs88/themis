@@ -87,6 +87,7 @@ import type {
   ManagedAgentPlatformWorkItemRespondInput,
   ManagedAgentPlatformWorkItemRespondResult,
 } from "../contracts/managed-agent-platform-work-items.js";
+import { buildPlatformServiceAuthorizationHeader } from "../contracts/managed-agent-platform-access.js";
 import type {
   StoredAgentSpawnPolicyRecord,
   StoredAgentWorkItemRecord,
@@ -765,7 +766,7 @@ export class ManagedAgentPlatformGatewayClient {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${this.webAccessToken}`,
+        Authorization: buildPlatformServiceAuthorizationHeader(this.webAccessToken),
       },
       body: JSON.stringify(payload),
     });

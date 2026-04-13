@@ -1,5 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  buildPlatformServiceAuthDeniedErrorResponse,
+  buildPlatformServiceForbiddenErrorResponse,
+  readPlatformServiceAuthorizationHeader,
+} from "../contracts/managed-agent-platform-access.js";
+import {
   WebAccessService,
   type PlatformServiceRole,
   type PlatformServiceTokenSummary,
@@ -239,7 +244,7 @@ function authenticatePlatformServiceRequest(
     };
   }
 
-  const secret = readBearerToken(request.headers.authorization);
+  const secret = readPlatformServiceAuthorizationHeader(request.headers.authorization);
 
   if (!secret) {
     return {
@@ -257,17 +262,19 @@ function authenticatePlatformServiceRequest(
   });
 
   if (!auth.ok) {
+    const deniedError = buildPlatformServiceAuthDeniedErrorResponse().error;
     return {
       status: "denied",
       httpStatus: 401,
-      code: "PLATFORM_SERVICE_AUTH_DENIED",
-      message: "平台服务令牌无效。",
+      code: deniedError.code,
+      message: deniedError.message,
     };
   }
 
   if (!isPlatformPathAllowedForRole(pathname, auth.token.serviceRole)) {
+    const forbiddenError = buildPlatformServiceForbiddenErrorResponse().error;
     service.recordDeniedAccess({
-      reason: "PLATFORM_SERVICE_FORBIDDEN",
+      reason: forbiddenError.code,
       tokenId: auth.token.tokenId,
       tokenLabel: auth.token.label,
       ...(remoteIp ? { remoteIp } : {}),
@@ -280,8 +287,8 @@ function authenticatePlatformServiceRequest(
     return {
       status: "denied",
       httpStatus: 403,
-      code: "PLATFORM_SERVICE_FORBIDDEN",
-      message: "当前平台服务令牌无权访问该接口。",
+      code: forbiddenError.code,
+      message: forbiddenError.message,
     };
   }
 
@@ -312,15 +319,6 @@ function isPublicWebAccessRoute(method: string, pathname: string): boolean {
   }
 
   return false;
-}
-
-function readBearerToken(authorizationHeader: string | undefined): string | null {
-  if (typeof authorizationHeader !== "string") {
-    return null;
-  }
-
-  const match = authorizationHeader.match(/^Bearer\s+(.+)$/i);
-  return match?.[1]?.trim() || null;
 }
 
 function isPlatformPathAllowedForRole(pathname: string, role: PlatformServiceRole): boolean {

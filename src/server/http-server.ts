@@ -159,6 +159,7 @@ import {
   handleScheduledTaskCreate,
   handleScheduledTaskList,
 } from "./http-scheduled-tasks.js";
+import { buildPlatformRouteNotFoundErrorResponse } from "../contracts/managed-agent-platform-access.js";
 import { writeJson } from "./http-responses.js";
 import { maybeHandleWebAccessRoute, requireWebAccess } from "./http-web-access.js";
 import {
@@ -280,12 +281,7 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
       }
 
       if (isBlockedPlatformSurfaceApiPath(surface, url.pathname)) {
-        return writeJson(response, 404, {
-          error: {
-            code: "PLATFORM_ROUTE_NOT_FOUND",
-            message: `Platform surface does not expose ${url.pathname}.`,
-          },
-        }, isHeadRequest);
+        return writeJson(response, 404, buildPlatformRouteNotFoundErrorResponse(url.pathname), isHeadRequest);
       }
 
       if ((request.method === "GET" || isHeadRequest) && url.pathname === "/api/runtime/config") {
