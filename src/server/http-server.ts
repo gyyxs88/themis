@@ -159,7 +159,7 @@ import {
   handleScheduledTaskCreate,
   handleScheduledTaskList,
 } from "./http-scheduled-tasks.js";
-import { writeJson } from "./http-responses.js";
+import { writeHtml, writeJson } from "./http-responses.js";
 import { maybeHandleWebAccessRoute, requireWebAccess } from "./http-web-access.js";
 import {
   handleSessionForkContext,
@@ -187,6 +187,7 @@ export interface ThemisServerRuntimeRegistry {
 export interface ThemisHttpServerOptions {
   host?: string;
   port?: number;
+  surface?: ThemisHttpServerSurface;
   runtime?: CodexTaskRuntime;
   runtimeRegistry?: ThemisServerRuntimeRegistry;
   authRuntime?: CodexAuthRuntime;
@@ -202,8 +203,11 @@ export interface ThemisHttpServerOptions {
   updateService?: ThemisUpdateService;
 }
 
+export type ThemisHttpServerSurface = "themis" | "platform";
+
 export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): Server {
   const runtime = options.runtime ?? new CodexTaskRuntime();
+  const surface = resolveHttpServerSurface(options.surface);
   const actionBridge = options.actionBridge ?? new AppServerActionBridge();
   const defaultAppServerRuntime = resolveAppServerRuntime(options.runtimeRegistry)
     ?? new AppServerTaskRuntime({
@@ -256,18 +260,31 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
         return;
       }
 
-      if (await maybeHandleWebAccessRoute(request, response, webAccessService)) {
+      if (await maybeHandleWebAccessRoute(request, response, webAccessService, {
+        appDisplayName: surface.webAppDisplayName,
+      })) {
         return;
       }
 
-      if (!requireWebAccess(request, response, webAccessService)) {
+      if (!requireWebAccess(request, response, webAccessService, {
+        appDisplayName: surface.webAppDisplayName,
+      })) {
         return;
       }
 
       if ((request.method === "GET" || isHeadRequest) && url.pathname === "/api/health") {
         return writeJson(response, 200, {
           ok: true,
-          service: "themis-webui",
+          service: surface.healthServiceName,
+        }, isHeadRequest);
+      }
+
+      if (isBlockedPlatformSurfaceApiPath(surface, url.pathname)) {
+        return writeJson(response, 404, {
+          error: {
+            code: "PLATFORM_ROUTE_NOT_FOUND",
+            message: `Platform surface does not expose ${url.pathname}.`,
+          },
         }, isHeadRequest);
       }
 
@@ -838,7 +855,7 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
       }
 
       if (request.method === "GET" || isHeadRequest) {
-        return serveWebAsset(url.pathname, response, isHeadRequest);
+        return serveHttpSurfaceAsset(surface, url.pathname, response, isHeadRequest);
       }
 
       return writeJson(response, 405, {
@@ -856,6 +873,12 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
       });
     }
   });
+}
+
+interface ResolvedHttpServerSurface {
+  id: ThemisHttpServerSurface;
+  webAppDisplayName: string;
+  healthServiceName: string;
 }
 
 export function resolveListenAddresses(host: string, port: number): string[] {
@@ -878,6 +901,106 @@ export function resolveListenAddresses(host: string, port: number): string[] {
   }
 
   return [...addresses];
+}
+
+function resolveHttpServerSurface(surface: ThemisHttpServerSurface | undefined): ResolvedHttpServerSurface {
+  if (surface === "platform") {
+    return {
+      id: "platform",
+      webAppDisplayName: "Themis Platform",
+      healthServiceName: "themis-platform",
+    };
+  }
+
+  return {
+    id: "themis",
+    webAppDisplayName: "Themis Web",
+    healthServiceName: "themis-webui",
+  };
+}
+
+function isBlockedPlatformSurfaceApiPath(surface: ResolvedHttpServerSurface, pathname: string): boolean {
+  return surface.id === "platform"
+    && pathname.startsWith("/api/")
+    && !pathname.startsWith("/api/platform/");
+}
+
+async function serveHttpSurfaceAsset(
+  surface: ResolvedHttpServerSurface,
+  pathname: string,
+  response: ServerResponse,
+  headOnly: boolean,
+): Promise<void> {
+  if (surface.id === "themis") {
+    return serveWebAsset(pathname, response, headOnly);
+  }
+
+  if (pathname === "/" || pathname === "/index.html") {
+    writeHtml(response, 200, createPlatformSurfaceHomeHtml(), headOnly);
+    return;
+  }
+
+  writeJson(response, 404, {
+    error: {
+      code: "NOT_FOUND",
+      message: `Unknown platform asset: ${pathname}`,
+    },
+  }, headOnly);
+}
+
+function createPlatformSurfaceHomeHtml(): string {
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Themis Platform</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
+      }
+
+      body {
+        margin: 0;
+        background: #f4f1ea;
+        color: #1d1d1f;
+      }
+
+      main {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 72px 24px;
+      }
+
+      h1 {
+        margin: 0 0 16px;
+        font-size: 40px;
+        line-height: 1.1;
+      }
+
+      p {
+        margin: 0 0 16px;
+        font-size: 16px;
+        line-height: 1.7;
+      }
+
+      code {
+        padding: 2px 6px;
+        border-radius: 6px;
+        background: rgba(29, 29, 31, 0.08);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Themis Platform</h1>
+      <p>这是平台控制面入口占位页，用来明确区分平台层与主 Themis Web。</p>
+      <p>节点、租约、调度和值班面板将迁移到独立的平台仓库与独立前端，不再复用主 Themis 页面或其静态资源。</p>
+      <p>当前可继续通过 <code>/api/platform/*</code> 和平台侧 CLI 推进控制面联调。</p>
+    </main>
+  </body>
+</html>`;
 }
 
 function normalizeRuntimeRegistry(

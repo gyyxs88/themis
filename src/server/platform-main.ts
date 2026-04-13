@@ -90,6 +90,7 @@ const updateService = new ThemisUpdateService({
 const server = createThemisHttpServer({
   host,
   port,
+  surface: "platform",
   runtime,
   runtimeRegistry: {
     defaultRuntime: appServerRuntime,

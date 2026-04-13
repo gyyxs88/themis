@@ -61,6 +61,8 @@ npm run dev:web
 npm run dev:platform
 ```
 
+平台进程当前只保留 `Themis Platform` 入口占位页、Web 鉴权、`/api/health` 和 `/api/platform/*` 控制面接口，不再复用主 `Themis Workspace` 的 Web 静态壳，也不会继续暴露主 Themis 的任务、历史、身份等 HTTP API。
+
 4. 在浏览器打开：
 
 ```text
@@ -351,6 +353,7 @@ THEMIS_UPDATE_CHANNEL=release
 
 - [首轮局域网联调清单](./docs/repository/themis-first-lan-joint-test-checklist.md)
 
-如果你准备按“平台层 / 主 Themis / Worker Node”三层并行推进后续开发，可直接参考：
+如果你准备按“平台层 / 主 Themis / Worker Node”三层拆仓推进后续开发，可直接参考：
 
-- [三层并行开发约定](./docs/repository/themis-three-layer-parallel-development-contract.md)
+- [三层拆仓开发约定](./docs/repository/themis-three-layer-parallel-development-contract.md)
+- [三层拆仓迁移清单](./docs/repository/themis-three-layer-split-migration-checklist.md)

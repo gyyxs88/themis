@@ -18,6 +18,9 @@ interface TestServerContext {
 
 async function withHttpServer(
   run: (context: TestServerContext) => Promise<void>,
+  options: {
+    surface?: "themis" | "platform";
+  } = {},
 ): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "themis-http-web-access-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
@@ -27,7 +30,10 @@ async function withHttpServer(
     workingDirectory: root,
     runtimeStore,
   });
-  const server = createThemisHttpServer({ runtime });
+  const server = createThemisHttpServer({
+    runtime,
+    ...(options.surface ? { surface: options.surface } : {}),
+  });
   const listeningServer = await listenServer(server);
   const address = listeningServer.address();
 
@@ -133,6 +139,50 @@ test("HTTP Web 登录 cookie 与受保护 API 拦截主链路", async () => {
         message: "请先登录 Themis Web。",
       },
     });
+  });
+});
+
+test("platform surface 的登录页与受保护提示改用平台语义", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const service = new WebAccessService({ registry: runtimeStore });
+    service.createToken({
+      label: "platform-owner",
+      secret: "platform-secret",
+      remoteIp: "127.0.0.1",
+    });
+
+    const unauthorizedResponse = await fetch(`${baseUrl}/api/runtime/config`);
+    assert.equal(unauthorizedResponse.status, 401);
+    assert.deepEqual(await unauthorizedResponse.json(), {
+      error: {
+        code: "WEB_ACCESS_REQUIRED",
+        message: "请先登录 Themis Platform。",
+      },
+    });
+
+    const loginPageResponse = await fetch(`${baseUrl}/login`);
+    assert.equal(loginPageResponse.status, 200);
+    assert.match(await loginPageResponse.text(), /Themis Platform 登录/);
+
+    const deniedLoginResponse = await fetch(`${baseUrl}/api/web-auth/login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        token: "wrong-secret",
+      }),
+    });
+
+    assert.equal(deniedLoginResponse.status, 401);
+    assert.deepEqual(await deniedLoginResponse.json(), {
+      error: {
+        code: "WEB_ACCESS_DENIED",
+        message: "口令错误，无法登录 Themis Platform。",
+      },
+    });
+  }, {
+    surface: "platform",
   });
 });
 

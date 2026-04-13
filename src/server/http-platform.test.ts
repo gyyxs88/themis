@@ -352,6 +352,95 @@ test("POST /api/platform/* 会暴露控制面最小主链", async () => {
   });
 });
 
+test("platform surface 不再复用主 Themis Web 静态页面", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-http-platform-surface-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: root,
+    runtimeStore,
+  });
+  const server = createThemisHttpServer({
+    runtime,
+    surface: "platform",
+  });
+  const listeningServer = await listenServer(server);
+  const address = listeningServer.address();
+
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to resolve server address.");
+  }
+
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  try {
+    const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+
+    const homeResponse = await fetch(`${baseUrl}/`, {
+      headers: authHeaders,
+    });
+    assert.equal(homeResponse.status, 200);
+    assert.match(homeResponse.headers.get("content-type") ?? "", /^text\/html\b/i);
+    const homeHtml = await homeResponse.text();
+    assert.match(homeHtml, /Themis Platform/);
+    assert.match(homeHtml, /平台控制面入口占位页/);
+    assert.equal(homeHtml.includes("Themis Workspace"), false);
+
+    const assetResponse = await fetch(`${baseUrl}/styles.css`, {
+      headers: authHeaders,
+    });
+    assert.equal(assetResponse.status, 404);
+    assert.deepEqual(await assetResponse.json(), {
+      error: {
+        code: "NOT_FOUND",
+        message: "Unknown platform asset: /styles.css",
+      },
+    });
+
+    const healthResponse = await fetch(`${baseUrl}/api/health`, {
+      headers: authHeaders,
+    });
+    assert.equal(healthResponse.status, 200);
+    assert.deepEqual(await healthResponse.json(), {
+      ok: true,
+      service: "themis-platform",
+    });
+
+    const blockedRuntimeConfigResponse = await fetch(`${baseUrl}/api/runtime/config`, {
+      headers: authHeaders,
+    });
+    assert.equal(blockedRuntimeConfigResponse.status, 404);
+    assert.deepEqual(await blockedRuntimeConfigResponse.json(), {
+      error: {
+        code: "PLATFORM_ROUTE_NOT_FOUND",
+        message: "Platform surface does not expose /api/runtime/config.",
+      },
+    });
+
+    const blockedTaskResponse = await fetch(`${baseUrl}/api/tasks/run`, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        goal: "should-be-blocked",
+      }),
+    });
+    assert.equal(blockedTaskResponse.status, 404);
+    assert.deepEqual(await blockedTaskResponse.json(), {
+      error: {
+        code: "PLATFORM_ROUTE_NOT_FOUND",
+        message: "Platform surface does not expose /api/tasks/run.",
+      },
+    });
+  } finally {
+    await closeServer(listeningServer);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("POST /api/platform/projects/workspace-binding/* 会持久化项目连续性，并让 dispatch 命中 projectId", async () => {
   await withHttpServer(async ({ baseUrl, runtime, runtimeStore }) => {
     const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });

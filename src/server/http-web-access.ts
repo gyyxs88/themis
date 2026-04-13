@@ -22,19 +22,28 @@ export interface PlatformServiceAuthContext {
   serviceRole: PlatformServiceRole;
 }
 
+export interface WebAccessRouteOptions {
+  appDisplayName?: string;
+}
+
 const PLATFORM_SERVICE_AUTH_CONTEXT = Symbol("themis.platform-service-auth-context");
+const DEFAULT_WEB_ACCESS_APP_DISPLAY_NAME = "Themis Web";
 
 export async function maybeHandleWebAccessRoute(
   request: IncomingMessage,
   response: ServerResponse,
   service: WebAccessService,
+  options: WebAccessRouteOptions = {},
 ): Promise<boolean> {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
   const method = request.method ?? "GET";
   const headOnly = method === "HEAD";
+  const ui = resolveWebAccessRouteOptions(options);
 
   if ((method === "GET" || headOnly) && url.pathname === "/login") {
-    const body = service.hasActiveToken() ? createLoginPageHtml() : createBootstrapHintHtml();
+    const body = service.hasActiveToken()
+      ? createLoginPageHtml(ui.appDisplayName)
+      : createBootstrapHintHtml(ui.appDisplayName);
     writeHtml(response, 200, body, headOnly);
     return true;
   }
@@ -82,7 +91,7 @@ export async function maybeHandleWebAccessRoute(
         writeJson(response, 401, {
           error: {
             code: "WEB_ACCESS_DENIED",
-            message: "口令错误，无法登录 Themis Web。",
+            message: `口令错误，无法登录 ${ui.appDisplayName}。`,
           },
         });
         return true;
@@ -130,9 +139,11 @@ export function requireWebAccess(
   request: IncomingMessage,
   response: ServerResponse,
   service: WebAccessService,
+  options: WebAccessRouteOptions = {},
 ): boolean {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
   const method = request.method ?? "GET";
+  const ui = resolveWebAccessRouteOptions(options);
 
   if (isPublicWebAccessRoute(method, url.pathname)) {
     return true;
@@ -178,7 +189,7 @@ export function requireWebAccess(
     writeJson(response, 401, {
       error: {
         code: "WEB_ACCESS_REQUIRED",
-        message: "请先登录 Themis Web。",
+        message: `请先登录 ${ui.appDisplayName}。`,
       },
     }, method === "HEAD");
     return false;
@@ -332,17 +343,23 @@ function normalizeOptionalText(value: unknown): string | null {
   return normalized ? normalized : null;
 }
 
-function createBootstrapHintHtml(): string {
+function resolveWebAccessRouteOptions(options: WebAccessRouteOptions): { appDisplayName: string } {
+  return {
+    appDisplayName: options.appDisplayName?.trim() || DEFAULT_WEB_ACCESS_APP_DISPLAY_NAME,
+  };
+}
+
+function createBootstrapHintHtml(appDisplayName: string): string {
   return `<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Themis Web 初始化</title>
+    <title>${appDisplayName} 初始化</title>
   </head>
   <body>
     <main>
-      <h1>Themis Web 还未初始化访问口令</h1>
+      <h1>${appDisplayName} 还未初始化访问口令</h1>
       <p>当前还没有任何 active token。</p>
       <p>请先在服务端执行 themis auth web add &lt;label&gt;，然后再回来登录。</p>
     </main>
@@ -350,17 +367,17 @@ function createBootstrapHintHtml(): string {
 </html>`;
 }
 
-function createLoginPageHtml(): string {
+function createLoginPageHtml(appDisplayName: string): string {
   return `<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Themis Web 登录</title>
+    <title>${appDisplayName} 登录</title>
   </head>
   <body>
     <main>
-      <h1>Themis Web 登录</h1>
+      <h1>${appDisplayName} 登录</h1>
       <form id="login-form">
         <label for="token-input">访问口令</label>
         <input id="token-input" name="token" type="password" autocomplete="current-password" required />
