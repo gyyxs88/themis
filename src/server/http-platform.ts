@@ -2,6 +2,16 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ManagedAgentControlPlaneFacadeLike } from "../core/managed-agent-control-plane-facade.js";
 import type { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
 import type {
+  ManagedAgentPlatformHandoffListPayload,
+  ManagedAgentPlatformMailboxAckPayload,
+  ManagedAgentPlatformMailboxListPayload,
+  ManagedAgentPlatformMailboxPullPayload,
+  ManagedAgentPlatformMailboxRespondPayload,
+  ManagedAgentPlatformMailboxResponsePayload,
+  ManagedAgentPlatformRunDetailPayload,
+  ManagedAgentPlatformRunListPayload,
+} from "../contracts/managed-agent-platform-collaboration.js";
+import type {
   ManagedAgentPlatformProjectWorkspaceBindingDetailPayload,
   ManagedAgentPlatformProjectWorkspaceBindingListPayload,
   ManagedAgentPlatformProjectWorkspaceBindingUpsertPayload,
@@ -169,46 +179,6 @@ interface PlatformWaitingQueueListPayload extends PlatformGovernanceFiltersPaylo
 
 interface PlatformCollaborationDashboardPayload extends PlatformGovernanceFiltersPayload {
   limit?: number;
-}
-
-interface PlatformRunListPayload extends PlatformAgentListPayload {
-  agentId?: string;
-  workItemId?: string;
-}
-
-interface PlatformRunDetailPayload extends PlatformAgentListPayload {
-  runId: string;
-}
-
-interface PlatformHandoffListPayload extends PlatformAgentListPayload {
-  agentId: string;
-  workItemId?: string;
-  limit?: number;
-}
-
-interface PlatformMailboxListPayload extends PlatformAgentListPayload {
-  agentId: string;
-}
-
-interface PlatformMailboxPullPayload extends PlatformAgentListPayload {
-  agentId: string;
-}
-
-interface PlatformMailboxAckPayload extends PlatformAgentListPayload {
-  agentId: string;
-  mailboxEntryId: string;
-}
-
-interface PlatformMailboxRespondPayload extends PlatformAgentListPayload {
-  agentId: string;
-  mailboxEntryId: string;
-  response: {
-    decision?: "approve" | "deny";
-    inputText?: string;
-    payload?: unknown;
-    artifactRefs?: string[];
-    priority?: ManagedAgentPriority;
-  };
 }
 
 async function readAndNormalizePayload<T extends ManagedAgentPlatformOwnerPayload>(
@@ -1093,7 +1063,9 @@ export async function handlePlatformMailboxRespond(
       mailboxEntryId: payload.mailboxEntryId,
       ...(payload.response.decision ? { decision: payload.response.decision } : {}),
       ...(payload.response.inputText ? { inputText: payload.response.inputText } : {}),
-      ...(hasOwn(payload.response, "payload") ? { payload: payload.response.payload } : {}),
+      ...(Object.prototype.hasOwnProperty.call(payload.response, "payload")
+        ? { payload: payload.response.payload }
+        : {}),
       ...(payload.response.artifactRefs ? { artifactRefs: payload.response.artifactRefs } : {}),
       ...(payload.response.priority ? { priority: payload.response.priority } : {}),
     });
@@ -1911,7 +1883,7 @@ function normalizePlatformWorkItemEscalatePayload(value: unknown): ManagedAgentP
   };
 }
 
-function normalizePlatformRunListPayload(value: unknown): PlatformRunListPayload {
+function normalizePlatformRunListPayload(value: unknown): ManagedAgentPlatformRunListPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -1926,7 +1898,7 @@ function normalizePlatformRunListPayload(value: unknown): PlatformRunListPayload
   };
 }
 
-function normalizePlatformRunDetailPayload(value: unknown): PlatformRunDetailPayload {
+function normalizePlatformRunDetailPayload(value: unknown): ManagedAgentPlatformRunDetailPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -1937,7 +1909,7 @@ function normalizePlatformRunDetailPayload(value: unknown): PlatformRunDetailPay
   };
 }
 
-function normalizePlatformHandoffListPayload(value: unknown): PlatformHandoffListPayload {
+function normalizePlatformHandoffListPayload(value: unknown): ManagedAgentPlatformHandoffListPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -1953,7 +1925,7 @@ function normalizePlatformHandoffListPayload(value: unknown): PlatformHandoffLis
   };
 }
 
-function normalizePlatformMailboxListPayload(value: unknown): PlatformMailboxListPayload {
+function normalizePlatformMailboxListPayload(value: unknown): ManagedAgentPlatformMailboxListPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -1964,7 +1936,7 @@ function normalizePlatformMailboxListPayload(value: unknown): PlatformMailboxLis
   };
 }
 
-function normalizePlatformMailboxPullPayload(value: unknown): PlatformMailboxPullPayload {
+function normalizePlatformMailboxPullPayload(value: unknown): ManagedAgentPlatformMailboxPullPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -1975,7 +1947,7 @@ function normalizePlatformMailboxPullPayload(value: unknown): PlatformMailboxPul
   };
 }
 
-function normalizePlatformMailboxAckPayload(value: unknown): PlatformMailboxAckPayload {
+function normalizePlatformMailboxAckPayload(value: unknown): ManagedAgentPlatformMailboxAckPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -1987,7 +1959,7 @@ function normalizePlatformMailboxAckPayload(value: unknown): PlatformMailboxAckP
   };
 }
 
-function normalizePlatformMailboxRespondPayload(value: unknown): PlatformMailboxRespondPayload {
+function normalizePlatformMailboxRespondPayload(value: unknown): ManagedAgentPlatformMailboxRespondPayload {
   if (!isRecord(value) || !isRecord(value.response)) {
     throw new Error("Request body.response must be an object.");
   }
@@ -1999,17 +1971,19 @@ function normalizePlatformMailboxRespondPayload(value: unknown): PlatformMailbox
     ? readStringArray(value.response.artifactRefs)
     : undefined;
 
+  const response: ManagedAgentPlatformMailboxResponsePayload = {
+    ...(decision ? { decision } : {}),
+    ...(inputText ? { inputText } : {}),
+    ...(hasOwn(value.response, "payload") ? { payload: value.response.payload } : {}),
+    ...(artifactRefs?.length ? { artifactRefs } : {}),
+    ...(priority ? { priority } : {}),
+  };
+
   return {
     ...normalizePlatformOwnerPayload(value),
     agentId: readRequiredString(value.agentId, "agentId"),
     mailboxEntryId: readRequiredString(value.mailboxEntryId, "mailboxEntryId"),
-    response: {
-      ...(decision ? { decision } : {}),
-      ...(inputText ? { inputText } : {}),
-      ...(hasOwn(value.response, "payload") ? { payload: value.response.payload } : {}),
-      ...(artifactRefs?.length ? { artifactRefs } : {}),
-      ...(priority ? { priority } : {}),
-    },
+    response,
   };
 }
 

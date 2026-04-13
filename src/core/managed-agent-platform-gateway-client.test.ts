@@ -390,6 +390,310 @@ test("ManagedAgentPlatformGatewayClient 会按 work-items 契约读写平台协�
   });
 });
 
+test("ManagedAgentPlatformGatewayClient 会按 mailbox 与 runs 契约读写平台协作视图", async () => {
+  const calls: FetchCall[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    const headers = normalizeHeaders(init?.headers);
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+
+    calls.push({
+      url,
+      headers,
+      body,
+    });
+
+    if (url.endsWith("/api/platform/runs/list")) {
+      return jsonResponse({
+        runs: [{
+          runId: "run-alpha",
+          organizationId: "org-alpha",
+          workItemId: "work-item-alpha",
+          targetAgentId: "agent-alpha",
+          status: "running",
+          leaseToken: "lease-alpha",
+          createdAt: "2026-04-13T10:20:00.000Z",
+          updatedAt: "2026-04-13T10:20:00.000Z",
+        }],
+      });
+    }
+
+    if (url.endsWith("/api/platform/runs/detail")) {
+      return jsonResponse({
+        organization: {
+          organizationId: "org-alpha",
+          ownerPrincipalId: "principal-owner",
+          displayName: "Alpha Org",
+          slug: "alpha-org",
+          createdAt: "2026-04-13T09:00:00.000Z",
+          updatedAt: "2026-04-13T09:00:00.000Z",
+        },
+        run: {
+          runId: "run-alpha",
+          organizationId: "org-alpha",
+          workItemId: "work-item-alpha",
+          targetAgentId: "agent-alpha",
+          status: "running",
+          leaseToken: "lease-alpha",
+          createdAt: "2026-04-13T10:20:00.000Z",
+          updatedAt: "2026-04-13T10:20:00.000Z",
+        },
+        workItem: {
+          workItemId: "work-item-alpha",
+          organizationId: "org-alpha",
+          targetAgentId: "agent-alpha",
+          sourceType: "human",
+          dispatchReason: "推进项目 Alpha",
+          goal: "完成第一阶段改造",
+          status: "running",
+          priority: "high",
+          createdAt: "2026-04-13T10:18:00.000Z",
+          updatedAt: "2026-04-13T10:20:00.000Z",
+        },
+        targetAgent: {
+          agentId: "agent-alpha",
+          principalId: "principal-agent-alpha",
+          organizationId: "org-alpha",
+          displayName: "Alpha Agent",
+          departmentRole: "交付经理",
+          status: "active",
+          createdByPrincipalId: "principal-owner",
+          createdAt: "2026-04-13T09:00:00.000Z",
+          updatedAt: "2026-04-13T09:00:00.000Z",
+        },
+      });
+    }
+
+    if (url.endsWith("/api/platform/agents/handoffs/list")) {
+      return jsonResponse({
+        agent: {
+          agentId: "agent-alpha",
+          principalId: "principal-agent-alpha",
+          organizationId: "org-alpha",
+          displayName: "Alpha Agent",
+          departmentRole: "交付经理",
+          status: "active",
+          createdByPrincipalId: "principal-owner",
+          createdAt: "2026-04-13T09:00:00.000Z",
+          updatedAt: "2026-04-13T09:00:00.000Z",
+        },
+        handoffs: [],
+        timeline: [],
+      });
+    }
+
+    if (url.endsWith("/api/platform/agents/mailbox/list")) {
+      return jsonResponse({
+        agent: {
+          agentId: "agent-alpha",
+          principalId: "principal-agent-alpha",
+          organizationId: "org-alpha",
+          displayName: "Alpha Agent",
+          departmentRole: "交付经理",
+          status: "active",
+          createdByPrincipalId: "principal-owner",
+          createdAt: "2026-04-13T09:00:00.000Z",
+          updatedAt: "2026-04-13T09:00:00.000Z",
+        },
+        items: [],
+      });
+    }
+
+    if (url.endsWith("/api/platform/agents/mailbox/pull")) {
+      return jsonResponse({
+        agent: {
+          agentId: "agent-alpha",
+          principalId: "principal-agent-alpha",
+          organizationId: "org-alpha",
+          displayName: "Alpha Agent",
+          departmentRole: "交付经理",
+          status: "active",
+          createdByPrincipalId: "principal-owner",
+          createdAt: "2026-04-13T09:00:00.000Z",
+          updatedAt: "2026-04-13T09:00:00.000Z",
+        },
+        item: null,
+      });
+    }
+
+    if (url.endsWith("/api/platform/agents/mailbox/ack")) {
+      return jsonResponse({
+        agent: {
+          agentId: "agent-alpha",
+          principalId: "principal-agent-alpha",
+          organizationId: "org-alpha",
+          displayName: "Alpha Agent",
+          departmentRole: "交付经理",
+          status: "active",
+          createdByPrincipalId: "principal-owner",
+          createdAt: "2026-04-13T09:00:00.000Z",
+          updatedAt: "2026-04-13T09:00:00.000Z",
+        },
+        mailboxEntry: {
+          mailboxEntryId: "mailbox-entry-alpha",
+          organizationId: "org-alpha",
+          agentId: "agent-alpha",
+          messageId: "message-alpha",
+          status: "acked",
+          leasedAt: "2026-04-13T10:21:00.000Z",
+          ackedAt: "2026-04-13T10:22:00.000Z",
+          createdAt: "2026-04-13T10:20:30.000Z",
+          updatedAt: "2026-04-13T10:22:00.000Z",
+        },
+      });
+    }
+
+    if (url.endsWith("/api/platform/agents/mailbox/respond")) {
+      return jsonResponse({
+        organization: {
+          organizationId: "org-alpha",
+          ownerPrincipalId: "principal-owner",
+          displayName: "Alpha Org",
+          slug: "alpha-org",
+          createdAt: "2026-04-13T09:00:00.000Z",
+          updatedAt: "2026-04-13T09:00:00.000Z",
+        },
+        agent: {
+          agentId: "agent-alpha",
+          principalId: "principal-agent-alpha",
+          organizationId: "org-alpha",
+          displayName: "Alpha Agent",
+          departmentRole: "交付经理",
+          status: "active",
+          createdByPrincipalId: "principal-owner",
+          createdAt: "2026-04-13T09:00:00.000Z",
+          updatedAt: "2026-04-13T09:00:00.000Z",
+        },
+        sourceMailboxEntry: {
+          mailboxEntryId: "mailbox-entry-alpha",
+          organizationId: "org-alpha",
+          agentId: "agent-alpha",
+          messageId: "message-alpha",
+          status: "acked",
+          leasedAt: "2026-04-13T10:21:00.000Z",
+          ackedAt: "2026-04-13T10:22:00.000Z",
+          createdAt: "2026-04-13T10:20:30.000Z",
+          updatedAt: "2026-04-13T10:22:00.000Z",
+        },
+        sourceMessage: {
+          messageId: "message-alpha",
+          organizationId: "org-alpha",
+          fromAgentId: "agent-beta",
+          toAgentId: "agent-alpha",
+          messageType: "question",
+          payload: null,
+          createdAt: "2026-04-13T10:20:30.000Z",
+          updatedAt: "2026-04-13T10:20:30.000Z",
+        },
+        responseMessage: {
+          messageId: "message-beta",
+          organizationId: "org-alpha",
+          fromAgentId: "agent-alpha",
+          toAgentId: "agent-beta",
+          messageType: "answer",
+          payload: null,
+          createdAt: "2026-04-13T10:22:30.000Z",
+          updatedAt: "2026-04-13T10:22:30.000Z",
+        },
+        responseMailboxEntry: {
+          mailboxEntryId: "mailbox-entry-beta",
+          organizationId: "org-alpha",
+          agentId: "agent-beta",
+          messageId: "message-beta",
+          status: "pending",
+          createdAt: "2026-04-13T10:22:30.000Z",
+          updatedAt: "2026-04-13T10:22:30.000Z",
+        },
+        resumedRuns: [],
+      });
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  const client = new ManagedAgentPlatformGatewayClient({
+    baseUrl: "https://platform.example.com/",
+    ownerPrincipalId: "principal-owner",
+    webAccessToken: "token-123",
+    fetchImpl,
+  });
+
+  const runs = await client.listRuns({
+    agentId: "agent-alpha",
+    workItemId: "work-item-alpha",
+  });
+  const runDetail = await client.getRunDetail("run-alpha");
+  const handoffs = await client.getAgentHandoffListView({
+    agentId: "agent-alpha",
+    workItemId: "work-item-alpha",
+    limit: 5,
+  });
+  const mailbox = await client.getAgentMailboxListView("agent-alpha");
+  const pulled = await client.pullMailboxEntry("agent-alpha");
+  const acked = await client.ackMailboxEntry("agent-alpha", "mailbox-entry-alpha");
+  const responded = await client.respondToMailboxEntry({
+    agentId: "agent-alpha",
+    mailboxEntryId: "mailbox-entry-alpha",
+    decision: "approve",
+    inputText: "继续推进",
+    priority: "high",
+  });
+
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0]?.runId, "run-alpha");
+  assert.equal(runDetail?.run.runId, "run-alpha");
+  assert.equal(handoffs.agent.agentId, "agent-alpha");
+  assert.equal(mailbox.agent.agentId, "agent-alpha");
+  assert.equal(pulled.item, null);
+  assert.equal(acked.mailboxEntry.mailboxEntryId, "mailbox-entry-alpha");
+  assert.equal(responded.agent.agentId, "agent-alpha");
+
+  assert.equal(calls.length, 7);
+  assert.equal(calls[0]?.headers.authorization, "Bearer token-123");
+  assert.deepEqual(calls[0]?.body, {
+    ownerPrincipalId: "principal-owner",
+    agentId: "agent-alpha",
+    workItemId: "work-item-alpha",
+  });
+  assert.deepEqual(calls[1]?.body, {
+    ownerPrincipalId: "principal-owner",
+    runId: "run-alpha",
+  });
+  assert.deepEqual(calls[2]?.body, {
+    ownerPrincipalId: "principal-owner",
+    agentId: "agent-alpha",
+    workItemId: "work-item-alpha",
+    limit: 5,
+  });
+  assert.deepEqual(calls[3]?.body, {
+    ownerPrincipalId: "principal-owner",
+    agentId: "agent-alpha",
+  });
+  assert.deepEqual(calls[4]?.body, {
+    ownerPrincipalId: "principal-owner",
+    agentId: "agent-alpha",
+  });
+  assert.deepEqual(calls[5]?.body, {
+    ownerPrincipalId: "principal-owner",
+    agentId: "agent-alpha",
+    mailboxEntryId: "mailbox-entry-alpha",
+  });
+  assert.deepEqual(calls[6]?.body, {
+    ownerPrincipalId: "principal-owner",
+    agentId: "agent-alpha",
+    mailboxEntryId: "mailbox-entry-alpha",
+    response: {
+      decision: "approve",
+      inputText: "继续推进",
+      priority: "high",
+    },
+  });
+});
+
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,

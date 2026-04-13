@@ -1,8 +1,6 @@
 import type {
-  ManagedAgentHandoffListView,
   ManagedAgentIdleRecoverySuggestionsView,
   ManagedAgentListView,
-  ManagedAgentMailboxListView,
   ManagedAgentSpawnSuggestionsView,
   ManagedAgentLifecycleUpdateInput,
 } from "./managed-agent-control-plane-facade.js";
@@ -12,9 +10,6 @@ import type {
   OrganizationGovernanceFilters,
   OrganizationGovernanceOverview,
   OrganizationWaitingQueueResult,
-  PullMailboxEntryResult,
-  RespondToMailboxEntryInput,
-  RespondToMailboxEntryResult,
 } from "./managed-agent-coordination-service.js";
 import type {
   ApproveManagedAgentIdleRecoverySuggestionInput,
@@ -32,7 +27,18 @@ import type {
   UpdateManagedAgentExecutionBoundaryInput,
   UpdateManagedAgentSpawnPolicyInput,
 } from "./managed-agents-service.js";
-import type { ManagedAgentRunDetailView, ManagedAgentRunListInput } from "./managed-agent-scheduler-service.js";
+import type {
+  ManagedAgentPlatformHandoffListInput,
+  ManagedAgentPlatformHandoffListResult,
+  ManagedAgentPlatformMailboxAckResult,
+  ManagedAgentPlatformMailboxListResult,
+  ManagedAgentPlatformMailboxPullResult,
+  ManagedAgentPlatformMailboxRespondInput,
+  ManagedAgentPlatformMailboxRespondResult,
+  ManagedAgentPlatformRunDetailResult,
+  ManagedAgentPlatformRunListInput,
+  ManagedAgentPlatformRunListResult,
+} from "../contracts/managed-agent-platform-collaboration.js";
 import type {
   ManagedAgentPlatformProjectWorkspaceBindingDetailResult,
   ManagedAgentPlatformProjectWorkspaceBindingListInput,
@@ -54,13 +60,34 @@ import type {
   ManagedAgentPlatformWorkItemRespondResult,
 } from "../contracts/managed-agent-platform-work-items.js";
 import type {
-  StoredAgentMailboxEntryRecord,
-  StoredAgentMessageRecord,
-  StoredAgentRunRecord,
   StoredAgentSpawnPolicyRecord,
   StoredAgentWorkItemRecord,
 } from "../types/index.js";
 
+export type {
+  ManagedAgentPlatformHandoffListInput,
+  ManagedAgentPlatformHandoffListPayload,
+  ManagedAgentPlatformHandoffListResult,
+  ManagedAgentPlatformMailboxAckInput,
+  ManagedAgentPlatformMailboxAckPayload,
+  ManagedAgentPlatformMailboxAckResult,
+  ManagedAgentPlatformMailboxListInput,
+  ManagedAgentPlatformMailboxListPayload,
+  ManagedAgentPlatformMailboxListResult,
+  ManagedAgentPlatformMailboxPullInput,
+  ManagedAgentPlatformMailboxPullPayload,
+  ManagedAgentPlatformMailboxPullResult,
+  ManagedAgentPlatformMailboxRespondInput,
+  ManagedAgentPlatformMailboxRespondPayload,
+  ManagedAgentPlatformMailboxRespondResult,
+  ManagedAgentPlatformMailboxResponsePayload,
+  ManagedAgentPlatformRunDetailInput,
+  ManagedAgentPlatformRunDetailPayload,
+  ManagedAgentPlatformRunDetailResult,
+  ManagedAgentPlatformRunListInput,
+  ManagedAgentPlatformRunListPayload,
+  ManagedAgentPlatformRunListResult,
+} from "../contracts/managed-agent-platform-collaboration.js";
 export type {
   ManagedAgentPlatformProjectWorkspaceBindingDetailInput,
   ManagedAgentPlatformProjectWorkspaceBindingDetailResult,
@@ -126,19 +153,6 @@ export interface ManagedAgentPlatformGatewayWorkItemDetailResult {
   childSummary: ManagedAgentWorkItemDetailView["collaboration"]["childSummary"];
   childWorkItems: ManagedAgentWorkItemDetailView["collaboration"]["childWorkItems"];
   messages: ManagedAgentWorkItemDetailView["messages"];
-}
-
-export interface ManagedAgentPlatformGatewayRunDetailResult {
-  organization: ManagedAgentRunDetailView["organization"];
-  run: ManagedAgentRunDetailView["run"];
-  workItem: ManagedAgentRunDetailView["workItem"];
-  targetAgent: ManagedAgentRunDetailView["targetAgent"];
-}
-
-export interface ManagedAgentPlatformGatewayMailboxAckResult {
-  agent: ManagedAgentMailboxListView["agent"];
-  mailboxEntry: StoredAgentMailboxEntryRecord;
-  message?: StoredAgentMessageRecord;
 }
 
 export class ManagedAgentPlatformGatewayClient {
@@ -570,10 +584,8 @@ export class ManagedAgentPlatformGatewayClient {
     };
   }
 
-  async listRuns(input: Omit<ManagedAgentRunListInput, "ownerPrincipalId"> = {}): Promise<StoredAgentRunRecord[]> {
-    const payload = await this.requestJson<{
-      runs?: StoredAgentRunRecord[];
-    }>("/api/platform/runs/list", {
+  async listRuns(input: ManagedAgentPlatformRunListInput = {}): Promise<NonNullable<ManagedAgentPlatformRunListResult["runs"]>> {
+    const payload = await this.requestJson<ManagedAgentPlatformRunListResult>("/api/platform/runs/list", {
       ownerPrincipalId: this.ownerPrincipalId,
       ...(input.agentId ? { agentId: input.agentId } : {}),
       ...(input.workItemId ? { workItemId: input.workItemId } : {}),
@@ -582,8 +594,8 @@ export class ManagedAgentPlatformGatewayClient {
     return Array.isArray(payload.runs) ? payload.runs : [];
   }
 
-  async getRunDetail(runId: string): Promise<ManagedAgentPlatformGatewayRunDetailResult | null> {
-    const payload = await this.requestJson<Partial<ManagedAgentPlatformGatewayRunDetailResult>>(
+  async getRunDetail(runId: string): Promise<ManagedAgentPlatformRunDetailResult | null> {
+    const payload = await this.requestJson<Partial<ManagedAgentPlatformRunDetailResult>>(
       "/api/platform/runs/detail",
       {
         ownerPrincipalId: this.ownerPrincipalId,
@@ -604,13 +616,9 @@ export class ManagedAgentPlatformGatewayClient {
   }
 
   async getAgentHandoffListView(
-    input: {
-      agentId: string;
-      workItemId?: string;
-      limit?: number;
-    },
-  ): Promise<ManagedAgentHandoffListView> {
-    const payload = await this.requestJson<Partial<ManagedAgentHandoffListView>>(
+    input: ManagedAgentPlatformHandoffListInput,
+  ): Promise<ManagedAgentPlatformHandoffListResult> {
+    const payload = await this.requestJson<Partial<ManagedAgentPlatformHandoffListResult>>(
       "/api/platform/agents/handoffs/list",
       {
         ownerPrincipalId: this.ownerPrincipalId,
@@ -631,8 +639,8 @@ export class ManagedAgentPlatformGatewayClient {
     };
   }
 
-  async getAgentMailboxListView(agentId: string): Promise<ManagedAgentMailboxListView> {
-    const payload = await this.requestJson<Partial<ManagedAgentMailboxListView>>(
+  async getAgentMailboxListView(agentId: string): Promise<ManagedAgentPlatformMailboxListResult> {
+    const payload = await this.requestJson<Partial<ManagedAgentPlatformMailboxListResult>>(
       "/api/platform/agents/mailbox/list",
       {
         ownerPrincipalId: this.ownerPrincipalId,
@@ -650,15 +658,15 @@ export class ManagedAgentPlatformGatewayClient {
     };
   }
 
-  async pullMailboxEntry(agentId: string): Promise<PullMailboxEntryResult> {
-    return await this.requestJson<PullMailboxEntryResult>("/api/platform/agents/mailbox/pull", {
+  async pullMailboxEntry(agentId: string): Promise<ManagedAgentPlatformMailboxPullResult> {
+    return await this.requestJson<ManagedAgentPlatformMailboxPullResult>("/api/platform/agents/mailbox/pull", {
       ownerPrincipalId: this.ownerPrincipalId,
       agentId,
     });
   }
 
-  async ackMailboxEntry(agentId: string, mailboxEntryId: string): Promise<ManagedAgentPlatformGatewayMailboxAckResult> {
-    return await this.requestJson<ManagedAgentPlatformGatewayMailboxAckResult>("/api/platform/agents/mailbox/ack", {
+  async ackMailboxEntry(agentId: string, mailboxEntryId: string): Promise<ManagedAgentPlatformMailboxAckResult> {
+    return await this.requestJson<ManagedAgentPlatformMailboxAckResult>("/api/platform/agents/mailbox/ack", {
       ownerPrincipalId: this.ownerPrincipalId,
       agentId,
       mailboxEntryId,
@@ -666,9 +674,9 @@ export class ManagedAgentPlatformGatewayClient {
   }
 
   async respondToMailboxEntry(
-    input: Omit<RespondToMailboxEntryInput, "ownerPrincipalId">,
-  ): Promise<RespondToMailboxEntryResult> {
-    return await this.requestJson<RespondToMailboxEntryResult>("/api/platform/agents/mailbox/respond", {
+    input: ManagedAgentPlatformMailboxRespondInput,
+  ): Promise<ManagedAgentPlatformMailboxRespondResult> {
+    return await this.requestJson<ManagedAgentPlatformMailboxRespondResult>("/api/platform/agents/mailbox/respond", {
       ownerPrincipalId: this.ownerPrincipalId,
       agentId: input.agentId,
       mailboxEntryId: input.mailboxEntryId,
