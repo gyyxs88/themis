@@ -342,6 +342,10 @@ THEMIS_UPDATE_CHANNEL=release
 - [Worker Node systemd service 示例](./infra/systemd/themis-worker-node.service.example)
 - [Worker Node 常驻部署说明](./docs/repository/themis-worker-node-systemd-service.md)
 
+如果你是小公司或个人部署，准备把“平台层 + 主 Themis + Worker Node”放在同一台机器上，可直接参考：
+
+- [单机三角色部署方案](./docs/repository/themis-single-host-three-role-deployment.md)
+
 如果你要做第一轮真实环境联调，可直接照着：
 
 - [首轮局域网联调清单](./docs/repository/themis-first-lan-joint-test-checklist.md)

@@ -34,6 +34,7 @@
 + /docs/repository/themis-first-lan-joint-test-checklist.md
 + /docs/repository/themis-platform-mysql-control-plane-cutover.md
 + /docs/repository/themis-platform-systemd-service.md
++ /docs/repository/themis-single-host-three-role-deployment.md
 + /docs/repository/themis-systemd-dev-service.md
 + /docs/repository/themis-systemd-prod-service.md
 + /docs/repository/themis-worker-node-systemd-service.md
