@@ -339,6 +339,7 @@ export function createRenderer(app) {
 
   function renderAgentsState() {
     const agentsState = app.runtime.agents ?? {};
+    const compatibilityStatus = normalizeAgentsCompatibilityStatusState(agentsState.compatibilityStatus);
     const agents = Array.isArray(agentsState.agents) ? agentsState.agents : [];
     const organizations = Array.isArray(agentsState.organizations) ? agentsState.organizations : [];
     const workItems = Array.isArray(agentsState.workItems) ? agentsState.workItems : [];
@@ -611,7 +612,11 @@ export function createRenderer(app) {
           ? "loading"
           : agentsState.noticeMessage
             ? "supported"
-            : "inconclusive";
+            : compatibilityStatus?.statusLevel === "error"
+              ? "error"
+              : compatibilityStatus
+                ? "warning"
+                : "inconclusive";
     } else {
       delete dom.agentsStatusNote.dataset.state;
     }
@@ -2858,6 +2863,8 @@ function resolveMemoryCandidatesStatusMessage(candidatesState, candidateCount) {
 }
 
 function resolveAgentsStatusMessage(agentsState) {
+  const compatibilityStatus = normalizeAgentsCompatibilityStatusState(agentsState.compatibilityStatus);
+
   if (agentsState.errorMessage) {
     return agentsState.errorMessage;
   }
@@ -2926,7 +2933,36 @@ function resolveAgentsStatusMessage(agentsState) {
     return agentsState.noticeMessage;
   }
 
+  if (compatibilityStatus?.message) {
+    return compatibilityStatus.message;
+  }
+
   return "";
+}
+
+function normalizeAgentsCompatibilityStatusState(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const accessMode = typeof value.accessMode === "string" ? value.accessMode : "local_legacy";
+  const statusLevel = value.statusLevel === "error" ? "error" : "warning";
+  const message = typeof value.message === "string" ? value.message : "";
+  const platformBaseUrl = typeof value.platformBaseUrl === "string" ? value.platformBaseUrl : "";
+
+  if (value.panelOwnership !== "platform") {
+    return null;
+  }
+
+  return {
+    panelOwnership: "platform",
+    accessMode: ["platform_gateway", "local_legacy", "invalid_gateway_config"].includes(accessMode)
+      ? accessMode
+      : "local_legacy",
+    statusLevel,
+    message: message.trim(),
+    platformBaseUrl: platformBaseUrl.trim(),
+  };
 }
 
 function normalizeAgentCreateDraft(draft) {

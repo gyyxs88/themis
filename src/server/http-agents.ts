@@ -242,6 +242,14 @@ interface MailboxRespondPayload extends IdentityPayload {
   };
 }
 
+export interface ManagedAgentGatewayCompatibilityStatus {
+  panelOwnership: "platform";
+  accessMode: "platform_gateway" | "local_legacy" | "invalid_gateway_config";
+  statusLevel: "warning" | "error";
+  message: string;
+  platformBaseUrl?: string;
+}
+
 async function readAndNormalizePayload<T>(
   request: IncomingMessage,
   response: ServerResponse,
@@ -374,6 +382,7 @@ export async function handleAgentList(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const compatibility = readManagedAgentGatewayCompatibilityStatus(process.env);
     const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
     const result = gatewayClient
       ? await gatewayClient.listManagedAgents()
@@ -381,6 +390,7 @@ export async function handleAgentList(
 
     writeJson(response, 200, {
       identity,
+      compatibility,
       organizations: result.organizations,
       agents: result.agents,
     });
@@ -437,6 +447,40 @@ function createManagedAgentPlatformGatewayClientFromEnv(): ManagedAgentPlatformG
   }
 
   return new ManagedAgentPlatformGatewayClient(config);
+}
+
+export function readManagedAgentGatewayCompatibilityStatus(
+  env: NodeJS.ProcessEnv = process.env,
+): ManagedAgentGatewayCompatibilityStatus {
+  try {
+    const config = readManagedAgentPlatformGatewayConfig(env);
+
+    if (config) {
+      return {
+        panelOwnership: "platform",
+        accessMode: "platform_gateway",
+        statusLevel: "warning",
+        message: "当前 Platform Agents 面板只是主 Themis 里的平台兼容入口；实际读写已走平台控制面，后续会迁到独立 Platform 前端。",
+        platformBaseUrl: config.baseUrl,
+      };
+    }
+  } catch (error) {
+    return {
+      panelOwnership: "platform",
+      accessMode: "invalid_gateway_config",
+      statusLevel: "error",
+      message: error instanceof Error
+        ? error.message
+        : "平台 Gateway 配置异常，当前 Platform Agents 兼容入口不可用。",
+    };
+  }
+
+  return {
+    panelOwnership: "platform",
+    accessMode: "local_legacy",
+    statusLevel: "warning",
+    message: "当前 Platform Agents 面板仍运行在本地 legacy 模式，只用于拆仓迁移过渡；不要继续在主 Themis 页面里扩平台治理功能。",
+  };
 }
 
 export async function handleAgentExecutionBoundaryUpdate(

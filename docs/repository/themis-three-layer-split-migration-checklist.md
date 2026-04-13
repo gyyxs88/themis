@@ -98,6 +98,10 @@
 - 这块页面展示的已经不是“当前 Themis 自己的内容”，而是组织级 managed-agent 治理。
 - 按新边界，这块应归平台层，不应继续留在主 Themis 页面里。
 
+当前进展：
+
+- `2026-04-13` 已补第一层语义收缩：当前主 Themis UI 已把这块显式改名为 `Platform Agents`，并通过 `/api/agents/list` 返回的 `compatibility` 状态与状态栏提示，把它标成“平台兼容面板”，不再继续伪装成主 Themis 的原生页面。
+
 迁移目标：
 
 - 从 `themis-main` 剥离。
@@ -109,6 +113,10 @@
 
 - 这层是 `Themis` 产品壳对 managed-agent / 平台事实的包装。
 - 在新边界下，凡是全局 managed-agent 治理相关能力，都不应继续从主 Themis 暴露。
+
+当前进展：
+
+- `2026-04-13` 已补兼容状态显式化：`/api/agents/list` 现在会返回 `compatibility` 字段，明确区分 `platform_gateway / local_legacy / invalid_gateway_config` 三种兼容模式，用来告诉前端“这是平台兼容入口，不是主 Themis 自有面板”。
 
 迁移目标：
 

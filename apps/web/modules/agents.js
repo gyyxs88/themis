@@ -74,6 +74,10 @@ function createDefaultExecutionBoundaryDraft() {
   };
 }
 
+function createDefaultCompatibilityStatus() {
+  return null;
+}
+
 export function createDefaultAgentsState() {
   return {
     status: "idle",
@@ -97,6 +101,7 @@ export function createDefaultAgentsState() {
     respondingWorkItemId: "",
     lifecycleUpdatingAgentId: "",
     lifecycleUpdatingAction: "",
+    compatibilityStatus: createDefaultCompatibilityStatus(),
     organizations: [],
     agents: [],
     organizationGovernanceOverview: null,
@@ -876,6 +881,7 @@ export function createAgentsController(app) {
       }
 
       const organizations = normalizeOrganizations(data.organizations);
+      const compatibilityStatus = normalizeAgentsCompatibilityStatus(data.compatibility);
       const agents = normalizeAgents(data.agents);
       const governanceFilters = syncGovernanceFilters(state.governanceFilters, organizations, agents);
       const governancePayload = {
@@ -917,6 +923,7 @@ export function createAgentsController(app) {
       setState({
         status: "ready",
         loading: false,
+        compatibilityStatus,
         organizations,
         agents,
         organizationGovernanceOverview: normalizeGovernanceOverview(overviewData.overview),
@@ -2113,6 +2120,31 @@ async function postAgents(url, payload) {
   }
 
   return data ?? {};
+}
+
+function normalizeAgentsCompatibilityStatus(value) {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const accessMode = typeof value.accessMode === "string" ? value.accessMode : "local_legacy";
+  const statusLevel = value.statusLevel === "error" ? "error" : "warning";
+  const message = typeof value.message === "string" ? value.message : "";
+  const platformBaseUrl = typeof value.platformBaseUrl === "string" ? value.platformBaseUrl : "";
+
+  if (value.panelOwnership !== "platform") {
+    return null;
+  }
+
+  return {
+    panelOwnership: "platform",
+    accessMode: ["platform_gateway", "local_legacy", "invalid_gateway_config"].includes(accessMode)
+      ? accessMode
+      : "local_legacy",
+    statusLevel,
+    message: message.trim(),
+    platformBaseUrl: platformBaseUrl.trim(),
+  };
 }
 
 async function safeReadJson(response) {

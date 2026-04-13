@@ -27,6 +27,13 @@ test("load 会读取 agent 列表并补齐当前选中 agent 的任务与 mailbo
 
       if (url === "/api/agents/list") {
         return jsonResponse({
+          compatibility: {
+            panelOwnership: "platform",
+            accessMode: "platform_gateway",
+            statusLevel: "warning",
+            message: "当前 Platform Agents 面板只是主 Themis 里的平台兼容入口；实际读写已走平台控制面，后续会迁到独立 Platform 前端。",
+            platformBaseUrl: "http://platform.example.com",
+          },
           organizations: [{ organizationId: "org-1", displayName: "老板团队" }],
           agents: [
             {
@@ -209,6 +216,9 @@ test("load 会读取 agent 列表并补齐当前选中 agent 的任务与 mailbo
     );
     assert.equal(result.organizations.length, 1);
     assert.equal(result.agents.length, 1);
+    assert.equal(result.compatibilityStatus?.panelOwnership, "platform");
+    assert.equal(result.compatibilityStatus?.accessMode, "platform_gateway");
+    assert.equal(result.compatibilityStatus?.platformBaseUrl, "http://platform.example.com");
     assert.equal(result.selectedAgentId, "agent-backend");
     assert.equal(result.organizationGovernanceOverview?.urgentParentCount, 1);
     assert.equal(result.organizationGovernanceOverview?.managerHotspots?.length, 1);

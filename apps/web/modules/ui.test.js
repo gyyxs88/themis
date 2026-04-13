@@ -525,6 +525,132 @@ test("renderAgentsState 会渲染组织级治理摘要与 manager 热点卡", ()
   assert.ok(harness.dom.agentsGovernanceHotspotsList.innerHTML.includes('data-agent-governance-hotspot-focus="agent-manager"'));
 });
 
+test("renderAgentsState 会把 Platform Agents 兼容提示渲染到状态栏", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      agents: {
+        status: "ready",
+        errorMessage: "",
+        noticeMessage: "",
+        loading: false,
+        detailLoading: false,
+        workItemDetailLoading: false,
+        creating: false,
+        dispatching: false,
+        updatingSpawnPolicy: false,
+        savingExecutionBoundary: false,
+        approvingSpawnSuggestionId: "",
+        approvingIdleRecoverySuggestionId: "",
+        ignoringSpawnSuggestionId: "",
+        rejectingSpawnSuggestionId: "",
+        restoringSpawnSuggestionId: "",
+        ackingMailboxEntryId: "",
+        cancelingWorkItemId: "",
+        escalatingWorkItemId: "",
+        respondingWorkItemId: "",
+        lifecycleUpdatingAgentId: "",
+        lifecycleUpdatingAction: "",
+        compatibilityStatus: {
+          panelOwnership: "platform",
+          accessMode: "platform_gateway",
+          statusLevel: "warning",
+          message: "当前 Platform Agents 面板只是主 Themis 里的平台兼容入口；实际读写已走平台控制面，后续会迁到独立 Platform 前端。",
+          platformBaseUrl: "http://platform.example.com",
+        },
+        organizations: [],
+        agents: [],
+        organizationGovernanceOverview: null,
+        organizationWaitingSummary: null,
+        organizationWaitingItems: [],
+        organizationCollaborationSummary: null,
+        organizationCollaborationItems: [],
+        spawnPolicies: [],
+        spawnSuggestions: [],
+        suppressedSpawnSuggestions: [],
+        spawnAuditLogs: [],
+        idleRecoverySuggestions: [],
+        idleRecoveryAuditLogs: [],
+        governanceFilters: {
+          organizationId: "",
+          managerAgentId: "",
+          attentionLevel: "all",
+          waitingFor: "any",
+          staleOnly: false,
+          failedOnly: false,
+          limit: 20,
+        },
+        organizationWaitingResponseDrafts: {},
+        selectedAgentId: "",
+        selectedAgent: null,
+        selectedAgentPrincipal: null,
+        selectedOrganization: null,
+        selectedWorkspacePolicy: null,
+        selectedRuntimeProfile: null,
+        availableAuthAccounts: [],
+        availableThirdPartyProviders: [],
+        handoffs: [],
+        handoffTimeline: [],
+        workItems: [],
+        mailboxItems: [],
+        selectedWorkItemId: "",
+        selectedWorkItemDetail: null,
+        humanResponseDraft: {
+          workItemId: "",
+          decision: "",
+          inputText: "",
+        },
+        spawnPolicyDraft: {
+          organizationId: "",
+          maxActiveAgents: 12,
+          maxActiveAgentsPerRole: 3,
+        },
+        executionBoundaryDraft: {
+          workspacePath: "",
+          additionalDirectoriesText: "",
+          allowNetworkAccess: true,
+          accessMode: "auth",
+          authAccountId: "",
+          thirdPartyProviderId: "",
+          model: "",
+          reasoning: "",
+          memoryMode: "",
+          sandboxMode: "workspace-write",
+          approvalPolicy: "never",
+          webSearchMode: "live",
+          networkAccessEnabled: true,
+        },
+        createDraft: {
+          departmentRole: "",
+          displayName: "",
+          mission: "",
+        },
+        dispatchDraft: {
+          targetAgentId: "",
+          sourceType: "human",
+          sourceAgentId: "",
+          dispatchReason: "",
+          goal: "",
+          contextPacketText: "",
+          priority: "normal",
+        },
+      },
+    },
+  });
+
+  harness.renderer.renderAgentsState();
+
+  assert.equal(
+    harness.dom.agentsStatusNote.textContent,
+    "当前 Platform Agents 面板只是主 Themis 里的平台兼容入口；实际读写已走平台控制面，后续会迁到独立 Platform 前端。",
+  );
+  assert.equal(harness.dom.agentsStatusNote.dataset.state, "warning");
+});
+
 test("renderAgentsState 会渲染组织级跨父任务汇总台卡片，并暴露父任务跳转动作", () => {
   const harness = createHarness({
     actionBarState: {
