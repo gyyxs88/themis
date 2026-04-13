@@ -44,6 +44,7 @@ npm run build
 ```bash
 THEMIS_HOST=0.0.0.0
 THEMIS_PORT=3100
+THEMIS_UPDATE_SYSTEMD_SERVICE=themis-platform.service
 
 THEMIS_PLATFORM_CONTROL_PLANE_DRIVER=mysql
 THEMIS_PLATFORM_MYSQL_DATABASE=themis_platform
@@ -66,6 +67,7 @@ THEMIS_PLATFORM_MYSQL_DATABASE=themis_platform
 
 - `THEMIS_MANAGED_AGENT_CONTROL_PLANE_DATABASE_FILE` 在这里不再表示“真相源 SQLite”，而是平台进程本地 shared cache 文件
 - `infra/local/themis.db` 仍继续承载本地 execution state、auth、thread/history
+- `THEMIS_UPDATE_SYSTEMD_SERVICE=themis-platform.service` 用来让受控升级完成后自动重启平台层，而不是默认的 `themis-prod.service`
 
 ## 3. 启动方式
 

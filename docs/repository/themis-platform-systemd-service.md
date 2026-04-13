@@ -44,6 +44,7 @@ npm run build
 ```bash
 THEMIS_HOST=0.0.0.0
 THEMIS_PORT=3100
+THEMIS_UPDATE_SYSTEMD_SERVICE=themis-platform.service
 
 THEMIS_PLATFORM_CONTROL_PLANE_DRIVER=mysql
 THEMIS_PLATFORM_MYSQL_DATABASE=themis_platform
@@ -67,6 +68,9 @@ THEMIS_PLATFORM_MYSQL_DATABASE=themis_platform
 - MySQL 承载 shared control plane 真相源
 - `THEMIS_MANAGED_AGENT_CONTROL_PLANE_DATABASE_FILE` 是平台本地 shared cache SQLite
 - `infra/local/themis.db` 仍继续承载本地 execution state、auth、thread/history
+- `THEMIS_UPDATE_SYSTEMD_SERVICE=themis-platform.service` 用来让 `./themis update apply` 在平台机上自动重启正确的 `systemd --user` 服务，而不是默认去找 `themis-prod.service`
+
+`infra/platform/` 是平台机本地 shared cache 运行态目录，应视为和 `infra/local/` 同级的本机数据；如果这类目录没有被 Git 忽略，正式实例自更新会因为工作区变脏而被拦下。
 
 如果平台机启用了 `ufw` 且默认 `deny incoming`，还要额外放行平台端口给局域网：
 

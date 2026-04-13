@@ -29,6 +29,7 @@ memory/sessions/*.md
 
 # Local infrastructure or overrides
 infra/local/
+infra/platform/
 *.local
 *.local.*
 .worktrees/
