@@ -350,3 +350,7 @@ THEMIS_UPDATE_CHANNEL=release
 如果你要做第一轮真实环境联调，可直接照着：
 
 - [首轮局域网联调清单](./docs/repository/themis-first-lan-joint-test-checklist.md)
+
+如果你准备按“平台层 / 主 Themis / Worker Node”三层并行推进后续开发，可直接参考：
+
+- [三层并行开发约定](./docs/repository/themis-three-layer-parallel-development-contract.md)
