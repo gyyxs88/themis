@@ -28,6 +28,8 @@
 
 - 按 [平台层切 MySQL 操作说明](./themis-platform-mysql-control-plane-cutover.md) 准备好 `.env.local`
 - 按 [平台层 systemd 用户服务说明](./themis-platform-systemd-service.md) 准备好常驻模板
+- 如果平台机启用了 `ufw` 且默认拒绝入站，先放行 `3100/tcp` 给局域网
+- 先确认 shared control plane 里已经存在后续 `gateway / worker` 会使用的 `ownerPrincipalId` 及默认组织；只发平台服务令牌还不够，否则 Worker 侧接口会报 `Owner principal not found.`
 
 ### 主 Themis
 
@@ -60,7 +62,7 @@ npm run start:platform
 
 - 日志里出现 `Control plane driver mysql`
 - 日志里出现 `Mirror bootstrap source ...`
-- `curl http://127.0.0.1:3100/api/health` 正常返回
+- `curl http://127.0.0.1:3100/api/health` 至少能拿到 HTTP 响应；如果返回 `WEB_ACCESS_REQUIRED`，继续用 Bearer 令牌检查 `/api/platform/agents/list` 与 `/api/platform/nodes/list`
 
 ## 2. 起主 Themis
 

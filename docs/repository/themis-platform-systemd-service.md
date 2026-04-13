@@ -68,6 +68,14 @@ THEMIS_PLATFORM_MYSQL_DATABASE=themis_platform
 - `THEMIS_MANAGED_AGENT_CONTROL_PLANE_DATABASE_FILE` 是平台本地 shared cache SQLite
 - `infra/local/themis.db` 仍继续承载本地 execution state、auth、thread/history
 
+如果平台机启用了 `ufw` 且默认 `deny incoming`，还要额外放行平台端口给局域网：
+
+```bash
+sudo ufw allow from 192.168.31.0/24 to any port 3100 proto tcp
+```
+
+否则即使平台进程已经监听 `0.0.0.0:3100`，局域网其他机器也会直接超时。
+
 ## 3. 先做一次前台启动验证
 
 正式挂常驻前，先直接前台跑：
@@ -87,6 +95,22 @@ npm run start:platform
 
 ```bash
 curl -sS http://127.0.0.1:3100/api/health
+```
+
+如果这里返回的是 `WEB_ACCESS_REQUIRED`，不要误判为平台没起来。
+这说明 HTTP 服务已经响应，只是该路径当前仍受 Web Access 保护。
+平台层更稳妥的验活方式，是直接带 Bearer 令牌打 `/api/platform/*`：
+
+```bash
+curl -sS -X POST http://127.0.0.1:3100/api/platform/agents/list \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <gatewayToken>' \
+  --data '{"ownerPrincipalId":"<principalId>"}'
+
+curl -sS -X POST http://127.0.0.1:3100/api/platform/nodes/list \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <workerToken>' \
+  --data '{"ownerPrincipalId":"<principalId>"}'
 ```
 
 ## 4. 安装 systemd 用户服务
@@ -156,6 +180,8 @@ journalctl --user -u themis-platform.service -f
 - `/api/platform/nodes/list`
 - `/api/platform/agents/list`
 - `/api/platform/work-items/list`
+
+如果 `worker` 侧接口返回 `Owner principal not found.`，优先检查 shared control plane 里是否已经存在与平台令牌绑定的 `ownerPrincipalId` 及其默认组织。只发平台令牌还不够，空平台还需要先补 owner principal / organization 这层基础事实。
 
 ## 7. 回退
 
