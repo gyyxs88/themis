@@ -384,8 +384,24 @@ test("platform surface 不再复用主 Themis Web 静态页面", async () => {
     assert.match(homeResponse.headers.get("content-type") ?? "", /^text\/html\b/i);
     const homeHtml = await homeResponse.text();
     assert.match(homeHtml, /Themis Platform/);
-    assert.match(homeHtml, /平台控制面入口占位页/);
+    assert.match(homeHtml, /独立平台控制面/);
+    assert.match(homeHtml, /platform\.css/);
+    assert.match(homeHtml, /platform\.js/);
     assert.equal(homeHtml.includes("Themis Workspace"), false);
+
+    const cssResponse = await fetch(`${baseUrl}/platform.css`, {
+      headers: authHeaders,
+    });
+    assert.equal(cssResponse.status, 200);
+    assert.match(cssResponse.headers.get("content-type") ?? "", /^text\/css\b/i);
+    assert.match(await cssResponse.text(), /platform-shell/);
+
+    const scriptResponse = await fetch(`${baseUrl}/platform.js`, {
+      headers: authHeaders,
+    });
+    assert.equal(scriptResponse.status, 200);
+    assert.match(scriptResponse.headers.get("content-type") ?? "", /^text\/javascript\b/i);
+    assert.match(await scriptResponse.text(), /summarizeNodes/);
 
     const assetResponse = await fetch(`${baseUrl}/styles.css`, {
       headers: authHeaders,

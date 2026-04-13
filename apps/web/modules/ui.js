@@ -621,6 +621,8 @@ export function createRenderer(app) {
       delete dom.agentsStatusNote.dataset.state;
     }
 
+    syncAgentsPlatformEntry(dom, compatibilityStatus);
+
     dom.agentsCreateRoleInput.value = createDraft.departmentRole;
     dom.agentsCreateNameInput.value = createDraft.displayName;
     dom.agentsCreateMissionInput.value = createDraft.mission;
@@ -2949,6 +2951,7 @@ function normalizeAgentsCompatibilityStatusState(value) {
   const statusLevel = value.statusLevel === "error" ? "error" : "warning";
   const message = typeof value.message === "string" ? value.message : "";
   const platformBaseUrl = typeof value.platformBaseUrl === "string" ? value.platformBaseUrl : "";
+  const ownerPrincipalId = typeof value.ownerPrincipalId === "string" ? value.ownerPrincipalId : "";
 
   if (value.panelOwnership !== "platform") {
     return null;
@@ -2962,7 +2965,65 @@ function normalizeAgentsCompatibilityStatusState(value) {
     statusLevel,
     message: message.trim(),
     platformBaseUrl: platformBaseUrl.trim(),
+    ownerPrincipalId: ownerPrincipalId.trim(),
   };
+}
+
+function syncAgentsPlatformEntry(dom, compatibilityStatus) {
+  if (!dom.agentsOpenPlatformLink || !dom.agentsOpenPlatformNote) {
+    return;
+  }
+
+  const platformHomeUrl = resolveAgentsPlatformHomeUrl(compatibilityStatus);
+  const directLinkAvailable = Boolean(platformHomeUrl);
+  dom.agentsOpenPlatformLink.href = directLinkAvailable ? platformHomeUrl : "#";
+  dom.agentsOpenPlatformLink.classList.toggle("disabled", !directLinkAvailable);
+  dom.agentsOpenPlatformLink.setAttribute("aria-disabled", directLinkAvailable ? "false" : "true");
+  dom.agentsOpenPlatformLink.tabIndex = directLinkAvailable ? 0 : -1;
+  dom.agentsOpenPlatformNote.textContent = resolveAgentsPlatformEntryNote(compatibilityStatus, platformHomeUrl);
+}
+
+function resolveAgentsPlatformHomeUrl(compatibilityStatus) {
+  if (!compatibilityStatus?.platformBaseUrl) {
+    return "";
+  }
+
+  const baseUrl = compatibilityStatus.platformBaseUrl.trim();
+
+  if (!baseUrl) {
+    return "";
+  }
+
+  try {
+    const platformUrl = new URL(baseUrl);
+    const ownerPrincipalId = typeof compatibilityStatus.ownerPrincipalId === "string"
+      ? compatibilityStatus.ownerPrincipalId.trim()
+      : "";
+
+    if (ownerPrincipalId) {
+      platformUrl.searchParams.set("ownerPrincipalId", ownerPrincipalId);
+    }
+
+    return platformUrl.toString();
+  } catch {
+    return baseUrl;
+  }
+}
+
+function resolveAgentsPlatformEntryNote(compatibilityStatus, platformHomeUrl) {
+  if (platformHomeUrl) {
+    return `当前已提供独立 Platform 页面入口：${platformHomeUrl}。建议优先在那里继续做平台治理。`;
+  }
+
+  if (compatibilityStatus?.accessMode === "local_legacy") {
+    return "当前还没有可直达的独立 Platform 页面；这里只保留过渡期兼容治理面。";
+  }
+
+  if (compatibilityStatus?.accessMode === "invalid_gateway_config") {
+    return "当前平台 Gateway 配置异常，暂时无法生成独立 Platform 页面入口。";
+  }
+
+  return "已配置平台上游后，这里会给出独立 Platform 页面的直达入口。";
 }
 
 function normalizeAgentCreateDraft(draft) {

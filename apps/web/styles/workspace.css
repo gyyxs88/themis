@@ -421,6 +421,19 @@
   gap: 8px;
 }
 
+.settings-sidebar-group {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(29, 29, 31, 0.08);
+}
+
+.settings-sidebar-copy {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .settings-nav-button {
   width: 100%;
   display: grid;
@@ -455,6 +468,18 @@
 .settings-nav-title {
   font-size: 14px;
   font-weight: 600;
+}
+
+.toolbar-link-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.toolbar-link-button.disabled {
+  pointer-events: none;
+  opacity: 0.5;
 }
 
 .settings-modal-content {

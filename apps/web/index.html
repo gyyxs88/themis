@@ -321,18 +321,6 @@
                 </button>
 
                 <button
-                  id="settings-agents-tab"
-                  type="button"
-                  class="settings-nav-button"
-                  data-settings-section="agents"
-                  role="tab"
-                  aria-controls="settings-agents-section"
-                  aria-selected="false"
-                >
-                  <span class="settings-nav-title">Platform Agents</span>
-                </button>
-
-                <button
                   id="settings-memory-candidates-tab"
                   type="button"
                   class="settings-nav-button"
@@ -367,6 +355,26 @@
                 >
                   <span class="settings-nav-title">模式切换</span>
                 </button>
+              </div>
+
+              <div class="settings-sidebar-group">
+                <p class="settings-sidebar-kicker">外部平台兼容入口</p>
+                <div class="settings-modal-nav" role="tablist" aria-label="平台兼容入口">
+                  <button
+                    id="settings-agents-tab"
+                    type="button"
+                    class="settings-nav-button"
+                    data-settings-section="agents"
+                    role="tab"
+                    aria-controls="settings-agents-section"
+                    aria-selected="false"
+                  >
+                    <span class="settings-nav-title">Platform Agents</span>
+                  </button>
+                </div>
+                <p class="settings-sidebar-copy">
+                  这里只保留迁移期的外部平台兼容入口，不再算主 Themis 的原生设置分类。
+                </p>
               </div>
             </aside>
 
@@ -1098,20 +1106,35 @@
                 <section class="workspace-tool-group">
                   <div class="tool-group-head">
                     <h3>Platform Agents</h3>
-                    <span class="meta-label">迁移中的兼容治理面</span>
+                    <span class="meta-label">外部平台兼容入口</span>
                   </div>
 
                   <p class="settings-section-copy">
-                    这是临时挂在主 Themis 里的平台兼容面板。这里展示组织级持久化 agent、任务单和内部信箱，并只保留迁移期所需的最小治理动作。
+                    这块已不再算主 Themis 的原生页面，只是迁移期保留的外部平台兼容入口。优先从这里跳到独立 Platform 页面；只有过渡期排障时才继续使用下方兼容治理面。
                   </p>
 
                   <div class="settings-stack">
                     <div class="settings-inline-actions">
                       <button id="agents-refresh-button" type="button" class="toolbar-button subtle">刷新</button>
+                      <a
+                        id="agents-open-platform-link"
+                        class="toolbar-button subtle toolbar-link-button disabled"
+                        href="#"
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        aria-disabled="true"
+                        tabindex="-1"
+                      >
+                        打开 Platform
+                      </a>
                       <p class="settings-inline-copy">
                         会同步拉取 agent 列表、当前选中 agent 的 work item，以及 mailbox 摘要。
                       </p>
                     </div>
+
+                    <p id="agents-open-platform-note" class="settings-section-copy">
+                      已配置平台上游后，这里会给出独立 Platform 页面的直达入口。
+                    </p>
 
                     <div class="agents-summary-grid">
                       <article class="agent-summary-card">

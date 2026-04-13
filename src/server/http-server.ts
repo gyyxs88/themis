@@ -9,7 +9,7 @@ import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import type { RuntimeEngine, TaskRuntimeFacade } from "../types/index.js";
 import { WebAccessService } from "../core/web-access.js";
 import { ThemisUpdateService } from "../diagnostics/update-service.js";
-import { serveWebAsset } from "./http-assets.js";
+import { servePlatformAsset, serveWebAsset } from "./http-assets.js";
 import {
   handleAgentArchive,
   handleAgentCollaborationDashboard,
@@ -159,7 +159,7 @@ import {
   handleScheduledTaskCreate,
   handleScheduledTaskList,
 } from "./http-scheduled-tasks.js";
-import { writeHtml, writeJson } from "./http-responses.js";
+import { writeJson } from "./http-responses.js";
 import { maybeHandleWebAccessRoute, requireWebAccess } from "./http-web-access.js";
 import {
   handleSessionForkContext,
@@ -935,72 +935,7 @@ async function serveHttpSurfaceAsset(
     return serveWebAsset(pathname, response, headOnly);
   }
 
-  if (pathname === "/" || pathname === "/index.html") {
-    writeHtml(response, 200, createPlatformSurfaceHomeHtml(), headOnly);
-    return;
-  }
-
-  writeJson(response, 404, {
-    error: {
-      code: "NOT_FOUND",
-      message: `Unknown platform asset: ${pathname}`,
-    },
-  }, headOnly);
-}
-
-function createPlatformSurfaceHomeHtml(): string {
-  return `<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Themis Platform</title>
-    <style>
-      :root {
-        color-scheme: light;
-        font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
-      }
-
-      body {
-        margin: 0;
-        background: #f4f1ea;
-        color: #1d1d1f;
-      }
-
-      main {
-        max-width: 720px;
-        margin: 0 auto;
-        padding: 72px 24px;
-      }
-
-      h1 {
-        margin: 0 0 16px;
-        font-size: 40px;
-        line-height: 1.1;
-      }
-
-      p {
-        margin: 0 0 16px;
-        font-size: 16px;
-        line-height: 1.7;
-      }
-
-      code {
-        padding: 2px 6px;
-        border-radius: 6px;
-        background: rgba(29, 29, 31, 0.08);
-      }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>Themis Platform</h1>
-      <p>这是平台控制面入口占位页，用来明确区分平台层与主 Themis Web。</p>
-      <p>节点、租约、调度和值班面板将迁移到独立的平台仓库与独立前端，不再复用主 Themis 页面或其静态资源。</p>
-      <p>当前可继续通过 <code>/api/platform/*</code> 和平台侧 CLI 推进控制面联调。</p>
-    </main>
-  </body>
-</html>`;
+  return servePlatformAsset(pathname, response, headOnly);
 }
 
 function normalizeRuntimeRegistry(

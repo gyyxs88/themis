@@ -95,6 +95,8 @@ export function createDom() {
     settingsThirdPartySection: document.getElementById("settings-third-party-section"),
     settingsModeSwitchSection: document.getElementById("settings-mode-switch-section"),
     agentsRefreshButton: document.getElementById("agents-refresh-button"),
+    agentsOpenPlatformLink: document.getElementById("agents-open-platform-link"),
+    agentsOpenPlatformNote: document.getElementById("agents-open-platform-note"),
     agentsStatusNote: document.getElementById("agents-status-note"),
     agentsSummaryOrganizations: document.getElementById("agents-summary-organizations"),
     agentsSummaryAgents: document.getElementById("agents-summary-agents"),

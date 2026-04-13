@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Themis Platform</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23111816'/%3E%3Cpath d='M16 18h32v8H36v20h-8V26H16z' fill='%23f4efe7'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/platform.css" />
+  </head>
+  <body>
+    <div class="platform-shell">
+      <header class="platform-hero">
+        <div>
+          <p class="platform-kicker">Control Plane</p>
+          <h1>Themis Platform</h1>
+          <p class="platform-copy">
+            独立平台控制面首版。当前先接入 Worker Nodes 总览，明确平台层与主 Themis 页面已经开始分家。
+          </p>
+        </div>
+        <div class="platform-session-card">
+          <p class="platform-session-label">当前 Web 会话</p>
+          <strong id="platform-session-title">正在确认登录状态</strong>
+          <p id="platform-session-note" class="platform-session-note">
+            登录通过后，这里会显示当前平台访问口令标签。
+          </p>
+        </div>
+      </header>
+
+      <main class="platform-main">
+        <section class="platform-panel">
+          <div class="platform-panel-head">
+            <div>
+              <p class="platform-panel-kicker">Access</p>
+              <h2>平台 ownerPrincipalId</h2>
+            </div>
+            <button id="platform-refresh-button" type="button" class="platform-button subtle">刷新节点</button>
+          </div>
+
+          <p class="platform-panel-copy">
+            当前首版平台页会按 `ownerPrincipalId` 拉取节点总览。你可以从主 Themis 的兼容入口跳转过来，或在这里手动填写。
+          </p>
+
+          <form id="platform-owner-form" class="platform-owner-form">
+            <label class="platform-field">
+              <span>ownerPrincipalId</span>
+              <input
+                id="platform-owner-input"
+                type="text"
+                placeholder="例如：principal-platform-owner"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </label>
+            <button id="platform-owner-submit" type="submit" class="platform-button">加载节点</button>
+          </form>
+
+          <p id="platform-owner-note" class="platform-inline-note">
+            如果你是从主 Themis 的兼容入口跳转过来的，这里通常会自动带上当前 ownerPrincipalId。
+          </p>
+        </section>
+
+        <section class="platform-panel">
+          <div class="platform-panel-head">
+            <div>
+              <p class="platform-panel-kicker">Worker Fleet</p>
+              <h2>Nodes 总览</h2>
+            </div>
+            <p class="platform-panel-copy">当前只接入节点总览；租约、调度和值班面板会继续往这里收口。</p>
+          </div>
+
+          <div class="platform-summary-grid">
+            <article class="platform-summary-card">
+              <span>全部节点</span>
+              <strong id="platform-summary-total">0</strong>
+            </article>
+            <article class="platform-summary-card">
+              <span>在线</span>
+              <strong id="platform-summary-online">0</strong>
+            </article>
+            <article class="platform-summary-card">
+              <span>排水中</span>
+              <strong id="platform-summary-draining">0</strong>
+            </article>
+            <article class="platform-summary-card">
+              <span>离线</span>
+              <strong id="platform-summary-offline">0</strong>
+            </article>
+          </div>
+
+          <p id="platform-nodes-status" class="platform-inline-note">
+            还没有读取节点数据。
+          </p>
+          <p id="platform-nodes-empty" class="platform-empty-state">
+            先填写 ownerPrincipalId，再从平台控制面读取节点列表。
+          </p>
+          <div id="platform-nodes-list" class="platform-nodes-list"></div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/platform.js"></script>
+  </body>
+</html>

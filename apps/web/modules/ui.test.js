@@ -561,6 +561,7 @@ test("renderAgentsState 会把 Platform Agents 兼容提示渲染到状态栏", 
           statusLevel: "warning",
           message: "当前 Platform Agents 面板只是主 Themis 里的平台兼容入口；实际读写已走平台控制面，后续会迁到独立 Platform 前端。",
           platformBaseUrl: "http://platform.example.com",
+          ownerPrincipalId: "principal-platform-owner",
         },
         organizations: [],
         agents: [],
@@ -649,6 +650,15 @@ test("renderAgentsState 会把 Platform Agents 兼容提示渲染到状态栏", 
     "当前 Platform Agents 面板只是主 Themis 里的平台兼容入口；实际读写已走平台控制面，后续会迁到独立 Platform 前端。",
   );
   assert.equal(harness.dom.agentsStatusNote.dataset.state, "warning");
+  assert.equal(
+    harness.dom.agentsOpenPlatformLink.href,
+    "http://platform.example.com/?ownerPrincipalId=principal-platform-owner",
+  );
+  assert.equal(harness.dom.agentsOpenPlatformLink.getAttribute("aria-disabled"), "false");
+  assert.match(
+    harness.dom.agentsOpenPlatformNote.textContent,
+    /http:\/\/platform\.example\.com\/\?ownerPrincipalId=principal-platform-owner/,
+  );
 });
 
 test("renderAgentsState 会渲染组织级跨父任务汇总台卡片，并暴露父任务跳转动作", () => {
@@ -1822,6 +1832,8 @@ function createHarness({ actionBarState, threadControlState = null, runtime = {}
       },
     },
     agentsRefreshButton: createButtonStub(),
+    agentsOpenPlatformLink: createLinkStub(),
+    agentsOpenPlatformNote: createTextStub(),
     agentsStatusNote: createTextStub(),
     agentsSummaryOrganizations: createTextStub(),
     agentsSummaryAgents: createTextStub(),
@@ -2178,6 +2190,14 @@ function createButtonStub() {
     getAttribute(name) {
       return this.attributes[name];
     },
+  };
+}
+
+function createLinkStub() {
+  return {
+    ...createButtonStub(),
+    href: "#",
+    tabIndex: -1,
   };
 }
 

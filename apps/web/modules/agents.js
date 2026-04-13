@@ -2131,6 +2131,7 @@ function normalizeAgentsCompatibilityStatus(value) {
   const statusLevel = value.statusLevel === "error" ? "error" : "warning";
   const message = typeof value.message === "string" ? value.message : "";
   const platformBaseUrl = typeof value.platformBaseUrl === "string" ? value.platformBaseUrl : "";
+  const ownerPrincipalId = typeof value.ownerPrincipalId === "string" ? value.ownerPrincipalId : "";
 
   if (value.panelOwnership !== "platform") {
     return null;
@@ -2144,6 +2145,7 @@ function normalizeAgentsCompatibilityStatus(value) {
     statusLevel,
     message: message.trim(),
     platformBaseUrl: platformBaseUrl.trim(),
+    ownerPrincipalId: ownerPrincipalId.trim(),
   };
 }
 

@@ -61,7 +61,7 @@ npm run dev:web
 npm run dev:platform
 ```
 
-平台进程当前只保留 `Themis Platform` 入口占位页、Web 鉴权、`/api/health` 和 `/api/platform/*` 控制面接口，不再复用主 `Themis Workspace` 的 Web 静态壳，也不会继续暴露主 Themis 的任务、历史、身份等 HTTP API。
+平台进程当前保留独立的 `Themis Platform` 前端壳、Web 鉴权、`/api/health` 和 `/api/platform/*` 控制面接口，不再复用主 `Themis Workspace` 的 Web 静态壳，也不会继续暴露主 Themis 的任务、历史、身份等 HTTP API。当前平台页首版已接入 Worker Nodes 总览，后续会继续把租约、调度和值班面板收口到这里。
 
 4. 在浏览器打开：
 

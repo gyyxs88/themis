@@ -1410,6 +1410,7 @@ test("POST /api/agents/list、/detail 在配置平台上游后会改读 platform
             accessMode?: string;
             statusLevel?: string;
             platformBaseUrl?: string;
+            ownerPrincipalId?: string;
           };
           organizations?: Array<{ organizationId?: string; displayName?: string }>;
           agents?: Array<{ agentId?: string; displayName?: string }>;
@@ -1419,6 +1420,7 @@ test("POST /api/agents/list、/detail 在配置平台上游后会改读 platform
         assert.equal(listPayload.compatibility?.accessMode, "platform_gateway");
         assert.equal(listPayload.compatibility?.statusLevel, "warning");
         assert.equal(listPayload.compatibility?.platformBaseUrl, platformServer.baseUrl);
+        assert.equal(listPayload.compatibility?.ownerPrincipalId, listPayload.identity?.principalId);
         assert.deepEqual(listPayload.organizations, [
           {
             organizationId: "org-platform",
@@ -1479,17 +1481,22 @@ test("POST /api/agents/list 会显式暴露当前 Platform Agents 兼容模式",
 
       assert.equal(listResponse.status, 200);
       const listPayload = await listResponse.json() as {
+        identity?: {
+          principalId?: string;
+        };
         compatibility?: {
           panelOwnership?: string;
           accessMode?: string;
           statusLevel?: string;
           message?: string;
+          ownerPrincipalId?: string;
         };
       };
       assert.equal(listPayload.compatibility?.panelOwnership, "platform");
       assert.equal(listPayload.compatibility?.accessMode, "local_legacy");
       assert.equal(listPayload.compatibility?.statusLevel, "warning");
       assert.match(listPayload.compatibility?.message ?? "", /本地 legacy 模式/);
+      assert.equal(listPayload.compatibility?.ownerPrincipalId, listPayload.identity?.principalId);
     });
   });
 });

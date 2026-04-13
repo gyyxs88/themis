@@ -248,6 +248,7 @@ export interface ManagedAgentGatewayCompatibilityStatus {
   statusLevel: "warning" | "error";
   message: string;
   platformBaseUrl?: string;
+  ownerPrincipalId?: string;
 }
 
 async function readAndNormalizePayload<T>(
@@ -382,7 +383,7 @@ export async function handleAgentList(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const compatibility = readManagedAgentGatewayCompatibilityStatus(process.env);
+    const compatibility = readManagedAgentGatewayCompatibilityStatus(process.env, identity.principalId);
     const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
     const result = gatewayClient
       ? await gatewayClient.listManagedAgents()
@@ -451,7 +452,10 @@ function createManagedAgentPlatformGatewayClientFromEnv(): ManagedAgentPlatformG
 
 export function readManagedAgentGatewayCompatibilityStatus(
   env: NodeJS.ProcessEnv = process.env,
+  ownerPrincipalId?: string,
 ): ManagedAgentGatewayCompatibilityStatus {
+  const normalizedOwnerPrincipalId = typeof ownerPrincipalId === "string" ? ownerPrincipalId.trim() : "";
+
   try {
     const config = readManagedAgentPlatformGatewayConfig(env);
 
@@ -462,6 +466,7 @@ export function readManagedAgentGatewayCompatibilityStatus(
         statusLevel: "warning",
         message: "当前 Platform Agents 面板只是主 Themis 里的平台兼容入口；实际读写已走平台控制面，后续会迁到独立 Platform 前端。",
         platformBaseUrl: config.baseUrl,
+        ...(normalizedOwnerPrincipalId ? { ownerPrincipalId: normalizedOwnerPrincipalId } : {}),
       };
     }
   } catch (error) {
@@ -472,6 +477,7 @@ export function readManagedAgentGatewayCompatibilityStatus(
       message: error instanceof Error
         ? error.message
         : "平台 Gateway 配置异常，当前 Platform Agents 兼容入口不可用。",
+      ...(normalizedOwnerPrincipalId ? { ownerPrincipalId: normalizedOwnerPrincipalId } : {}),
     };
   }
 
@@ -480,6 +486,7 @@ export function readManagedAgentGatewayCompatibilityStatus(
     accessMode: "local_legacy",
     statusLevel: "warning",
     message: "当前 Platform Agents 面板仍运行在本地 legacy 模式，只用于拆仓迁移过渡；不要继续在主 Themis 页面里扩平台治理功能。",
+    ...(normalizedOwnerPrincipalId ? { ownerPrincipalId: normalizedOwnerPrincipalId } : {}),
   };
 }
 
