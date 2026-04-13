@@ -2,6 +2,20 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ManagedAgentControlPlaneFacadeLike } from "../core/managed-agent-control-plane-facade.js";
 import type { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
 import type {
+  ManagedAgentPlatformAgentCreatePayload,
+  ManagedAgentPlatformAgentDetailPayload,
+  ManagedAgentPlatformAgentExecutionBoundaryUpdatePayload,
+  ManagedAgentPlatformAgentIdleApprovePayload,
+  ManagedAgentPlatformAgentLifecyclePayload,
+  ManagedAgentPlatformAgentSpawnApprovePayload,
+  ManagedAgentPlatformAgentSpawnPolicyUpdatePayload,
+  ManagedAgentPlatformAgentSpawnSuggestionActionPayload,
+  ManagedAgentPlatformAgentSpawnSuggestionRestorePayload,
+  ManagedAgentPlatformCollaborationDashboardPayload,
+  ManagedAgentPlatformGovernanceFiltersPayload,
+  ManagedAgentPlatformWaitingQueueListPayload,
+} from "../contracts/managed-agent-platform-agents.js";
+import type {
   ManagedAgentPlatformHandoffListPayload,
   ManagedAgentPlatformMailboxAckPayload,
   ManagedAgentPlatformMailboxListPayload,
@@ -60,126 +74,6 @@ import { getPlatformServiceAuthContext } from "./http-web-access.js";
 
 type ManagedAgentControlPlaneFacade = ManagedAgentControlPlaneFacadeLike;
 export type ManagedAgentWorkItemCancellationService = Pick<ManagedAgentExecutionService, "cancelWorkItem">;
-
-interface PlatformAgentCreatePayload {
-  ownerPrincipalId: string;
-  agent: {
-    displayName?: string;
-    departmentRole: string;
-    mission?: string;
-    organizationId?: string;
-    supervisorAgentId?: string;
-  };
-}
-
-interface PlatformAgentListPayload {
-  ownerPrincipalId: string;
-}
-
-interface PlatformAgentDetailPayload extends PlatformAgentListPayload {
-  agentId: string;
-}
-
-interface PlatformAgentExecutionBoundaryUpdatePayload extends PlatformAgentListPayload {
-  agentId: string;
-  boundary: {
-    workspacePolicy?: {
-      displayName?: string;
-      workspacePath: string;
-      additionalDirectories?: string[];
-      allowNetworkAccess?: boolean;
-    };
-    runtimeProfile?: {
-      displayName?: string;
-      model?: string;
-      reasoning?: ReasoningLevel;
-      memoryMode?: MemoryMode;
-      sandboxMode?: SandboxMode;
-      webSearchMode?: WebSearchMode;
-      networkAccessEnabled?: boolean;
-      approvalPolicy?: ApprovalPolicy;
-      accessMode?: TaskAccessMode;
-      authAccountId?: string;
-      thirdPartyProviderId?: string;
-    };
-  };
-}
-
-interface PlatformAgentSpawnPolicyUpdatePayload extends PlatformAgentListPayload {
-  policy: {
-    organizationId?: string;
-    maxActiveAgents: number;
-    maxActiveAgentsPerRole: number;
-  };
-}
-
-interface PlatformAgentSpawnApprovePayload extends PlatformAgentListPayload {
-  agent: {
-    displayName?: string;
-    departmentRole: string;
-    mission?: string;
-    organizationId?: string;
-    supervisorAgentId?: string;
-  };
-}
-
-interface PlatformAgentSpawnSuggestionActionPayload extends PlatformAgentListPayload {
-  suggestion: {
-    suggestionId: string;
-    organizationId: string;
-    departmentRole: string;
-    displayName: string;
-    mission?: string;
-    rationale?: string;
-    supportingAgentId?: string;
-    supportingAgentDisplayName?: string;
-    suggestedSupervisorAgentId?: string;
-    openWorkItemCount?: number;
-    waitingWorkItemCount?: number;
-    highPriorityWorkItemCount?: number;
-    spawnPolicy?: unknown;
-    guardrail?: unknown;
-    auditFacts?: unknown;
-  };
-}
-
-interface PlatformAgentSpawnSuggestionRestorePayload extends PlatformAgentListPayload {
-  suggestion: {
-    suggestionId: string;
-    organizationId?: string;
-  };
-}
-
-interface PlatformAgentIdleApprovePayload extends PlatformAgentListPayload {
-  suggestion: {
-    suggestionId: string;
-    organizationId?: string;
-    agentId: string;
-    action: ManagedAgentIdleRecoveryAction;
-  };
-}
-
-interface PlatformAgentLifecyclePayload extends PlatformAgentListPayload {
-  agentId: string;
-}
-
-interface PlatformGovernanceFiltersPayload extends PlatformAgentListPayload {
-  organizationId?: string;
-  managerAgentId?: string;
-  attentionOnly?: boolean;
-  attentionLevels?: Array<"normal" | "attention" | "urgent">;
-  waitingFor?: "any" | "human" | "agent";
-  staleOnly?: boolean;
-  failedOnly?: boolean;
-}
-
-interface PlatformWaitingQueueListPayload extends PlatformGovernanceFiltersPayload {
-  limit?: number;
-}
-
-interface PlatformCollaborationDashboardPayload extends PlatformGovernanceFiltersPayload {
-  limit?: number;
-}
 
 async function readAndNormalizePayload<T extends ManagedAgentPlatformOwnerPayload>(
   request: IncomingMessage,
@@ -1399,7 +1293,7 @@ export async function handlePlatformWorkerRunComplete(
   }
 }
 
-function normalizePlatformAgentCreatePayload(value: unknown): PlatformAgentCreatePayload {
+function normalizePlatformAgentCreatePayload(value: unknown): ManagedAgentPlatformAgentCreatePayload {
   if (!isRecord(value) || !isRecord(value.agent)) {
     throw new Error("Request body.agent must be an object.");
   }
@@ -1421,7 +1315,7 @@ function normalizePlatformAgentCreatePayload(value: unknown): PlatformAgentCreat
   };
 }
 
-function normalizePlatformOwnerPayload(value: unknown): PlatformAgentListPayload {
+function normalizePlatformOwnerPayload(value: unknown): ManagedAgentPlatformOwnerPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -1431,7 +1325,7 @@ function normalizePlatformOwnerPayload(value: unknown): PlatformAgentListPayload
   };
 }
 
-function normalizePlatformAgentDetailPayload(value: unknown): PlatformAgentDetailPayload {
+function normalizePlatformAgentDetailPayload(value: unknown): ManagedAgentPlatformAgentDetailPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -1444,7 +1338,7 @@ function normalizePlatformAgentDetailPayload(value: unknown): PlatformAgentDetai
 
 function normalizePlatformAgentExecutionBoundaryUpdatePayload(
   value: unknown,
-): PlatformAgentExecutionBoundaryUpdatePayload {
+): ManagedAgentPlatformAgentExecutionBoundaryUpdatePayload {
   if (!isRecord(value) || !isRecord(value.boundary)) {
     throw new Error("Request body.boundary must be an object.");
   }
@@ -1515,7 +1409,7 @@ function normalizePlatformAgentExecutionBoundaryUpdatePayload(
   };
 }
 
-function normalizePlatformAgentSpawnPolicyUpdatePayload(value: unknown): PlatformAgentSpawnPolicyUpdatePayload {
+function normalizePlatformAgentSpawnPolicyUpdatePayload(value: unknown): ManagedAgentPlatformAgentSpawnPolicyUpdatePayload {
   if (!isRecord(value) || !isRecord(value.policy)) {
     throw new Error("Request body.policy must be an object.");
   }
@@ -1535,7 +1429,7 @@ function normalizePlatformAgentSpawnPolicyUpdatePayload(value: unknown): Platfor
   };
 }
 
-function normalizePlatformAgentSpawnApprovePayload(value: unknown): PlatformAgentSpawnApprovePayload {
+function normalizePlatformAgentSpawnApprovePayload(value: unknown): ManagedAgentPlatformAgentSpawnApprovePayload {
   if (!isRecord(value) || !isRecord(value.agent)) {
     throw new Error("Request body.agent must be an object.");
   }
@@ -1628,7 +1522,7 @@ function normalizePlatformProjectWorkspaceBindingUpsertPayload(
 
 function normalizePlatformAgentSpawnSuggestionActionPayload(
   value: unknown,
-): PlatformAgentSpawnSuggestionActionPayload {
+): ManagedAgentPlatformAgentSpawnSuggestionActionPayload {
   if (!isRecord(value) || !isRecord(value.suggestion)) {
     throw new Error("Request body.suggestion must be an object.");
   }
@@ -1673,7 +1567,7 @@ function normalizePlatformAgentSpawnSuggestionActionPayload(
 
 function normalizePlatformAgentSpawnSuggestionRestorePayload(
   value: unknown,
-): PlatformAgentSpawnSuggestionRestorePayload {
+): ManagedAgentPlatformAgentSpawnSuggestionRestorePayload {
   if (!isRecord(value) || !isRecord(value.suggestion)) {
     throw new Error("Request body.suggestion must be an object.");
   }
@@ -1689,7 +1583,7 @@ function normalizePlatformAgentSpawnSuggestionRestorePayload(
   };
 }
 
-function normalizePlatformAgentIdleApprovePayload(value: unknown): PlatformAgentIdleApprovePayload {
+function normalizePlatformAgentIdleApprovePayload(value: unknown): ManagedAgentPlatformAgentIdleApprovePayload {
   if (!isRecord(value) || !isRecord(value.suggestion)) {
     throw new Error("Request body.suggestion must be an object.");
   }
@@ -1707,11 +1601,11 @@ function normalizePlatformAgentIdleApprovePayload(value: unknown): PlatformAgent
   };
 }
 
-function normalizePlatformAgentLifecyclePayload(value: unknown): PlatformAgentLifecyclePayload {
+function normalizePlatformAgentLifecyclePayload(value: unknown): ManagedAgentPlatformAgentLifecyclePayload {
   return normalizePlatformAgentDetailPayload(value);
 }
 
-function normalizePlatformGovernanceFiltersPayload(value: unknown): PlatformGovernanceFiltersPayload {
+function normalizePlatformGovernanceFiltersPayload(value: unknown): ManagedAgentPlatformGovernanceFiltersPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -1740,7 +1634,7 @@ function normalizePlatformGovernanceFiltersPayload(value: unknown): PlatformGove
   };
 }
 
-function normalizePlatformWaitingQueueListPayload(value: unknown): PlatformWaitingQueueListPayload {
+function normalizePlatformWaitingQueueListPayload(value: unknown): ManagedAgentPlatformWaitingQueueListPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -1753,7 +1647,7 @@ function normalizePlatformWaitingQueueListPayload(value: unknown): PlatformWaiti
   };
 }
 
-function normalizePlatformCollaborationDashboardPayload(value: unknown): PlatformCollaborationDashboardPayload {
+function normalizePlatformCollaborationDashboardPayload(value: unknown): ManagedAgentPlatformCollaborationDashboardPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -2316,7 +2210,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function buildPlatformGovernanceFilters(
-  payload: PlatformGovernanceFiltersPayload & { limit?: number },
+  payload: ManagedAgentPlatformGovernanceFiltersPayload & { limit?: number },
 ): {
   organizationId?: string;
   managerAgentId?: string;

@@ -694,6 +694,204 @@ test("ManagedAgentPlatformGatewayClient 会按 mailbox 与 runs 契约读写平�
   });
 });
 
+test("ManagedAgentPlatformGatewayClient 会按 agents 与 governance 契约读写平台治理接口", async () => {
+  const calls: FetchCall[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    const headers = normalizeHeaders(init?.headers);
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+
+    calls.push({
+      url,
+      headers,
+      body,
+    });
+
+    if (url.endsWith("/api/platform/agents/create")) {
+      return jsonResponse({
+        organization: {
+          organizationId: "org-alpha",
+          ownerPrincipalId: "principal-owner",
+          displayName: "Alpha Org",
+          slug: "alpha-org",
+          createdAt: "2026-04-13T09:00:00.000Z",
+          updatedAt: "2026-04-13T09:00:00.000Z",
+        },
+        principal: {
+          principalId: "principal-agent-alpha",
+          organizationId: "org-alpha",
+          displayName: "Alpha Agent",
+          kind: "managed_agent",
+          createdAt: "2026-04-13T10:30:00.000Z",
+          updatedAt: "2026-04-13T10:30:00.000Z",
+        },
+        agent: {
+          agentId: "agent-alpha",
+          principalId: "principal-agent-alpha",
+          organizationId: "org-alpha",
+          displayName: "Alpha Agent",
+          departmentRole: "交付经理",
+          status: "active",
+          createdByPrincipalId: "principal-owner",
+          createdAt: "2026-04-13T10:30:00.000Z",
+          updatedAt: "2026-04-13T10:30:00.000Z",
+        },
+      });
+    }
+
+    if (url.endsWith("/api/platform/agents/execution-boundary/update")) {
+      return jsonResponse({
+        agent: {
+          agentId: "agent-alpha",
+          principalId: "principal-agent-alpha",
+          organizationId: "org-alpha",
+          displayName: "Alpha Agent",
+          departmentRole: "交付经理",
+          status: "active",
+          createdByPrincipalId: "principal-owner",
+          createdAt: "2026-04-13T10:30:00.000Z",
+          updatedAt: "2026-04-13T10:31:00.000Z",
+        },
+        workspacePolicy: {
+          policyId: "workspace-policy-alpha",
+          ownerAgentId: "agent-alpha",
+          displayName: "Alpha Workspace",
+          workspacePath: "/srv/alpha",
+          createdAt: "2026-04-13T10:31:00.000Z",
+          updatedAt: "2026-04-13T10:31:00.000Z",
+        },
+        runtimeProfile: {
+          profileId: "runtime-profile-alpha",
+          ownerAgentId: "agent-alpha",
+          displayName: "Alpha Runtime",
+          model: "gpt-5.4",
+          reasoning: "high",
+          createdAt: "2026-04-13T10:31:00.000Z",
+          updatedAt: "2026-04-13T10:31:00.000Z",
+        },
+      });
+    }
+
+    if (url.endsWith("/api/platform/agents/spawn-policy/update")) {
+      return jsonResponse({
+        policy: {
+          organizationId: "org-alpha",
+          maxActiveAgents: 6,
+          maxActiveAgentsPerRole: 2,
+          createdAt: "2026-04-13T10:32:00.000Z",
+          updatedAt: "2026-04-13T10:32:00.000Z",
+        },
+      });
+    }
+
+    if (url.endsWith("/api/platform/agents/waiting/list")) {
+      return jsonResponse({
+        summary: {
+          totalCount: 2,
+          waitingHumanCount: 1,
+          waitingAgentCount: 1,
+          escalationCount: 0,
+        },
+        items: [],
+      });
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  const client = new ManagedAgentPlatformGatewayClient({
+    baseUrl: "https://platform.example.com/",
+    ownerPrincipalId: "principal-owner",
+    webAccessToken: "token-123",
+    fetchImpl,
+  });
+
+  const created = await client.createManagedAgent({
+    departmentRole: "交付经理",
+    displayName: "Alpha Agent",
+    mission: "推进项目 Alpha",
+    organizationId: "org-alpha",
+  });
+  const boundary = await client.updateManagedAgentExecutionBoundary({
+    agentId: "agent-alpha",
+    workspacePolicy: {
+      displayName: "Alpha Workspace",
+      workspacePath: "/srv/alpha",
+    },
+    runtimeProfile: {
+      displayName: "Alpha Runtime",
+      model: "gpt-5.4",
+      reasoning: "high",
+    },
+  });
+  const policy = await client.updateSpawnPolicy({
+    organizationId: "org-alpha",
+    maxActiveAgents: 6,
+    maxActiveAgentsPerRole: 2,
+  });
+  const waiting = await client.listOrganizationWaitingQueue({
+    organizationId: "org-alpha",
+    managerAgentId: "agent-manager",
+    attentionOnly: true,
+    waitingFor: "human",
+    failedOnly: true,
+    limit: 10,
+  });
+
+  assert.equal(created.agent.agentId, "agent-alpha");
+  assert.equal(boundary.workspacePolicy.workspacePath, "/srv/alpha");
+  assert.equal(policy.maxActiveAgents, 6);
+  assert.equal(waiting.summary.totalCount, 2);
+
+  assert.equal(calls.length, 4);
+  assert.equal(calls[0]?.headers.authorization, "Bearer token-123");
+  assert.deepEqual(calls[0]?.body, {
+    ownerPrincipalId: "principal-owner",
+    agent: {
+      departmentRole: "交付经理",
+      displayName: "Alpha Agent",
+      mission: "推进项目 Alpha",
+      organizationId: "org-alpha",
+    },
+  });
+  assert.deepEqual(calls[1]?.body, {
+    ownerPrincipalId: "principal-owner",
+    agentId: "agent-alpha",
+    boundary: {
+      workspacePolicy: {
+        displayName: "Alpha Workspace",
+        workspacePath: "/srv/alpha",
+      },
+      runtimeProfile: {
+        displayName: "Alpha Runtime",
+        model: "gpt-5.4",
+        reasoning: "high",
+      },
+    },
+  });
+  assert.deepEqual(calls[2]?.body, {
+    ownerPrincipalId: "principal-owner",
+    policy: {
+      organizationId: "org-alpha",
+      maxActiveAgents: 6,
+      maxActiveAgentsPerRole: 2,
+    },
+  });
+  assert.deepEqual(calls[3]?.body, {
+    ownerPrincipalId: "principal-owner",
+    organizationId: "org-alpha",
+    managerAgentId: "agent-manager",
+    attentionOnly: true,
+    waitingFor: "human",
+    failedOnly: true,
+    limit: 10,
+  });
+});
+
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,

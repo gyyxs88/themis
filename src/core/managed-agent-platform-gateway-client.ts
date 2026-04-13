@@ -30,15 +30,43 @@ import type {
 import type {
   ManagedAgentPlatformHandoffListInput,
   ManagedAgentPlatformHandoffListResult,
+  ManagedAgentPlatformMailboxAckInput,
   ManagedAgentPlatformMailboxAckResult,
+  ManagedAgentPlatformMailboxListInput,
   ManagedAgentPlatformMailboxListResult,
+  ManagedAgentPlatformMailboxPullInput,
   ManagedAgentPlatformMailboxPullResult,
   ManagedAgentPlatformMailboxRespondInput,
   ManagedAgentPlatformMailboxRespondResult,
+  ManagedAgentPlatformRunDetailInput,
   ManagedAgentPlatformRunDetailResult,
   ManagedAgentPlatformRunListInput,
   ManagedAgentPlatformRunListResult,
 } from "../contracts/managed-agent-platform-collaboration.js";
+import type {
+  ManagedAgentPlatformAgentCreateInput,
+  ManagedAgentPlatformAgentCreateResult,
+  ManagedAgentPlatformAgentExecutionBoundaryUpdateInput,
+  ManagedAgentPlatformAgentExecutionBoundaryUpdateResult,
+  ManagedAgentPlatformAgentIdleApproveInput,
+  ManagedAgentPlatformAgentIdleApproveResult,
+  ManagedAgentPlatformAgentIdleRecoverySuggestionsResult,
+  ManagedAgentPlatformAgentLifecycleInput,
+  ManagedAgentPlatformAgentLifecycleResult,
+  ManagedAgentPlatformAgentSpawnApproveInput,
+  ManagedAgentPlatformAgentSpawnApproveResult,
+  ManagedAgentPlatformAgentSpawnPolicyUpdateInput,
+  ManagedAgentPlatformAgentSpawnPolicyUpdateResult,
+  ManagedAgentPlatformAgentSpawnSuggestionActionInput,
+  ManagedAgentPlatformAgentSpawnSuggestionActionResult,
+  ManagedAgentPlatformAgentSpawnSuggestionRestoreInput,
+  ManagedAgentPlatformAgentSpawnSuggestionRestoreResult,
+  ManagedAgentPlatformAgentSpawnSuggestionsResult,
+  ManagedAgentPlatformCollaborationDashboardResult,
+  ManagedAgentPlatformGovernanceFiltersInput,
+  ManagedAgentPlatformGovernanceOverviewResult,
+  ManagedAgentPlatformWaitingQueueResult,
+} from "../contracts/managed-agent-platform-agents.js";
 import type {
   ManagedAgentPlatformProjectWorkspaceBindingDetailResult,
   ManagedAgentPlatformProjectWorkspaceBindingListInput,
@@ -64,6 +92,45 @@ import type {
   StoredAgentWorkItemRecord,
 } from "../types/index.js";
 
+export type {
+  ManagedAgentPlatformAgentCreateInput,
+  ManagedAgentPlatformAgentCreatePayload,
+  ManagedAgentPlatformAgentCreateResult,
+  ManagedAgentPlatformAgentDetailInput,
+  ManagedAgentPlatformAgentDetailPayload,
+  ManagedAgentPlatformAgentDetailResult,
+  ManagedAgentPlatformAgentExecutionBoundaryUpdateInput,
+  ManagedAgentPlatformAgentExecutionBoundaryUpdatePayload,
+  ManagedAgentPlatformAgentExecutionBoundaryUpdateResult,
+  ManagedAgentPlatformAgentIdleApproveInput,
+  ManagedAgentPlatformAgentIdleApprovePayload,
+  ManagedAgentPlatformAgentIdleApproveResult,
+  ManagedAgentPlatformAgentIdleRecoverySuggestionsResult,
+  ManagedAgentPlatformAgentLifecycleInput,
+  ManagedAgentPlatformAgentLifecyclePayload,
+  ManagedAgentPlatformAgentLifecycleResult,
+  ManagedAgentPlatformAgentListResult,
+  ManagedAgentPlatformAgentSpawnApproveInput,
+  ManagedAgentPlatformAgentSpawnApprovePayload,
+  ManagedAgentPlatformAgentSpawnApproveResult,
+  ManagedAgentPlatformAgentSpawnPolicyUpdateInput,
+  ManagedAgentPlatformAgentSpawnPolicyUpdatePayload,
+  ManagedAgentPlatformAgentSpawnPolicyUpdateResult,
+  ManagedAgentPlatformAgentSpawnSuggestionActionInput,
+  ManagedAgentPlatformAgentSpawnSuggestionActionPayload,
+  ManagedAgentPlatformAgentSpawnSuggestionActionResult,
+  ManagedAgentPlatformAgentSpawnSuggestionRestoreInput,
+  ManagedAgentPlatformAgentSpawnSuggestionRestorePayload,
+  ManagedAgentPlatformAgentSpawnSuggestionRestoreResult,
+  ManagedAgentPlatformAgentSpawnSuggestionsResult,
+  ManagedAgentPlatformCollaborationDashboardPayload,
+  ManagedAgentPlatformCollaborationDashboardResult,
+  ManagedAgentPlatformGovernanceFiltersInput,
+  ManagedAgentPlatformGovernanceFiltersPayload,
+  ManagedAgentPlatformGovernanceOverviewResult,
+  ManagedAgentPlatformWaitingQueueListPayload,
+  ManagedAgentPlatformWaitingQueueResult,
+} from "../contracts/managed-agent-platform-agents.js";
 export type {
   ManagedAgentPlatformHandoffListInput,
   ManagedAgentPlatformHandoffListPayload,
@@ -259,8 +326,8 @@ export class ManagedAgentPlatformGatewayClient {
     };
   }
 
-  async createManagedAgent(input: Omit<CreateManagedAgentInput, "ownerPrincipalId">): Promise<CreateManagedAgentResult> {
-    return await this.requestJson<CreateManagedAgentResult>("/api/platform/agents/create", {
+  async createManagedAgent(input: ManagedAgentPlatformAgentCreateInput): Promise<ManagedAgentPlatformAgentCreateResult> {
+    return await this.requestJson<ManagedAgentPlatformAgentCreateResult>("/api/platform/agents/create", {
       ownerPrincipalId: this.ownerPrincipalId,
       agent: {
         departmentRole: input.departmentRole,
@@ -273,22 +340,25 @@ export class ManagedAgentPlatformGatewayClient {
   }
 
   async updateManagedAgentExecutionBoundary(
-    input: Omit<UpdateManagedAgentExecutionBoundaryInput, "ownerPrincipalId">,
-  ): Promise<ManagedAgentExecutionBoundaryView> {
-    return await this.requestJson<ManagedAgentExecutionBoundaryView>("/api/platform/agents/execution-boundary/update", {
-      ownerPrincipalId: this.ownerPrincipalId,
-      agentId: input.agentId,
-      boundary: {
-        ...(input.workspacePolicy ? { workspacePolicy: input.workspacePolicy } : {}),
-        ...(input.runtimeProfile ? { runtimeProfile: input.runtimeProfile } : {}),
+    input: ManagedAgentPlatformAgentExecutionBoundaryUpdateInput,
+  ): Promise<ManagedAgentPlatformAgentExecutionBoundaryUpdateResult> {
+    return await this.requestJson<ManagedAgentPlatformAgentExecutionBoundaryUpdateResult>(
+      "/api/platform/agents/execution-boundary/update",
+      {
+        ownerPrincipalId: this.ownerPrincipalId,
+        agentId: input.agentId,
+        boundary: {
+          ...(input.workspacePolicy ? { workspacePolicy: input.workspacePolicy } : {}),
+          ...(input.runtimeProfile ? { runtimeProfile: input.runtimeProfile } : {}),
+        },
       },
-    });
+    );
   }
 
   async updateSpawnPolicy(
-    input: Omit<UpdateManagedAgentSpawnPolicyInput, "ownerPrincipalId">,
+    input: ManagedAgentPlatformAgentSpawnPolicyUpdateInput,
   ): Promise<StoredAgentSpawnPolicyRecord> {
-    const payload = await this.requestJson<{ policy: StoredAgentSpawnPolicyRecord }>(
+    const payload = await this.requestJson<ManagedAgentPlatformAgentSpawnPolicyUpdateResult>(
       "/api/platform/agents/spawn-policy/update",
       {
         ownerPrincipalId: this.ownerPrincipalId,
@@ -304,9 +374,9 @@ export class ManagedAgentPlatformGatewayClient {
   }
 
   async approveSpawnSuggestion(
-    input: Omit<ApproveManagedAgentSpawnSuggestionInput, "ownerPrincipalId">,
-  ): Promise<ApproveManagedAgentSpawnSuggestionResult> {
-    return await this.requestJson<ApproveManagedAgentSpawnSuggestionResult>("/api/platform/agents/spawn-approve", {
+    input: ManagedAgentPlatformAgentSpawnApproveInput,
+  ): Promise<ManagedAgentPlatformAgentSpawnApproveResult> {
+    return await this.requestJson<ManagedAgentPlatformAgentSpawnApproveResult>("/api/platform/agents/spawn-approve", {
       ownerPrincipalId: this.ownerPrincipalId,
       agent: {
         departmentRole: input.departmentRole,
@@ -319,27 +389,27 @@ export class ManagedAgentPlatformGatewayClient {
   }
 
   async ignoreSpawnSuggestion(
-    input: Omit<ManagedAgentSpawnSuggestionDecisionInput, "ownerPrincipalId">,
-  ): Promise<ManagedAgentSpawnSuggestionDecisionResult> {
-    return await this.requestJson<ManagedAgentSpawnSuggestionDecisionResult>("/api/platform/agents/spawn-ignore", {
+    input: ManagedAgentPlatformAgentSpawnSuggestionActionInput,
+  ): Promise<ManagedAgentPlatformAgentSpawnSuggestionActionResult> {
+    return await this.requestJson<ManagedAgentPlatformAgentSpawnSuggestionActionResult>("/api/platform/agents/spawn-ignore", {
       ownerPrincipalId: this.ownerPrincipalId,
       suggestion: input,
     });
   }
 
   async rejectSpawnSuggestion(
-    input: Omit<ManagedAgentSpawnSuggestionDecisionInput, "ownerPrincipalId">,
-  ): Promise<ManagedAgentSpawnSuggestionDecisionResult> {
-    return await this.requestJson<ManagedAgentSpawnSuggestionDecisionResult>("/api/platform/agents/spawn-reject", {
+    input: ManagedAgentPlatformAgentSpawnSuggestionActionInput,
+  ): Promise<ManagedAgentPlatformAgentSpawnSuggestionActionResult> {
+    return await this.requestJson<ManagedAgentPlatformAgentSpawnSuggestionActionResult>("/api/platform/agents/spawn-reject", {
       ownerPrincipalId: this.ownerPrincipalId,
       suggestion: input,
     });
   }
 
   async restoreSpawnSuggestion(
-    input: Omit<RestoreManagedAgentSpawnSuggestionInput, "ownerPrincipalId">,
-  ): Promise<{ auditLog: ManagedAgentSpawnSuggestionDecisionResult["auditLog"] }> {
-    return await this.requestJson<{ auditLog: ManagedAgentSpawnSuggestionDecisionResult["auditLog"] }>(
+    input: ManagedAgentPlatformAgentSpawnSuggestionRestoreInput,
+  ): Promise<ManagedAgentPlatformAgentSpawnSuggestionRestoreResult> {
+    return await this.requestJson<ManagedAgentPlatformAgentSpawnSuggestionRestoreResult>(
       "/api/platform/agents/spawn-restore",
       {
         ownerPrincipalId: this.ownerPrincipalId,
@@ -349,31 +419,31 @@ export class ManagedAgentPlatformGatewayClient {
   }
 
   async approveIdleRecoverySuggestion(
-    input: Omit<ApproveManagedAgentIdleRecoverySuggestionInput, "ownerPrincipalId">,
-  ): Promise<ApproveManagedAgentIdleRecoverySuggestionResult> {
-    return await this.requestJson<ApproveManagedAgentIdleRecoverySuggestionResult>("/api/platform/agents/idle-approve", {
+    input: ManagedAgentPlatformAgentIdleApproveInput,
+  ): Promise<ManagedAgentPlatformAgentIdleApproveResult> {
+    return await this.requestJson<ManagedAgentPlatformAgentIdleApproveResult>("/api/platform/agents/idle-approve", {
       ownerPrincipalId: this.ownerPrincipalId,
       suggestion: input,
     });
   }
 
   async updateManagedAgentLifecycle(
-    input: Omit<ManagedAgentLifecycleUpdateInput, "ownerPrincipalId">,
-  ): Promise<ManagedAgentOwnerView> {
+    input: ManagedAgentPlatformAgentLifecycleInput,
+  ): Promise<ManagedAgentPlatformAgentLifecycleResult> {
     const pathname = input.action === "pause"
       ? "/api/platform/agents/pause"
       : input.action === "resume"
         ? "/api/platform/agents/resume"
         : "/api/platform/agents/archive";
 
-    return await this.requestJson<ManagedAgentOwnerView>(pathname, {
+    return await this.requestJson<ManagedAgentPlatformAgentLifecycleResult>(pathname, {
       ownerPrincipalId: this.ownerPrincipalId,
       agentId: input.agentId,
     });
   }
 
-  async getSpawnSuggestionsView(): Promise<ManagedAgentSpawnSuggestionsView> {
-    const payload = await this.requestJson<Partial<ManagedAgentSpawnSuggestionsView>>(
+  async getSpawnSuggestionsView(): Promise<ManagedAgentPlatformAgentSpawnSuggestionsResult> {
+    const payload = await this.requestJson<Partial<ManagedAgentPlatformAgentSpawnSuggestionsResult>>(
       "/api/platform/agents/spawn-suggestions",
       {
         ownerPrincipalId: this.ownerPrincipalId,
@@ -388,8 +458,8 @@ export class ManagedAgentPlatformGatewayClient {
     };
   }
 
-  async getIdleRecoverySuggestionsView(): Promise<ManagedAgentIdleRecoverySuggestionsView> {
-    const payload = await this.requestJson<Partial<ManagedAgentIdleRecoverySuggestionsView>>(
+  async getIdleRecoverySuggestionsView(): Promise<ManagedAgentPlatformAgentIdleRecoverySuggestionsResult> {
+    const payload = await this.requestJson<Partial<ManagedAgentPlatformAgentIdleRecoverySuggestionsResult>>(
       "/api/platform/agents/idle-suggestions",
       {
         ownerPrincipalId: this.ownerPrincipalId,
@@ -469,9 +539,9 @@ export class ManagedAgentPlatformGatewayClient {
   }
 
   async listOrganizationWaitingQueue(
-    filters: OrganizationGovernanceFilters = {},
-  ): Promise<OrganizationWaitingQueueResult> {
-    const payload = await this.requestJson<Partial<OrganizationWaitingQueueResult>>(
+    filters: ManagedAgentPlatformGovernanceFiltersInput = {},
+  ): Promise<ManagedAgentPlatformWaitingQueueResult> {
+    const payload = await this.requestJson<Partial<ManagedAgentPlatformWaitingQueueResult>>(
       "/api/platform/agents/waiting/list",
       {
         ownerPrincipalId: this.ownerPrincipalId,
@@ -498,9 +568,9 @@ export class ManagedAgentPlatformGatewayClient {
   }
 
   async getOrganizationGovernanceOverview(
-    filters: OrganizationGovernanceFilters = {},
-  ): Promise<OrganizationGovernanceOverview> {
-    const payload = await this.requestJson<{ overview?: Partial<OrganizationGovernanceOverview> }>(
+    filters: ManagedAgentPlatformGovernanceFiltersInput = {},
+  ): Promise<ManagedAgentPlatformGovernanceOverviewResult> {
+    const payload = await this.requestJson<{ overview?: Partial<ManagedAgentPlatformGovernanceOverviewResult> }>(
       "/api/platform/agents/governance-overview",
       {
         ownerPrincipalId: this.ownerPrincipalId,
@@ -522,9 +592,9 @@ export class ManagedAgentPlatformGatewayClient {
   }
 
   async listOrganizationCollaborationDashboard(
-    filters: OrganizationGovernanceFilters = {},
-  ): Promise<OrganizationCollaborationDashboardResult> {
-    const payload = await this.requestJson<Partial<OrganizationCollaborationDashboardResult>>(
+    filters: ManagedAgentPlatformGovernanceFiltersInput = {},
+  ): Promise<ManagedAgentPlatformCollaborationDashboardResult> {
+    const payload = await this.requestJson<Partial<ManagedAgentPlatformCollaborationDashboardResult>>(
       "/api/platform/agents/collaboration-dashboard",
       {
         ownerPrincipalId: this.ownerPrincipalId,
