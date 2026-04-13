@@ -233,6 +233,7 @@ npm run dev:platform
 - [持久化 agent 架构](./docs/product/themis-persistent-agent-architecture.md)
 - [公开发布边界与导出规则](./docs/repository/github-safe-publish.md)
 - [平台层切 MySQL 操作说明](./docs/repository/themis-platform-mysql-control-plane-cutover.md)
+- [单机三角色部署方案](./docs/repository/themis-single-host-three-role-deployment.md)
 - [systemd 正式常驻示例](./docs/repository/themis-systemd-prod-service.md)
 - [systemd 开发常驻示例](./docs/repository/themis-systemd-dev-service.md)
 - [Worker Node 常驻部署说明](./docs/repository/themis-worker-node-systemd-service.md)

@@ -39,6 +39,9 @@ Worker Node           不开端口，主动连平台层
 ~/services/themis-worker-node
 ```
 
+其中 `~/services/themis-worker-node` 建议是独立 clone，不要一上来就把 `~/services/themis-prod` 直接暴露给同机 Worker。
+主 Themis 目录优先继续只承载人类入口、平台网关和主 Agent 自身运行态；Worker 需要可治理节点身份时，再给它单独工作区。
+
 推荐服务名：
 
 ```text
@@ -164,6 +167,8 @@ npm run build
 几点建议：
 
 - `--node-id` 一定固定
+- 同机部署第一阶段，优先把 `--workspace` 指向独立的 `~/services/themis-worker-node`
+- 不建议默认把 `~/services/themis-prod` 直接加进 Worker `--workspace`；只有确认主 Themis 目录也应该被节点化执行时，再显式追加
 - `--workspace` 可以配多次，不必只指向 Worker 自己目录
 - 小型部署可以先复用同一用户的默认 `~/.codex`
 - 如果以后想更强隔离，再拆专用 credential 或专用 `CODEX_HOME`
@@ -215,6 +220,8 @@ curl -sS -X POST http://127.0.0.1:3200/api/platform/nodes/list \
 - 节点在线
 - 节点 `workspaceCapabilities` 正确
 - 主 Themis 新派的任务能被本机 Worker claim
+
+实机参考：`2026-04-13` 已在 `192.168.31.208` 上验证“主 Themis + 同机 Worker”闭环成立，Worker 以独立目录 `/home/abner/services/themis-worker-node` 运行，真实任务 `work-item-gqyz0ldv` 已由同机节点 claim 成 `run-nqslkfzs` 并完成。
 
 ## 6. 这个形态下，主 Themis 还会不会自己执行
 
