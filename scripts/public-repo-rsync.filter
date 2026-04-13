@@ -12,6 +12,8 @@
 + /themis-platform
 + /themis-worker-node
 + /scripts/
++ /scripts/bootstrap-split-repos.sh
++ /scripts/bootstrap-split-repos.test.ts
 + /scripts/export-public-repo.sh
 + /scripts/public-repo-rsync.filter
 
@@ -41,6 +43,7 @@
 + /docs/repository/themis-systemd-prod-service.md
 + /docs/repository/themis-three-layer-parallel-development-contract.md
 + /docs/repository/themis-three-layer-split-migration-checklist.md
++ /docs/repository/themis-three-layer-phase-5-bootstrap-and-cutover.md
 + /docs/repository/themis-worker-node-systemd-service.md
 
 - *

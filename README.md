@@ -349,6 +349,7 @@ THEMIS_UPDATE_CHANNEL=release
 - [平台层 systemd service 示例](./infra/systemd/themis-platform.service.example)
 - [平台层 systemd 使用说明](./docs/repository/themis-platform-systemd-service.md)
 - [平台层切 MySQL 操作说明](./docs/repository/themis-platform-mysql-control-plane-cutover.md)
+- [三层拆仓 Phase 5：新仓初始化与切换演练](./docs/repository/themis-three-layer-phase-5-bootstrap-and-cutover.md)
 
 如果你要把另一台机器部署成 `Worker Node daemon`，可参考：
 
