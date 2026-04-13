@@ -131,6 +131,10 @@
 
 - `worker-node`、`worker-fleet`、`doctor worker-*` 与 Themis 主 CLI 当前仍混在同一个入口。
 
+当前进展：
+
+- `2026-04-13` 已补 `Phase 3` 第一刀：当前仓库已新增 `themis-platform` 与 `themis-worker-node` 两个独立 CLI 入口，以及 `src/cli/platform-main.ts` / `src/cli/worker-node-main.ts` 两个装配点；主 `themis` 入口里的 `auth platform`、`doctor worker-node`、`doctor worker-fleet`、`worker-node`、`worker-fleet` 仍可作为兼容别名使用，但会显式提示应迁往新入口。
+
 迁移目标：
 
 - `worker-node` 本机预检与常驻命令进入 `themis-worker-node`。

@@ -63,28 +63,56 @@ const cwd = process.cwd();
 const launcherPath = fileURLToPath(new URL("../../themis", import.meta.url));
 const cliDatabasePath = resolve(cwd, "infra/local/themis.db");
 const CLI_PRINCIPAL_ID = "principal-local-owner";
+const DEFAULT_THEMIS_LAUNCHER_NAME = "themis";
+const DEFAULT_PLATFORM_LAUNCHER_NAME = "themis-platform";
+const DEFAULT_WORKER_NODE_LAUNCHER_NAME = "themis-worker-node";
 const shellEnv = new Map<string, string>(
   Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
 );
 
 loadProjectEnv(cwd);
 
-void main(process.argv.slice(2)).catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`Themis CLI 执行失败：${message}`);
-  process.exitCode = 1;
-});
+export type ThemisCliSurface = "themis" | "platform" | "worker-node";
 
-async function main(args: string[]): Promise<void> {
+export interface ThemisCliEntrypointOptions {
+  surface?: ThemisCliSurface;
+  launcherName?: string;
+}
+
+if (isDirectCliEntrypoint(import.meta.url)) {
+  void runCli(process.argv.slice(2)).catch(reportCliFailure);
+}
+
+export async function runCli(
+  args: string[],
+  options: ThemisCliEntrypointOptions = {},
+): Promise<void> {
+  const surface = options.surface ?? "themis";
+  const launcherName = resolveCliLauncherName(surface, options.launcherName);
   const [command, subcommand, ...rest] = args;
 
   if (!command) {
-    if (input.isTTY && output.isTTY) {
+    if (surface === "themis" && input.isTTY && output.isTTY) {
       await runInteractiveShell();
       return;
     }
 
-    await handleStatus();
+    if (surface === "themis") {
+      await handleStatus();
+      return;
+    }
+
+    printHelp(surface, launcherName);
+    return;
+  }
+
+  if (surface === "platform") {
+    await handlePlatformCli(command, subcommand, rest, launcherName);
+    return;
+  }
+
+  if (surface === "worker-node") {
+    await handleWorkerNodeCli(command, subcommand, rest, launcherName);
     return;
   }
 
@@ -92,7 +120,7 @@ async function main(args: string[]): Promise<void> {
     case "help":
     case "--help":
     case "-h":
-      printHelp();
+      printHelp("themis", launcherName);
       return;
     case "init":
       handleInit(rest);
@@ -108,6 +136,7 @@ async function main(args: string[]): Promise<void> {
       await handleUpdate(subcommand, rest);
       return;
     case "doctor":
+      maybePrintCompatibilityAliasNotice("themis", command, subcommand);
       if (subcommand?.trim().toLowerCase() === "smoke") {
         process.exit(await handleDoctorSmoke(rest));
       }
@@ -121,6 +150,7 @@ async function main(args: string[]): Promise<void> {
       await handleBackup(subcommand, rest);
       return;
     case "auth":
+      maybePrintCompatibilityAliasNotice("themis", command, subcommand);
       await handleAuth(subcommand, rest);
       return;
     case "skill":
@@ -130,13 +160,133 @@ async function main(args: string[]): Promise<void> {
       await handleMcpServer([...(subcommand ? [subcommand] : []), ...rest]);
       return;
     case "worker-node":
+      maybePrintCompatibilityAliasNotice("themis", command, subcommand);
       await handleWorkerNode(subcommand, rest);
+      return;
+    case "worker-fleet":
+      maybePrintCompatibilityAliasNotice("themis", command, subcommand);
+      await handleWorkerFleet(subcommand, rest);
+      return;
+    default:
+      throw new Error(`不支持的命令：${command}。可用命令：init / status / check / update / doctor / config / backup / auth / skill / mcp-server / worker-node / worker-fleet / help。`);
+  }
+}
+
+export function reportCliFailure(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`Themis CLI 执行失败：${message}`);
+  process.exitCode = 1;
+}
+
+function isDirectCliEntrypoint(metaUrl: string): boolean {
+  const entryPath = process.argv[1] ? resolve(process.argv[1]) : "";
+  return entryPath === fileURLToPath(metaUrl);
+}
+
+function resolveCliLauncherName(surface: ThemisCliSurface, launcherName: string | undefined): string {
+  const normalizedLauncherName = typeof launcherName === "string" ? launcherName.trim() : "";
+
+  if (normalizedLauncherName) {
+    return normalizedLauncherName;
+  }
+
+  switch (surface) {
+    case "platform":
+      return DEFAULT_PLATFORM_LAUNCHER_NAME;
+    case "worker-node":
+      return DEFAULT_WORKER_NODE_LAUNCHER_NAME;
+    default:
+      return DEFAULT_THEMIS_LAUNCHER_NAME;
+  }
+}
+
+async function handlePlatformCli(
+  command: string,
+  subcommand: string | undefined,
+  rest: string[],
+  launcherName: string,
+): Promise<void> {
+  switch (command) {
+    case "help":
+    case "--help":
+    case "-h":
+      printHelp("platform", launcherName);
+      return;
+    case "backup":
+      await handleBackup(subcommand, rest);
+      return;
+    case "auth":
+      if (subcommand?.trim().toLowerCase() !== "platform") {
+        throw new Error(`${launcherName} 当前只承载 auth platform。`);
+      }
+
+      await handleAuth(subcommand, rest);
+      return;
+    case "doctor":
+      if (subcommand?.trim().toLowerCase() !== "worker-fleet") {
+        throw new Error(`${launcherName} 当前只承载 doctor worker-fleet。`);
+      }
+
+      await handleDoctor(subcommand, rest);
       return;
     case "worker-fleet":
       await handleWorkerFleet(subcommand, rest);
       return;
     default:
-      throw new Error(`不支持的命令：${command}。可用命令：init / status / check / update / doctor / config / backup / auth / skill / mcp-server / worker-node / worker-fleet / help。`);
+      throw new Error(`${launcherName} 当前仅支持 backup / auth platform / doctor worker-fleet / worker-fleet / help。`);
+  }
+}
+
+async function handleWorkerNodeCli(
+  command: string,
+  subcommand: string | undefined,
+  rest: string[],
+  launcherName: string,
+): Promise<void> {
+  switch (command) {
+    case "help":
+    case "--help":
+    case "-h":
+      printHelp("worker-node", launcherName);
+      return;
+    case "doctor":
+      if (subcommand?.trim().toLowerCase() !== "worker-node") {
+        throw new Error(`${launcherName} 当前只承载 doctor worker-node。`);
+      }
+
+      await handleDoctor(subcommand, rest);
+      return;
+    case "worker-node":
+      await handleWorkerNode(subcommand, rest);
+      return;
+    default:
+      throw new Error(`${launcherName} 当前仅支持 doctor worker-node / worker-node / help。`);
+  }
+}
+
+function maybePrintCompatibilityAliasNotice(
+  surface: ThemisCliSurface,
+  command: string,
+  subcommand: string | undefined,
+): void {
+  if (surface !== "themis") {
+    return;
+  }
+
+  const normalizedSubcommand = subcommand?.trim().toLowerCase();
+
+  if (command === "auth" && normalizedSubcommand === "platform") {
+    console.error("兼容入口提示：平台服务令牌命令已迁往 ./themis-platform；当前 ./themis auth platform 仅作为过渡别名保留。");
+    return;
+  }
+
+  if (command === "worker-fleet" || (command === "doctor" && normalizedSubcommand === "worker-fleet")) {
+    console.error("兼容入口提示：平台值班与 Worker Fleet 治理命令已迁往 ./themis-platform；当前 ./themis 入口仅作为过渡别名保留。");
+    return;
+  }
+
+  if (command === "worker-node" || (command === "doctor" && normalizedSubcommand === "worker-node")) {
+    console.error("兼容入口提示：Worker Node 命令已迁往 ./themis-worker-node；当前 ./themis 入口仅作为过渡别名保留。");
   }
 }
 
@@ -1559,47 +1709,78 @@ async function handleSkill(subcommand: string | undefined, args: string[]): Prom
   }
 }
 
-function printHelp(): void {
+function printHelp(surface: ThemisCliSurface = "themis", launcherName = DEFAULT_THEMIS_LAUNCHER_NAME): void {
+  if (surface === "platform") {
+    console.log("Themis Platform CLI");
+    console.log("");
+    console.log("可用命令：");
+    console.log(`- ./${launcherName} help`);
+    console.log(`- ./${launcherName} backup create [--database <sqlitePath>] [--output <backupPath>]`);
+    console.log(`- ./${launcherName} backup restore --input <backupPath> [--database <sqlitePath>] --yes`);
+    console.log(`- ./${launcherName} auth platform list`);
+    console.log(`- ./${launcherName} auth platform add <label> --role <gateway|worker> --owner-principal <principalId>`);
+    console.log(`- ./${launcherName} auth platform remove <label>`);
+    console.log(`- ./${launcherName} auth platform rename <old-label> <new-label>`);
+    console.log(`- ./${launcherName} doctor worker-fleet --platform <baseUrl> --owner-principal <principalId> --token <platformToken>`);
+    console.log(`- ./${launcherName} worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <platformToken> --node <nodeId> [--node <nodeId> ...] --yes`);
+    console.log("");
+    console.log("当前这是拆仓过渡期的独立平台 CLI 入口；主 Themis 上的同类命令仅保留兼容别名。");
+    return;
+  }
+
+  if (surface === "worker-node") {
+    console.log("Themis Worker Node CLI");
+    console.log("");
+    console.log("可用命令：");
+    console.log(`- ./${launcherName} help`);
+    console.log(`- ./${launcherName} doctor worker-node --platform <baseUrl> --owner-principal <principalId> --token <platformToken> --workspace <path>`);
+    console.log(`- ./${launcherName} worker-node run --platform <baseUrl> --owner-principal <principalId> --token <platformToken> --name <displayName> [--once]`);
+    console.log("");
+    console.log("当前这是拆仓过渡期的独立 Worker Node CLI 入口；主 Themis 上的同类命令仅保留兼容别名。");
+    return;
+  }
+
   console.log("Themis 项目级 CLI");
   console.log("");
   console.log("可用命令：");
-  console.log("- ./themis              # 进入交互模式");
-  console.log("- ./themis install      # 安装到用户目录，无需 sudo");
-  console.log("- ./themis init");
-  console.log("- ./themis status");
-  console.log("- ./themis check");
-  console.log("- ./themis update");
-  console.log("- ./themis update check");
-  console.log("- ./themis update apply [--service <systemd-user-service>] [--no-restart]");
-  console.log("- ./themis update rollback [--service <systemd-user-service>] [--no-restart]");
-  console.log("- ./themis doctor");
-  console.log("- ./themis doctor <context|auth|provider|memory|service|mcp|feishu|worker-node|worker-fleet|release>");
-  console.log("- ./themis doctor smoke <web|feishu|all>");
-  console.log("- ./themis config list [--show-secrets]");
-  console.log("- ./themis config set <KEY> <VALUE>");
-  console.log("- ./themis config unset <KEY>");
-  console.log("- ./themis backup create [--database <sqlitePath>] [--output <backupPath>]");
-  console.log("- ./themis backup restore --input <backupPath> [--database <sqlitePath>] --yes");
-  console.log("- ./themis auth web list");
-  console.log("- ./themis auth web add <label>");
-  console.log("- ./themis auth web remove <label>");
-  console.log("- ./themis auth web rename <old-label> <new-label>");
-  console.log("- ./themis auth platform list");
-  console.log("- ./themis auth platform add <label> --role <gateway|worker> --owner-principal <principalId>");
-  console.log("- ./themis auth platform remove <label>");
-  console.log("- ./themis auth platform rename <old-label> <new-label>");
-  console.log("- ./themis skill list");
-  console.log("- ./themis skill curated list");
-  console.log("- ./themis skill install local <ABSOLUTE_PATH>");
-  console.log("- ./themis skill install url <GITHUB_URL> [REF]");
-  console.log("- ./themis skill install repo <REPO> <PATH> [REF]");
-  console.log("- ./themis skill install curated <SKILL_NAME>");
-  console.log("- ./themis skill remove <SKILL_NAME>");
-  console.log("- ./themis skill sync <SKILL_NAME> [--force]");
-  console.log("- ./themis mcp-server [--channel <channel>] [--user <channelUserId>] [--name <displayName>] [--session <sessionId>] [--channel-session-key <key>]");
-  console.log("- ./themis worker-node run --platform <baseUrl> --owner-principal <principalId> --token <platformToken> --name <displayName> [--once]");
-  console.log("- ./themis worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <platformToken> --node <nodeId> [--node <nodeId> ...] --yes");
+  console.log(`- ./${launcherName}              # 进入交互模式`);
+  console.log(`- ./${launcherName} install      # 安装到用户目录，无需 sudo`);
+  console.log(`- ./${launcherName} init`);
+  console.log(`- ./${launcherName} status`);
+  console.log(`- ./${launcherName} check`);
+  console.log(`- ./${launcherName} update`);
+  console.log(`- ./${launcherName} update check`);
+  console.log(`- ./${launcherName} update apply [--service <systemd-user-service>] [--no-restart]`);
+  console.log(`- ./${launcherName} update rollback [--service <systemd-user-service>] [--no-restart]`);
+  console.log(`- ./${launcherName} doctor`);
+  console.log(`- ./${launcherName} doctor <context|auth|provider|memory|service|mcp|feishu|worker-node|worker-fleet|release>`);
+  console.log(`- ./${launcherName} doctor smoke <web|feishu|all>`);
+  console.log(`- ./${launcherName} config list [--show-secrets]`);
+  console.log(`- ./${launcherName} config set <KEY> <VALUE>`);
+  console.log(`- ./${launcherName} config unset <KEY>`);
+  console.log(`- ./${launcherName} backup create [--database <sqlitePath>] [--output <backupPath>]`);
+  console.log(`- ./${launcherName} backup restore --input <backupPath> [--database <sqlitePath>] --yes`);
+  console.log(`- ./${launcherName} auth web list`);
+  console.log(`- ./${launcherName} auth web add <label>`);
+  console.log(`- ./${launcherName} auth web remove <label>`);
+  console.log(`- ./${launcherName} auth web rename <old-label> <new-label>`);
+  console.log(`- ./${launcherName} auth platform list`);
+  console.log(`- ./${launcherName} auth platform add <label> --role <gateway|worker> --owner-principal <principalId>`);
+  console.log(`- ./${launcherName} auth platform remove <label>`);
+  console.log(`- ./${launcherName} auth platform rename <old-label> <new-label>`);
+  console.log(`- ./${launcherName} skill list`);
+  console.log(`- ./${launcherName} skill curated list`);
+  console.log(`- ./${launcherName} skill install local <ABSOLUTE_PATH>`);
+  console.log(`- ./${launcherName} skill install url <GITHUB_URL> [REF]`);
+  console.log(`- ./${launcherName} skill install repo <REPO> <PATH> [REF]`);
+  console.log(`- ./${launcherName} skill install curated <SKILL_NAME>`);
+  console.log(`- ./${launcherName} skill remove <SKILL_NAME>`);
+  console.log(`- ./${launcherName} skill sync <SKILL_NAME> [--force]`);
+  console.log(`- ./${launcherName} mcp-server [--channel <channel>] [--user <channelUserId>] [--name <displayName>] [--session <sessionId>] [--channel-session-key <key>]`);
+  console.log(`- ./${launcherName} worker-node run --platform <baseUrl> --owner-principal <principalId> --token <platformToken> --name <displayName> [--once]`);
+  console.log(`- ./${launcherName} worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <platformToken> --node <nodeId> [--node <nodeId> ...] --yes`);
   console.log("");
+  console.log(`兼容入口提示：平台和值班命令正在迁往 ./${DEFAULT_PLATFORM_LAUNCHER_NAME}，Worker Node 命令正在迁往 ./${DEFAULT_WORKER_NODE_LAUNCHER_NAME}。`);
   console.log("如果希望像 codex/openclaw 一样直接输入 `themis`，建议执行 `./themis install`。");
 }
 

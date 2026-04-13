@@ -5,10 +5,14 @@
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "themis": "./themis"
+    "themis": "./themis",
+    "themis-platform": "./themis-platform",
+    "themis-worker-node": "./themis-worker-node"
   },
   "scripts": {
     "themis": "tsx src/cli/main.ts",
+    "themis:platform": "tsx src/cli/platform-main.ts",
+    "themis:worker-node": "tsx src/cli/worker-node-main.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "dev:web": "tsx watch --clear-screen=false src/server/main.ts",

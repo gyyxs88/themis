@@ -84,12 +84,22 @@ http://localhost:3100
 ./themis doctor smoke feishu
 ./themis doctor smoke all
 ./themis doctor release
-./themis worker-node run --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --name <displayName> [--once]
-./themis worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --node <nodeId> [--node <nodeId> ...] --yes
+./themis-platform auth platform list
+./themis-platform doctor worker-fleet --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken>
+./themis-platform worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --node <nodeId> [--node <nodeId> ...] --yes
+./themis-worker-node doctor worker-node --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --workspace <path>
+./themis-worker-node worker-node run --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --name <displayName> [--once]
 ./themis mcp-server
 npm run dev:platform
 npm run start:platform
 ```
+
+说明：
+
+- `./themis` 里的 `auth platform`、`doctor worker-node`、`doctor worker-fleet`、`worker-node`、`worker-fleet` 当前仍保留兼容别名，但已经明确进入迁移期。
+- 新的推荐入口是：
+  - 平台侧值班 / 平台令牌 / `worker-fleet`：`./themis-platform`
+  - Worker Node 本机预检 / 常驻执行：`./themis-worker-node`
 
 如果你要把某台机器接成局域网执行节点，推荐先按这个顺序验证：
 
