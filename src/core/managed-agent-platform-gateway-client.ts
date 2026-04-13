@@ -7,19 +7,12 @@ import type {
   ManagedAgentLifecycleUpdateInput,
 } from "./managed-agent-control-plane-facade.js";
 import type {
-  CancelWorkItemResult,
-  DispatchWorkItemInput,
-  DispatchWorkItemResult,
-  EscalateWaitingAgentWorkItemToHumanInput,
-  EscalateWaitingAgentWorkItemToHumanResult,
   ManagedAgentWorkItemDetailView,
   OrganizationCollaborationDashboardResult,
   OrganizationGovernanceFilters,
   OrganizationGovernanceOverview,
   OrganizationWaitingQueueResult,
   PullMailboxEntryResult,
-  RespondToHumanWaitingWorkItemInput,
-  RespondToHumanWaitingWorkItemResult,
   RespondToMailboxEntryInput,
   RespondToMailboxEntryResult,
 } from "./managed-agent-coordination-service.js";
@@ -49,6 +42,18 @@ import type {
   ManagedAgentPlatformProjectWorkspaceBindingUpsertResult,
 } from "../contracts/managed-agent-platform-projects.js";
 import type {
+  ManagedAgentPlatformWorkItemCancelResult,
+  ManagedAgentPlatformWorkItemDetailResult,
+  ManagedAgentPlatformWorkItemDispatchInput,
+  ManagedAgentPlatformWorkItemDispatchResult,
+  ManagedAgentPlatformWorkItemEscalateInput,
+  ManagedAgentPlatformWorkItemEscalateResult,
+  ManagedAgentPlatformWorkItemListInput,
+  ManagedAgentPlatformWorkItemListResult,
+  ManagedAgentPlatformWorkItemRespondInput,
+  ManagedAgentPlatformWorkItemRespondResult,
+} from "../contracts/managed-agent-platform-work-items.js";
+import type {
   StoredAgentMailboxEntryRecord,
   StoredAgentMessageRecord,
   StoredAgentRunRecord,
@@ -65,6 +70,25 @@ export type {
   ManagedAgentPlatformProjectWorkspaceBindingUpsertInput,
   ManagedAgentPlatformProjectWorkspaceBindingUpsertResult,
 } from "../contracts/managed-agent-platform-projects.js";
+export type {
+  ManagedAgentPlatformWorkItemCancelPayload,
+  ManagedAgentPlatformWorkItemCancelResult,
+  ManagedAgentPlatformWorkItemDetailInput,
+  ManagedAgentPlatformWorkItemDetailPayload,
+  ManagedAgentPlatformWorkItemDetailResult,
+  ManagedAgentPlatformWorkItemDispatchInput,
+  ManagedAgentPlatformWorkItemDispatchPayload,
+  ManagedAgentPlatformWorkItemDispatchResult,
+  ManagedAgentPlatformWorkItemEscalateInput,
+  ManagedAgentPlatformWorkItemEscalatePayload,
+  ManagedAgentPlatformWorkItemEscalateResult,
+  ManagedAgentPlatformWorkItemListInput,
+  ManagedAgentPlatformWorkItemListPayload,
+  ManagedAgentPlatformWorkItemListResult,
+  ManagedAgentPlatformWorkItemRespondInput,
+  ManagedAgentPlatformWorkItemRespondPayload,
+  ManagedAgentPlatformWorkItemRespondResult,
+} from "../contracts/managed-agent-platform-work-items.js";
 
 export interface ManagedAgentPlatformGatewayConfig {
   baseUrl: string;
@@ -364,19 +388,17 @@ export class ManagedAgentPlatformGatewayClient {
     };
   }
 
-  async listWorkItems(agentId?: string): Promise<StoredAgentWorkItemRecord[]> {
-    const payload = await this.requestJson<{
-      workItems?: StoredAgentWorkItemRecord[];
-    }>("/api/platform/work-items/list", {
+  async listWorkItems(input: ManagedAgentPlatformWorkItemListInput = {}): Promise<StoredAgentWorkItemRecord[]> {
+    const payload = await this.requestJson<ManagedAgentPlatformWorkItemListResult>("/api/platform/work-items/list", {
       ownerPrincipalId: this.ownerPrincipalId,
-      ...(agentId ? { agentId } : {}),
+      ...(input.agentId ? { agentId: input.agentId } : {}),
     });
 
     return Array.isArray(payload.workItems) ? payload.workItems : [];
   }
 
-  async dispatchWorkItem(input: Omit<DispatchWorkItemInput, "ownerPrincipalId">): Promise<DispatchWorkItemResult> {
-    return await this.requestJson<DispatchWorkItemResult>("/api/platform/work-items/dispatch", {
+  async dispatchWorkItem(input: ManagedAgentPlatformWorkItemDispatchInput): Promise<ManagedAgentPlatformWorkItemDispatchResult> {
+    return await this.requestJson<ManagedAgentPlatformWorkItemDispatchResult>("/api/platform/work-items/dispatch", {
       ownerPrincipalId: this.ownerPrincipalId,
       workItem: {
         targetAgentId: input.targetAgentId,
@@ -400,17 +422,17 @@ export class ManagedAgentPlatformGatewayClient {
     });
   }
 
-  async cancelWorkItem(workItemId: string): Promise<CancelWorkItemResult> {
-    return await this.requestJson<CancelWorkItemResult>("/api/platform/work-items/cancel", {
+  async cancelWorkItem(workItemId: string): Promise<ManagedAgentPlatformWorkItemCancelResult> {
+    return await this.requestJson<ManagedAgentPlatformWorkItemCancelResult>("/api/platform/work-items/cancel", {
       ownerPrincipalId: this.ownerPrincipalId,
       workItemId,
     });
   }
 
   async respondToHumanWaitingWorkItem(
-    input: Omit<RespondToHumanWaitingWorkItemInput, "ownerPrincipalId">,
-  ): Promise<RespondToHumanWaitingWorkItemResult> {
-    return await this.requestJson<RespondToHumanWaitingWorkItemResult>("/api/platform/work-items/respond", {
+    input: ManagedAgentPlatformWorkItemRespondInput,
+  ): Promise<ManagedAgentPlatformWorkItemRespondResult> {
+    return await this.requestJson<ManagedAgentPlatformWorkItemRespondResult>("/api/platform/work-items/respond", {
       ownerPrincipalId: this.ownerPrincipalId,
       workItemId: input.workItemId,
       response: {
@@ -423,9 +445,9 @@ export class ManagedAgentPlatformGatewayClient {
   }
 
   async escalateWaitingAgentWorkItemToHuman(
-    input: Omit<EscalateWaitingAgentWorkItemToHumanInput, "ownerPrincipalId">,
-  ): Promise<EscalateWaitingAgentWorkItemToHumanResult> {
-    return await this.requestJson<EscalateWaitingAgentWorkItemToHumanResult>("/api/platform/work-items/escalate", {
+    input: ManagedAgentPlatformWorkItemEscalateInput,
+  ): Promise<ManagedAgentPlatformWorkItemEscalateResult> {
+    return await this.requestJson<ManagedAgentPlatformWorkItemEscalateResult>("/api/platform/work-items/escalate", {
       ownerPrincipalId: this.ownerPrincipalId,
       workItemId: input.workItemId,
       ...(input.inputText ? { escalation: { inputText: input.inputText } } : {}),
@@ -515,15 +537,7 @@ export class ManagedAgentPlatformGatewayClient {
   }
 
   async getWorkItemDetail(workItemId: string): Promise<ManagedAgentPlatformGatewayWorkItemDetailResult | null> {
-    const payload = await this.requestJson<{
-      organization?: ManagedAgentWorkItemDetailView["organization"];
-      workItem?: ManagedAgentWorkItemDetailView["workItem"];
-      targetAgent?: ManagedAgentWorkItemDetailView["targetAgent"];
-      sourceAgent?: ManagedAgentWorkItemDetailView["sourceAgent"];
-      sourcePrincipal?: ManagedAgentWorkItemDetailView["sourcePrincipal"];
-      messages?: ManagedAgentWorkItemDetailView["messages"];
-      collaboration?: ManagedAgentWorkItemDetailView["collaboration"];
-    }>(
+    const payload = await this.requestJson<Partial<ManagedAgentPlatformWorkItemDetailResult>>(
       "/api/platform/work-items/detail",
       {
         ownerPrincipalId: this.ownerPrincipalId,

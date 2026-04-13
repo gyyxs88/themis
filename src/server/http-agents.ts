@@ -955,7 +955,7 @@ export async function handleAgentWorkItemList(
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
     const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
     const workItems = gatewayClient
-      ? await gatewayClient.listWorkItems(payload.agentId)
+      ? await gatewayClient.listWorkItems(payload.agentId ? { agentId: payload.agentId } : {})
       : runtime.getManagedAgentControlPlaneFacade().listWorkItems(identity.principalId, payload.agentId);
 
     writeJson(response, 200, {

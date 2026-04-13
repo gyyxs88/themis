@@ -7,6 +7,15 @@ import type {
   ManagedAgentPlatformProjectWorkspaceBindingUpsertPayload,
 } from "../contracts/managed-agent-platform-projects.js";
 import type {
+  ManagedAgentPlatformWorkItemCancelPayload,
+  ManagedAgentPlatformWorkItemDetailPayload,
+  ManagedAgentPlatformWorkItemDispatchPayload,
+  ManagedAgentPlatformWorkItemEscalatePayload,
+  ManagedAgentPlatformWorkItemListPayload,
+  ManagedAgentPlatformWorkItemResponsePayload,
+  ManagedAgentPlatformWorkItemRespondPayload,
+} from "../contracts/managed-agent-platform-work-items.js";
+import type {
   ManagedAgentPlatformNodeDetailPayload,
   ManagedAgentPlatformNodeHeartbeatPayload,
   ManagedAgentPlatformNodeListPayload,
@@ -29,7 +38,6 @@ import {
   type ManagedAgentIdleRecoveryAction,
   type MemoryMode,
   type ManagedAgentPriority,
-  type ManagedAgentWorkItemSourceType,
   type ReasoningLevel,
   type SandboxMode,
   type TaskAccessMode,
@@ -161,53 +169,6 @@ interface PlatformWaitingQueueListPayload extends PlatformGovernanceFiltersPaylo
 
 interface PlatformCollaborationDashboardPayload extends PlatformGovernanceFiltersPayload {
   limit?: number;
-}
-
-interface PlatformWorkItemListPayload extends PlatformAgentListPayload {
-  agentId?: string;
-}
-
-interface PlatformWorkItemDispatchPayload extends PlatformAgentListPayload {
-  workItem: {
-    targetAgentId: string;
-    projectId?: string;
-    sourceType?: ManagedAgentWorkItemSourceType;
-    sourceAgentId?: string;
-    sourcePrincipalId?: string;
-    parentWorkItemId?: string;
-    dispatchReason: string;
-    goal: string;
-    contextPacket?: unknown;
-    priority?: ManagedAgentPriority;
-    workspacePolicySnapshot?: unknown;
-    runtimeProfileSnapshot?: unknown;
-    scheduledAt?: string;
-  };
-}
-
-interface PlatformWorkItemDetailPayload extends PlatformAgentListPayload {
-  workItemId: string;
-}
-
-interface PlatformWorkItemCancelPayload extends PlatformAgentListPayload {
-  workItemId: string;
-}
-
-interface PlatformWorkItemRespondPayload extends PlatformAgentListPayload {
-  workItemId: string;
-  response: {
-    decision?: "approve" | "deny";
-    inputText?: string;
-    payload?: unknown;
-    artifactRefs?: string[];
-  };
-}
-
-interface PlatformWorkItemEscalatePayload extends PlatformAgentListPayload {
-  workItemId: string;
-  escalation?: {
-    inputText?: string;
-  };
 }
 
 interface PlatformRunListPayload extends PlatformAgentListPayload {
@@ -935,7 +896,9 @@ export async function handlePlatformWorkItemRespond(
       workItemId: payload.workItemId,
       ...(payload.response.decision ? { decision: payload.response.decision } : {}),
       ...(payload.response.inputText ? { inputText: payload.response.inputText } : {}),
-      ...(hasOwn(payload.response, "payload") ? { payload: payload.response.payload } : {}),
+      ...(Object.prototype.hasOwnProperty.call(payload.response, "payload")
+        ? { payload: payload.response.payload }
+        : {}),
       ...(payload.response.artifactRefs ? { artifactRefs: payload.response.artifactRefs } : {}),
     });
 
@@ -1831,7 +1794,7 @@ function normalizePlatformCollaborationDashboardPayload(value: unknown): Platfor
   };
 }
 
-function normalizePlatformWorkItemListPayload(value: unknown): PlatformWorkItemListPayload {
+function normalizePlatformWorkItemListPayload(value: unknown): ManagedAgentPlatformWorkItemListPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -1844,7 +1807,7 @@ function normalizePlatformWorkItemListPayload(value: unknown): PlatformWorkItemL
   };
 }
 
-function normalizePlatformWorkItemDispatchPayload(value: unknown): PlatformWorkItemDispatchPayload {
+function normalizePlatformWorkItemDispatchPayload(value: unknown): ManagedAgentPlatformWorkItemDispatchPayload {
   if (!isRecord(value) || !isRecord(value.workItem)) {
     throw new Error("Request body.workItem must be an object.");
   }
@@ -1889,7 +1852,7 @@ function normalizePlatformWorkItemDispatchPayload(value: unknown): PlatformWorkI
   };
 }
 
-function normalizePlatformWorkItemDetailPayload(value: unknown): PlatformWorkItemDetailPayload {
+function normalizePlatformWorkItemDetailPayload(value: unknown): ManagedAgentPlatformWorkItemDetailPayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
@@ -1900,11 +1863,11 @@ function normalizePlatformWorkItemDetailPayload(value: unknown): PlatformWorkIte
   };
 }
 
-function normalizePlatformWorkItemCancelPayload(value: unknown): PlatformWorkItemCancelPayload {
+function normalizePlatformWorkItemCancelPayload(value: unknown): ManagedAgentPlatformWorkItemCancelPayload {
   return normalizePlatformWorkItemDetailPayload(value);
 }
 
-function normalizePlatformWorkItemRespondPayload(value: unknown): PlatformWorkItemRespondPayload {
+function normalizePlatformWorkItemRespondPayload(value: unknown): ManagedAgentPlatformWorkItemRespondPayload {
   if (!isRecord(value) || !isRecord(value.response)) {
     throw new Error("Request body.response must be an object.");
   }
@@ -1914,20 +1877,21 @@ function normalizePlatformWorkItemRespondPayload(value: unknown): PlatformWorkIt
   const artifactRefs = Array.isArray(value.response.artifactRefs)
     ? readStringArray(value.response.artifactRefs)
     : undefined;
+  const response: ManagedAgentPlatformWorkItemResponsePayload = {
+    ...(decision ? { decision } : {}),
+    ...(inputText ? { inputText } : {}),
+    ...(hasOwn(value.response, "payload") ? { payload: value.response.payload } : {}),
+    ...(artifactRefs?.length ? { artifactRefs } : {}),
+  };
 
   return {
     ...normalizePlatformOwnerPayload(value),
     workItemId: readRequiredString(value.workItemId, "workItemId"),
-    response: {
-      ...(decision ? { decision } : {}),
-      ...(inputText ? { inputText } : {}),
-      ...(hasOwn(value.response, "payload") ? { payload: value.response.payload } : {}),
-      ...(artifactRefs?.length ? { artifactRefs } : {}),
-    },
+    response,
   };
 }
 
-function normalizePlatformWorkItemEscalatePayload(value: unknown): PlatformWorkItemEscalatePayload {
+function normalizePlatformWorkItemEscalatePayload(value: unknown): ManagedAgentPlatformWorkItemEscalatePayload {
   if (!isRecord(value)) {
     throw new Error("Request body must be an object.");
   }
