@@ -1,6 +1,6 @@
 # Themis 局域网多节点硅基员工平台 / MySQL Shared Control Plane 下一阶段实施计划
 
-更新时间：2026-04-13 11:10 CST  
+更新时间：2026-04-13 14:35 CST
 文档性质：实施计划稿。目标是把“平台层真正独立出来”的下一阶段收成可开工的工程任务，而不是继续停留在口头共识。
 
 ## 0. 当前进展
@@ -16,6 +16,12 @@
   - `work_item` 已补 `project_id` 持久化，MySQL 侧也已补 `listManagedAgentsByOwnerPrincipal`、`get*ByOwnerAgent`、`listAgentWorkItemsByOwnerPrincipal|Target|Parent`、`listAgentRunsByOwnerPrincipal|WorkItem`、`listStaleActiveAgentRuns`、`listActiveAgentExecutionLeases`
   - `claimNextAgentMailboxEntry(...)` 与 `claimNextRunnableAgentWorkItem(...)` 也已在 MySQL 事务里落地
   - 已新增 Docker + `mysql:8.4` 真库集成测试 `src/storage/mysql-managed-agent-control-plane-store.test.ts`
+- `2026-04-13` 同日已完成 `Step C / 平台路径适配` 与 `Step D / 独立平台入口` 的首轮闭环：
+  - 新增 `ManagedAgentControlPlaneMirror`，平台进程现在采用“本地 shared cache SQLite + MySQL snapshot mirror”结构，而不是强行把现有同步 service 全改成 async
+  - `createManagedAgentControlPlaneRuntimeFromEnv(...)` 已支持 `THEMIS_PLATFORM_CONTROL_PLANE_DRIVER=mysql`，会自动装配本地 shared cache、MySQL snapshot store、启动时 bootstrap 和镜像对象
+  - `ManagedAgentControlPlaneFacade` 的 async 适配器已支持 mutation runner；平台 API 写请求会在成功后回刷 MySQL，失败时回滚本地 shared cache
+  - 已新增独立入口 `src/server/platform-main.ts` 与 `npm run dev:platform / start:platform`，可单独启动平台层进程
+  - 已补单测 `managed-agent-control-plane-bootstrap.test.ts`、`managed-agent-control-plane-mirror.test.ts`、`managed-agent-control-plane-facade.test.ts`，并回归 `codex-runtime / app-server-task-runtime / http-platform`
 
 ## 1. 这份计划解决什么问题
 
@@ -43,7 +49,7 @@
 
 这意味着“平台层独立 wiring”这条缝已经开出来了，后面不需要再先拆运行时边界。
 
-### 2.2 当前 MySQL store 仍然只是异步原型，不是可切主实现
+### 2.2 当前 MySQL store 仍然不是“所有 service 直连”的最终形态
 
 当前 [src/storage/mysql-managed-agent-control-plane-store.ts](/home/leyi/projects/themis/src/storage/mysql-managed-agent-control-plane-store.ts) 已经覆盖了这些对象的最小 round-trip：
 
@@ -65,7 +71,16 @@
 2. 调用模型不兼容  
 当前 `MySqlManagedAgentControlPlaneStore` 是 `async/await + Promise` 风格，而现有 `ManagedAgentsService / ManagedAgentCoordinationService / ManagedAgentSchedulerService` 仍是同步 store 接口。
 
-也就是说，**现在不能直接把 `MySqlManagedAgentControlPlaneStore` 塞进现有 managed-agent service。**
+也就是说，**当前仍不适合把 `MySqlManagedAgentControlPlaneStore` 直接塞进现有 managed-agent service。**
+
+当前已经落地的路线是：
+
+- 平台进程继续跑现有同步 service
+- shared control plane 先落到本地 `SQLite cache`
+- 平台启动时由 `ManagedAgentControlPlaneMirror` 决定“从 MySQL 拉到本地”还是“把本地推到 MySQL”
+- 平台 API 写请求和 scheduler tick 再持续把本地 shared cache 回刷到 MySQL
+
+这条路线的好处是：先把平台层独立出来，同时不把整个 service 栈重写成 async。
 
 ### 2.3 当前真正该切到 MySQL 的只有 shared control plane
 
@@ -246,6 +261,8 @@
 - 平台 API 主链已经在 MySQL 上回归通过
 - 主 Themis 与 Worker Node 不需要直连 MySQL
 - 有固定的切换、验收和回退步骤
+
+截至 `2026-04-13 14:35 CST`，前四条已经进入可运行首版；当前剩余主线集中在最后一条：补齐固定烟测、回归矩阵和切换/回退文档。
 
 ## 9. 一句话结论
 

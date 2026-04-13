@@ -25,6 +25,7 @@ import { writeJson } from "./http-responses.js";
 import { getPlatformServiceAuthContext } from "./http-web-access.js";
 
 type ManagedAgentControlPlaneFacade = ManagedAgentControlPlaneFacadeLike;
+export type ManagedAgentWorkItemCancellationService = Pick<ManagedAgentExecutionService, "cancelWorkItem">;
 
 interface PlatformAgentCreatePayload {
   ownerPrincipalId: string;
@@ -975,7 +976,7 @@ export async function handlePlatformWorkItemDispatch(
 export async function handlePlatformWorkItemCancel(
   request: IncomingMessage,
   response: ServerResponse,
-  executionService: ManagedAgentExecutionService,
+  executionService: ManagedAgentWorkItemCancellationService,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizePlatformWorkItemCancelPayload);
   if (!payload) {

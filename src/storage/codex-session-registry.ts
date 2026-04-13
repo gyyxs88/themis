@@ -1131,6 +1131,10 @@ export class SqliteCodexSessionRegistry {
     this.db = this.openDatabase();
   }
 
+  getDatabaseFile(): string {
+    return this.databaseFile;
+  }
+
   getSession(sessionId: string): StoredCodexSessionRecord | null {
     const normalized = sessionId.trim();
 

@@ -58,6 +58,53 @@ export type ManagedAgentsStore = Pick<SqliteCodexSessionRegistry,
   | "saveThirdPartyProviderModel"
 >;
 
+export type ManagedAgentsSharedStore = Pick<ManagedAgentsStore,
+  | "deleteAgentSpawnSuggestionState"
+  | "getAgentRuntimeProfile"
+  | "getAgentRuntimeProfileByOwnerAgent"
+  | "getAgentSpawnPolicy"
+  | "getAgentSpawnSuggestionState"
+  | "getAgentWorkItem"
+  | "getAgentWorkspacePolicy"
+  | "getAgentWorkspacePolicyByOwnerAgent"
+  | "getManagedAgent"
+  | "getProjectWorkspaceBinding"
+  | "getOrganization"
+  | "getPrincipal"
+  | "listAgentAuditLogsByOrganization"
+  | "listAgentHandoffsByAgent"
+  | "listAgentMailboxEntriesByAgent"
+  | "listAgentMessagesByAgent"
+  | "listAgentSpawnSuggestionStatesByOrganization"
+  | "listAgentWorkItemsByOwnerPrincipal"
+  | "listAgentWorkItemsByParentWorkItem"
+  | "listAgentWorkItemsByTargetAgent"
+  | "listManagedAgentsByOrganization"
+  | "listManagedAgentsByOwnerPrincipal"
+  | "listOrganizationsByOwnerPrincipal"
+  | "listProjectWorkspaceBindingsByOrganization"
+  | "saveAgentAuditLog"
+  | "saveAgentRuntimeProfile"
+  | "saveAgentSpawnPolicy"
+  | "saveAgentSpawnSuggestionState"
+  | "saveAgentWorkItem"
+  | "saveAgentWorkspacePolicy"
+  | "saveManagedAgent"
+  | "saveProjectWorkspaceBinding"
+  | "saveOrganization"
+  | "savePrincipal"
+>;
+
+export type ManagedAgentsLocalStore = Pick<ManagedAgentsStore,
+  | "getActiveAuthAccount"
+  | "getAuthAccount"
+  | "listAuthAccounts"
+  | "listThirdPartyProviderModels"
+  | "listThirdPartyProviders"
+  | "saveThirdPartyProvider"
+  | "saveThirdPartyProviderModel"
+>;
+
 export type ManagedAgentCoordinationStore = Pick<SqliteCodexSessionRegistry,
   | "claimNextAgentMailboxEntry"
   | "getActiveAgentExecutionLeaseByRun"
@@ -187,7 +234,7 @@ export type ManagedAgentWorkerStore = Pick<SqliteCodexSessionRegistry,
 >;
 
 export type ManagedAgentControlPlaneSharedStore =
-  & ManagedAgentsStore
+  & ManagedAgentsSharedStore
   & ManagedAgentCoordinationStore
   & ManagedAgentSchedulerStore
   & ManagedAgentNodeStore
@@ -206,6 +253,7 @@ export interface ManagedAgentControlPlaneStore {
 
 export interface CompositeManagedAgentControlPlaneStoreOptions {
   sharedStore: ManagedAgentControlPlaneSharedStore;
+  managedAgentsStore?: ManagedAgentsStore;
   executionStateStore: ManagedAgentExecutionStateStore;
 }
 
@@ -258,6 +306,62 @@ export function createSplitManagedAgentExecutionStateStore(
   };
 }
 
+export interface SplitManagedAgentsStoreOptions {
+  sharedStore: ManagedAgentsSharedStore;
+  localManagedAgentsStore: ManagedAgentsLocalStore;
+}
+
+export function createSplitManagedAgentsStore(
+  options: SplitManagedAgentsStoreOptions,
+): ManagedAgentsStore {
+  const { sharedStore, localManagedAgentsStore } = options;
+
+  return {
+    deleteAgentSpawnSuggestionState: sharedStore.deleteAgentSpawnSuggestionState.bind(sharedStore),
+    getActiveAuthAccount: localManagedAgentsStore.getActiveAuthAccount.bind(localManagedAgentsStore),
+    getAgentRuntimeProfile: sharedStore.getAgentRuntimeProfile.bind(sharedStore),
+    getAgentRuntimeProfileByOwnerAgent: sharedStore.getAgentRuntimeProfileByOwnerAgent.bind(sharedStore),
+    getAgentSpawnPolicy: sharedStore.getAgentSpawnPolicy.bind(sharedStore),
+    getAgentSpawnSuggestionState: sharedStore.getAgentSpawnSuggestionState.bind(sharedStore),
+    getAgentWorkItem: sharedStore.getAgentWorkItem.bind(sharedStore),
+    getAgentWorkspacePolicy: sharedStore.getAgentWorkspacePolicy.bind(sharedStore),
+    getAgentWorkspacePolicyByOwnerAgent: sharedStore.getAgentWorkspacePolicyByOwnerAgent.bind(sharedStore),
+    getAuthAccount: localManagedAgentsStore.getAuthAccount.bind(localManagedAgentsStore),
+    getManagedAgent: sharedStore.getManagedAgent.bind(sharedStore),
+    getProjectWorkspaceBinding: sharedStore.getProjectWorkspaceBinding.bind(sharedStore),
+    getOrganization: sharedStore.getOrganization.bind(sharedStore),
+    getPrincipal: sharedStore.getPrincipal.bind(sharedStore),
+    listAgentAuditLogsByOrganization: sharedStore.listAgentAuditLogsByOrganization.bind(sharedStore),
+    listAuthAccounts: localManagedAgentsStore.listAuthAccounts.bind(localManagedAgentsStore),
+    listAgentHandoffsByAgent: sharedStore.listAgentHandoffsByAgent.bind(sharedStore),
+    listAgentMailboxEntriesByAgent: sharedStore.listAgentMailboxEntriesByAgent.bind(sharedStore),
+    listAgentMessagesByAgent: sharedStore.listAgentMessagesByAgent.bind(sharedStore),
+    listAgentSpawnSuggestionStatesByOrganization:
+      sharedStore.listAgentSpawnSuggestionStatesByOrganization.bind(sharedStore),
+    listAgentWorkItemsByOwnerPrincipal: sharedStore.listAgentWorkItemsByOwnerPrincipal.bind(sharedStore),
+    listAgentWorkItemsByParentWorkItem: sharedStore.listAgentWorkItemsByParentWorkItem.bind(sharedStore),
+    listAgentWorkItemsByTargetAgent: sharedStore.listAgentWorkItemsByTargetAgent.bind(sharedStore),
+    listManagedAgentsByOrganization: sharedStore.listManagedAgentsByOrganization.bind(sharedStore),
+    listManagedAgentsByOwnerPrincipal: sharedStore.listManagedAgentsByOwnerPrincipal.bind(sharedStore),
+    listOrganizationsByOwnerPrincipal: sharedStore.listOrganizationsByOwnerPrincipal.bind(sharedStore),
+    listProjectWorkspaceBindingsByOrganization: sharedStore.listProjectWorkspaceBindingsByOrganization.bind(sharedStore),
+    listThirdPartyProviderModels: localManagedAgentsStore.listThirdPartyProviderModels.bind(localManagedAgentsStore),
+    listThirdPartyProviders: localManagedAgentsStore.listThirdPartyProviders.bind(localManagedAgentsStore),
+    saveAgentAuditLog: sharedStore.saveAgentAuditLog.bind(sharedStore),
+    saveAgentRuntimeProfile: sharedStore.saveAgentRuntimeProfile.bind(sharedStore),
+    saveAgentSpawnPolicy: sharedStore.saveAgentSpawnPolicy.bind(sharedStore),
+    saveAgentSpawnSuggestionState: sharedStore.saveAgentSpawnSuggestionState.bind(sharedStore),
+    saveAgentWorkItem: sharedStore.saveAgentWorkItem.bind(sharedStore),
+    saveAgentWorkspacePolicy: sharedStore.saveAgentWorkspacePolicy.bind(sharedStore),
+    saveManagedAgent: sharedStore.saveManagedAgent.bind(sharedStore),
+    saveProjectWorkspaceBinding: sharedStore.saveProjectWorkspaceBinding.bind(sharedStore),
+    saveOrganization: sharedStore.saveOrganization.bind(sharedStore),
+    savePrincipal: sharedStore.savePrincipal.bind(sharedStore),
+    saveThirdPartyProvider: localManagedAgentsStore.saveThirdPartyProvider.bind(localManagedAgentsStore),
+    saveThirdPartyProviderModel: localManagedAgentsStore.saveThirdPartyProviderModel.bind(localManagedAgentsStore),
+  };
+}
+
 export class CompositeManagedAgentControlPlaneStore implements ManagedAgentControlPlaneStore {
   readonly managedAgentsStore: ManagedAgentsStore;
   readonly coordinationStore: ManagedAgentCoordinationStore;
@@ -268,7 +372,7 @@ export class CompositeManagedAgentControlPlaneStore implements ManagedAgentContr
   readonly workerStore: ManagedAgentWorkerStore;
 
   constructor(options: CompositeManagedAgentControlPlaneStoreOptions) {
-    this.managedAgentsStore = options.sharedStore;
+    this.managedAgentsStore = options.managedAgentsStore ?? options.sharedStore as unknown as ManagedAgentsStore;
     this.coordinationStore = options.sharedStore;
     this.schedulerStore = options.sharedStore;
     this.nodeStore = options.sharedStore;

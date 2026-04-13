@@ -7,6 +7,11 @@ import {
   type RowDataPacket,
 } from "mysql2/promise";
 import type { StoredPrincipalRecord } from "./codex-session-registry.js";
+import {
+  MANAGED_AGENT_CONTROL_PLANE_SNAPSHOT_TABLES,
+  type ManagedAgentControlPlaneSnapshot,
+  type SnapshotRow,
+} from "./managed-agent-control-plane-snapshot.js";
 import type {
   StoredAgentAuditLogRecord,
   StoredAgentExecutionLeaseRecord,
@@ -572,6 +577,67 @@ export class MySqlManagedAgentControlPlaneStore {
         "ALTER TABLE themis_agent_work_items ADD COLUMN project_id VARCHAR(191) NULL AFTER target_agent_id",
       );
     }
+  }
+
+  async exportSharedSnapshot(): Promise<ManagedAgentControlPlaneSnapshot> {
+    const snapshot = {
+      principals: [],
+      organizations: [],
+      spawnPolicies: [],
+      spawnSuggestionStates: [],
+      managedAgents: [],
+      workspacePolicies: [],
+      runtimeProfiles: [],
+      projectWorkspaceBindings: [],
+      workItems: [],
+      messages: [],
+      handoffs: [],
+      runs: [],
+      nodes: [],
+      executionLeases: [],
+      mailboxes: [],
+      auditLogs: [],
+    } as ManagedAgentControlPlaneSnapshot;
+
+    for (const table of MANAGED_AGENT_CONTROL_PLANE_SNAPSHOT_TABLES) {
+      const [rows] = await this.pool.query<Array<RowDataPacket & Record<string, unknown>>>(
+        `SELECT ${table.columns.join(", ")} FROM ${table.table} ORDER BY ${table.orderBy}`,
+      );
+      snapshot[table.key] = rows.map((row) => normalizeSnapshotRow(row));
+    }
+
+    return snapshot;
+  }
+
+  async replaceSharedSnapshot(snapshot: ManagedAgentControlPlaneSnapshot): Promise<void> {
+    await this.withTransaction(async (connection) => {
+      await connection.query("SET FOREIGN_KEY_CHECKS = 0");
+
+      for (const table of [...MANAGED_AGENT_CONTROL_PLANE_SNAPSHOT_TABLES].reverse()) {
+        await connection.query(`DELETE FROM ${table.table}`);
+      }
+
+      for (const table of MANAGED_AGENT_CONTROL_PLANE_SNAPSHOT_TABLES) {
+        const rows = snapshot[table.key];
+
+        if (!rows.length) {
+          continue;
+        }
+
+        const placeholders = table.columns.map((column) =>
+          isSnapshotJsonColumn(column) ? "CAST(? AS JSON)" : "?").join(", ");
+        const statement = `INSERT INTO ${table.table} (${table.columns.join(", ")}) VALUES (${placeholders})`;
+
+        for (const row of rows) {
+          await connection.execute<ResultSetHeader>(
+            statement,
+            table.columns.map((column) => normalizeMySqlSnapshotValue(column, row[column] ?? null)),
+          );
+        }
+      }
+
+      await connection.query("SET FOREIGN_KEY_CHECKS = 1");
+    });
   }
 
   async savePrincipal(record: StoredPrincipalRecord): Promise<void> {
@@ -2220,6 +2286,64 @@ function mapAgentExecutionLeaseRow(row: AgentExecutionLeaseRow): StoredAgentExec
     createdAt: fromMySqlDateTime(row.created_at),
     updatedAt: fromMySqlDateTime(row.updated_at),
   };
+}
+
+const SNAPSHOT_JSON_COLUMNS = new Set([
+  "payload_json",
+  "bootstrap_profile_json",
+  "additional_directories_json",
+  "snapshot_json",
+  "context_packet_json",
+  "waiting_action_request_json",
+  "latest_human_response_json",
+  "workspace_policy_snapshot_json",
+  "runtime_profile_snapshot_json",
+  "artifact_refs_json",
+  "blockers_json",
+  "recommended_next_actions_json",
+  "attached_artifacts_json",
+  "labels_json",
+  "workspace_capabilities_json",
+  "credential_capabilities_json",
+  "provider_capabilities_json",
+]);
+
+function normalizeSnapshotRow(row: Record<string, unknown>): SnapshotRow {
+  return Object.fromEntries(
+    Object.entries(row).map(([key, value]) => [key, normalizeSnapshotValue(value)]),
+  ) as SnapshotRow;
+}
+
+function normalizeSnapshotValue(value: unknown): string | number | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (typeof value === "string" || typeof value === "number") {
+    return value;
+  }
+
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+
+  return JSON.stringify(value);
+}
+
+function isSnapshotJsonColumn(column: string): boolean {
+  return SNAPSHOT_JSON_COLUMNS.has(column);
+}
+
+function normalizeMySqlSnapshotValue(column: string, value: string | number | null): string | number | null {
+  if (!isSnapshotJsonColumn(column)) {
+    return value;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  return typeof value === "string" ? value : JSON.stringify(value);
 }
 
 function safeParseJson<T>(value: unknown): T | undefined {

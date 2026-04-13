@@ -55,6 +55,12 @@ npm run themis -- init
 npm run dev:web
 ```
 
+如果要单独启动平台层进程，改用：
+
+```bash
+npm run dev:platform
+```
+
 4. 在浏览器打开：
 
 ```text
@@ -79,6 +85,8 @@ http://localhost:3100
 ./themis worker-node run --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --name <displayName> [--once]
 ./themis worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --node <nodeId> [--node <nodeId> ...] --yes
 ./themis mcp-server
+npm run dev:platform
+npm run start:platform
 ```
 
 如果你要把某台机器接成局域网执行节点，推荐先按这个顺序验证：
@@ -168,6 +176,14 @@ npm run themis -- config set FEISHU_APP_SECRET xxx
 - `THEMIS_PLATFORM_BASE_URL`
 - `THEMIS_PLATFORM_OWNER_PRINCIPAL_ID`
 - `THEMIS_PLATFORM_WEB_ACCESS_TOKEN`
+- `THEMIS_PLATFORM_CONTROL_PLANE_DRIVER`
+- `THEMIS_PLATFORM_MYSQL_URI`
+- `THEMIS_PLATFORM_MYSQL_HOST`
+- `THEMIS_PLATFORM_MYSQL_PORT`
+- `THEMIS_PLATFORM_MYSQL_USER`
+- `THEMIS_PLATFORM_MYSQL_PASSWORD`
+- `THEMIS_PLATFORM_MYSQL_DATABASE`
+- `THEMIS_PLATFORM_MYSQL_CONNECTION_LIMIT`
 - `THEMIS_MANAGED_AGENT_CONTROL_PLANE_DATABASE_FILE`
 - `CODEX_HOME`
 - `CODEX_API_KEY`
@@ -192,6 +208,23 @@ THEMIS_MANAGED_AGENT_CONTROL_PLANE_DATABASE_FILE=infra/platform/control-plane.db
 ```
 
 这会把 `managed_agent / work_item / run / node / execution_lease` 这类共享控制面事实切到独立 SQLite 文件；本地 `session task settings` 等执行态仍留在当前 runtime store，不会跟平台真相源混在一起。
+
+如果要把平台层切到 MySQL 真相源，推荐单独起平台进程，并配置：
+
+```bash
+THEMIS_PLATFORM_CONTROL_PLANE_DRIVER=mysql
+THEMIS_PLATFORM_MYSQL_DATABASE=themis_platform
+THEMIS_PLATFORM_MYSQL_URI=mysql://user:password@127.0.0.1:3306/themis_platform
+THEMIS_MANAGED_AGENT_CONTROL_PLANE_DATABASE_FILE=infra/platform/control-plane.db
+```
+
+然后启动：
+
+```bash
+npm run dev:platform
+```
+
+这时平台进程会把 managed-agent shared control plane 先落到本地 `SQLite cache`，启动时从 MySQL 拉快照，平台写操作和 scheduler tick 再持续回刷 MySQL；本地 `session task settings`、线程/history、认证运行态仍留在当前 runtime store，不会被搬进 MySQL。
 
 ## 公开文档
 

@@ -22,8 +22,8 @@ import {
   type UpsertProjectWorkspaceBindingInput,
 } from "./managed-agents-service.js";
 import {
-  createAsyncMethodAdapter,
   type AsyncMethods,
+  type Awaitable,
   type AwaitableMethods,
 } from "../storage/index.js";
 import {
@@ -125,10 +125,69 @@ export interface ManagedAgentMailboxListView {
 export type ManagedAgentControlPlaneFacadeLike = AwaitableMethods<ManagedAgentControlPlaneFacade>;
 export type ManagedAgentControlPlaneFacadeAsync = AsyncMethods<ManagedAgentControlPlaneFacade>;
 
+const MANAGED_AGENT_CONTROL_PLANE_FACADE_MUTATION_METHODS = new Set<keyof ManagedAgentControlPlaneFacade>([
+  "createManagedAgent",
+  "updateManagedAgentExecutionBoundary",
+  "upsertProjectWorkspaceBinding",
+  "updateSpawnPolicy",
+  "approveSpawnSuggestion",
+  "ignoreSpawnSuggestion",
+  "rejectSpawnSuggestion",
+  "restoreSpawnSuggestion",
+  "approveIdleRecoverySuggestion",
+  "updateManagedAgentLifecycle",
+  "dispatchWorkItem",
+  "cancelWorkItem",
+  "respondToHumanWaitingWorkItem",
+  "escalateWaitingAgentWorkItemToHuman",
+  "pullMailboxEntry",
+  "ackMailboxEntry",
+  "respondToMailboxEntry",
+  "registerNode",
+  "heartbeatNode",
+  "markNodeDraining",
+  "markNodeOffline",
+  "reclaimNodeLeases",
+  "pullAssignedRun",
+  "updateWorkerRunStatus",
+  "completeWorkerRun",
+]);
+
+export interface CreateManagedAgentControlPlaneFacadeAsyncAdapterOptions {
+  runMutation?: <T>(mutation: () => Awaitable<T>) => Promise<T>;
+}
+
 export function createManagedAgentControlPlaneFacadeAsyncAdapter(
   facade: ManagedAgentControlPlaneFacade,
+  options: CreateManagedAgentControlPlaneFacadeAsyncAdapterOptions = {},
 ): ManagedAgentControlPlaneFacadeAsync {
-  return createAsyncMethodAdapter(facade);
+  return new Proxy(facade, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+
+      if (typeof value !== "function") {
+        return value;
+      }
+
+      return (...args: unknown[]) => {
+        const invoke = () => Reflect.apply(value, target, args);
+
+        try {
+          if (
+            options.runMutation
+            && typeof property === "string"
+            && MANAGED_AGENT_CONTROL_PLANE_FACADE_MUTATION_METHODS.has(property as keyof ManagedAgentControlPlaneFacade)
+          ) {
+            return options.runMutation(() => Promise.resolve(invoke()));
+          }
+
+          return Promise.resolve(invoke());
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      };
+    },
+  }) as unknown as ManagedAgentControlPlaneFacadeAsync;
 }
 
 export class ManagedAgentControlPlaneFacade {

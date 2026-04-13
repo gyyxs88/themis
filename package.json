@@ -13,7 +13,10 @@
     "build": "tsc",
     "dev:web": "tsx watch --clear-screen=false src/server/main.ts",
     "dev:web:once": "tsx src/server/main.ts",
+    "dev:platform": "tsx watch --clear-screen=false src/server/platform-main.ts",
+    "dev:platform:once": "tsx src/server/platform-main.ts",
     "start:web": "node dist/server/main.js",
+    "start:platform": "node dist/server/platform-main.js",
     "publish:public": "bash scripts/export-public-repo.sh"
   },
   "devDependencies": {

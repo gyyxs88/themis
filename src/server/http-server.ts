@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
 import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
+import type { ManagedAgentControlPlaneFacadeLike } from "../core/managed-agent-control-plane-facade.js";
 import { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
 import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
@@ -145,6 +146,7 @@ import {
   handlePlatformRunDetail,
   handlePlatformRunList,
   handlePlatformWaitingQueueList,
+  type ManagedAgentWorkItemCancellationService,
   handlePlatformWorkItemCancel,
   handlePlatformWorkItemEscalate,
   handlePlatformWorkItemList,
@@ -192,6 +194,8 @@ export interface ThemisHttpServerOptions {
   createMcpInspector?: CreateMcpInspector;
   actionBridge?: AppServerActionBridge;
   managedAgentExecutionService?: ManagedAgentExecutionService;
+  platformManagedAgentExecutionService?: ManagedAgentWorkItemCancellationService;
+  platformControlPlaneFacade?: ManagedAgentControlPlaneFacadeLike;
   feishuService?: {
     handleCardActionWebhook(request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean>;
   };
@@ -218,6 +222,8 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
     schedulerService: defaultAppServerRuntime.getManagedAgentSchedulerService(),
     coordinationService: defaultAppServerRuntime.getManagedAgentCoordinationService(),
   });
+  const platformManagedAgentExecutionService =
+    options.platformManagedAgentExecutionService ?? managedAgentExecutionService;
   const authRuntime = options.authRuntime ?? new CodexAuthRuntime({
     workingDirectory: runtime.getWorkingDirectory(),
     registry: runtime.getRuntimeStore(),
@@ -234,7 +240,8 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
   });
   const runtimeStore = runtime.getRuntimeStore();
   const webAccessService = new WebAccessService({ registry: runtimeStore });
-  const platformControlPlaneFacade = defaultAppServerRuntime.getManagedAgentControlPlaneFacadeAsync();
+  const platformControlPlaneFacade = options.platformControlPlaneFacade
+    ?? defaultAppServerRuntime.getManagedAgentControlPlaneFacadeAsync();
   const updateService = options.updateService ?? new ThemisUpdateService({
     workingDirectory: runtime.getWorkingDirectory(),
   });
@@ -589,7 +596,7 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
       }
 
       if (request.method === "POST" && url.pathname === "/api/platform/work-items/cancel") {
-        return handlePlatformWorkItemCancel(request, response, managedAgentExecutionService);
+        return handlePlatformWorkItemCancel(request, response, platformManagedAgentExecutionService);
       }
 
       if (request.method === "POST" && url.pathname === "/api/platform/work-items/respond") {
