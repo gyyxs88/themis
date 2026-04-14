@@ -239,6 +239,7 @@
 - `2026-04-14` 已继续推进平台仓真实迁移首刀：当前 `../themis-platform` 已开始直接托管 `apps/platform/*` 独立前端壳，并在本仓落入最小 `nodes/register|heartbeat|list|detail` API、内存节点仓与静态资源服务；该仓当前已真实通过 `npm run test`、`npm run typecheck`、`npm run build`。这意味着平台仓已经从“最小 JSON bootstrap”继续往前走到“独立平台页 + 最小节点控制面都开始由新仓自己提供”的阶段。
 - `2026-04-14` 同日已继续补节点治理动作：当前 `../themis-platform` 已把 `nodes/drain|offline` API 和平台页对应按钮也迁入本仓，说明平台仓现在已经不只是“能看节点”，而是开始承接最小节点治理动作。`reclaim` 仍暂留在后续，因为主仓当前返回 shape 与 `themis-contracts` 里的共享类型还有一层差口，继续推进前应先补契约收口。
 - `2026-04-14` 同日已继续收口 `nodes reclaim` 差口：当前 `../themis-contracts` 已把节点 detail / reclaim 的共享类型对齐到主仓真实返回 shape，随后 `../themis-platform` 也已基于新契约补入 `nodes/reclaim` API、平台页 `Reclaim` 按钮与 summary 展示。到这一步，平台仓的节点控制面已经从“只读列表”推进到“读 + drain/offline/reclaim 最小治理闭环”。
+- `2026-04-14` 同日已继续收口 `worker-runs` 契约与平台迁移：当前 `../themis-contracts` 已把 `worker/runs/update|complete` 的共享结果结构、`run / executionLease` 状态枚举，以及 `waitingAction / completion result` payload 对齐到主仓真实 API；随后 `../themis-platform` 也已基于新契约补入 `worker/runs/pull|update|complete` 最小 API、内存 run 仓与 `pull -> starting -> running -> complete` 回归测试。到这一步，平台仓已不再只承接节点治理面，而是开始自己承接最小节点执行主链。
 
 说明：
 
