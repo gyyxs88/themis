@@ -103,6 +103,8 @@ npm run start:platform
   - 平台侧值班 / 平台令牌 / `worker-fleet`：`./themis-platform`
   - Worker Node 本机预检 / 常驻执行：`./themis-worker-node`
 
+当前 `themis-worker-node` 独立仓已经开始承接最小 `worker-node run` daemon 闭环；`doctor worker-node` 与真实本机执行链还会继续往该仓迁入。
+
 如果你要把某台机器接成局域网执行节点，推荐先按这个顺序验证：
 
 ```bash
