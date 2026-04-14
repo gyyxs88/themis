@@ -245,6 +245,7 @@
 - `2026-04-14` 同日已继续把最小治理读面也往平台仓收口：当前 `../themis-platform` 已补入 `agents/governance-overview|waiting/list` 两组平台 API、`platform-governance-service` 派生层，以及独立平台页上的治理摘要、manager hotspots 和 waiting queue 面板。底层这次没有再平行造一套假数据，而是直接复用平台仓现有的 in-memory `workerRunService` 状态来派生治理摘要，因此 worker run 状态变化后，独立平台页的 waiting summary 也会一起刷新。到这一步，平台仓已经开始自己承接最小平台治理读面，而不再只停留在 nodes + worker-runs。
 - `2026-04-14` 同日已继续把 recent runs 读面也往平台仓收口：当前 `../themis-platform` 已补入 `/api/platform/runs/list|detail` 两组 API，并在独立平台页上接入 recent runs 列表与当前选中 run detail。底层这次仍直接复用平台仓现有的 `workerRunService` 状态来提供 runs 列表和 detail，因此 recent runs、governance overview、waiting queue 现在都共享同一套平台事实，不再各自平行造内存视图。
 - `2026-04-14` 同日已继续收口 `themis-platform` 独立 CLI：当前 `../themis-platform` 已新增独立 `themis-platform` CLI 入口、本地平台服务令牌存储、`doctor worker-fleet` 巡检摘要，以及 `worker-fleet drain|offline|reclaim` 最小治理命令；对应的节点读取/治理 client 和 diagnostics/governance 测试也已在新仓落下并真实通过 `npm run test`、`npm run typecheck`、`npm run build`。到这一步，平台仓已开始自己承接平台值班入口，而不再依赖主仓里的兼容 CLI。
+- `2026-04-14` 同日已继续把协作读面也往平台仓收口：当前 `../themis-platform` 已补入 `/api/platform/agents/collaboration-dashboard|handoffs/list` 两组平台 API、`platform-collaboration-service` 派生层，以及独立平台页上的“父任务协作分组 + 当前选中 agent 的 handoff 时间线”首版只读面。与此同时，`../themis-contracts` 也已把 handoff / timeline 最小展示字段补齐到共享契约里，避免平台仓为了这组页面又回头依赖主仓本地类型。到这一步，平台仓当前的独立前端已经从 `nodes + governance + waiting + runs` 扩到 `nodes + governance + waiting + collaboration + handoffs + runs` 这一束。
 
 说明：
 
