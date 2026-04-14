@@ -61,7 +61,7 @@ cd ~/services/themis-worker-node
 ./themis-worker-node doctor worker-node \
   --platform http://192.168.31.208:3100 \
   --owner-principal principal-owner \
-  --token <platformToken> \
+  --token <platformWorkerToken> \
   --workspace /home/you/services/themis-worker-node \
   --credential default
 ```
@@ -72,6 +72,8 @@ cd ~/services/themis-worker-node
 - `credential=missing`
 - `provider=missing / read_error`
 - `platform.status=failed`
+
+这里的 `--token` 当前应使用 `worker` 角色的平台服务令牌；主 Themis 自己配置的 `THEMIS_PLATFORM_WEB_ACCESS_TOKEN` 只负责主 Themis 的 `agents / projects / work-items / runs` gateway，不负责节点 `nodes/*` 或 `worker-fleet`。
 
 如果这是台 fresh 节点，但对应 `CODEX_HOME` 或 `infra/local/codex-auth/<id>` 里已经有真实 `auth.json`，当前 `doctor worker-node` 也会直接把该 credential 判成 `ok`，不需要先跑一次 daemon 才让预检通过。
 
@@ -100,7 +102,7 @@ cd ~/services/themis-worker-node
 ./themis-worker-node worker-node run \
   --platform http://192.168.31.208:3100 \
   --owner-principal principal-owner \
-  --token <platformToken> \
+  --token <platformWorkerToken> \
   --name worker-node-a \
   --workspace /home/you/services/themis-worker-node \
   --credential default \
@@ -196,7 +198,7 @@ cd ~/services/themis-worker-node
 ./themis-worker-node doctor worker-node \
   --platform http://192.168.31.208:3100 \
   --owner-principal principal-owner \
-  --token <platformToken> \
+  --token <platformWorkerToken> \
   --workspace /home/you/services/themis-worker-node \
   --credential default
 ```
@@ -228,7 +230,7 @@ systemctl --user stop themis-worker-node.service
 ./themis-platform worker-fleet reclaim \
   --platform http://127.0.0.1:3100 \
   --owner-principal principal-owner \
-  --token <platformToken> \
+  --token <platformWorkerToken> \
   --node <nodeId> \
   --yes
 ```

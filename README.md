@@ -85,10 +85,10 @@ http://localhost:3100
 ./themis doctor smoke all
 ./themis doctor release
 ./themis-platform auth platform list
-./themis-platform doctor worker-fleet --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken>
-./themis-platform worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --node <nodeId> [--node <nodeId> ...] --yes
-./themis-worker-node doctor worker-node --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --workspace <path>
-./themis-worker-node worker-node run --platform <baseUrl> --owner-principal <principalId> --token <webAccessToken> --name <displayName> [--once]
+./themis-platform doctor worker-fleet --platform <baseUrl> --owner-principal <principalId> --token <platformWorkerToken>
+./themis-platform worker-fleet <drain|offline|reclaim> --platform <baseUrl> --owner-principal <principalId> --token <platformWorkerToken> --node <nodeId> [--node <nodeId> ...] --yes
+./themis-worker-node doctor worker-node --platform <baseUrl> --owner-principal <principalId> --token <platformWorkerToken> --workspace <path>
+./themis-worker-node worker-node run --platform <baseUrl> --owner-principal <principalId> --token <platformWorkerToken> --name <displayName> [--once]
 ./themis mcp-server
 npm run dev:platform
 npm run start:platform
@@ -110,14 +110,14 @@ npm run start:platform
 ./themis-worker-node doctor worker-node \
   --platform <baseUrl> \
   --owner-principal <principalId> \
-  --token <webAccessToken> \
+  --token <platformWorkerToken> \
   --workspace <absolutePath> \
   --credential <id>
 
 ./themis-worker-node worker-node run \
   --platform <baseUrl> \
   --owner-principal <principalId> \
-  --token <webAccessToken> \
+  --token <platformWorkerToken> \
   --name <displayName> \
   --workspace <absolutePath> \
   --credential <id> \
@@ -132,10 +132,11 @@ npm run start:platform
 ./themis-platform doctor worker-fleet \
   --platform <baseUrl> \
   --owner-principal <principalId> \
-  --token <webAccessToken>
+  --token <platformWorkerToken>
 ```
 
 这条命令会批量读取 `nodes/list + nodes/detail`，汇总每台节点的 `status / heartbeat / active lease`，并直接给出值班建议动作。
+当前这组节点接口与 `worker-fleet` 值班命令应使用 `worker` 角色的平台服务令牌；主 Themis 自己的 `THEMIS_PLATFORM_WEB_ACCESS_TOKEN` 当前只负责 `agents / projects / work-items / runs` 这组业务 gateway，不负责 `nodes/*`。
 
 如果已经确认要对节点做平台侧治理，可以直接运行：
 
@@ -143,7 +144,7 @@ npm run start:platform
 ./themis-platform worker-fleet drain \
   --platform <baseUrl> \
   --owner-principal <principalId> \
-  --token <webAccessToken> \
+  --token <platformWorkerToken> \
   --node <nodeId> \
   --yes
 ```

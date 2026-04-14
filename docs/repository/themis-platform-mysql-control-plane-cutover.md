@@ -116,7 +116,7 @@ curl -sS http://127.0.0.1:3100/api/health
 ./themis doctor worker-fleet \
   --platform http://127.0.0.1:3100 \
   --owner-principal <principalId> \
-  --token <platformToken>
+  --token <platformWorkerToken>
 ```
 
 如果已经有节点，还应该至少验证一轮：
@@ -130,7 +130,7 @@ curl -sS http://127.0.0.1:3100/api/health
 
 ```bash
 curl -sS http://127.0.0.1:3100/api/platform/nodes/list \
-  -H "Authorization: Bearer <platformToken>" \
+  -H "Authorization: Bearer <platformWorkerToken>" \
   -H "Content-Type: application/json" \
   -d '{"ownerPrincipalId":"<principalId>"}'
 ```

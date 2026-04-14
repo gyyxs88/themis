@@ -40,8 +40,13 @@
 ```bash
 THEMIS_PLATFORM_BASE_URL=http://<platform-host>:3100
 THEMIS_PLATFORM_OWNER_PRINCIPAL_ID=<principalId>
-THEMIS_PLATFORM_WEB_ACCESS_TOKEN=<platformToken>
+THEMIS_PLATFORM_WEB_ACCESS_TOKEN=<platformGatewayToken>
 ```
+
+说明：
+
+- `platformGatewayToken` 当前供主 Themis 自己的 `/api/platform/agents|projects|work-items|runs` gateway 使用
+- `platformWorkerToken` 当前供 `worker-node run`、`doctor worker-node`、`doctor worker-fleet`、`worker-fleet drain|offline|reclaim` 与 `nodes/*` 使用
 
 ### Worker Node
 
@@ -81,7 +86,10 @@ npm run start:web
 
 - Web 页面能打开
 - 主 Themis 能正常读平台 facts，而不是退回本地 SQLite
-- `/api/agents/*` 创建、列表、派工都能走通
+- `POST /api/agents/list` 继续稳定返回 `404 ROUTE_NOT_FOUND`
+- 主 Themis 本地 `POST /api/platform/agents/list|work-items/list|projects/workspace-binding/list` 能读到平台真数据
+- 主 Themis 本地 `POST /api/platform/work-items/dispatch` 能派工，随后可通过主 Themis 本地 `POST /api/platform/runs/list|detail` 回看到真实 run
+- `nodes/*` 当前不属于主 Themis gateway 验收范围；节点值班和 `worker-fleet` 继续只归独立 `themis-platform`
 
 ## 3. 起第一个 Worker
 
@@ -91,7 +99,7 @@ npm run start:web
 ./themis-worker-node doctor worker-node \
   --platform http://<platform-host>:3100 \
   --owner-principal <principalId> \
-  --token <platformToken> \
+  --token <platformWorkerToken> \
   --workspace <workspace-path> \
   --credential default
 ```
@@ -102,7 +110,7 @@ npm run start:web
 ./themis-worker-node worker-node run \
   --platform http://<platform-host>:3100 \
   --owner-principal <principalId> \
-  --token <platformToken> \
+  --token <platformWorkerToken> \
   --name worker-node-a \
   --workspace <workspace-path> \
   --credential default \
@@ -183,7 +191,7 @@ npm run start:web
 ./themis-platform worker-fleet reclaim \
   --platform http://<platform-host>:3100 \
   --owner-principal <principalId> \
-  --token <platformToken> \
+  --token <platformWorkerToken> \
   --node <nodeId-of-w1> \
   --yes
 ```
