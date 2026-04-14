@@ -103,19 +103,19 @@ npm run start:platform
   - 平台侧值班 / 平台令牌 / `worker-fleet`：`./themis-platform`
   - Worker Node 本机预检 / 常驻执行：`./themis-worker-node`
 
-当前 `themis-worker-node` 独立仓已经开始承接最小 `worker-node run` daemon 闭环；`doctor worker-node` 与真实本机执行链还会继续往该仓迁入。
+当前 `themis-worker-node` 独立仓已经承接最小 `worker-node run` daemon 闭环与 `doctor worker-node` 预检；下一顺序差口只剩真实本机执行器与更细的 `execute -> report` 回传。
 
 如果你要把某台机器接成局域网执行节点，推荐先按这个顺序验证：
 
 ```bash
-./themis doctor worker-node \
+./themis-worker-node doctor worker-node \
   --platform <baseUrl> \
   --owner-principal <principalId> \
   --token <webAccessToken> \
   --workspace <absolutePath> \
   --credential <id>
 
-./themis worker-node run \
+./themis-worker-node worker-node run \
   --platform <baseUrl> \
   --owner-principal <principalId> \
   --token <webAccessToken> \
@@ -151,7 +151,7 @@ npm run start:platform
 
 同一组参数下也支持 `offline` 和 `reclaim`；`reclaim` 还可以额外传 `--failure-code` 与 `--failure-message`。当前 CLI 会逐节点输出成功/失败摘要，不需要再手工登录平台取 cookie 后拼 `curl`。
 
-如果这是台 fresh 节点，但对应默认 `CODEX_HOME` 或托管 credential 目录里已经有真实 `auth.json`，`./themis doctor worker-node` 现在会直接把该 credential 判成可用，不需要先跑一次 daemon 才过预检。
+如果这是台 fresh 节点，但对应默认 `CODEX_HOME` 或托管 credential 目录里已经有真实 `auth.json`，`./themis-worker-node doctor worker-node` 现在会直接把该 credential 判成可用，不需要先跑一次 daemon 才过预检。
 
 如果你希望像 `codex` 一样直接输入 `themis`，可以在仓库根目录执行一次：
 

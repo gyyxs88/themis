@@ -33,7 +33,7 @@ infra/systemd/themis-worker-node.service.example
 
 ```bash
 mkdir -p ~/services
-git clone git@github.com:gyyxs88/themis.git ~/services/themis-worker-node
+git clone git@github.com:gyyxs88/themis-worker-node.git ~/services/themis-worker-node
 cd ~/services/themis-worker-node
 npm ci
 npm run build
@@ -53,7 +53,7 @@ npm run build
 
 ```bash
 cd ~/services/themis-worker-node
-./themis doctor worker-node \
+./themis-worker-node doctor worker-node \
   --platform http://192.168.31.208:3100 \
   --owner-principal principal-owner \
   --token <platformToken> \
@@ -74,7 +74,7 @@ cd ~/services/themis-worker-node
 
 `--credential` 不是“纯调度标签”，它必须和节点本地实际可用账号对齐。
 
-当前 `themis worker-node run` 会在本地 runtime store 自动补账号记录：
+当前 `themis-worker-node worker-node run` 会在本地 runtime store 自动补账号记录：
 
 - `--credential default`
   - 对应默认 `CODEX_HOME`
@@ -84,7 +84,7 @@ cd ~/services/themis-worker-node
 
 这只解决“本地 runtime store 里有账号槽位”这件事，不等于认证已经准备好。你仍然要确保对应 `codex-home` 里有真实可用的认证材料。
 
-当前 `doctor worker-node` 会同时看 runtime store 里的 auth account 记录，以及对应 `codex-home` 下是否已经存在 `auth.json`。所以对 fresh 节点来说，只要认证材料已经在位，预检就会把 credential 判成可用，而不是一律报缺失。
+当前 `themis-worker-node doctor worker-node` 会同时看 runtime store 里的 auth account 记录，以及对应 `codex-home` 下是否已经存在 `auth.json`。所以对 fresh 节点来说，只要认证材料已经在位，预检就会把 credential 判成可用，而不是一律报缺失。
 
 ## 4. 先做一次单次启动验证
 
@@ -92,7 +92,7 @@ cd ~/services/themis-worker-node
 
 ```bash
 cd ~/services/themis-worker-node
-./themis worker-node run \
+./themis-worker-node worker-node run \
   --platform http://192.168.31.208:3100 \
   --owner-principal principal-owner \
   --token <platformToken> \
@@ -133,7 +133,7 @@ Environment="THEMIS_WORKER_NODE_ID=node-worker-a"
 Environment="THEMIS_WORKER_WORKSPACE=%h/services/themis-worker-node"
 Environment="THEMIS_WORKER_CREDENTIAL=default"
 Environment="THEMIS_WORKER_SLOT_CAPACITY=1"
-ExecStart=%h/services/themis-worker-node/themis worker-node run ...
+ExecStart=%h/services/themis-worker-node/themis-worker-node worker-node run ...
 ```
 
 至少按真实环境替换这些项：
@@ -188,7 +188,7 @@ journalctl --user -u themis-worker-node.service -f
 
 ```bash
 cd ~/services/themis-worker-node
-./themis doctor worker-node \
+./themis-worker-node doctor worker-node \
   --platform http://192.168.31.208:3100 \
   --owner-principal principal-owner \
   --token <platformToken> \
@@ -198,6 +198,7 @@ cd ~/services/themis-worker-node
 
 如果平台侧也在值守，建议再配合看：
 
+- `./themis-platform doctor worker-fleet`
 - `POST /api/platform/nodes/list`
 - `POST /api/platform/nodes/detail`
 - 平台主进程日志里是否出现节点 heartbeat 或自动 reclaim 提示
