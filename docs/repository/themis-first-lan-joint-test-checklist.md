@@ -26,6 +26,7 @@
 
 ### 平台层
 
+- 机器上需要同时准备 sibling repo：`~/services/themis-contracts` 与 `~/services/themis-platform`；当前 `themis-platform/package.json` 仍通过 `file:../themis-contracts` 依赖共享契约
 - 按 [平台层切 MySQL 操作说明](./themis-platform-mysql-control-plane-cutover.md) 准备好 `.env.local`
 - 按 [平台层 systemd 用户服务说明](./themis-platform-systemd-service.md) 准备好常驻模板
 - 如果平台机启用了 `ufw` 且默认拒绝入站，先放行 `3100/tcp` 给局域网
@@ -44,6 +45,7 @@ THEMIS_PLATFORM_WEB_ACCESS_TOKEN=<platformToken>
 
 ### Worker Node
 
+- 机器上需要同时准备 sibling repo：`~/services/themis-contracts` 与 `~/services/themis-worker-node`；当前 `themis-worker-node/package.json` 仍通过 `file:../themis-contracts` 依赖共享契约
 - 按 [Worker Node 常驻部署说明](./themis-worker-node-systemd-service.md) 准备目录和账号材料
 - 先确保每台节点各自的工作区路径真实存在
 
@@ -86,7 +88,7 @@ npm run start:web
 在 `W1` 上先跑一次预检：
 
 ```bash
-./themis doctor worker-node \
+./themis-worker-node doctor worker-node \
   --platform http://<platform-host>:3100 \
   --owner-principal <principalId> \
   --token <platformToken> \
@@ -97,7 +99,7 @@ npm run start:web
 再跑一次单次启动：
 
 ```bash
-./themis worker-node run \
+./themis-worker-node worker-node run \
   --platform http://<platform-host>:3100 \
   --owner-principal <principalId> \
   --token <platformToken> \
@@ -178,7 +180,7 @@ npm run start:web
 让 `W1` 停掉，执行：
 
 ```bash
-./themis worker-fleet reclaim \
+./themis-platform worker-fleet reclaim \
   --platform http://<platform-host>:3100 \
   --owner-principal <principalId> \
   --token <platformToken> \

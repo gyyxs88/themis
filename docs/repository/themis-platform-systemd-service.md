@@ -1,5 +1,7 @@
 # Themis 平台层 systemd 用户服务说明
 
+> 拆仓后，当前以 `themis-platform` 独立仓里的 `infra/systemd/themis-platform.service.example` 和 `docs/themis-platform-systemd-service.md` 为准；本文保留为主仓镜像。
+
 ## 目标
 
 把独立平台层进程挂到 `systemd --user` 下常驻运行，并让它以 `MySQL shared control plane + 本地 shared cache SQLite` 的方式提供平台控制面。
@@ -31,11 +33,14 @@ infra/systemd/themis-platform.service.example
 
 ```bash
 mkdir -p ~/services
-git clone git@github.com:gyyxs88/themis.git ~/services/themis-platform
+git clone git@github.com:gyyxs88/themis-contracts.git ~/services/themis-contracts
+git clone git@github.com:gyyxs88/themis-platform.git ~/services/themis-platform
 cd ~/services/themis-platform
 npm ci
 npm run build
 ```
+
+这里必须先把 `themis-contracts` 放到 sibling 目录；当前 `themis-platform/package.json` 里的 `file:../themis-contracts` 是真实安装前提。
 
 ## 2. 准备平台配置
 
@@ -173,7 +178,9 @@ journalctl --user -u themis-platform.service -f
 再跑平台最小巡检：
 
 ```bash
-./themis doctor worker-fleet \
+./themis-platform auth platform list
+
+./themis-platform doctor worker-fleet \
   --platform http://127.0.0.1:3100 \
   --owner-principal <principalId> \
   --token <platformToken>

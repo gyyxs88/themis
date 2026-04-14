@@ -80,8 +80,6 @@ http://localhost:3100
 ./themis update apply
 ./themis update rollback
 ./themis doctor
-./themis doctor worker-node
-./themis doctor worker-fleet
 ./themis doctor smoke web
 ./themis doctor smoke feishu
 ./themis doctor smoke all
@@ -102,6 +100,7 @@ npm run start:platform
 - 新的推荐入口是：
   - 平台侧值班 / 平台令牌 / `worker-fleet`：`./themis-platform`
   - Worker Node 本机预检 / 常驻执行：`./themis-worker-node`
+- `themis-platform` 与 `themis-worker-node` 当前都通过 `file:../themis-contracts` 依赖共享契约；真实部署时要把 `themis-contracts` 作为 sibling repo 放到同一级目录，再执行 `npm ci`。
 
 当前 `themis-worker-node` 独立仓已经承接最小 `worker-node run` daemon 闭环、`doctor worker-node` 预检、会生成本地 `report.json` 的本机执行器、独立 `systemd` 模板/部署文档，以及每个 run 的本地 runtime / `credential / provider` 装配；当前这条 Worker 拆仓顺序线已经收口。
 
@@ -130,7 +129,7 @@ npm run start:platform
 如果你已经有多台节点在线，想先从平台侧看一眼整体现状，可以直接运行：
 
 ```bash
-./themis doctor worker-fleet \
+./themis-platform doctor worker-fleet \
   --platform <baseUrl> \
   --owner-principal <principalId> \
   --token <webAccessToken>
@@ -141,7 +140,7 @@ npm run start:platform
 如果已经确认要对节点做平台侧治理，可以直接运行：
 
 ```bash
-./themis worker-fleet drain \
+./themis-platform worker-fleet drain \
   --platform <baseUrl> \
   --owner-principal <principalId> \
   --token <webAccessToken> \

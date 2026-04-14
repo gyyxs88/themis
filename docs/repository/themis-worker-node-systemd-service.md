@@ -35,11 +35,14 @@ infra/systemd/themis-worker-node.service.example
 
 ```bash
 mkdir -p ~/services
+git clone git@github.com:gyyxs88/themis-contracts.git ~/services/themis-contracts
 git clone git@github.com:gyyxs88/themis-worker-node.git ~/services/themis-worker-node
 cd ~/services/themis-worker-node
 npm ci
 npm run build
 ```
+
+这里必须先把 `themis-contracts` 放到 sibling 目录；当前 `themis-worker-node/package.json` 里的 `file:../themis-contracts` 是真实安装前提。
 
 如果这台机器只是执行节点，不需要再启动 Web 服务。
 
@@ -222,7 +225,7 @@ systemctl --user stop themis-worker-node.service
 停机后如果希望平台立刻回收该节点上的活动 lease，当前优先执行：
 
 ```bash
-./themis worker-fleet reclaim \
+./themis-platform worker-fleet reclaim \
   --platform http://127.0.0.1:3100 \
   --owner-principal principal-owner \
   --token <platformToken> \
