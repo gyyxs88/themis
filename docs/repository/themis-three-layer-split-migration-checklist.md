@@ -120,6 +120,7 @@
 - `2026-04-13` 已补兼容状态显式化：`/api/agents/list` 现在会返回 `compatibility` 字段，明确区分 `platform_gateway / gateway_required / invalid_gateway_config` 三种兼容模式，用来告诉前端“这是平台兼容入口，不是主 Themis 自有面板”。
 - `2026-04-13` 同日已继续补跳转上下文：`compatibility` 现在还会显式透出当前 `ownerPrincipalId`，让主 Themis 只保留“跳平台”的兼容职责，不再继续承担平台页面自己的入口状态装配。
 - `2026-04-14` 已补第二刀纯 gateway 收口：当前主仓 `http-agents` 已不再回退本地 managed-agent 控制面，除了 `/api/agents/list` 仍保留兼容状态占位外，其余 `/api/agents/*` 都要求显式配置 `THEMIS_PLATFORM_*` 后再转发到平台控制面；未配置时会统一返回 `PLATFORM_AGENTS_GATEWAY_UNAVAILABLE`。同时 Web `Platform Agents` 兼容页也已改成“先读 `/api/agents/list`，若拿到 `gateway_required / invalid_gateway_config` 就停止继续请求治理接口”，因此主 Themis 当前只剩兼容入口，不再继续自己托管平台治理读写。
+- `2026-04-14` 同日又补了页面层的第二刀：当前主 Themis Web 里的 `Platform Agents` 页面已经彻底降成纯跳转入口，只保留入口状态刷新与独立平台页直达链接；原先残留在主 Themis 里的组织级治理摘要、waiting queue、collaboration dashboard、spawn / idle recovery、dispatch、mailbox、handoff 和 execution boundary 表单都已从这页移除。到这一步，“主 Themis 继续宿主平台治理页面”这层旧语义也已经被切断。
 
 迁移目标：
 
