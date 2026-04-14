@@ -661,6 +661,134 @@ test("renderAgentsState 会把 Platform Agents 兼容提示渲染到状态栏", 
   );
 });
 
+test("renderAgentsState 会在 gateway_required 时把 Platform Agents 限制成状态入口", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      agents: {
+        status: "ready",
+        errorMessage: "",
+        noticeMessage: "",
+        loading: false,
+        detailLoading: false,
+        workItemDetailLoading: false,
+        creating: false,
+        dispatching: false,
+        updatingSpawnPolicy: false,
+        savingExecutionBoundary: false,
+        approvingSpawnSuggestionId: "",
+        approvingIdleRecoverySuggestionId: "",
+        ignoringSpawnSuggestionId: "",
+        rejectingSpawnSuggestionId: "",
+        restoringSpawnSuggestionId: "",
+        ackingMailboxEntryId: "",
+        cancelingWorkItemId: "",
+        escalatingWorkItemId: "",
+        respondingWorkItemId: "",
+        lifecycleUpdatingAgentId: "",
+        lifecycleUpdatingAction: "",
+        compatibilityStatus: {
+          panelOwnership: "platform",
+          accessMode: "gateway_required",
+          statusLevel: "error",
+          message: "当前 Platform Agents 兼容入口已经收口为纯 gateway；请先配置 THEMIS_PLATFORM_*，或直接使用独立 themis-platform 页面。",
+          platformBaseUrl: "",
+          ownerPrincipalId: "principal-platform-owner",
+        },
+        organizations: [],
+        agents: [],
+        organizationGovernanceOverview: null,
+        organizationWaitingSummary: null,
+        organizationWaitingItems: [],
+        organizationCollaborationSummary: null,
+        organizationCollaborationItems: [],
+        spawnPolicies: [],
+        spawnSuggestions: [],
+        suppressedSpawnSuggestions: [],
+        spawnAuditLogs: [],
+        idleRecoverySuggestions: [],
+        idleRecoveryAuditLogs: [],
+        governanceFilters: {
+          organizationId: "",
+          managerAgentId: "",
+          attentionLevel: "all",
+          waitingFor: "any",
+          staleOnly: false,
+          failedOnly: false,
+          limit: 20,
+        },
+        organizationWaitingResponseDrafts: {},
+        selectedAgentId: "",
+        selectedAgent: null,
+        selectedAgentPrincipal: null,
+        selectedOrganization: null,
+        selectedWorkspacePolicy: null,
+        selectedRuntimeProfile: null,
+        availableAuthAccounts: [],
+        availableThirdPartyProviders: [],
+        handoffs: [],
+        handoffTimeline: [],
+        workItems: [],
+        mailboxItems: [],
+        selectedWorkItemId: "",
+        selectedWorkItemDetail: null,
+        humanResponseDraft: {
+          workItemId: "",
+          decision: "",
+          inputText: "",
+        },
+        spawnPolicyDraft: {
+          organizationId: "",
+          maxActiveAgents: 12,
+          maxActiveAgentsPerRole: 3,
+        },
+        executionBoundaryDraft: {
+          workspacePath: "",
+          additionalDirectoriesText: "",
+          allowNetworkAccess: true,
+          accessMode: "auth",
+          authAccountId: "",
+          thirdPartyProviderId: "",
+          model: "",
+          reasoning: "",
+          memoryMode: "",
+          sandboxMode: "workspace-write",
+          approvalPolicy: "never",
+          webSearchMode: "live",
+          networkAccessEnabled: true,
+        },
+        createDraft: {
+          departmentRole: "",
+          displayName: "",
+          mission: "",
+        },
+        dispatchDraft: {
+          targetAgentId: "",
+          sourceType: "human",
+          sourceAgentId: "",
+          dispatchReason: "",
+          goal: "",
+          contextPacketText: "",
+          priority: "normal",
+        },
+      },
+    },
+  });
+
+  harness.renderer.renderAgentsState();
+
+  assert.equal(harness.dom.agentsStatusNote.dataset.state, "error");
+  assert.equal(harness.dom.agentsOpenPlatformLink.getAttribute("aria-disabled"), "true");
+  assert.equal(
+    harness.dom.agentsOpenPlatformNote.textContent,
+    "主 Themis 已不再托管这个平台治理面；请先配置平台 gateway，或直接切到独立 themis-platform 页面。",
+  );
+});
+
 test("renderAgentsState 会渲染组织级跨父任务汇总台卡片，并暴露父任务跳转动作", () => {
   const harness = createHarness({
     actionBarState: {

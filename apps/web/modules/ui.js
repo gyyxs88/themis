@@ -2947,7 +2947,7 @@ function normalizeAgentsCompatibilityStatusState(value) {
     return null;
   }
 
-  const accessMode = typeof value.accessMode === "string" ? value.accessMode : "local_legacy";
+  const accessMode = typeof value.accessMode === "string" ? value.accessMode : "gateway_required";
   const statusLevel = value.statusLevel === "error" ? "error" : "warning";
   const message = typeof value.message === "string" ? value.message : "";
   const platformBaseUrl = typeof value.platformBaseUrl === "string" ? value.platformBaseUrl : "";
@@ -2959,9 +2959,9 @@ function normalizeAgentsCompatibilityStatusState(value) {
 
   return {
     panelOwnership: "platform",
-    accessMode: ["platform_gateway", "local_legacy", "invalid_gateway_config"].includes(accessMode)
+    accessMode: ["platform_gateway", "gateway_required", "invalid_gateway_config"].includes(accessMode)
       ? accessMode
-      : "local_legacy",
+      : "gateway_required",
     statusLevel,
     message: message.trim(),
     platformBaseUrl: platformBaseUrl.trim(),
@@ -3015,12 +3015,12 @@ function resolveAgentsPlatformEntryNote(compatibilityStatus, platformHomeUrl) {
     return `当前已提供独立 Platform 页面入口：${platformHomeUrl}。建议优先在那里继续做平台治理。`;
   }
 
-  if (compatibilityStatus?.accessMode === "local_legacy") {
-    return "当前还没有可直达的独立 Platform 页面；这里只保留过渡期兼容治理面。";
+  if (compatibilityStatus?.accessMode === "gateway_required") {
+    return "主 Themis 已不再托管这个平台治理面；请先配置平台 gateway，或直接切到独立 themis-platform 页面。";
   }
 
   if (compatibilityStatus?.accessMode === "invalid_gateway_config") {
-    return "当前平台 Gateway 配置异常，暂时无法生成独立 Platform 页面入口。";
+    return "当前平台 Gateway 配置异常，兼容入口暂时只能展示状态，无法生成独立 Platform 页面入口。";
   }
 
   return "已配置平台上游后，这里会给出独立 Platform 页面的直达入口。";

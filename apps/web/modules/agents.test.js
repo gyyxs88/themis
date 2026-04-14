@@ -236,6 +236,56 @@ test("load 会读取 agent 列表并补齐当前选中 agent 的任务与 mailbo
   }
 });
 
+test("load 在兼容入口缺少平台 gateway 时只保留状态，不再继续请求治理接口", async () => {
+  const state = createDefaultAgentsState();
+  const app = createAppStub(state);
+  const controller = createAgentsController(app);
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+
+  try {
+    globalThis.fetch = async (url, init = {}) => {
+      calls.push({
+        url,
+        method: init.method ?? "GET",
+        body: JSON.parse(init.body),
+      });
+
+      if (url === "/api/agents/list") {
+        return jsonResponse({
+          compatibility: {
+            panelOwnership: "platform",
+            accessMode: "gateway_required",
+            statusLevel: "error",
+            message: "当前 Platform Agents 兼容入口已经收口为纯 gateway；请先配置 THEMIS_PLATFORM_*，或直接使用独立 themis-platform 页面。",
+          },
+          organizations: [],
+          agents: [],
+        });
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    };
+
+    const result = await controller.load();
+
+    assert.deepEqual(
+      calls.map((call) => call.url),
+      [
+        "/api/agents/list",
+      ],
+    );
+    assert.equal(result.compatibilityStatus?.panelOwnership, "platform");
+    assert.equal(result.compatibilityStatus?.accessMode, "gateway_required");
+    assert.equal(result.compatibilityStatus?.statusLevel, "error");
+    assert.equal(result.organizations.length, 0);
+    assert.equal(result.agents.length, 0);
+    assert.equal(result.selectedAgentId, "");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("createAgent 会调用创建接口并刷新列表，把焦点切到新 agent", async () => {
   const state = createDefaultAgentsState();
   state.createDraft = {

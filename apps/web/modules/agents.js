@@ -870,11 +870,7 @@ export function createAgentsController(app) {
     render();
 
     try {
-      const [data, suggestionsData, idleRecoveryData] = await Promise.all([
-        postAgents("/api/agents/list", buildIdentityPayload(app)),
-        postAgents("/api/agents/spawn-suggestions", buildIdentityPayload(app)),
-        postAgents("/api/agents/idle-suggestions", buildIdentityPayload(app)),
-      ]);
+      const data = await postAgents("/api/agents/list", buildIdentityPayload(app));
 
       if (requestId !== loadRequestId) {
         return app.runtime.agents;
@@ -883,6 +879,53 @@ export function createAgentsController(app) {
       const organizations = normalizeOrganizations(data.organizations);
       const compatibilityStatus = normalizeAgentsCompatibilityStatus(data.compatibility);
       const agents = normalizeAgents(data.agents);
+
+      if (compatibilityStatus && compatibilityStatus.accessMode !== "platform_gateway") {
+        setState({
+          status: "ready",
+          loading: false,
+          compatibilityStatus,
+          organizations: [],
+          agents: [],
+          organizationGovernanceOverview: normalizeGovernanceOverview(null),
+          organizationWaitingSummary: null,
+          organizationWaitingItems: [],
+          organizationCollaborationSummary: null,
+          organizationCollaborationItems: [],
+          spawnPolicies: [],
+          spawnSuggestions: [],
+          suppressedSpawnSuggestions: [],
+          spawnAuditLogs: [],
+          idleRecoverySuggestions: [],
+          idleRecoveryAuditLogs: [],
+          governanceFilters: syncGovernanceFilters(state.governanceFilters, [], []),
+          organizationWaitingResponseDrafts: {},
+          selectedAgentId: "",
+          selectedAgent: null,
+          selectedAgentPrincipal: null,
+          selectedOrganization: null,
+          selectedWorkspacePolicy: null,
+          selectedRuntimeProfile: null,
+          availableAuthAccounts: [],
+          availableThirdPartyProviders: [],
+          handoffs: [],
+          handoffTimeline: [],
+          workItems: [],
+          mailboxItems: [],
+          selectedWorkItemId: "",
+          selectedWorkItemDetail: null,
+          dispatchDraft: syncDispatchDraft(state.dispatchDraft, [], ""),
+          spawnPolicyDraft: syncSpawnPolicyDraft(state.spawnPolicyDraft, [], ""),
+          errorMessage: "",
+        });
+        render();
+        return app.runtime.agents;
+      }
+
+      const [suggestionsData, idleRecoveryData] = await Promise.all([
+        postAgents("/api/agents/spawn-suggestions", buildIdentityPayload(app)),
+        postAgents("/api/agents/idle-suggestions", buildIdentityPayload(app)),
+      ]);
       const governanceFilters = syncGovernanceFilters(state.governanceFilters, organizations, agents);
       const governancePayload = {
         ...buildIdentityPayload(app),
@@ -2127,7 +2170,7 @@ function normalizeAgentsCompatibilityStatus(value) {
     return null;
   }
 
-  const accessMode = typeof value.accessMode === "string" ? value.accessMode : "local_legacy";
+  const accessMode = typeof value.accessMode === "string" ? value.accessMode : "gateway_required";
   const statusLevel = value.statusLevel === "error" ? "error" : "warning";
   const message = typeof value.message === "string" ? value.message : "";
   const platformBaseUrl = typeof value.platformBaseUrl === "string" ? value.platformBaseUrl : "";
@@ -2139,9 +2182,9 @@ function normalizeAgentsCompatibilityStatus(value) {
 
   return {
     panelOwnership: "platform",
-    accessMode: ["platform_gateway", "local_legacy", "invalid_gateway_config"].includes(accessMode)
+    accessMode: ["platform_gateway", "gateway_required", "invalid_gateway_config"].includes(accessMode)
       ? accessMode
-      : "local_legacy",
+      : "gateway_required",
     statusLevel,
     message: message.trim(),
     platformBaseUrl: platformBaseUrl.trim(),

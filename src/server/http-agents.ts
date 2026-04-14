@@ -244,12 +244,21 @@ interface MailboxRespondPayload extends IdentityPayload {
 
 export interface ManagedAgentGatewayCompatibilityStatus {
   panelOwnership: "platform";
-  accessMode: "platform_gateway" | "local_legacy" | "invalid_gateway_config";
+  accessMode: "platform_gateway" | "gateway_required" | "invalid_gateway_config";
   statusLevel: "warning" | "error";
   message: string;
   platformBaseUrl?: string;
   ownerPrincipalId?: string;
 }
+
+interface ManagedAgentGatewayAccess {
+  compatibility: ManagedAgentGatewayCompatibilityStatus;
+  gatewayClient: ManagedAgentPlatformGatewayClient | null;
+}
+
+const PLATFORM_AGENTS_GATEWAY_UNAVAILABLE_CODE = "PLATFORM_AGENTS_GATEWAY_UNAVAILABLE";
+const PLATFORM_AGENTS_GATEWAY_REQUIRED_MESSAGE =
+  "当前 Platform Agents 兼容入口已经收口为纯 gateway；请先配置 THEMIS_PLATFORM_BASE_URL / THEMIS_PLATFORM_OWNER_PRINCIPAL_ID / THEMIS_PLATFORM_WEB_ACCESS_TOKEN，或直接使用独立 themis-platform 页面。";
 
 async function readAndNormalizePayload<T>(
   request: IncomingMessage,
@@ -339,24 +348,19 @@ export async function handleAgentCreate(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const createInput = {
-      ownerPrincipalId: identity.principalId,
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const result = await gatewayClient.createManagedAgent({
       departmentRole: payload.agent.departmentRole,
       ...(payload.agent.displayName ? { displayName: payload.agent.displayName } : {}),
       ...(payload.agent.mission ? { mission: payload.agent.mission } : {}),
       ...(payload.agent.organizationId ? { organizationId: payload.agent.organizationId } : {}),
       ...(payload.agent.supervisorAgentId ? { supervisorAgentId: payload.agent.supervisorAgentId } : {}),
-    };
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const result = gatewayClient
-      ? await gatewayClient.createManagedAgent({
-        departmentRole: createInput.departmentRole,
-        ...(createInput.displayName ? { displayName: createInput.displayName } : {}),
-        ...(createInput.mission ? { mission: createInput.mission } : {}),
-        ...(createInput.organizationId ? { organizationId: createInput.organizationId } : {}),
-        ...(createInput.supervisorAgentId ? { supervisorAgentId: createInput.supervisorAgentId } : {}),
-      })
-      : runtime.getManagedAgentControlPlaneFacade().createManagedAgent(createInput);
+    });
 
     writeJson(response, 200, {
       ok: true,
@@ -383,11 +387,13 @@ export async function handleAgentList(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const compatibility = readManagedAgentGatewayCompatibilityStatus(process.env, identity.principalId);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
+    const { compatibility, gatewayClient } = resolveManagedAgentGatewayAccess(process.env, identity.principalId);
     const result = gatewayClient
       ? await gatewayClient.listManagedAgents()
-      : runtime.getManagedAgentControlPlaneFacade().listManagedAgents(identity.principalId);
+      : {
+          organizations: [],
+          agents: [],
+        };
 
     writeJson(response, 200, {
       identity,
@@ -413,13 +419,13 @@ export async function handleAgentDetail(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const detail = gatewayClient
-      ? await gatewayClient.getManagedAgentDetail(payload.agentId)
-      : runtime.getManagedAgentControlPlaneFacade().getManagedAgentDetailView(
-        identity.principalId,
-        payload.agentId,
-      );
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const detail = await gatewayClient.getManagedAgentDetail(payload.agentId);
 
     if (!detail) {
       throw new Error("Managed agent does not exist.");
@@ -440,20 +446,17 @@ export async function handleAgentDetail(
   }
 }
 
-function createManagedAgentPlatformGatewayClientFromEnv(): ManagedAgentPlatformGatewayClient | null {
-  const config = readManagedAgentPlatformGatewayConfig(process.env);
-
-  if (!config) {
-    return null;
-  }
-
-  return new ManagedAgentPlatformGatewayClient(config);
-}
-
 export function readManagedAgentGatewayCompatibilityStatus(
   env: NodeJS.ProcessEnv = process.env,
   ownerPrincipalId?: string,
 ): ManagedAgentGatewayCompatibilityStatus {
+  return resolveManagedAgentGatewayAccess(env, ownerPrincipalId).compatibility;
+}
+
+function resolveManagedAgentGatewayAccess(
+  env: NodeJS.ProcessEnv = process.env,
+  ownerPrincipalId?: string,
+): ManagedAgentGatewayAccess {
   const normalizedOwnerPrincipalId = typeof ownerPrincipalId === "string" ? ownerPrincipalId.trim() : "";
 
   try {
@@ -461,33 +464,62 @@ export function readManagedAgentGatewayCompatibilityStatus(
 
     if (config) {
       return {
-        panelOwnership: "platform",
-        accessMode: "platform_gateway",
-        statusLevel: "warning",
-        message: "当前 Platform Agents 面板只是主 Themis 里的平台兼容入口；实际读写已走平台控制面，后续会迁到独立 Platform 前端。",
-        platformBaseUrl: config.baseUrl,
-        ...(normalizedOwnerPrincipalId ? { ownerPrincipalId: normalizedOwnerPrincipalId } : {}),
+        compatibility: {
+          panelOwnership: "platform",
+          accessMode: "platform_gateway",
+          statusLevel: "warning",
+          message: "当前 Platform Agents 面板只是主 Themis 里的平台兼容入口；实际读写已走平台控制面，后续会迁到独立 Platform 前端。",
+          platformBaseUrl: config.baseUrl,
+          ...(normalizedOwnerPrincipalId ? { ownerPrincipalId: normalizedOwnerPrincipalId } : {}),
+        },
+        gatewayClient: new ManagedAgentPlatformGatewayClient(config),
       };
     }
   } catch (error) {
     return {
-      panelOwnership: "platform",
-      accessMode: "invalid_gateway_config",
-      statusLevel: "error",
-      message: error instanceof Error
-        ? error.message
-        : "平台 Gateway 配置异常，当前 Platform Agents 兼容入口不可用。",
-      ...(normalizedOwnerPrincipalId ? { ownerPrincipalId: normalizedOwnerPrincipalId } : {}),
+      compatibility: {
+        panelOwnership: "platform",
+        accessMode: "invalid_gateway_config",
+        statusLevel: "error",
+        message: error instanceof Error
+          ? error.message
+          : "平台 Gateway 配置异常，当前 Platform Agents 兼容入口不可用。",
+        ...(normalizedOwnerPrincipalId ? { ownerPrincipalId: normalizedOwnerPrincipalId } : {}),
+      },
+      gatewayClient: null,
     };
   }
 
   return {
-    panelOwnership: "platform",
-    accessMode: "local_legacy",
-    statusLevel: "warning",
-    message: "当前 Platform Agents 面板仍运行在本地 legacy 模式，只用于拆仓迁移过渡；不要继续在主 Themis 页面里扩平台治理功能。",
-    ...(normalizedOwnerPrincipalId ? { ownerPrincipalId: normalizedOwnerPrincipalId } : {}),
+    compatibility: {
+      panelOwnership: "platform",
+      accessMode: "gateway_required",
+      statusLevel: "error",
+      message: PLATFORM_AGENTS_GATEWAY_REQUIRED_MESSAGE,
+      ...(normalizedOwnerPrincipalId ? { ownerPrincipalId: normalizedOwnerPrincipalId } : {}),
+    },
+    gatewayClient: null,
   };
+}
+
+function requireManagedAgentPlatformGatewayClient(
+  response: ServerResponse,
+  ownerPrincipalId?: string,
+): ManagedAgentPlatformGatewayClient | null {
+  const { compatibility, gatewayClient } = resolveManagedAgentGatewayAccess(process.env, ownerPrincipalId);
+
+  if (gatewayClient) {
+    return gatewayClient;
+  }
+
+  writeJson(response, 503, {
+    error: {
+      code: PLATFORM_AGENTS_GATEWAY_UNAVAILABLE_CODE,
+      message: compatibility.message,
+    },
+    compatibility,
+  });
+  return null;
 }
 
 export async function handleAgentExecutionBoundaryUpdate(
@@ -503,19 +535,17 @@ export async function handleAgentExecutionBoundaryUpdate(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const result = gatewayClient
-      ? await gatewayClient.updateManagedAgentExecutionBoundary({
-        agentId: payload.agentId,
-        ...(payload.boundary.workspacePolicy ? { workspacePolicy: payload.boundary.workspacePolicy } : {}),
-        ...(payload.boundary.runtimeProfile ? { runtimeProfile: payload.boundary.runtimeProfile } : {}),
-      })
-      : runtime.getManagedAgentsService().updateManagedAgentExecutionBoundary({
-      ownerPrincipalId: identity.principalId,
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const result = await gatewayClient.updateManagedAgentExecutionBoundary({
       agentId: payload.agentId,
       ...(payload.boundary.workspacePolicy ? { workspacePolicy: payload.boundary.workspacePolicy } : {}),
       ...(payload.boundary.runtimeProfile ? { runtimeProfile: payload.boundary.runtimeProfile } : {}),
-      });
+    });
 
     writeJson(response, 200, {
       ok: true,
@@ -543,17 +573,16 @@ async function handleAgentLifecycleUpdate(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const ownerView = gatewayClient
-      ? await gatewayClient.updateManagedAgentLifecycle({
-        agentId: payload.agentId,
-        action,
-      })
-      : runtime.getManagedAgentControlPlaneFacade().updateManagedAgentLifecycle({
-        ownerPrincipalId: identity.principalId,
-        agentId: payload.agentId,
-        action,
-      });
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const ownerView = await gatewayClient.updateManagedAgentLifecycle({
+      agentId: payload.agentId,
+      action,
+    });
 
     if (!ownerView) {
       throw new Error("Managed agent does not exist.");
@@ -584,10 +613,13 @@ export async function handleAgentSpawnSuggestions(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const result = gatewayClient
-      ? await gatewayClient.getSpawnSuggestionsView()
-      : runtime.getManagedAgentControlPlaneFacade().getSpawnSuggestionsView(identity.principalId);
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const result = await gatewayClient.getSpawnSuggestionsView();
 
     writeJson(response, 200, {
       identity,
@@ -614,10 +646,13 @@ export async function handleAgentIdleRecoverySuggestions(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const result = gatewayClient
-      ? await gatewayClient.getIdleRecoverySuggestionsView()
-      : runtime.getManagedAgentControlPlaneFacade().getIdleRecoverySuggestionsView(identity.principalId);
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const result = await gatewayClient.getIdleRecoverySuggestionsView();
 
     writeJson(response, 200, {
       identity,
@@ -642,19 +677,17 @@ export async function handleAgentSpawnPolicyUpdate(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const policy = gatewayClient
-      ? await gatewayClient.updateSpawnPolicy({
-        ...(payload.policy.organizationId ? { organizationId: payload.policy.organizationId } : {}),
-        maxActiveAgents: payload.policy.maxActiveAgents,
-        maxActiveAgentsPerRole: payload.policy.maxActiveAgentsPerRole,
-      })
-      : runtime.getManagedAgentsService().updateSpawnPolicy({
-        ownerPrincipalId: identity.principalId,
-        ...(payload.policy.organizationId ? { organizationId: payload.policy.organizationId } : {}),
-        maxActiveAgents: payload.policy.maxActiveAgents,
-        maxActiveAgentsPerRole: payload.policy.maxActiveAgentsPerRole,
-      });
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const policy = await gatewayClient.updateSpawnPolicy({
+      ...(payload.policy.organizationId ? { organizationId: payload.policy.organizationId } : {}),
+      maxActiveAgents: payload.policy.maxActiveAgents,
+      maxActiveAgentsPerRole: payload.policy.maxActiveAgentsPerRole,
+    });
 
     writeJson(response, 200, {
       ok: true,
@@ -679,23 +712,19 @@ export async function handleAgentSpawnApprove(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const result = gatewayClient
-      ? await gatewayClient.approveSpawnSuggestion({
-        departmentRole: payload.agent.departmentRole,
-        ...(payload.agent.displayName ? { displayName: payload.agent.displayName } : {}),
-        ...(payload.agent.mission ? { mission: payload.agent.mission } : {}),
-        ...(payload.agent.organizationId ? { organizationId: payload.agent.organizationId } : {}),
-        ...(payload.agent.supervisorAgentId ? { supervisorAgentId: payload.agent.supervisorAgentId } : {}),
-      })
-      : runtime.getManagedAgentsService().approveSpawnSuggestion({
-        ownerPrincipalId: identity.principalId,
-        departmentRole: payload.agent.departmentRole,
-        ...(payload.agent.displayName ? { displayName: payload.agent.displayName } : {}),
-        ...(payload.agent.mission ? { mission: payload.agent.mission } : {}),
-        ...(payload.agent.organizationId ? { organizationId: payload.agent.organizationId } : {}),
-        ...(payload.agent.supervisorAgentId ? { supervisorAgentId: payload.agent.supervisorAgentId } : {}),
-      });
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const result = await gatewayClient.approveSpawnSuggestion({
+      departmentRole: payload.agent.departmentRole,
+      ...(payload.agent.displayName ? { displayName: payload.agent.displayName } : {}),
+      ...(payload.agent.mission ? { mission: payload.agent.mission } : {}),
+      ...(payload.agent.organizationId ? { organizationId: payload.agent.organizationId } : {}),
+      ...(payload.agent.supervisorAgentId ? { supervisorAgentId: payload.agent.supervisorAgentId } : {}),
+    });
 
     writeJson(response, 200, {
       ok: true,
@@ -725,20 +754,15 @@ async function handleAgentSpawnSuggestionDecision(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const result = gatewayClient
-      ? action === "ignore"
-        ? await gatewayClient.ignoreSpawnSuggestion(payload.suggestion)
-        : await gatewayClient.rejectSpawnSuggestion(payload.suggestion)
-      : action === "ignore"
-        ? runtime.getManagedAgentsService().ignoreSpawnSuggestion({
-          ownerPrincipalId: identity.principalId,
-          ...payload.suggestion,
-        })
-        : runtime.getManagedAgentsService().rejectSpawnSuggestion({
-          ownerPrincipalId: identity.principalId,
-          ...payload.suggestion,
-        });
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const result = action === "ignore"
+      ? await gatewayClient.ignoreSpawnSuggestion(payload.suggestion)
+      : await gatewayClient.rejectSpawnSuggestion(payload.suggestion);
 
     writeJson(response, 200, {
       ok: true,
@@ -780,19 +804,16 @@ export async function handleAgentSpawnRestore(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const restored = gatewayClient
-      ? await gatewayClient.restoreSpawnSuggestion({
-        suggestionId: payload.suggestion.suggestionId,
-        ...(payload.suggestion.organizationId ? { organizationId: payload.suggestion.organizationId } : {}),
-      })
-      : {
-        auditLog: runtime.getManagedAgentsService().restoreSpawnSuggestion({
-          ownerPrincipalId: identity.principalId,
-          suggestionId: payload.suggestion.suggestionId,
-          ...(payload.suggestion.organizationId ? { organizationId: payload.suggestion.organizationId } : {}),
-        }),
-      };
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const restored = await gatewayClient.restoreSpawnSuggestion({
+      suggestionId: payload.suggestion.suggestionId,
+      ...(payload.suggestion.organizationId ? { organizationId: payload.suggestion.organizationId } : {}),
+    });
 
     writeJson(response, 200, {
       ok: true,
@@ -817,28 +838,23 @@ export async function handleAgentIdleRecoveryApprove(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const result = gatewayClient
-      ? await gatewayClient.approveIdleRecoverySuggestion({
-        suggestionId: payload.suggestion.suggestionId,
-        ...(payload.suggestion.organizationId ? { organizationId: payload.suggestion.organizationId } : {}),
-        agentId: payload.suggestion.agentId,
-        action: payload.suggestion.action,
-      })
-      : runtime.getManagedAgentsService().approveIdleRecoverySuggestion({
-        ownerPrincipalId: identity.principalId,
-        suggestionId: payload.suggestion.suggestionId,
-        ...(payload.suggestion.organizationId ? { organizationId: payload.suggestion.organizationId } : {}),
-        agentId: payload.suggestion.agentId,
-        action: payload.suggestion.action,
-      });
-    const principal = runtime.getRuntimeStore().getPrincipal(result.agent.principalId);
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const result = await gatewayClient.approveIdleRecoverySuggestion({
+      suggestionId: payload.suggestion.suggestionId,
+      ...(payload.suggestion.organizationId ? { organizationId: payload.suggestion.organizationId } : {}),
+      agentId: payload.suggestion.agentId,
+      action: payload.suggestion.action,
+    });
 
     writeJson(response, 200, {
       ok: true,
       identity,
       organization: result.organization,
-      ...(principal ? { principal } : {}),
       agent: result.agent,
       auditLog: result.auditLog,
     });
@@ -884,47 +900,31 @@ export async function handleAgentDispatch(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const result = gatewayClient
-      ? await gatewayClient.dispatchWorkItem({
-        targetAgentId: payload.workItem.targetAgentId,
-        ...(payload.workItem.projectId ? { projectId: payload.workItem.projectId } : {}),
-        ...(payload.workItem.sourceType ? { sourceType: payload.workItem.sourceType } : {}),
-        ...(payload.workItem.sourceAgentId ? { sourceAgentId: payload.workItem.sourceAgentId } : {}),
-        ...(payload.workItem.sourcePrincipalId ? { sourcePrincipalId: payload.workItem.sourcePrincipalId } : {}),
-        ...(payload.workItem.parentWorkItemId ? { parentWorkItemId: payload.workItem.parentWorkItemId } : {}),
-        dispatchReason: payload.workItem.dispatchReason,
-        goal: payload.workItem.goal,
-        ...(hasOwn(payload.workItem, "contextPacket") ? { contextPacket: payload.workItem.contextPacket } : {}),
-        ...(payload.workItem.priority ? { priority: payload.workItem.priority } : {}),
-        ...(hasOwn(payload.workItem, "workspacePolicySnapshot")
-          ? { workspacePolicySnapshot: payload.workItem.workspacePolicySnapshot }
-          : {}),
-        ...(hasOwn(payload.workItem, "runtimeProfileSnapshot")
-          ? { runtimeProfileSnapshot: payload.workItem.runtimeProfileSnapshot }
-          : {}),
-        ...(payload.workItem.scheduledAt ? { scheduledAt: payload.workItem.scheduledAt } : {}),
-      })
-      : runtime.getManagedAgentControlPlaneFacade().dispatchWorkItem({
-        ownerPrincipalId: identity.principalId,
-        targetAgentId: payload.workItem.targetAgentId,
-        ...(payload.workItem.projectId ? { projectId: payload.workItem.projectId } : {}),
-        ...(payload.workItem.sourceType ? { sourceType: payload.workItem.sourceType } : {}),
-        ...(payload.workItem.sourceAgentId ? { sourceAgentId: payload.workItem.sourceAgentId } : {}),
-        ...(payload.workItem.sourcePrincipalId ? { sourcePrincipalId: payload.workItem.sourcePrincipalId } : {}),
-        ...(payload.workItem.parentWorkItemId ? { parentWorkItemId: payload.workItem.parentWorkItemId } : {}),
-        dispatchReason: payload.workItem.dispatchReason,
-        goal: payload.workItem.goal,
-        ...(hasOwn(payload.workItem, "contextPacket") ? { contextPacket: payload.workItem.contextPacket } : {}),
-        ...(payload.workItem.priority ? { priority: payload.workItem.priority } : {}),
-        ...(hasOwn(payload.workItem, "workspacePolicySnapshot")
-          ? { workspacePolicySnapshot: payload.workItem.workspacePolicySnapshot }
-          : {}),
-        ...(hasOwn(payload.workItem, "runtimeProfileSnapshot")
-          ? { runtimeProfileSnapshot: payload.workItem.runtimeProfileSnapshot }
-          : {}),
-        ...(payload.workItem.scheduledAt ? { scheduledAt: payload.workItem.scheduledAt } : {}),
-      });
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const result = await gatewayClient.dispatchWorkItem({
+      targetAgentId: payload.workItem.targetAgentId,
+      ...(payload.workItem.projectId ? { projectId: payload.workItem.projectId } : {}),
+      ...(payload.workItem.sourceType ? { sourceType: payload.workItem.sourceType } : {}),
+      ...(payload.workItem.sourceAgentId ? { sourceAgentId: payload.workItem.sourceAgentId } : {}),
+      ...(payload.workItem.sourcePrincipalId ? { sourcePrincipalId: payload.workItem.sourcePrincipalId } : {}),
+      ...(payload.workItem.parentWorkItemId ? { parentWorkItemId: payload.workItem.parentWorkItemId } : {}),
+      dispatchReason: payload.workItem.dispatchReason,
+      goal: payload.workItem.goal,
+      ...(hasOwn(payload.workItem, "contextPacket") ? { contextPacket: payload.workItem.contextPacket } : {}),
+      ...(payload.workItem.priority ? { priority: payload.workItem.priority } : {}),
+      ...(hasOwn(payload.workItem, "workspacePolicySnapshot")
+        ? { workspacePolicySnapshot: payload.workItem.workspacePolicySnapshot }
+        : {}),
+      ...(hasOwn(payload.workItem, "runtimeProfileSnapshot")
+        ? { runtimeProfileSnapshot: payload.workItem.runtimeProfileSnapshot }
+        : {}),
+      ...(payload.workItem.scheduledAt ? { scheduledAt: payload.workItem.scheduledAt } : {}),
+    });
 
     writeJson(response, 200, {
       ok: true,
@@ -953,10 +953,13 @@ export async function handleAgentWorkItemList(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const workItems = gatewayClient
-      ? await gatewayClient.listWorkItems(payload.agentId ? { agentId: payload.agentId } : {})
-      : runtime.getManagedAgentControlPlaneFacade().listWorkItems(identity.principalId, payload.agentId);
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const workItems = await gatewayClient.listWorkItems(payload.agentId ? { agentId: payload.agentId } : {});
 
     writeJson(response, 200, {
       identity,
@@ -980,28 +983,22 @@ export async function handleAgentWaitingQueueList(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const result = gatewayClient
-      ? await gatewayClient.listOrganizationWaitingQueue({
-        ...(payload.organizationId ? { organizationId: payload.organizationId } : {}),
-        ...(payload.managerAgentId ? { managerAgentId: payload.managerAgentId } : {}),
-        ...(payload.attentionOnly !== undefined ? { attentionOnly: payload.attentionOnly } : {}),
-        ...(payload.attentionLevels ? { attentionLevels: payload.attentionLevels } : {}),
-        ...(payload.waitingFor ? { waitingFor: payload.waitingFor } : {}),
-        ...(payload.staleOnly !== undefined ? { staleOnly: payload.staleOnly } : {}),
-        ...(payload.failedOnly !== undefined ? { failedOnly: payload.failedOnly } : {}),
-        ...(payload.limit ? { limit: payload.limit } : {}),
-      })
-      : runtime.getManagedAgentControlPlaneFacade().listOrganizationWaitingQueue(identity.principalId, {
-        ...(payload.organizationId ? { organizationId: payload.organizationId } : {}),
-        ...(payload.managerAgentId ? { managerAgentId: payload.managerAgentId } : {}),
-        ...(payload.attentionOnly !== undefined ? { attentionOnly: payload.attentionOnly } : {}),
-        ...(payload.attentionLevels ? { attentionLevels: payload.attentionLevels } : {}),
-        ...(payload.waitingFor ? { waitingFor: payload.waitingFor } : {}),
-        ...(payload.staleOnly !== undefined ? { staleOnly: payload.staleOnly } : {}),
-        ...(payload.failedOnly !== undefined ? { failedOnly: payload.failedOnly } : {}),
-        ...(payload.limit ? { limit: payload.limit } : {}),
-      });
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const result = await gatewayClient.listOrganizationWaitingQueue({
+      ...(payload.organizationId ? { organizationId: payload.organizationId } : {}),
+      ...(payload.managerAgentId ? { managerAgentId: payload.managerAgentId } : {}),
+      ...(payload.attentionOnly !== undefined ? { attentionOnly: payload.attentionOnly } : {}),
+      ...(payload.attentionLevels ? { attentionLevels: payload.attentionLevels } : {}),
+      ...(payload.waitingFor ? { waitingFor: payload.waitingFor } : {}),
+      ...(payload.staleOnly !== undefined ? { staleOnly: payload.staleOnly } : {}),
+      ...(payload.failedOnly !== undefined ? { failedOnly: payload.failedOnly } : {}),
+      ...(payload.limit ? { limit: payload.limit } : {}),
+    });
 
     writeJson(response, 200, {
       identity,
@@ -1026,26 +1023,21 @@ export async function handleAgentGovernanceOverview(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const overview = gatewayClient
-      ? await gatewayClient.getOrganizationGovernanceOverview({
-        ...(payload.organizationId ? { organizationId: payload.organizationId } : {}),
-        ...(payload.managerAgentId ? { managerAgentId: payload.managerAgentId } : {}),
-        ...(payload.attentionOnly !== undefined ? { attentionOnly: payload.attentionOnly } : {}),
-        ...(payload.attentionLevels ? { attentionLevels: payload.attentionLevels } : {}),
-        ...(payload.waitingFor ? { waitingFor: payload.waitingFor } : {}),
-        ...(payload.staleOnly !== undefined ? { staleOnly: payload.staleOnly } : {}),
-        ...(payload.failedOnly !== undefined ? { failedOnly: payload.failedOnly } : {}),
-      })
-      : runtime.getManagedAgentControlPlaneFacade().getOrganizationGovernanceOverview(identity.principalId, {
-        ...(payload.organizationId ? { organizationId: payload.organizationId } : {}),
-        ...(payload.managerAgentId ? { managerAgentId: payload.managerAgentId } : {}),
-        ...(payload.attentionOnly !== undefined ? { attentionOnly: payload.attentionOnly } : {}),
-        ...(payload.attentionLevels ? { attentionLevels: payload.attentionLevels } : {}),
-        ...(payload.waitingFor ? { waitingFor: payload.waitingFor } : {}),
-        ...(payload.staleOnly !== undefined ? { staleOnly: payload.staleOnly } : {}),
-        ...(payload.failedOnly !== undefined ? { failedOnly: payload.failedOnly } : {}),
-      });
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const overview = await gatewayClient.getOrganizationGovernanceOverview({
+      ...(payload.organizationId ? { organizationId: payload.organizationId } : {}),
+      ...(payload.managerAgentId ? { managerAgentId: payload.managerAgentId } : {}),
+      ...(payload.attentionOnly !== undefined ? { attentionOnly: payload.attentionOnly } : {}),
+      ...(payload.attentionLevels ? { attentionLevels: payload.attentionLevels } : {}),
+      ...(payload.waitingFor ? { waitingFor: payload.waitingFor } : {}),
+      ...(payload.staleOnly !== undefined ? { staleOnly: payload.staleOnly } : {}),
+      ...(payload.failedOnly !== undefined ? { failedOnly: payload.failedOnly } : {}),
+    });
 
     writeJson(response, 200, {
       identity,
@@ -1069,28 +1061,22 @@ export async function handleAgentCollaborationDashboard(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const result = gatewayClient
-      ? await gatewayClient.listOrganizationCollaborationDashboard({
-        ...(payload.organizationId ? { organizationId: payload.organizationId } : {}),
-        ...(payload.managerAgentId ? { managerAgentId: payload.managerAgentId } : {}),
-        ...(payload.attentionOnly !== undefined ? { attentionOnly: payload.attentionOnly } : {}),
-        ...(payload.attentionLevels ? { attentionLevels: payload.attentionLevels } : {}),
-        ...(payload.waitingFor ? { waitingFor: payload.waitingFor } : {}),
-        ...(payload.staleOnly !== undefined ? { staleOnly: payload.staleOnly } : {}),
-        ...(payload.failedOnly !== undefined ? { failedOnly: payload.failedOnly } : {}),
-        ...(payload.limit ? { limit: payload.limit } : {}),
-      })
-      : runtime.getManagedAgentControlPlaneFacade().listOrganizationCollaborationDashboard(identity.principalId, {
-        ...(payload.organizationId ? { organizationId: payload.organizationId } : {}),
-        ...(payload.managerAgentId ? { managerAgentId: payload.managerAgentId } : {}),
-        ...(payload.attentionOnly !== undefined ? { attentionOnly: payload.attentionOnly } : {}),
-        ...(payload.attentionLevels ? { attentionLevels: payload.attentionLevels } : {}),
-        ...(payload.waitingFor ? { waitingFor: payload.waitingFor } : {}),
-        ...(payload.staleOnly !== undefined ? { staleOnly: payload.staleOnly } : {}),
-        ...(payload.failedOnly !== undefined ? { failedOnly: payload.failedOnly } : {}),
-        ...(payload.limit ? { limit: payload.limit } : {}),
-      });
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const result = await gatewayClient.listOrganizationCollaborationDashboard({
+      ...(payload.organizationId ? { organizationId: payload.organizationId } : {}),
+      ...(payload.managerAgentId ? { managerAgentId: payload.managerAgentId } : {}),
+      ...(payload.attentionOnly !== undefined ? { attentionOnly: payload.attentionOnly } : {}),
+      ...(payload.attentionLevels ? { attentionLevels: payload.attentionLevels } : {}),
+      ...(payload.waitingFor ? { waitingFor: payload.waitingFor } : {}),
+      ...(payload.staleOnly !== undefined ? { staleOnly: payload.staleOnly } : {}),
+      ...(payload.failedOnly !== undefined ? { failedOnly: payload.failedOnly } : {}),
+      ...(payload.limit ? { limit: payload.limit } : {}),
+    });
 
     writeJson(response, 200, {
       identity,
@@ -1115,10 +1101,13 @@ export async function handleAgentWorkItemDetail(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const detail = gatewayClient
-      ? await gatewayClient.getWorkItemDetail(payload.workItemId)
-      : runtime.getManagedAgentControlPlaneFacade().getWorkItemDetailView(identity.principalId, payload.workItemId);
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const detail = await gatewayClient.getWorkItemDetail(payload.workItemId);
 
     if (!detail) {
       throw new Error("Work item does not exist.");
@@ -1131,12 +1120,10 @@ export async function handleAgentWorkItemDetail(
       targetAgent: detail.targetAgent,
       sourcePrincipal: detail.sourcePrincipal,
       ...(detail.sourceAgent ? { sourceAgent: detail.sourceAgent } : {}),
-      parentWorkItem: "collaboration" in detail ? detail.collaboration.parentWorkItem : detail.parentWorkItem,
-      parentTargetAgent: "collaboration" in detail
-        ? detail.collaboration.parentTargetAgent
-        : detail.parentTargetAgent,
-      childSummary: "collaboration" in detail ? detail.collaboration.childSummary : detail.childSummary,
-      childWorkItems: "collaboration" in detail ? detail.collaboration.childWorkItems : detail.childWorkItems,
+      parentWorkItem: detail.parentWorkItem,
+      parentTargetAgent: detail.parentTargetAgent,
+      childSummary: detail.childSummary,
+      childWorkItems: detail.childWorkItems,
       messages: detail.messages,
     });
   } catch (error) {
@@ -1148,7 +1135,7 @@ export async function handleAgentWorkItemCancel(
   request: IncomingMessage,
   response: ServerResponse,
   runtime: CodexTaskRuntime,
-  executionService: ManagedAgentExecutionService,
+  _executionService: ManagedAgentExecutionService,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizeWorkItemCancelPayload);
 
@@ -1158,13 +1145,13 @@ export async function handleAgentWorkItemCancel(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const result = gatewayClient
-      ? await gatewayClient.cancelWorkItem(payload.workItemId)
-      : await executionService.cancelWorkItem({
-        ownerPrincipalId: identity.principalId,
-        workItemId: payload.workItemId,
-      });
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const result = await gatewayClient.cancelWorkItem(payload.workItemId);
 
     writeJson(response, 200, {
       ok: true,
@@ -1194,23 +1181,19 @@ export async function handleAgentWorkItemRespond(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const result = gatewayClient
-      ? await gatewayClient.respondToHumanWaitingWorkItem({
-        workItemId: payload.workItemId,
-        ...(payload.response.decision ? { decision: payload.response.decision } : {}),
-        ...(payload.response.inputText ? { inputText: payload.response.inputText } : {}),
-        ...(hasOwn(payload.response, "payload") ? { payload: payload.response.payload } : {}),
-        ...(payload.response.artifactRefs ? { artifactRefs: payload.response.artifactRefs } : {}),
-      })
-      : runtime.getManagedAgentCoordinationService().respondToHumanWaitingWorkItem({
-        ownerPrincipalId: identity.principalId,
-        workItemId: payload.workItemId,
-        ...(payload.response.decision ? { decision: payload.response.decision } : {}),
-        ...(payload.response.inputText ? { inputText: payload.response.inputText } : {}),
-        ...(hasOwn(payload.response, "payload") ? { payload: payload.response.payload } : {}),
-        ...(payload.response.artifactRefs ? { artifactRefs: payload.response.artifactRefs } : {}),
-      });
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const result = await gatewayClient.respondToHumanWaitingWorkItem({
+      workItemId: payload.workItemId,
+      ...(payload.response.decision ? { decision: payload.response.decision } : {}),
+      ...(payload.response.inputText ? { inputText: payload.response.inputText } : {}),
+      ...(hasOwn(payload.response, "payload") ? { payload: payload.response.payload } : {}),
+      ...(payload.response.artifactRefs ? { artifactRefs: payload.response.artifactRefs } : {}),
+    });
 
     writeJson(response, 200, {
       ok: true,
@@ -1238,17 +1221,16 @@ export async function handleAgentWorkItemEscalate(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const result = gatewayClient
-      ? await gatewayClient.escalateWaitingAgentWorkItemToHuman({
-        workItemId: payload.workItemId,
-        ...(payload.escalation?.inputText ? { inputText: payload.escalation.inputText } : {}),
-      })
-      : runtime.getManagedAgentCoordinationService().escalateWaitingAgentWorkItemToHuman({
-        ownerPrincipalId: identity.principalId,
-        workItemId: payload.workItemId,
-        ...(payload.escalation?.inputText ? { inputText: payload.escalation.inputText } : {}),
-      });
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const result = await gatewayClient.escalateWaitingAgentWorkItemToHuman({
+      workItemId: payload.workItemId,
+      ...(payload.escalation?.inputText ? { inputText: payload.escalation.inputText } : {}),
+    });
 
     writeJson(response, 200, {
       ok: true,
@@ -1277,17 +1259,16 @@ export async function handleAgentRunList(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const runs = gatewayClient
-      ? await gatewayClient.listRuns({
-        ...(payload.agentId ? { agentId: payload.agentId } : {}),
-        ...(payload.workItemId ? { workItemId: payload.workItemId } : {}),
-      })
-      : runtime.getManagedAgentControlPlaneFacade().listRuns({
-        ownerPrincipalId: identity.principalId,
-        ...(payload.agentId ? { agentId: payload.agentId } : {}),
-        ...(payload.workItemId ? { workItemId: payload.workItemId } : {}),
-      });
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const runs = await gatewayClient.listRuns({
+      ...(payload.agentId ? { agentId: payload.agentId } : {}),
+      ...(payload.workItemId ? { workItemId: payload.workItemId } : {}),
+    });
 
     writeJson(response, 200, {
       identity,
@@ -1311,10 +1292,13 @@ export async function handleAgentRunDetail(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const detail = gatewayClient
-      ? await gatewayClient.getRunDetail(payload.runId)
-      : runtime.getManagedAgentControlPlaneFacade().getRunDetailView(identity.principalId, payload.runId);
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const detail = await gatewayClient.getRunDetail(payload.runId);
 
     if (!detail) {
       throw new Error("Agent run does not exist.");
@@ -1345,18 +1329,17 @@ export async function handleAgentHandoffList(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const result = gatewayClient
-      ? await gatewayClient.getAgentHandoffListView({
-        agentId: payload.agentId,
-        ...(payload.workItemId ? { workItemId: payload.workItemId } : {}),
-        ...(payload.limit ? { limit: payload.limit } : {}),
-      })
-      : runtime.getManagedAgentControlPlaneFacade().getAgentHandoffListView(identity.principalId, {
-        agentId: payload.agentId,
-        ...(payload.workItemId ? { workItemId: payload.workItemId } : {}),
-        ...(payload.limit ? { limit: payload.limit } : {}),
-      });
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const result = await gatewayClient.getAgentHandoffListView({
+      agentId: payload.agentId,
+      ...(payload.workItemId ? { workItemId: payload.workItemId } : {}),
+      ...(payload.limit ? { limit: payload.limit } : {}),
+    });
 
     writeJson(response, 200, {
       identity,
@@ -1382,10 +1365,13 @@ export async function handleAgentMailboxList(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const result = gatewayClient
-      ? await gatewayClient.getAgentMailboxListView(payload.agentId)
-      : runtime.getManagedAgentControlPlaneFacade().getAgentMailboxListView(identity.principalId, payload.agentId);
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const result = await gatewayClient.getAgentMailboxListView(payload.agentId);
 
     writeJson(response, 200, {
       identity,
@@ -1410,10 +1396,13 @@ export async function handleAgentMailboxPull(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const result = gatewayClient
-      ? await gatewayClient.pullMailboxEntry(payload.agentId)
-      : runtime.getManagedAgentCoordinationService().pullMailboxEntry(identity.principalId, payload.agentId);
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const result = await gatewayClient.pullMailboxEntry(payload.agentId);
 
     writeJson(response, 200, {
       ok: true,
@@ -1439,24 +1428,13 @@ export async function handleAgentMailboxAck(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const ackResult = gatewayClient
-      ? await gatewayClient.ackMailboxEntry(payload.agentId, payload.mailboxEntryId)
-      : (() => {
-        const mailboxEntry = runtime.getManagedAgentCoordinationService().ackMailboxEntry(
-          identity.principalId,
-          payload.agentId,
-          payload.mailboxEntryId,
-        );
-        const agent = runtime.getRuntimeStore().getManagedAgent(payload.agentId);
-        const message = runtime.getRuntimeStore().getAgentMessage(mailboxEntry.messageId);
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
 
-        return {
-          mailboxEntry,
-          agent,
-          ...(message ? { message } : {}),
-        };
-      })();
+    if (!gatewayClient) {
+      return;
+    }
+
+    const ackResult = await gatewayClient.ackMailboxEntry(payload.agentId, payload.mailboxEntryId);
 
     writeJson(response, 200, {
       ok: true,
@@ -1483,27 +1461,21 @@ export async function handleAgentMailboxRespond(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
-    const gatewayClient = createManagedAgentPlatformGatewayClientFromEnv();
-    const result = gatewayClient
-      ? await gatewayClient.respondToMailboxEntry({
-        agentId: payload.agentId,
-        mailboxEntryId: payload.mailboxEntryId,
-        ...(payload.response.decision ? { decision: payload.response.decision } : {}),
-        ...(payload.response.inputText ? { inputText: payload.response.inputText } : {}),
-        ...(hasOwn(payload.response, "payload") ? { payload: payload.response.payload } : {}),
-        ...(payload.response.artifactRefs ? { artifactRefs: payload.response.artifactRefs } : {}),
-        ...(payload.response.priority ? { priority: payload.response.priority } : {}),
-      })
-      : runtime.getManagedAgentCoordinationService().respondToMailboxEntry({
-        ownerPrincipalId: identity.principalId,
-        agentId: payload.agentId,
-        mailboxEntryId: payload.mailboxEntryId,
-        ...(payload.response.decision ? { decision: payload.response.decision } : {}),
-        ...(payload.response.inputText ? { inputText: payload.response.inputText } : {}),
-        ...(hasOwn(payload.response, "payload") ? { payload: payload.response.payload } : {}),
-        ...(payload.response.artifactRefs ? { artifactRefs: payload.response.artifactRefs } : {}),
-        ...(payload.response.priority ? { priority: payload.response.priority } : {}),
-      });
+    const gatewayClient = requireManagedAgentPlatformGatewayClient(response, identity.principalId);
+
+    if (!gatewayClient) {
+      return;
+    }
+
+    const result = await gatewayClient.respondToMailboxEntry({
+      agentId: payload.agentId,
+      mailboxEntryId: payload.mailboxEntryId,
+      ...(payload.response.decision ? { decision: payload.response.decision } : {}),
+      ...(payload.response.inputText ? { inputText: payload.response.inputText } : {}),
+      ...(hasOwn(payload.response, "payload") ? { payload: payload.response.payload } : {}),
+      ...(payload.response.artifactRefs ? { artifactRefs: payload.response.artifactRefs } : {}),
+      ...(payload.response.priority ? { priority: payload.response.priority } : {}),
+    });
 
     writeJson(response, 200, {
       ok: true,
