@@ -103,7 +103,7 @@ npm run start:platform
   - 平台侧值班 / 平台令牌 / `worker-fleet`：`./themis-platform`
   - Worker Node 本机预检 / 常驻执行：`./themis-worker-node`
 
-当前 `themis-worker-node` 独立仓已经承接最小 `worker-node run` daemon 闭环、`doctor worker-node` 预检、会生成本地 `report.json` 的本机执行器，以及独立 `systemd` 模板/部署文档；下一顺序差口只剩本地 runtime / `credential / provider` 装配继续收口。
+当前 `themis-worker-node` 独立仓已经承接最小 `worker-node run` daemon 闭环、`doctor worker-node` 预检、会生成本地 `report.json` 的本机执行器、独立 `systemd` 模板/部署文档，以及每个 run 的本地 runtime / `credential / provider` 装配；当前这条 Worker 拆仓顺序线已经收口。
 
 如果你要把某台机器接成局域网执行节点，推荐先按这个顺序验证：
 
