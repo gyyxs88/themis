@@ -10,6 +10,7 @@ export * from "./managed-agent-coordination-service.js";
 export * from "./managed-agent-control-plane-facade.js";
 export * from "./managed-agent-control-plane-bootstrap.js";
 export * from "./managed-agent-control-plane-mirror.js";
+export * from "./managed-agent-platform-gateway-facade.js";
 export * from "./managed-agent-execution-service.js";
 export * from "./managed-agent-lease-recovery.js";
 export * from "./managed-agent-node-service.js";

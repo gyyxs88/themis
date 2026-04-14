@@ -27,6 +27,7 @@ import type {
   UpdateManagedAgentExecutionBoundaryInput,
   UpdateManagedAgentSpawnPolicyInput,
 } from "./managed-agents-service.js";
+import type { ManagedAgentRunDetailView } from "./managed-agent-scheduler-service.js";
 import type {
   ManagedAgentPlatformHandoffListInput,
   ManagedAgentPlatformHandoffListResult,
@@ -88,6 +89,21 @@ import type {
   ManagedAgentPlatformWorkItemRespondResult,
 } from "../contracts/managed-agent-platform-work-items.js";
 import { buildPlatformServiceAuthorizationHeader } from "../contracts/managed-agent-platform-access.js";
+import type {
+  ManagedAgentPlatformWorkerNodeDetailResult,
+  ManagedAgentPlatformWorkerNodeLeaseRecoveryResult,
+  ManagedAgentPlatformWorkerNodeMutationResult,
+  ManagedAgentPlatformWorkerNodeRecord,
+  ManagedAgentPlatformWorkerAssignedRunResult,
+  ManagedAgentPlatformWorkerRunMutationResult,
+  ManagedAgentPlatformWorkerNodeRegistrationInput,
+  ManagedAgentPlatformWorkerNodeHeartbeatInput,
+  ManagedAgentPlatformWorkerNodeListInput,
+  ManagedAgentPlatformWorkerNodeLeaseReclaimInput,
+  ManagedAgentPlatformWorkerPullInput,
+  ManagedAgentPlatformWorkerRunCompleteInput,
+  ManagedAgentPlatformWorkerRunStatusInput,
+} from "../contracts/managed-agent-platform-worker.js";
 import type {
   StoredAgentSpawnPolicyRecord,
   StoredAgentWorkItemRecord,
@@ -208,19 +224,6 @@ export interface ManagedAgentPlatformGatewayDetailResult {
   runtimeProfile: ManagedAgentDetailView["runtimeProfile"];
   authAccounts: ManagedAgentDetailView["authAccounts"];
   thirdPartyProviders: ManagedAgentDetailView["thirdPartyProviders"];
-}
-
-export interface ManagedAgentPlatformGatewayWorkItemDetailResult {
-  organization: ManagedAgentWorkItemDetailView["organization"];
-  workItem: ManagedAgentWorkItemDetailView["workItem"];
-  targetAgent: ManagedAgentWorkItemDetailView["targetAgent"];
-  sourcePrincipal: ManagedAgentWorkItemDetailView["sourcePrincipal"];
-  sourceAgent?: ManagedAgentWorkItemDetailView["sourceAgent"];
-  parentWorkItem: ManagedAgentWorkItemDetailView["collaboration"]["parentWorkItem"];
-  parentTargetAgent: ManagedAgentWorkItemDetailView["collaboration"]["parentTargetAgent"];
-  childSummary: ManagedAgentWorkItemDetailView["collaboration"]["childSummary"];
-  childWorkItems: ManagedAgentWorkItemDetailView["collaboration"]["childWorkItems"];
-  messages: ManagedAgentWorkItemDetailView["messages"];
 }
 
 export class ManagedAgentPlatformGatewayClient {
@@ -621,7 +624,7 @@ export class ManagedAgentPlatformGatewayClient {
     };
   }
 
-  async getWorkItemDetail(workItemId: string): Promise<ManagedAgentPlatformGatewayWorkItemDetailResult | null> {
+  async getWorkItemDetail(workItemId: string): Promise<ManagedAgentPlatformWorkItemDetailResult | null> {
     const payload = await this.requestJson<Partial<ManagedAgentPlatformWorkItemDetailResult>>(
       "/api/platform/work-items/detail",
       {
@@ -639,18 +642,20 @@ export class ManagedAgentPlatformGatewayClient {
       workItem: payload.workItem,
       targetAgent: payload.targetAgent ?? null,
       sourcePrincipal: payload.sourcePrincipal ?? null,
-      ...(payload.sourceAgent ? { sourceAgent: payload.sourceAgent } : {}),
-      parentWorkItem: payload.collaboration?.parentWorkItem ?? null,
-      parentTargetAgent: payload.collaboration?.parentTargetAgent ?? null,
-      childSummary: payload.collaboration?.childSummary ?? {
-        totalCount: 0,
-        openCount: 0,
-        waitingCount: 0,
-        completedCount: 0,
-        failedCount: 0,
-        cancelledCount: 0,
+      sourceAgent: payload.sourceAgent ?? null,
+      collaboration: {
+        parentWorkItem: payload.collaboration?.parentWorkItem ?? null,
+        parentTargetAgent: payload.collaboration?.parentTargetAgent ?? null,
+        childSummary: payload.collaboration?.childSummary ?? {
+          totalCount: 0,
+          openCount: 0,
+          waitingCount: 0,
+          completedCount: 0,
+          failedCount: 0,
+          cancelledCount: 0,
+        },
+        childWorkItems: Array.isArray(payload.collaboration?.childWorkItems) ? payload.collaboration.childWorkItems : [],
       },
-      childWorkItems: Array.isArray(payload.collaboration?.childWorkItems) ? payload.collaboration.childWorkItems : [],
       messages: Array.isArray(payload.messages) ? payload.messages : [],
     };
   }
@@ -665,8 +670,11 @@ export class ManagedAgentPlatformGatewayClient {
     return Array.isArray(payload.runs) ? payload.runs : [];
   }
 
-  async getRunDetail(runId: string): Promise<ManagedAgentPlatformRunDetailResult | null> {
-    const payload = await this.requestJson<Partial<ManagedAgentPlatformRunDetailResult>>(
+  async getRunDetail(runId: string): Promise<ManagedAgentRunDetailView | null> {
+    const payload = await this.requestJson<Partial<ManagedAgentPlatformRunDetailResult> & {
+      node?: ManagedAgentRunDetailView["node"];
+      executionLease?: ManagedAgentRunDetailView["executionLease"];
+    }>(
       "/api/platform/runs/detail",
       {
         ownerPrincipalId: this.ownerPrincipalId,
@@ -683,6 +691,8 @@ export class ManagedAgentPlatformGatewayClient {
       run: payload.run,
       workItem: payload.workItem ?? null,
       targetAgent: payload.targetAgent ?? null,
+      node: payload.node ?? null,
+      executionLease: payload.executionLease ?? null,
     };
   }
 
@@ -761,6 +771,155 @@ export class ManagedAgentPlatformGatewayClient {
     });
   }
 
+  async registerNode(input: ManagedAgentPlatformWorkerNodeRegistrationInput): Promise<ManagedAgentPlatformWorkerNodeMutationResult> {
+    return await this.requestJson<ManagedAgentPlatformWorkerNodeMutationResult>("/api/platform/nodes/register", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      node: {
+        ...(input.nodeId ? { nodeId: input.nodeId } : {}),
+        ...(input.organizationId ? { organizationId: input.organizationId } : {}),
+        displayName: input.displayName,
+        slotCapacity: input.slotCapacity,
+        ...(input.slotAvailable !== undefined ? { slotAvailable: input.slotAvailable } : {}),
+        ...(input.labels ? { labels: input.labels } : {}),
+        ...(input.workspaceCapabilities ? { workspaceCapabilities: input.workspaceCapabilities } : {}),
+        ...(input.credentialCapabilities ? { credentialCapabilities: input.credentialCapabilities } : {}),
+        ...(input.providerCapabilities ? { providerCapabilities: input.providerCapabilities } : {}),
+        ...(input.heartbeatTtlSeconds !== undefined ? { heartbeatTtlSeconds: input.heartbeatTtlSeconds } : {}),
+      },
+    });
+  }
+
+  async heartbeatNode(input: ManagedAgentPlatformWorkerNodeHeartbeatInput): Promise<ManagedAgentPlatformWorkerNodeMutationResult> {
+    return await this.requestJson<ManagedAgentPlatformWorkerNodeMutationResult>("/api/platform/nodes/heartbeat", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      node: {
+        nodeId: input.nodeId,
+        ...(input.status ? { status: input.status } : {}),
+        ...(input.slotAvailable !== undefined ? { slotAvailable: input.slotAvailable } : {}),
+        ...(input.labels ? { labels: input.labels } : {}),
+        ...(input.workspaceCapabilities ? { workspaceCapabilities: input.workspaceCapabilities } : {}),
+        ...(input.credentialCapabilities ? { credentialCapabilities: input.credentialCapabilities } : {}),
+        ...(input.providerCapabilities ? { providerCapabilities: input.providerCapabilities } : {}),
+        ...(input.heartbeatTtlSeconds !== undefined ? { heartbeatTtlSeconds: input.heartbeatTtlSeconds } : {}),
+      },
+    });
+  }
+
+  async listNodes(input: ManagedAgentPlatformWorkerNodeListInput = {}): Promise<ManagedAgentPlatformWorkerNodeRecord[]> {
+    const payload = await this.requestJson<{ nodes?: ManagedAgentPlatformWorkerNodeRecord[] }>("/api/platform/nodes/list", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      ...(input.organizationId ? { organizationId: input.organizationId } : {}),
+    });
+
+    return Array.isArray(payload.nodes) ? payload.nodes : [];
+  }
+
+  async getNodeDetail(nodeId: string): Promise<ManagedAgentPlatformWorkerNodeDetailResult | null> {
+    const payload = await this.requestJson<Partial<ManagedAgentPlatformWorkerNodeDetailResult>>(
+      "/api/platform/nodes/detail",
+      {
+        ownerPrincipalId: this.ownerPrincipalId,
+        nodeId,
+      },
+    );
+
+    if (!payload.node || !payload.organization) {
+      return null;
+    }
+
+    return {
+      organization: payload.organization,
+      node: payload.node,
+      leaseSummary: payload.leaseSummary ?? {
+        totalCount: 0,
+        activeCount: 0,
+        expiredCount: 0,
+        releasedCount: 0,
+        revokedCount: 0,
+      },
+      activeExecutionLeases: Array.isArray(payload.activeExecutionLeases) ? payload.activeExecutionLeases : [],
+      recentExecutionLeases: Array.isArray(payload.recentExecutionLeases) ? payload.recentExecutionLeases : [],
+    };
+  }
+
+  async markNodeDraining(nodeId: string): Promise<ManagedAgentPlatformWorkerNodeMutationResult> {
+    return await this.requestNodeGovernanceMutation("/api/platform/nodes/drain", nodeId);
+  }
+
+  async markNodeOffline(nodeId: string): Promise<ManagedAgentPlatformWorkerNodeMutationResult> {
+    return await this.requestNodeGovernanceMutation("/api/platform/nodes/offline", nodeId);
+  }
+
+  async reclaimNodeLeases(
+    input: ManagedAgentPlatformWorkerNodeLeaseReclaimInput,
+  ): Promise<ManagedAgentPlatformWorkerNodeLeaseRecoveryResult> {
+    return await this.requestJson<ManagedAgentPlatformWorkerNodeLeaseRecoveryResult>("/api/platform/nodes/reclaim", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      nodeId: input.nodeId,
+      ...(input.failureCode ? { failureCode: input.failureCode } : {}),
+      ...(input.failureMessage ? { failureMessage: input.failureMessage } : {}),
+    });
+  }
+
+  async pullAssignedRun(input: ManagedAgentPlatformWorkerPullInput): Promise<ManagedAgentPlatformWorkerAssignedRunResult | null> {
+    const payload = await this.requestJson<Partial<ManagedAgentPlatformWorkerAssignedRunResult>>(
+      "/api/platform/worker/runs/pull",
+      {
+        ownerPrincipalId: this.ownerPrincipalId,
+        nodeId: input.nodeId,
+      },
+    );
+
+    if (
+      !payload.organization
+      || !payload.run
+      || !payload.executionLease
+      || !payload.executionContract
+      || !payload.node
+      || !payload.targetAgent
+      || !payload.workItem
+    ) {
+      return null;
+    }
+
+    return {
+      organization: payload.organization,
+      node: payload.node,
+      targetAgent: payload.targetAgent,
+      workItem: payload.workItem,
+      run: payload.run,
+      executionLease: payload.executionLease,
+      executionContract: payload.executionContract,
+    };
+  }
+
+  async updateWorkerRunStatus(
+    input: ManagedAgentPlatformWorkerRunStatusInput,
+  ): Promise<ManagedAgentPlatformWorkerRunMutationResult> {
+    return await this.requestJson<ManagedAgentPlatformWorkerRunMutationResult>("/api/platform/worker/runs/update", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      nodeId: input.nodeId,
+      runId: input.runId,
+      leaseToken: input.leaseToken,
+      status: input.status,
+      ...(input.failureCode ? { failureCode: input.failureCode } : {}),
+      ...(input.failureMessage ? { failureMessage: input.failureMessage } : {}),
+      ...(input.waitingAction ? { waitingAction: input.waitingAction } : {}),
+    });
+  }
+
+  async completeWorkerRun(
+    input: ManagedAgentPlatformWorkerRunCompleteInput,
+  ): Promise<ManagedAgentPlatformWorkerRunMutationResult> {
+    return await this.requestJson<ManagedAgentPlatformWorkerRunMutationResult>("/api/platform/worker/runs/complete", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      nodeId: input.nodeId,
+      runId: input.runId,
+      leaseToken: input.leaseToken,
+      ...(Object.prototype.hasOwnProperty.call(input, "result") ? { result: input.result } : {}),
+    });
+  }
+
   private async requestJson<T>(pathname: string, payload: Record<string, unknown>): Promise<T> {
     const response = await this.fetchImpl(`${this.baseUrl}${pathname}`, {
       method: "POST",
@@ -777,6 +936,16 @@ export class ManagedAgentPlatformGatewayClient {
     }
 
     return parsed as T;
+  }
+
+  private async requestNodeGovernanceMutation(
+    pathname: string,
+    nodeId: string,
+  ): Promise<ManagedAgentPlatformWorkerNodeMutationResult> {
+    return await this.requestJson<ManagedAgentPlatformWorkerNodeMutationResult>(pathname, {
+      ownerPrincipalId: this.ownerPrincipalId,
+      nodeId,
+    });
   }
 }
 

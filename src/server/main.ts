@@ -12,6 +12,7 @@ import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { ThemisUpdateService } from "../diagnostics/update-service.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createThemisHttpServer, resolveListenAddresses } from "./http-server.js";
+import { resolveMainPlatformGatewayFacade } from "./main-platform-gateway.js";
 
 const DEFAULT_PRIVATE_ASSISTANT_PRINCIPAL_ID = "principal-local-owner";
 
@@ -94,6 +95,7 @@ const authRuntime = new CodexAuthRuntime({
 const updateService = new ThemisUpdateService({
   workingDirectory: runtime.getWorkingDirectory(),
 });
+const platformControlPlaneFacade = resolveMainPlatformGatewayFacade();
 feishuService = new FeishuChannelService({
   runtime,
   runtimeRegistry: feishuRuntimeRegistry,
@@ -113,6 +115,7 @@ const server = createThemisHttpServer({
   managedAgentExecutionService,
   feishuService,
   updateService,
+  ...(platformControlPlaneFacade ? { platformControlPlaneFacade } : {}),
 });
 
 let agentSchedulerTickRunning = false;
