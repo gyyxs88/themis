@@ -63,7 +63,7 @@ npm run dev:platform
 
 平台进程当前保留独立的 `Themis Platform` 前端壳、Web 鉴权、`/api/health` 和 `/api/platform/*` 控制面接口，不再复用主 `Themis Workspace` 的 Web 静态壳，也不会继续暴露主 Themis 的任务、历史、身份等 HTTP API。当前平台页已接入 Worker Nodes、`agents + projects` 最小真实控制面、governance overview、waiting queue、collaboration/handoffs、recent runs、`work-items + mailbox` 的最小读写闭环，以及 `oncall/summary` 值班建议面板；平台线当前已不再缺页面读面，后续重点转到平台鉴权事实与真实持久化控制面的继续收口。
 
-主 Themis 里的 `Platform Agents` 当前也已收口成纯兼容 gateway：`/api/agents/list` 只负责暴露平台兼容状态与跳转上下文；如果没有有效的 `THEMIS_PLATFORM_*` 配置，其余 `/api/agents/*` 不再回退本地平台治理，而会明确提示去配置平台 gateway 或直接使用独立 `themis-platform` 页面。与此同时，主 Themis Web 里的 `Platform Agents` 页面也已进一步降成“纯跳转入口”：现在只保留入口状态刷新与独立平台页直达链接，不再承载任何组织级治理、派工、mailbox、handoff 或 execution boundary 表单。
+主 Themis 当前已经不再保留 `Platform Agents` 页面，也不再暴露 `/api/agents/*` 这层平台兼容路由；相关组织级治理、节点、协作和值班入口现在统一以独立 `themis-platform` 页面与 `/api/platform/*` 控制面为准。主仓后续只保留 Themis 自己的页面语义，以及通过共享契约消费平台事实的最小客户端能力，不再继续宿主平台后台。
 
 4. 在浏览器打开：
 

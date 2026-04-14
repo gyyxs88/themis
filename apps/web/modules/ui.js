@@ -133,7 +133,6 @@ export function createRenderer(app) {
     renderRuntimeConfigNote(settings, effectiveSettings);
     renderUpdateManagerState();
     renderIdentityState();
-    renderAgentsState();
     renderMemoryCandidatesState();
     renderSkillsState();
     renderMcpState();
@@ -288,8 +287,8 @@ export function createRenderer(app) {
     dom.settingsMcpSection.setAttribute("aria-hidden", String(activeSection !== "mcp"));
     dom.settingsPluginsSection.classList.toggle("hidden", activeSection !== "plugins");
     dom.settingsPluginsSection.setAttribute("aria-hidden", String(activeSection !== "plugins"));
-    dom.settingsAgentsSection.classList.toggle("hidden", activeSection !== "agents");
-    dom.settingsAgentsSection.setAttribute("aria-hidden", String(activeSection !== "agents"));
+    dom.settingsAgentsSection?.classList.toggle("hidden", activeSection !== "agents");
+    dom.settingsAgentsSection?.setAttribute("aria-hidden", String(activeSection !== "agents"));
     dom.settingsMemoryCandidatesSection.classList.toggle("hidden", activeSection !== "memory-candidates");
     dom.settingsMemoryCandidatesSection.setAttribute("aria-hidden", String(activeSection !== "memory-candidates"));
     dom.settingsThirdPartySection.classList.toggle("hidden", activeSection !== "third-party");
@@ -335,37 +334,6 @@ export function createRenderer(app) {
         formatRelativeTime: utils.formatRelativeTime,
       }))
       .join("");
-  }
-
-  function renderAgentsState() {
-    const agentsState = app.runtime.agents ?? {};
-    const compatibilityStatus = normalizeAgentsCompatibilityStatusState(agentsState.compatibilityStatus);
-    const statusMessage = resolveAgentsStatusMessage(agentsState);
-    const busy = Boolean(agentsState.loading);
-
-    dom.agentsStatusNote.classList.toggle("hidden", !statusMessage);
-    dom.agentsStatusNote.textContent = statusMessage;
-    if (statusMessage) {
-      dom.agentsStatusNote.dataset.state = agentsState.errorMessage
-        ? "error"
-        : busy
-          ? "loading"
-          : agentsState.noticeMessage
-            ? "supported"
-            : compatibilityStatus?.statusLevel === "error"
-              ? "error"
-              : compatibilityStatus
-                ? "warning"
-                : "supported";
-    } else {
-      delete dom.agentsStatusNote.dataset.state;
-    }
-
-    syncAgentsPlatformEntry(dom, compatibilityStatus);
-    if (dom.agentsRefreshButton) {
-      dom.agentsRefreshButton.disabled = busy;
-      dom.agentsRefreshButton.textContent = busy ? "刷新中..." : "刷新入口状态";
-    }
   }
 
   function renderSkillsState() {
@@ -1626,6 +1594,37 @@ export function createRenderer(app) {
     dom.identityLinkNote.textContent = "默认情况下 Web 和飞书已经共享同一私人助理 principal；只有认领旧浏览器身份时，才需要 `/link 绑定码`。";
   }
 
+  function renderAgentsState() {
+    const agentsState = app.runtime.agents ?? {};
+    const compatibilityStatus = normalizeAgentsCompatibilityStatusState(agentsState.compatibilityStatus);
+    const statusMessage = resolveAgentsStatusMessage(agentsState);
+    const busy = Boolean(agentsState.loading);
+
+    dom.agentsStatusNote.classList.toggle("hidden", !statusMessage);
+    dom.agentsStatusNote.textContent = statusMessage;
+    if (statusMessage) {
+      dom.agentsStatusNote.dataset.state = agentsState.errorMessage
+        ? "error"
+        : busy
+          ? "loading"
+          : agentsState.noticeMessage
+            ? "supported"
+            : compatibilityStatus?.statusLevel === "error"
+              ? "error"
+              : compatibilityStatus
+                ? "warning"
+                : "supported";
+    } else {
+      delete dom.agentsStatusNote.dataset.state;
+    }
+
+    syncAgentsPlatformEntry(dom, compatibilityStatus);
+    if (dom.agentsRefreshButton) {
+      dom.agentsRefreshButton.disabled = busy;
+      dom.agentsRefreshButton.textContent = busy ? "刷新中..." : "刷新入口状态";
+    }
+  }
+
   return {
     renderAll,
     renderComposer,
@@ -1637,6 +1636,168 @@ export function createRenderer(app) {
     setToolsPanelOpen,
     setToolsPanelSection,
   };
+}
+
+function resolveAgentsStatusMessage(agentsState) {
+  const compatibilityStatus = normalizeAgentsCompatibilityStatusState(agentsState.compatibilityStatus);
+
+  if (agentsState.errorMessage) {
+    return agentsState.errorMessage;
+  }
+
+  if (agentsState.loading) {
+    return "正在读取 Platform 兼容入口状态。";
+  }
+
+  if (agentsState.creating) {
+    return "正在创建新的持久化 agent。";
+  }
+
+  if (agentsState.detailLoading) {
+    return "正在读取当前 agent 的任务和内部信箱。";
+  }
+
+  if (agentsState.dispatching) {
+    return "正在提交派工。";
+  }
+
+  if (agentsState.updatingSpawnPolicy) {
+    return "正在更新当前组织的自动创建护栏。";
+  }
+
+  if (agentsState.approvingSpawnSuggestionId) {
+    return "正在按建议创建新的长期 agent。";
+  }
+
+  if (agentsState.approvingIdleRecoverySuggestionId) {
+    return "正在批准当前空闲回收建议。";
+  }
+
+  if (agentsState.ignoringSpawnSuggestionId) {
+    return "正在忽略当前自动创建建议。";
+  }
+
+  if (agentsState.rejectingSpawnSuggestionId) {
+    return "正在拒绝当前自动创建建议。";
+  }
+
+  if (agentsState.restoringSpawnSuggestionId) {
+    return "正在恢复被忽略或拒绝的自动创建建议。";
+  }
+
+  if (agentsState.workItemDetailLoading) {
+    return "正在读取 work item 详情。";
+  }
+
+  if (agentsState.cancelingWorkItemId) {
+    return "正在取消当前 work item。";
+  }
+
+  if (agentsState.lifecycleUpdatingAgentId) {
+    return resolveAgentLifecycleStatusMessage(agentsState.lifecycleUpdatingAction);
+  }
+
+  if (agentsState.escalatingWorkItemId) {
+    return "正在把等待中的 agent 阻塞升级到顶层治理。";
+  }
+
+  if (agentsState.ackingMailboxEntryId) {
+    return "正在确认内部消息。";
+  }
+
+  if (agentsState.noticeMessage) {
+    return agentsState.noticeMessage;
+  }
+
+  if (compatibilityStatus?.message) {
+    return compatibilityStatus.message;
+  }
+
+  return "";
+}
+
+function normalizeAgentsCompatibilityStatusState(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const accessMode = typeof value.accessMode === "string" ? value.accessMode : "gateway_required";
+  const statusLevel = value.statusLevel === "error" ? "error" : "warning";
+  const message = typeof value.message === "string" ? value.message : "";
+  const platformBaseUrl = typeof value.platformBaseUrl === "string" ? value.platformBaseUrl : "";
+  const ownerPrincipalId = typeof value.ownerPrincipalId === "string" ? value.ownerPrincipalId : "";
+
+  if (value.panelOwnership !== "platform") {
+    return null;
+  }
+
+  return {
+    panelOwnership: "platform",
+    accessMode: ["platform_gateway", "gateway_required", "invalid_gateway_config"].includes(accessMode)
+      ? accessMode
+      : "gateway_required",
+    statusLevel,
+    message: message.trim(),
+    platformBaseUrl: platformBaseUrl.trim(),
+    ownerPrincipalId: ownerPrincipalId.trim(),
+  };
+}
+
+function syncAgentsPlatformEntry(dom, compatibilityStatus) {
+  if (!dom.agentsOpenPlatformLink || !dom.agentsOpenPlatformNote) {
+    return;
+  }
+
+  const platformHomeUrl = resolveAgentsPlatformHomeUrl(compatibilityStatus);
+  const directLinkAvailable = Boolean(platformHomeUrl);
+  dom.agentsOpenPlatformLink.href = directLinkAvailable ? platformHomeUrl : "#";
+  dom.agentsOpenPlatformLink.classList.toggle("disabled", !directLinkAvailable);
+  dom.agentsOpenPlatformLink.setAttribute("aria-disabled", directLinkAvailable ? "false" : "true");
+  dom.agentsOpenPlatformLink.tabIndex = directLinkAvailable ? 0 : -1;
+  dom.agentsOpenPlatformNote.textContent = resolveAgentsPlatformEntryNote(compatibilityStatus, platformHomeUrl);
+}
+
+function resolveAgentsPlatformHomeUrl(compatibilityStatus) {
+  if (!compatibilityStatus?.platformBaseUrl) {
+    return "";
+  }
+
+  const baseUrl = compatibilityStatus.platformBaseUrl.trim();
+
+  if (!baseUrl) {
+    return "";
+  }
+
+  try {
+    const platformUrl = new URL(baseUrl);
+    const ownerPrincipalId = typeof compatibilityStatus.ownerPrincipalId === "string"
+      ? compatibilityStatus.ownerPrincipalId.trim()
+      : "";
+
+    if (ownerPrincipalId) {
+      platformUrl.searchParams.set("ownerPrincipalId", ownerPrincipalId);
+    }
+
+    return platformUrl.toString();
+  } catch {
+    return baseUrl;
+  }
+}
+
+function resolveAgentsPlatformEntryNote(compatibilityStatus, platformHomeUrl) {
+  if (platformHomeUrl) {
+    return `当前主 Themis 只保留独立 Platform 页面的跳转入口：${platformHomeUrl}。后续平台治理请直接在那里完成。`;
+  }
+
+  if (compatibilityStatus?.accessMode === "gateway_required") {
+    return "主 Themis 已不再托管这个平台治理面；请先配置平台 gateway，或直接切到独立 themis-platform 页面。";
+  }
+
+  if (compatibilityStatus?.accessMode === "invalid_gateway_config") {
+    return "当前平台 Gateway 配置异常，兼容入口暂时只能展示状态，无法生成独立 Platform 页面入口。";
+  }
+
+  return "已配置平台上游后，这里会给出独立 Platform 页面的直达入口。";
 }
 
 function resolveSkillsStatusMessage(skillsState) {
@@ -2211,7 +2372,7 @@ function resolveModelFallbackLabel(runtimeConfig) {
 }
 
 function resolveWorkspaceToolsSection(section) {
-  return ["runtime", "auth", "skills", "mcp", "plugins", "agents", "memory-candidates", "third-party", "mode-switch"].includes(section)
+  return ["runtime", "auth", "skills", "mcp", "plugins", "memory-candidates", "third-party", "mode-switch"].includes(section)
     ? section
     : "runtime";
 }
@@ -2324,167 +2485,6 @@ function resolveMemoryCandidatesStatusMessage(candidatesState, candidateCount) {
   return "";
 }
 
-function resolveAgentsStatusMessage(agentsState) {
-  const compatibilityStatus = normalizeAgentsCompatibilityStatusState(agentsState.compatibilityStatus);
-
-  if (agentsState.errorMessage) {
-    return agentsState.errorMessage;
-  }
-
-  if (agentsState.loading) {
-    return "正在读取 Platform 兼容入口状态。";
-  }
-
-  if (agentsState.creating) {
-    return "正在创建新的持久化 agent。";
-  }
-
-  if (agentsState.detailLoading) {
-    return "正在读取当前 agent 的任务和内部信箱。";
-  }
-
-  if (agentsState.dispatching) {
-    return "正在提交派工。";
-  }
-
-  if (agentsState.updatingSpawnPolicy) {
-    return "正在更新当前组织的自动创建护栏。";
-  }
-
-  if (agentsState.approvingSpawnSuggestionId) {
-    return "正在按建议创建新的长期 agent。";
-  }
-
-  if (agentsState.approvingIdleRecoverySuggestionId) {
-    return "正在批准当前空闲回收建议。";
-  }
-
-  if (agentsState.ignoringSpawnSuggestionId) {
-    return "正在忽略当前自动创建建议。";
-  }
-
-  if (agentsState.rejectingSpawnSuggestionId) {
-    return "正在拒绝当前自动创建建议。";
-  }
-
-  if (agentsState.restoringSpawnSuggestionId) {
-    return "正在恢复被忽略或拒绝的自动创建建议。";
-  }
-
-  if (agentsState.workItemDetailLoading) {
-    return "正在读取 work item 详情。";
-  }
-
-  if (agentsState.cancelingWorkItemId) {
-    return "正在取消当前 work item。";
-  }
-
-  if (agentsState.lifecycleUpdatingAgentId) {
-    return resolveAgentLifecycleStatusMessage(agentsState.lifecycleUpdatingAction);
-  }
-
-  if (agentsState.escalatingWorkItemId) {
-    return "正在把等待中的 agent 阻塞升级到顶层治理。";
-  }
-
-  if (agentsState.ackingMailboxEntryId) {
-    return "正在确认内部消息。";
-  }
-
-  if (agentsState.noticeMessage) {
-    return agentsState.noticeMessage;
-  }
-
-  if (compatibilityStatus?.message) {
-    return compatibilityStatus.message;
-  }
-
-  return "";
-}
-
-function normalizeAgentsCompatibilityStatusState(value) {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-
-  const accessMode = typeof value.accessMode === "string" ? value.accessMode : "gateway_required";
-  const statusLevel = value.statusLevel === "error" ? "error" : "warning";
-  const message = typeof value.message === "string" ? value.message : "";
-  const platformBaseUrl = typeof value.platformBaseUrl === "string" ? value.platformBaseUrl : "";
-  const ownerPrincipalId = typeof value.ownerPrincipalId === "string" ? value.ownerPrincipalId : "";
-
-  if (value.panelOwnership !== "platform") {
-    return null;
-  }
-
-  return {
-    panelOwnership: "platform",
-    accessMode: ["platform_gateway", "gateway_required", "invalid_gateway_config"].includes(accessMode)
-      ? accessMode
-      : "gateway_required",
-    statusLevel,
-    message: message.trim(),
-    platformBaseUrl: platformBaseUrl.trim(),
-    ownerPrincipalId: ownerPrincipalId.trim(),
-  };
-}
-
-function syncAgentsPlatformEntry(dom, compatibilityStatus) {
-  if (!dom.agentsOpenPlatformLink || !dom.agentsOpenPlatformNote) {
-    return;
-  }
-
-  const platformHomeUrl = resolveAgentsPlatformHomeUrl(compatibilityStatus);
-  const directLinkAvailable = Boolean(platformHomeUrl);
-  dom.agentsOpenPlatformLink.href = directLinkAvailable ? platformHomeUrl : "#";
-  dom.agentsOpenPlatformLink.classList.toggle("disabled", !directLinkAvailable);
-  dom.agentsOpenPlatformLink.setAttribute("aria-disabled", directLinkAvailable ? "false" : "true");
-  dom.agentsOpenPlatformLink.tabIndex = directLinkAvailable ? 0 : -1;
-  dom.agentsOpenPlatformNote.textContent = resolveAgentsPlatformEntryNote(compatibilityStatus, platformHomeUrl);
-}
-
-function resolveAgentsPlatformHomeUrl(compatibilityStatus) {
-  if (!compatibilityStatus?.platformBaseUrl) {
-    return "";
-  }
-
-  const baseUrl = compatibilityStatus.platformBaseUrl.trim();
-
-  if (!baseUrl) {
-    return "";
-  }
-
-  try {
-    const platformUrl = new URL(baseUrl);
-    const ownerPrincipalId = typeof compatibilityStatus.ownerPrincipalId === "string"
-      ? compatibilityStatus.ownerPrincipalId.trim()
-      : "";
-
-    if (ownerPrincipalId) {
-      platformUrl.searchParams.set("ownerPrincipalId", ownerPrincipalId);
-    }
-
-    return platformUrl.toString();
-  } catch {
-    return baseUrl;
-  }
-}
-
-function resolveAgentsPlatformEntryNote(compatibilityStatus, platformHomeUrl) {
-  if (platformHomeUrl) {
-    return `当前主 Themis 只保留独立 Platform 页面的跳转入口：${platformHomeUrl}。后续平台治理请直接在那里完成。`;
-  }
-
-  if (compatibilityStatus?.accessMode === "gateway_required") {
-    return "主 Themis 已不再托管这个平台治理面；请先配置平台 gateway，或直接切到独立 themis-platform 页面。";
-  }
-
-  if (compatibilityStatus?.accessMode === "invalid_gateway_config") {
-    return "当前平台 Gateway 配置异常，兼容入口暂时只能展示状态，无法生成独立 Platform 页面入口。";
-  }
-
-  return "已配置平台上游后，这里会给出独立 Platform 页面的直达入口。";
-}
 
 function normalizeAgentCreateDraft(draft) {
   return {

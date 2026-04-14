@@ -8,6 +8,7 @@ import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { WebAccessService } from "../core/web-access.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createThemisHttpServer } from "./http-server.js";
+import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
 
 interface TestServerContext {
   server: Server;
@@ -183,6 +184,31 @@ test("platform surface 的登录页与受保护提示改用平台语义", async 
     });
   }, {
     surface: "platform",
+  });
+});
+
+test("themis surface 不再暴露 /api/agents/* 兼容路由", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const headers = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+    const response = await fetch(`${baseUrl}/api/agents/list`, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        channel: "web",
+        channelUserId: "user-main-owner",
+      }),
+    });
+
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), {
+      error: {
+        code: "ROUTE_NOT_FOUND",
+        message: "Themis main surface does not expose /api/agents/list.",
+      },
+    });
   });
 });
 

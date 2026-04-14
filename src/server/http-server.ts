@@ -11,39 +11,6 @@ import { WebAccessService } from "../core/web-access.js";
 import { ThemisUpdateService } from "../diagnostics/update-service.js";
 import { servePlatformAsset, serveWebAsset } from "./http-assets.js";
 import {
-  handleAgentArchive,
-  handleAgentCollaborationDashboard,
-  handleAgentCreate,
-  handleAgentDetail,
-  handleAgentDispatch,
-  handleAgentExecutionBoundaryUpdate,
-  handleAgentGovernanceOverview,
-  handleAgentIdleRecoveryApprove,
-  handleAgentIdleRecoverySuggestions,
-  handleAgentHandoffList,
-  handleAgentList,
-  handleAgentMailboxAck,
-  handleAgentMailboxList,
-  handleAgentMailboxPull,
-  handleAgentMailboxRespond,
-  handleAgentPause,
-  handleAgentResume,
-  handleAgentSpawnApprove,
-  handleAgentSpawnIgnore,
-  handleAgentSpawnPolicyUpdate,
-  handleAgentSpawnReject,
-  handleAgentSpawnRestore,
-  handleAgentSpawnSuggestions,
-  handleAgentRunDetail,
-  handleAgentRunList,
-  handleAgentWorkItemCancel,
-  handleAgentWorkItemEscalate,
-  handleAgentWaitingQueueList,
-  handleAgentWorkItemDetail,
-  handleAgentWorkItemList,
-  handleAgentWorkItemRespond,
-} from "./http-agents.js";
-import {
   handleActorCreate,
   handleActorList,
   handleMainMemoryCandidateExtract,
@@ -284,6 +251,15 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
         return writeJson(response, 404, buildPlatformRouteNotFoundErrorResponse(url.pathname), isHeadRequest);
       }
 
+      if (isRemovedPlatformCompatibilityApiPath(url.pathname)) {
+        return writeJson(response, 404, {
+          error: {
+            code: "ROUTE_NOT_FOUND",
+            message: `Themis main surface does not expose ${url.pathname}.`,
+          },
+        }, isHeadRequest);
+      }
+
       if ((request.method === "GET" || isHeadRequest) && url.pathname === "/api/runtime/config") {
         return handleRuntimeConfig(response, runtime, isHeadRequest);
       }
@@ -370,130 +346,6 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/actors/create") {
         return handleActorCreate(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/create") {
-        return handleAgentCreate(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/list") {
-        return handleAgentList(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/detail") {
-        return handleAgentDetail(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/execution-boundary/update") {
-        return handleAgentExecutionBoundaryUpdate(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/spawn-suggestions") {
-        return handleAgentSpawnSuggestions(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/idle-suggestions") {
-        return handleAgentIdleRecoverySuggestions(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/spawn-policy/update") {
-        return handleAgentSpawnPolicyUpdate(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/spawn-approve") {
-        return handleAgentSpawnApprove(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/spawn-ignore") {
-        return handleAgentSpawnIgnore(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/spawn-reject") {
-        return handleAgentSpawnReject(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/spawn-restore") {
-        return handleAgentSpawnRestore(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/idle-approve") {
-        return handleAgentIdleRecoveryApprove(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/pause") {
-        return handleAgentPause(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/resume") {
-        return handleAgentResume(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/archive") {
-        return handleAgentArchive(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/dispatch") {
-        return handleAgentDispatch(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/work-items/list") {
-        return handleAgentWorkItemList(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/waiting/list") {
-        return handleAgentWaitingQueueList(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/governance-overview") {
-        return handleAgentGovernanceOverview(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/collaboration-dashboard") {
-        return handleAgentCollaborationDashboard(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/work-items/detail") {
-        return handleAgentWorkItemDetail(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/work-items/cancel") {
-        return handleAgentWorkItemCancel(request, response, runtime, managedAgentExecutionService);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/work-items/respond") {
-        return handleAgentWorkItemRespond(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/work-items/escalate") {
-        return handleAgentWorkItemEscalate(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/runs/list") {
-        return handleAgentRunList(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/runs/detail") {
-        return handleAgentRunDetail(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/handoffs/list") {
-        return handleAgentHandoffList(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/mailbox/list") {
-        return handleAgentMailboxList(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/mailbox/pull") {
-        return handleAgentMailboxPull(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/mailbox/ack") {
-        return handleAgentMailboxAck(request, response, runtime);
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/agents/mailbox/respond") {
-        return handleAgentMailboxRespond(request, response, runtime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/platform/agents/create") {
@@ -919,6 +771,10 @@ function isBlockedPlatformSurfaceApiPath(surface: ResolvedHttpServerSurface, pat
   return surface.id === "platform"
     && pathname.startsWith("/api/")
     && !pathname.startsWith("/api/platform/");
+}
+
+function isRemovedPlatformCompatibilityApiPath(pathname: string): boolean {
+  return pathname === "/api/agents" || pathname.startsWith("/api/agents/");
 }
 
 async function serveHttpSurfaceAsset(

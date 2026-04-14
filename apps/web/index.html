@@ -357,25 +357,6 @@
                 </button>
               </div>
 
-              <div class="settings-sidebar-group">
-                <p class="settings-sidebar-kicker">外部平台兼容入口</p>
-                <div class="settings-modal-nav" role="tablist" aria-label="平台兼容入口">
-                  <button
-                    id="settings-agents-tab"
-                    type="button"
-                    class="settings-nav-button"
-                    data-settings-section="agents"
-                    role="tab"
-                    aria-controls="settings-agents-section"
-                    aria-selected="false"
-                  >
-                    <span class="settings-nav-title">Platform Agents</span>
-                  </button>
-                </div>
-                <p class="settings-sidebar-copy">
-                  这里只保留迁移期的纯跳转入口，不再算主 Themis 的原生设置分类，也不再承载平台治理表单。
-                </p>
-              </div>
             </aside>
 
             <div class="settings-modal-content">
@@ -1095,66 +1076,6 @@
                     </div>
                   </section>
                 </div>
-              </section>
-
-              <section
-                id="settings-agents-section"
-                class="settings-panel hidden"
-                role="tabpanel"
-                aria-labelledby="settings-agents-tab"
-              >
-                <section class="workspace-tool-group">
-                  <div class="tool-group-head">
-                    <h3>Platform Agents</h3>
-                    <span class="meta-label">纯跳转入口</span>
-                  </div>
-
-                  <p class="settings-section-copy">
-                    这块已不再算主 Themis 的原生页面，也不再承载平台治理表单。主 Themis 现在只负责显示当前平台兼容状态，并把你送去独立 `themis-platform` 页面。
-                  </p>
-
-                  <div class="settings-stack">
-                    <div class="settings-inline-actions">
-                      <button id="agents-refresh-button" type="button" class="toolbar-button subtle">刷新入口状态</button>
-                      <a
-                        id="agents-open-platform-link"
-                        class="toolbar-button subtle toolbar-link-button disabled"
-                        href="#"
-                        target="_blank"
-                        rel="noreferrer noopener"
-                        aria-disabled="true"
-                        tabindex="-1"
-                      >
-                        打开 Platform
-                      </a>
-                      <p class="settings-inline-copy">
-                        这里只检查兼容状态和跳转上下文；真正的节点、租约、治理和值班页面已经迁往独立 Platform。
-                      </p>
-                    </div>
-
-                    <p id="agents-open-platform-note" class="settings-section-copy">
-                      已配置平台上游后，这里会给出独立 Platform 页面的直达入口。
-                    </p>
-
-                    <div class="settings-stack">
-                      <p class="settings-section-copy">
-                        当前主 Themis 不再继续提供这些平台动作：
-                      </p>
-                      <ul class="settings-section-copy">
-                        <li>创建或治理 Platform Agents</li>
-                        <li>组织级 waiting queue / collaboration dashboard</li>
-                        <li>spawn / idle recovery / lifecycle / dispatch</li>
-                        <li>mailbox / handoff / execution boundary</li>
-                      </ul>
-                    </div>
-
-                    <p
-                      id="agents-status-note"
-                      class="settings-section-copy settings-probe-note hidden"
-                      aria-live="polite"
-                    ></p>
-                  </div>
-                </section>
               </section>
 
               <section
