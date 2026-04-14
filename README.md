@@ -191,6 +191,8 @@ npm run themis -- config set FEISHU_APP_SECRET xxx
 - `THEMIS_PLATFORM_BASE_URL`
 - `THEMIS_PLATFORM_OWNER_PRINCIPAL_ID`
 - `THEMIS_PLATFORM_WEB_ACCESS_TOKEN`
+- `THEMIS_PLATFORM_RUNTIME_SNAPSHOT_FILE`
+- `THEMIS_PLATFORM_EXECUTION_RUNTIME_ROOT`
 - `THEMIS_PLATFORM_CONTROL_PLANE_DRIVER`
 - `THEMIS_PLATFORM_MYSQL_URI`
 - `THEMIS_PLATFORM_MYSQL_HOST`
@@ -223,6 +225,15 @@ THEMIS_MANAGED_AGENT_CONTROL_PLANE_DATABASE_FILE=infra/platform/control-plane.db
 ```
 
 这会把 `managed_agent / work_item / run / node / execution_lease` 这类共享控制面事实切到独立 SQLite 文件；本地 `session task settings` 等执行态仍留在当前 runtime store，不会跟平台真相源混在一起。
+
+如果当前还在 split repo 独立平台仓演练阶段，也可以额外配置：
+
+```bash
+THEMIS_PLATFORM_RUNTIME_SNAPSHOT_FILE=infra/platform/runtime-state.json
+THEMIS_PLATFORM_EXECUTION_RUNTIME_ROOT=infra/platform/runtime-runs
+```
+
+这会让 `themis-platform` 把平台事实 snapshot 和每个 run 的 `assigned-run / state / events` execution 轨迹分别落到本地目录，便于在接通 MySQL shared control plane 前先完成单机 runtime 持久化验收。
 
 如果要把平台层切到 MySQL 真相源，推荐单独起平台进程，并配置：
 
