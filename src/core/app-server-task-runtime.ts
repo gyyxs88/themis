@@ -80,7 +80,10 @@ import {
   buildThemisScheduledTaskMcpConfigOverrides,
   buildThemisScheduledTaskPromptSection,
 } from "./themis-scheduled-task-tools.js";
-import { buildThemisManagedAgentPromptSection } from "./themis-managed-agent-tools.js";
+import {
+  buildThemisManagedAgentPromptSection,
+  isThemisManagedAgentToolName,
+} from "./themis-managed-agent-tools.js";
 import { compileTaskInputForRuntime } from "./runtime-input-compiler.js";
 import { resolveStoredSessionThreadReference } from "./session-thread-reference.js";
 import { validateWorkspacePath } from "./session-workspace.js";
@@ -1263,6 +1266,18 @@ export class AppServerTaskRuntime {
     signal: AbortSignal;
     emit: (event: TaskEvent) => Promise<void>;
   }): Promise<void> {
+    const autoApprovalResponse = resolveAutoApprovalServerRequestResponse(input.serverRequest);
+
+    if (autoApprovalResponse !== undefined) {
+      if (typeof input.session.respondToServerRequest === "function") {
+        await abortable(
+          () => input.session.respondToServerRequest!(input.serverRequest.id, autoApprovalResponse),
+          input.signal,
+        );
+      }
+      return;
+    }
+
     const resolvedAction = resolveServerRequestAction(input.serverRequest);
 
     if (!resolvedAction) {
@@ -1429,6 +1444,21 @@ function resolveServerRequestAction(serverRequest: AppServerReverseRequest): Res
       }
       return null;
   }
+}
+
+function resolveAutoApprovalServerRequestResponse(serverRequest: AppServerReverseRequest): unknown | undefined {
+  if (serverRequest.method !== "item/tool/requestApproval") {
+    return undefined;
+  }
+
+  const params = asRecord(serverRequest.params);
+  const toolName = normalizeTextValue(params?.toolName) ?? normalizeTextValue(params?.name);
+
+  if (!isThemisManagedAgentToolName(toolName)) {
+    return undefined;
+  }
+
+  return { decision: "accept" };
 }
 
 function resolveCommandApprovalAction(serverRequest: AppServerReverseRequest): ResolvedServerRequestAction | null {

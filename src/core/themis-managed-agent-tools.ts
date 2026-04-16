@@ -1,5 +1,16 @@
 import type { TaskRequest } from "../types/index.js";
 
+export const THEMIS_MANAGED_AGENT_TOOL_NAMES = [
+  "list_managed_agents",
+  "get_managed_agent_detail",
+  "create_managed_agent",
+  "update_managed_agent_execution_boundary",
+  "dispatch_work_item",
+  "update_managed_agent_lifecycle",
+] as const;
+
+const THEMIS_MANAGED_AGENT_TOOL_NAME_SET = new Set<string>(THEMIS_MANAGED_AGENT_TOOL_NAMES);
+
 export function buildThemisManagedAgentPromptSection(request: TaskRequest): string {
   const sessionId = normalizeText(request.channelContext.sessionId) ?? "<none>";
   const channelSessionKey = normalizeText(request.channelContext.channelSessionKey) ?? "<none>";
@@ -16,6 +27,11 @@ export function buildThemisManagedAgentPromptSection(request: TaskRequest): stri
     "After changing a managed agent or dispatching work, confirm the exact agent and boundary or work item you used.",
     `Current managed-agent context: sourceChannel=${request.sourceChannel}, channelUserId=${request.user.userId}, displayName=${displayName}, sessionId=${sessionId}, channelSessionKey=${channelSessionKey}.`,
   ].join("\n");
+}
+
+export function isThemisManagedAgentToolName(value: string | null | undefined): boolean {
+  const normalized = normalizeText(value ?? undefined);
+  return normalized ? THEMIS_MANAGED_AGENT_TOOL_NAME_SET.has(normalized) : false;
 }
 
 function normalizeText(value: string | undefined): string | undefined {
