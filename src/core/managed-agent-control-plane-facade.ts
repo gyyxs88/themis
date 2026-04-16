@@ -17,6 +17,7 @@ import {
   type ManagedAgentSuppressedSpawnSuggestion,
   type RestoreManagedAgentSpawnSuggestionInput,
   type UpdateManagedAgentSpawnPolicyInput,
+  type UpdateManagedAgentCardInput,
   type UpdateManagedAgentExecutionBoundaryInput,
   type ManagedAgentExecutionBoundaryView,
   type UpsertProjectWorkspaceBindingInput,
@@ -127,6 +128,7 @@ export type ManagedAgentControlPlaneFacadeAsync = AsyncMethods<ManagedAgentContr
 
 const MANAGED_AGENT_CONTROL_PLANE_FACADE_MUTATION_METHODS = new Set<keyof ManagedAgentControlPlaneFacade>([
   "createManagedAgent",
+  "updateManagedAgentCard",
   "updateManagedAgentExecutionBoundary",
   "upsertProjectWorkspaceBinding",
   "updateSpawnPolicy",
@@ -207,6 +209,10 @@ export class ManagedAgentControlPlaneFacade {
 
   createManagedAgent(input: CreateManagedAgentInput): CreateManagedAgentResult {
     return this.managedAgentsService.createManagedAgent(input);
+  }
+
+  updateManagedAgentCard(input: UpdateManagedAgentCardInput): ManagedAgentDetailView {
+    return this.managedAgentsService.updateManagedAgentCard(input);
   }
 
   listManagedAgents(ownerPrincipalId: string): ManagedAgentListView {

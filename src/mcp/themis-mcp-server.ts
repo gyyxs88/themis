@@ -32,6 +32,7 @@ import { ScheduledTasksService } from "../core/scheduled-tasks-service.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import {
   APPROVAL_POLICIES,
+  type ManagedAgentCardInput,
   MANAGED_AGENT_AUTONOMY_LEVELS,
   MANAGED_AGENT_CREATION_MODES,
   MANAGED_AGENT_EXPOSURE_POLICIES,
@@ -150,6 +151,11 @@ interface CreateManagedAgentToolArgs {
   autonomyLevel?: CreateManagedAgentInput["autonomyLevel"];
   creationMode?: CreateManagedAgentInput["creationMode"];
   exposurePolicy?: CreateManagedAgentInput["exposurePolicy"];
+}
+
+interface UpdateManagedAgentCardToolArgs {
+  agentId: string;
+  card: ManagedAgentCardInput;
 }
 
 interface UpdateManagedAgentExecutionBoundaryToolArgs {
@@ -310,7 +316,7 @@ export class ThemisMcpServer {
       instructions: [
         "This MCP server manages Themis scheduled tasks and managed agents.",
         "Use explicit scheduledAt timestamps and a concrete timezone for scheduled tasks.",
-        "Use managed agent tools to create and govern digital employees, update execution boundaries, and dispatch work.",
+        "Use managed agent tools to create and govern digital employees, update employee dossiers, update execution boundaries, and dispatch work.",
       ].join(" "),
     };
   }
@@ -345,6 +351,8 @@ export class ThemisMcpServer {
         return this.runToolSafely(() => this.getManagedAgentDetail(argumentsRecord));
       case "create_managed_agent":
         return this.runToolSafely(() => this.createManagedAgent(argumentsRecord));
+      case "update_managed_agent_card":
+        return this.runToolSafely(() => this.updateManagedAgentCard(argumentsRecord));
       case "update_managed_agent_execution_boundary":
         return this.runToolSafely(() => this.updateManagedAgentExecutionBoundary(argumentsRecord));
       case "dispatch_work_item":
@@ -529,6 +537,32 @@ export class ThemisMcpServer {
         organization: result.organization,
         principal: result.principal,
         agent: result.agent,
+      },
+    );
+  }
+
+  private async updateManagedAgentCard(argumentsRecord: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const args = normalizeUpdateManagedAgentCardToolArgs(argumentsRecord);
+    const identity = this.ensureIdentity();
+    const ownerPrincipalId = this.resolveManagedAgentOwnerPrincipalId(identity);
+    const detail = await this.managedAgentControlPlaneFacade.updateManagedAgentCard({
+      ownerPrincipalId,
+      agentId: args.agentId,
+      card: args.card,
+    });
+
+    return createToolResult(
+      buildManagedAgentDetailSummary(detail),
+      {
+        identity,
+        ownerPrincipalId,
+        organization: detail.organization,
+        principal: detail.principal,
+        agent: detail.agent,
+        workspacePolicy: detail.workspacePolicy,
+        runtimeProfile: detail.runtimeProfile,
+        authAccounts: detail.authAccounts,
+        thirdPartyProviders: detail.thirdPartyProviders,
       },
     );
   }
@@ -866,6 +900,23 @@ function buildToolDefinitions(): McpToolDefinition[] {
       },
     },
     {
+      name: "update_managed_agent_card",
+      title: "Update Managed Agent Card",
+      description: "更新员工档案，包括编号、能力标签、职责范围、协作偏好和评审摘要。",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          agentId: {
+            type: "string",
+            description: "要更新的员工 id。",
+          },
+          card: buildManagedAgentCardInputSchema(),
+        },
+        required: ["agentId", "card"],
+      },
+    },
+    {
       name: "update_managed_agent_execution_boundary",
       title: "Update Managed Agent Execution Boundary",
       description: "更新员工的工作区和运行时边界。",
@@ -1107,6 +1158,45 @@ function buildManagedAgentRuntimeProfileSchema(): Record<string, unknown> {
   };
 }
 
+function buildManagedAgentCardInputSchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      employeeCode: { type: "string" },
+      title: { type: "string" },
+      domainTags: {
+        type: "array",
+        items: { type: "string" },
+      },
+      skillTags: {
+        type: "array",
+        items: { type: "string" },
+      },
+      responsibilitySummary: { type: "string" },
+      allowedScopes: {
+        type: "array",
+        items: { type: "string" },
+      },
+      forbiddenScopes: {
+        type: "array",
+        items: { type: "string" },
+      },
+      workStyle: { type: "string" },
+      collaborationNotes: { type: "string" },
+      representativeProjects: {
+        type: "array",
+        items: { type: "string" },
+      },
+      currentFocus: { type: "string" },
+      reviewSummary: { type: "string" },
+      lastReviewedAt: {
+        anyOf: [{ type: "string" }, { type: "null" }],
+      },
+    },
+  };
+}
+
 function normalizeCreateScheduledTaskToolArgs(value: Record<string, unknown>): CreateScheduledTaskToolArgs {
   const options = value.options === undefined
     ? undefined
@@ -1221,6 +1311,17 @@ function normalizeCreateManagedAgentToolArgs(value: Record<string, unknown>): Cr
   };
 }
 
+function normalizeUpdateManagedAgentCardToolArgs(
+  value: Record<string, unknown>,
+): UpdateManagedAgentCardToolArgs {
+  return {
+    agentId: expectRequiredText(value.agentId, "agentId is required."),
+    card: normalizeManagedAgentCardInput(
+      expectRecord(value.card, "card must be an object."),
+    ),
+  };
+}
+
 function normalizeUpdateManagedAgentExecutionBoundaryToolArgs(
   value: Record<string, unknown>,
 ): UpdateManagedAgentExecutionBoundaryToolArgs {
@@ -1298,6 +1399,72 @@ function normalizeManagedAgentWorkspacePolicyInput(
       ? { allowNetworkAccess: expectBoolean(value.allowNetworkAccess, "workspacePolicy.allowNetworkAccess must be a boolean.") }
       : {}),
   };
+}
+
+function normalizeManagedAgentCardInput(value: Record<string, unknown>): ManagedAgentCardInput {
+  const card: ManagedAgentCardInput = {};
+
+  if (hasOwn(value, "employeeCode")) {
+    card.employeeCode = expectRequiredText(value.employeeCode, "card.employeeCode is required.");
+  }
+
+  if (hasOwn(value, "title")) {
+    card.title = expectRequiredText(value.title, "card.title is required.");
+  }
+
+  if (hasOwn(value, "domainTags")) {
+    card.domainTags = normalizeStringArray(value.domainTags, "card.domainTags must be an array of strings.");
+  }
+
+  if (hasOwn(value, "skillTags")) {
+    card.skillTags = normalizeStringArray(value.skillTags, "card.skillTags must be an array of strings.");
+  }
+
+  if (hasOwn(value, "responsibilitySummary")) {
+    card.responsibilitySummary = expectRequiredText(
+      value.responsibilitySummary,
+      "card.responsibilitySummary is required.",
+    );
+  }
+
+  if (hasOwn(value, "allowedScopes")) {
+    card.allowedScopes = normalizeStringArray(value.allowedScopes, "card.allowedScopes must be an array of strings.");
+  }
+
+  if (hasOwn(value, "forbiddenScopes")) {
+    card.forbiddenScopes = normalizeStringArray(value.forbiddenScopes, "card.forbiddenScopes must be an array of strings.");
+  }
+
+  if (hasOwn(value, "workStyle")) {
+    setOptionalRecordField(card, "workStyle", normalizeOptionalMultilineText(value.workStyle) ?? undefined);
+  }
+
+  if (hasOwn(value, "collaborationNotes")) {
+    setOptionalRecordField(card, "collaborationNotes", normalizeOptionalMultilineText(value.collaborationNotes) ?? undefined);
+  }
+
+  if (hasOwn(value, "representativeProjects")) {
+    card.representativeProjects = normalizeStringArray(
+      value.representativeProjects,
+      "card.representativeProjects must be an array of strings.",
+    );
+  }
+
+  if (hasOwn(value, "currentFocus")) {
+    setOptionalRecordField(card, "currentFocus", normalizeOptionalMultilineText(value.currentFocus) ?? undefined);
+  }
+
+  if (hasOwn(value, "reviewSummary")) {
+    setOptionalRecordField(card, "reviewSummary", normalizeOptionalMultilineText(value.reviewSummary) ?? undefined);
+  }
+
+  if (hasOwn(value, "lastReviewedAt")) {
+    card.lastReviewedAt = value.lastReviewedAt === null
+      ? null
+      : expectRequiredText(value.lastReviewedAt, "card.lastReviewedAt must be a string or null.");
+  }
+
+  return card;
 }
 
 function normalizeManagedAgentRuntimeProfileInput(
@@ -1417,10 +1584,19 @@ function buildManagedAgentListSummary(
 function buildManagedAgentDetailSummary(detail: ManagedAgentDetailView): string {
   const workspacePath = detail.workspacePolicy?.workspacePath ?? "<unset>";
   const model = detail.runtimeProfile?.model ?? "<default>";
+  const card = detail.agent.agentCard;
+  const allowedScopes = Array.isArray(card?.allowedScopes) && card.allowedScopes.length
+    ? card.allowedScopes.join("；")
+    : "<unset>";
+  const currentFocus = normalizeText(card?.currentFocus) ?? "<unset>";
 
   return [
     `员工 ${detail.agent.displayName}（${detail.agent.agentId}）当前状态 ${detail.agent.status}。`,
+    `员工编号：${card?.employeeCode ?? "<unset>"}`,
     `角色：${detail.agent.departmentRole}`,
+    `职责摘要：${card?.responsibilitySummary ?? detail.agent.mission}`,
+    `允许范围：${allowedScopes}`,
+    `当前重点：${currentFocus}`,
     `workspace：${workspacePath}`,
     `model：${model}`,
   ].join("\n");
@@ -1484,6 +1660,10 @@ function normalizeText(value: unknown): string | undefined {
 
   const normalized = value.trim();
   return normalized ? normalized : undefined;
+}
+
+function setOptionalRecordField(target: object, key: string, value: unknown): void {
+  (target as Record<string, unknown>)[key] = value;
 }
 
 function normalizeOptionalMultilineText(value: unknown): string | undefined {

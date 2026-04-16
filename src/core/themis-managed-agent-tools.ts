@@ -4,6 +4,7 @@ export const THEMIS_MANAGED_AGENT_TOOL_NAMES = [
   "list_managed_agents",
   "get_managed_agent_detail",
   "create_managed_agent",
+  "update_managed_agent_card",
   "update_managed_agent_execution_boundary",
   "dispatch_work_item",
   "update_managed_agent_lifecycle",
@@ -18,12 +19,12 @@ export function buildThemisManagedAgentPromptSection(request: TaskRequest): stri
 
   return [
     "Themis managed agent tools are available in this session.",
-    "Use these tools when the user asks you to create digital employees, inspect managed agents, update execution boundaries, dispatch work, or pause, resume, and archive managed agents.",
+    "Use these tools when the user asks you to create digital employees, inspect managed agents, update employee dossiers, update execution boundaries, dispatch work, or pause, resume, and archive managed agents.",
     "These tools operate on Themis managed_agent entities, not the lighter actor memory model.",
-    "If the user intent is clear, you should execute create_managed_agent, update_managed_agent_execution_boundary, dispatch_work_item, and update_managed_agent_lifecycle directly without asking for an extra confirmation.",
+    "If the user intent is clear, you should execute create_managed_agent, update_managed_agent_card, update_managed_agent_execution_boundary, dispatch_work_item, and update_managed_agent_lifecycle directly without asking for an extra confirmation.",
     "Ask one concise follow-up question only when a required field is actually missing or ambiguous, such as which managed agent to target or what concrete goal should be dispatched.",
     "Use list_managed_agents to inspect the current managed workforce.",
-    "Use get_managed_agent_detail before changing an existing managed agent when you need to inspect its current workspace or runtime boundary.",
+    "Use get_managed_agent_detail before changing an existing managed agent when you need to inspect its current dossier, workspace, or runtime boundary.",
     "After changing a managed agent or dispatching work, confirm the exact agent and boundary or work item you used.",
     `Current managed-agent context: sourceChannel=${request.sourceChannel}, channelUserId=${request.user.userId}, displayName=${displayName}, sessionId=${sessionId}, channelSessionKey=${channelSessionKey}.`,
   ].join("\n");

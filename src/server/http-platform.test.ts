@@ -270,11 +270,13 @@ test("POST /api/platform/* 会暴露控制面最小主链", async () => {
 
     assert.equal(detailResponse.status, 200);
     const detailPayload = await detailResponse.json() as {
-      agent?: { agentId?: string };
+      agent?: { agentId?: string; agentCard?: { title?: string; responsibilitySummary?: string } };
       workspacePolicy?: { ownerAgentId?: string };
       runtimeProfile?: { ownerAgentId?: string };
     };
     assert.equal(detailPayload.agent?.agentId, createPayload.agent?.agentId);
+    assert.equal(detailPayload.agent?.agentCard?.title, "平台工程");
+    assert.equal(detailPayload.agent?.agentCard?.responsibilitySummary, "负责验证 platform API 原型。");
     assert.equal(detailPayload.workspacePolicy?.ownerAgentId, createPayload.agent?.agentId);
     assert.equal(detailPayload.runtimeProfile?.ownerAgentId, createPayload.agent?.agentId);
 
@@ -638,6 +640,34 @@ test("POST /api/platform/agents 写治理接口会暴露执行边界、spawn pol
     assert.equal(boundaryPayload.runtimeProfile?.approvalPolicy, "on-request");
     assert.equal(boundaryPayload.runtimeProfile?.webSearchMode, "disabled");
     assert.equal(boundaryPayload.runtimeProfile?.networkAccessEnabled, false);
+
+    const cardResponse = await postJson(baseUrl, "/api/platform/agents/card/update", {
+      ownerPrincipalId,
+      agentId: agent.agentId,
+      card: {
+        domainTags: ["平台", "编排"],
+        skillTags: ["调度", "部署"],
+        allowedScopes: ["节点编排", "发布协同"],
+        currentFocus: "推进平台发布链路收口。",
+      },
+    }, authHeaders);
+    assert.equal(cardResponse.status, 200);
+    const cardPayload = await cardResponse.json() as {
+      agent?: {
+        agentId?: string;
+        agentCard?: {
+          domainTags?: string[];
+          skillTags?: string[];
+          allowedScopes?: string[];
+          currentFocus?: string;
+        };
+      };
+    };
+    assert.equal(cardPayload.agent?.agentId, agent.agentId);
+    assert.deepEqual(cardPayload.agent?.agentCard?.domainTags, ["平台", "编排"]);
+    assert.deepEqual(cardPayload.agent?.agentCard?.skillTags, ["调度", "部署"]);
+    assert.deepEqual(cardPayload.agent?.agentCard?.allowedScopes, ["节点编排", "发布协同"]);
+    assert.equal(cardPayload.agent?.agentCard?.currentFocus, "推进平台发布链路收口。");
 
     const spawnPolicyResponse = await postJson(baseUrl, "/api/platform/agents/spawn-policy/update", {
       ownerPrincipalId,

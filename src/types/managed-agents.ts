@@ -57,6 +57,47 @@ export const MANAGED_AGENT_IDLE_RECOVERY_ACTIONS = ["pause", "archive"] as const
 
 export type ManagedAgentIdleRecoveryAction = (typeof MANAGED_AGENT_IDLE_RECOVERY_ACTIONS)[number];
 
+export interface ManagedAgentCardReportLine {
+  supervisorPrincipalId?: string;
+  supervisorAgentId?: string;
+  supervisorDisplayName?: string;
+}
+
+export interface ManagedAgentCard {
+  employeeCode: string;
+  title: string;
+  reportLine?: ManagedAgentCardReportLine;
+  domainTags: string[];
+  skillTags: string[];
+  responsibilitySummary: string;
+  allowedScopes: string[];
+  forbiddenScopes: string[];
+  workStyle?: string;
+  collaborationNotes?: string;
+  representativeProjects: string[];
+  currentFocus?: string;
+  reviewSummary?: string;
+  lastReviewedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ManagedAgentCardInput {
+  employeeCode?: string;
+  title?: string;
+  domainTags?: string[];
+  skillTags?: string[];
+  responsibilitySummary?: string;
+  allowedScopes?: string[];
+  forbiddenScopes?: string[];
+  workStyle?: string;
+  collaborationNotes?: string;
+  representativeProjects?: string[];
+  currentFocus?: string;
+  reviewSummary?: string;
+  lastReviewedAt?: string | null;
+}
+
 export interface ManagedAgentBootstrapProfile {
   mode: typeof MANAGED_AGENT_BOOTSTRAP_MODE_AUTO_SPAWN;
   state: ManagedAgentBootstrapState;
@@ -257,6 +298,7 @@ export interface StoredManagedAgentRecord {
   exposurePolicy: ManagedAgentExposurePolicy;
   defaultWorkspacePolicyId?: string;
   defaultRuntimeProfileId?: string;
+  agentCard?: ManagedAgentCard;
   bootstrapProfile?: ManagedAgentBootstrapProfile;
   bootstrappedAt?: string;
   createdAt: string;

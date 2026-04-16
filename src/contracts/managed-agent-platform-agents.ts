@@ -23,6 +23,7 @@ import type {
   ManagedAgentSpawnSuggestionDecisionInput,
   ManagedAgentSpawnSuggestionDecisionResult,
   RestoreManagedAgentSpawnSuggestionInput,
+  UpdateManagedAgentCardInput,
   UpdateManagedAgentExecutionBoundaryInput,
   UpdateManagedAgentSpawnPolicyInput,
 } from "../core/managed-agents-service.js";
@@ -52,6 +53,14 @@ export interface ManagedAgentPlatformAgentExecutionBoundaryUpdatePayload extends
     workspacePolicy?: ManagedAgentPlatformAgentExecutionBoundaryUpdateInput["workspacePolicy"];
     runtimeProfile?: ManagedAgentPlatformAgentExecutionBoundaryUpdateInput["runtimeProfile"];
   };
+}
+
+export type ManagedAgentPlatformAgentCardUpdateInput =
+  Omit<UpdateManagedAgentCardInput, "ownerPrincipalId" | "now">;
+
+export interface ManagedAgentPlatformAgentCardUpdatePayload extends ManagedAgentPlatformOwnerPayload {
+  agentId: string;
+  card: ManagedAgentPlatformAgentCardUpdateInput["card"];
 }
 
 export type ManagedAgentPlatformAgentSpawnPolicyUpdateInput =
@@ -109,6 +118,7 @@ export interface ManagedAgentPlatformCollaborationDashboardPayload
 export type ManagedAgentPlatformAgentListResult = ManagedAgentListView;
 export type ManagedAgentPlatformAgentCreateResult = CreateManagedAgentResult;
 export type ManagedAgentPlatformAgentExecutionBoundaryUpdateResult = ManagedAgentExecutionBoundaryView;
+export type ManagedAgentPlatformAgentCardUpdateResult = ManagedAgentPlatformAgentDetailResult;
 export interface ManagedAgentPlatformAgentSpawnPolicyUpdateResult {
   policy: StoredAgentSpawnPolicyRecord;
 }

@@ -82,6 +82,7 @@ import type {
   AgentMessageType,
   AgentSpawnSuggestionState,
   ApprovalPolicy,
+  ManagedAgentCard,
   ManagedAgentBootstrapProfile,
   ActorRuntimeMemoryKind,
   ActorRuntimeMemoryStatus,
@@ -727,6 +728,7 @@ interface ManagedAgentRow {
   exposure_policy: string;
   default_workspace_policy_id: string | null;
   default_runtime_profile_id: string | null;
+  agent_card_json: string | null;
   bootstrap_profile_json: string | null;
   bootstrapped_at: string | null;
   created_at: string;
@@ -2385,6 +2387,7 @@ export class SqliteCodexSessionRegistry {
           exposure_policy,
           default_workspace_policy_id,
           default_runtime_profile_id,
+          agent_card_json,
           bootstrap_profile_json,
           bootstrapped_at,
           created_at,
@@ -2424,6 +2427,7 @@ export class SqliteCodexSessionRegistry {
           exposure_policy,
           default_workspace_policy_id,
           default_runtime_profile_id,
+          agent_card_json,
           bootstrap_profile_json,
           bootstrapped_at,
           created_at,
@@ -2463,6 +2467,7 @@ export class SqliteCodexSessionRegistry {
             exposure_policy,
             default_workspace_policy_id,
             default_runtime_profile_id,
+            agent_card_json,
             bootstrap_profile_json,
             bootstrapped_at,
             created_at,
@@ -2503,6 +2508,7 @@ export class SqliteCodexSessionRegistry {
             agent.exposure_policy,
             agent.default_workspace_policy_id,
             agent.default_runtime_profile_id,
+            agent.agent_card_json,
             agent.bootstrap_profile_json,
             agent.bootstrapped_at,
             agent.created_at,
@@ -2535,6 +2541,7 @@ export class SqliteCodexSessionRegistry {
     const exposurePolicy = normalizeText(record.exposurePolicy);
     const defaultWorkspacePolicyId = normalizeText(record.defaultWorkspacePolicyId);
     const defaultRuntimeProfileId = normalizeText(record.defaultRuntimeProfileId);
+    const agentCard = normalizeManagedAgentCard(record.agentCard);
     const bootstrapProfile = normalizeManagedAgentBootstrapProfile(record.bootstrapProfile);
     const bootstrappedAt = normalizeText(record.bootstrappedAt);
 
@@ -2592,6 +2599,7 @@ export class SqliteCodexSessionRegistry {
             exposure_policy,
             default_workspace_policy_id,
             default_runtime_profile_id,
+            agent_card_json,
             bootstrap_profile_json,
             bootstrapped_at,
             created_at,
@@ -2612,6 +2620,7 @@ export class SqliteCodexSessionRegistry {
             @exposure_policy,
             @default_workspace_policy_id,
             @default_runtime_profile_id,
+            @agent_card_json,
             @bootstrap_profile_json,
             @bootstrapped_at,
             @created_at,
@@ -2629,6 +2638,7 @@ export class SqliteCodexSessionRegistry {
             exposure_policy = excluded.exposure_policy,
             default_workspace_policy_id = excluded.default_workspace_policy_id,
             default_runtime_profile_id = excluded.default_runtime_profile_id,
+            agent_card_json = excluded.agent_card_json,
             bootstrap_profile_json = excluded.bootstrap_profile_json,
             bootstrapped_at = excluded.bootstrapped_at,
             updated_at = excluded.updated_at
@@ -2651,6 +2661,7 @@ export class SqliteCodexSessionRegistry {
         exposure_policy: exposurePolicy,
         default_workspace_policy_id: defaultWorkspacePolicyId ?? null,
         default_runtime_profile_id: defaultRuntimeProfileId ?? null,
+        agent_card_json: agentCard ? JSON.stringify(agentCard) : null,
         bootstrap_profile_json: bootstrapProfile ? JSON.stringify(bootstrapProfile) : null,
         bootstrapped_at: bootstrappedAt ?? null,
         created_at: record.createdAt,
@@ -10350,6 +10361,7 @@ export class SqliteCodexSessionRegistry {
         exposure_policy TEXT NOT NULL,
         default_workspace_policy_id TEXT,
         default_runtime_profile_id TEXT,
+        agent_card_json TEXT,
         bootstrap_profile_json TEXT,
         bootstrapped_at TEXT,
         created_at TEXT NOT NULL,
@@ -11183,6 +11195,13 @@ export class SqliteCodexSessionRegistry {
       `);
     }
 
+    if (!managedAgentColumnNames.has("agent_card_json")) {
+      database.exec(`
+        ALTER TABLE themis_managed_agents
+        ADD COLUMN agent_card_json TEXT;
+      `);
+    }
+
     const authAccountColumns = database
       .prepare(`PRAGMA table_info(themis_auth_accounts)`)
       .all() as Array<{ name: string }>;
@@ -11668,6 +11687,9 @@ function mapAgentSpawnSuggestionStateRow(
 }
 
 function mapManagedAgentRow(row: ManagedAgentRow): StoredManagedAgentRecord {
+  const agentCard = row.agent_card_json
+    ? normalizeManagedAgentCard(safeParseJson(row.agent_card_json))
+    : undefined;
   const bootstrapProfile = row.bootstrap_profile_json
     ? normalizeManagedAgentBootstrapProfile(safeParseJson(row.bootstrap_profile_json))
     : undefined;
@@ -11688,6 +11710,7 @@ function mapManagedAgentRow(row: ManagedAgentRow): StoredManagedAgentRecord {
     exposurePolicy: row.exposure_policy as ManagedAgentExposurePolicy,
     ...(row.default_workspace_policy_id ? { defaultWorkspacePolicyId: row.default_workspace_policy_id } : {}),
     ...(row.default_runtime_profile_id ? { defaultRuntimeProfileId: row.default_runtime_profile_id } : {}),
+    ...(agentCard ? { agentCard } : {}),
     ...(bootstrapProfile ? { bootstrapProfile } : {}),
     ...(row.bootstrapped_at ? { bootstrappedAt: row.bootstrapped_at } : {}),
     createdAt: row.created_at,
@@ -12914,6 +12937,14 @@ function normalizeManagedAgentBootstrapProfile(value: unknown): ManagedAgentBoot
   }
 
   return value as ManagedAgentBootstrapProfile;
+}
+
+function normalizeManagedAgentCard(value: unknown): ManagedAgentCard | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+
+  return value as ManagedAgentCard;
 }
 
 function normalizeManagedAgentWorkspacePolicySnapshot(

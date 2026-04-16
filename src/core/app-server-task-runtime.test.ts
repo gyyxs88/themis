@@ -1479,7 +1479,7 @@ test("AppServerTaskRuntime 会在 prompt 里明确注入员工治理工具使用
 
     assert.equal(state.turns.length, 1);
     assert.match(state.turns[0]?.prompt ?? "", /Themis managed agent tools are available in this session/);
-    assert.match(state.turns[0]?.prompt ?? "", /create digital employees, inspect managed agents, update execution boundaries, dispatch work/);
+    assert.match(state.turns[0]?.prompt ?? "", /create digital employees, inspect managed agents, update employee dossiers, update execution boundaries, dispatch work/);
     assert.match(state.turns[0]?.prompt ?? "", /without asking for an extra confirmation/);
     assert.match(state.turns[0]?.prompt ?? "", /sourceChannel=web/);
     assert.match(state.turns[0]?.prompt ?? "", /channelUserId=browser-user-managed-agent-1/);

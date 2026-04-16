@@ -3,6 +3,7 @@ import { buildPlatformServiceOwnerMismatchErrorResponse } from "../contracts/man
 import type { ManagedAgentControlPlaneFacadeLike } from "../core/managed-agent-control-plane-facade.js";
 import type { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
 import type {
+  ManagedAgentPlatformAgentCardUpdatePayload,
   ManagedAgentPlatformAgentCreatePayload,
   ManagedAgentPlatformAgentDetailPayload,
   ManagedAgentPlatformAgentExecutionBoundaryUpdatePayload,
@@ -212,6 +213,38 @@ export async function handlePlatformAgentExecutionBoundaryUpdate(
       agent: result.agent,
       workspacePolicy: result.workspacePolicy,
       runtimeProfile: result.runtimeProfile,
+    });
+  } catch (error) {
+    writePlatformError(response, error);
+  }
+}
+
+export async function handlePlatformAgentCardUpdate(
+  request: IncomingMessage,
+  response: ServerResponse,
+  facade: ManagedAgentControlPlaneFacade,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePlatformAgentCardUpdatePayload);
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const detail = await facade.updateManagedAgentCard({
+      ownerPrincipalId: payload.ownerPrincipalId,
+      agentId: payload.agentId,
+      card: payload.card,
+    });
+
+    writeJson(response, 200, {
+      ok: true,
+      organization: detail.organization,
+      principal: detail.principal,
+      agent: detail.agent,
+      workspacePolicy: detail.workspacePolicy,
+      runtimeProfile: detail.runtimeProfile,
+      authAccounts: detail.authAccounts,
+      thirdPartyProviders: detail.thirdPartyProviders,
     });
   } catch (error) {
     writePlatformError(response, error);
@@ -1405,6 +1438,95 @@ function normalizePlatformAgentExecutionBoundaryUpdatePayload(
   };
 }
 
+function normalizePlatformAgentCardUpdatePayload(
+  value: unknown,
+): ManagedAgentPlatformAgentCardUpdatePayload {
+  if (!isRecord(value) || !isRecord(value.card)) {
+    throw new Error("Request body.card must be an object.");
+  }
+
+  const card: ManagedAgentPlatformAgentCardUpdatePayload["card"] = {};
+
+  if (hasOwn(value.card, "employeeCode")) {
+    card.employeeCode = readRequiredString(value.card.employeeCode, "card.employeeCode");
+  }
+
+  if (hasOwn(value.card, "title")) {
+    card.title = readRequiredString(value.card.title, "card.title");
+  }
+
+  if (hasOwn(value.card, "domainTags")) {
+    if (!Array.isArray(value.card.domainTags)) {
+      throw new Error("card.domainTags must be an array.");
+    }
+    card.domainTags = readStringArray(value.card.domainTags);
+  }
+
+  if (hasOwn(value.card, "skillTags")) {
+    if (!Array.isArray(value.card.skillTags)) {
+      throw new Error("card.skillTags must be an array.");
+    }
+    card.skillTags = readStringArray(value.card.skillTags);
+  }
+
+  if (hasOwn(value.card, "responsibilitySummary")) {
+    card.responsibilitySummary = readRequiredString(value.card.responsibilitySummary, "card.responsibilitySummary");
+  }
+
+  if (hasOwn(value.card, "allowedScopes")) {
+    if (!Array.isArray(value.card.allowedScopes)) {
+      throw new Error("card.allowedScopes must be an array.");
+    }
+    card.allowedScopes = readStringArray(value.card.allowedScopes);
+  }
+
+  if (hasOwn(value.card, "forbiddenScopes")) {
+    if (!Array.isArray(value.card.forbiddenScopes)) {
+      throw new Error("card.forbiddenScopes must be an array.");
+    }
+    card.forbiddenScopes = readStringArray(value.card.forbiddenScopes);
+  }
+
+  if (hasOwn(value.card, "workStyle")) {
+    setOptionalRecordField(card, "workStyle", readOptionalString(value.card.workStyle));
+  }
+
+  if (hasOwn(value.card, "collaborationNotes")) {
+    setOptionalRecordField(card, "collaborationNotes", readOptionalString(value.card.collaborationNotes));
+  }
+
+  if (hasOwn(value.card, "representativeProjects")) {
+    if (!Array.isArray(value.card.representativeProjects)) {
+      throw new Error("card.representativeProjects must be an array.");
+    }
+    card.representativeProjects = readStringArray(value.card.representativeProjects);
+  }
+
+  if (hasOwn(value.card, "currentFocus")) {
+    setOptionalRecordField(card, "currentFocus", readOptionalString(value.card.currentFocus));
+  }
+
+  if (hasOwn(value.card, "reviewSummary")) {
+    setOptionalRecordField(card, "reviewSummary", readOptionalString(value.card.reviewSummary));
+  }
+
+  if (hasOwn(value.card, "lastReviewedAt")) {
+    setOptionalRecordField(
+      card,
+      "lastReviewedAt",
+      value.card.lastReviewedAt === null
+        ? null
+        : readOptionalString(value.card.lastReviewedAt),
+    );
+  }
+
+  return {
+    ...normalizePlatformOwnerPayload(value),
+    agentId: readRequiredString(value.agentId, "agentId"),
+    card,
+  };
+}
+
 function normalizePlatformAgentSpawnPolicyUpdatePayload(value: unknown): ManagedAgentPlatformAgentSpawnPolicyUpdatePayload {
   if (!isRecord(value) || !isRecord(value.policy)) {
     throw new Error("Request body.policy must be an object.");
@@ -2199,6 +2321,10 @@ function readStringArray(values: unknown[]): string[] {
 
 function hasOwn(value: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function setOptionalRecordField(target: object, key: string, value: unknown): void {
+  (target as Record<string, unknown>)[key] = value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

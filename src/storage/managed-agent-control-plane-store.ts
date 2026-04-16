@@ -26,6 +26,7 @@ export type ManagedAgentsStore = Pick<SqliteCodexSessionRegistry,
   | "getAgentWorkspacePolicyByOwnerAgent"
   | "getAuthAccount"
   | "getManagedAgent"
+  | "getManagedAgentByPrincipal"
   | "getProjectWorkspaceBinding"
   | "getOrganization"
   | "getPrincipal"
@@ -68,6 +69,7 @@ export type ManagedAgentsSharedStore = Pick<ManagedAgentsStore,
   | "getAgentWorkspacePolicy"
   | "getAgentWorkspacePolicyByOwnerAgent"
   | "getManagedAgent"
+  | "getManagedAgentByPrincipal"
   | "getProjectWorkspaceBinding"
   | "getOrganization"
   | "getPrincipal"
@@ -330,6 +332,7 @@ export function createSplitManagedAgentsStore(
     getAgentWorkspacePolicyByOwnerAgent: sharedStore.getAgentWorkspacePolicyByOwnerAgent.bind(sharedStore),
     getAuthAccount: localManagedAgentsStore.getAuthAccount.bind(localManagedAgentsStore),
     getManagedAgent: sharedStore.getManagedAgent.bind(sharedStore),
+    getManagedAgentByPrincipal: sharedStore.getManagedAgentByPrincipal.bind(sharedStore),
     getProjectWorkspaceBinding: sharedStore.getProjectWorkspaceBinding.bind(sharedStore),
     getOrganization: sharedStore.getOrganization.bind(sharedStore),
     getPrincipal: sharedStore.getPrincipal.bind(sharedStore),

@@ -75,6 +75,7 @@ test("Themis MCP server 会暴露定时任务和员工治理工具列表", async
         "list_managed_agents",
         "get_managed_agent_detail",
         "create_managed_agent",
+        "update_managed_agent_card",
         "update_managed_agent_execution_boundary",
         "dispatch_work_item",
         "update_managed_agent_lifecycle",
@@ -282,7 +283,31 @@ test("Themis MCP server 支持员工治理工具闭环", async () => {
     const detailPayload = JSON.parse(detailResponse);
     assert.equal(detailPayload.result?.isError, false);
     assert.equal(detailPayload.result?.structuredContent?.agent?.agentId, agentId);
+    assert.equal(detailPayload.result?.structuredContent?.agent?.agentCard?.title, "前端");
     assert.equal(detailPayload.result?.structuredContent?.workspacePolicy?.workspacePath, workspace);
+
+    const cardResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 10.5,
+      method: "tools/call",
+      params: {
+        name: "update_managed_agent_card",
+        arguments: {
+          agentId,
+          card: {
+            domainTags: ["官网", "品牌"],
+            skillTags: ["React", "信息架构"],
+            currentFocus: "推进官网首页信息架构。",
+          },
+        },
+      },
+    }));
+
+    assert.ok(cardResponse);
+    const cardPayload = JSON.parse(cardResponse);
+    assert.equal(cardPayload.result?.isError, false);
+    assert.deepEqual(cardPayload.result?.structuredContent?.agent?.agentCard?.domainTags, ["官网", "品牌"]);
+    assert.equal(cardPayload.result?.structuredContent?.agent?.agentCard?.currentFocus, "推进官网首页信息架构。");
 
     const agentWorkspace = resolve(workspace, "workspace/frontend");
     mkdirSync(agentWorkspace, { recursive: true });

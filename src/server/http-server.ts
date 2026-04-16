@@ -75,6 +75,7 @@ import {
   handlePluginsUninstall,
 } from "./http-plugins.js";
 import {
+  handlePlatformAgentCardUpdate,
   handlePlatformAgentCreate,
   handlePlatformAgentDetail,
   handlePlatformAgentExecutionBoundaryUpdate,
@@ -362,6 +363,10 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/platform/agents/execution-boundary/update") {
         return handlePlatformAgentExecutionBoundaryUpdate(request, response, platformControlPlaneFacade);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/platform/agents/card/update") {
+        return handlePlatformAgentCardUpdate(request, response, platformControlPlaneFacade);
       }
 
       if (request.method === "POST" && url.pathname === "/api/platform/projects/workspace-binding/list") {

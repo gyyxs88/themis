@@ -3,6 +3,8 @@ import type { ManagedAgentsStore, StoredAuthAccountRecord, StoredPrincipalRecord
 import type {
   ApprovalPolicy,
   AgentAuditLogEventType,
+  ManagedAgentCard,
+  ManagedAgentCardInput,
   ManagedAgentBootstrapProfile,
   ManagedAgentIdleRecoveryAction,
   ManagedAgentAutonomyLevel,
@@ -137,6 +139,13 @@ export interface UpdateManagedAgentExecutionBoundaryInput {
   agentId: string;
   workspacePolicy?: ManagedAgentExecutionBoundaryWorkspacePolicyInput;
   runtimeProfile?: ManagedAgentExecutionBoundaryRuntimeProfileInput;
+  now?: string;
+}
+
+export interface UpdateManagedAgentCardInput {
+  ownerPrincipalId: string;
+  agentId: string;
+  card: ManagedAgentCardInput;
   now?: string;
 }
 
@@ -497,7 +506,7 @@ export class ManagedAgentsService {
       createdAt: now,
       updatedAt: now,
     };
-    const agent: StoredManagedAgentRecord = {
+    const agentBase: StoredManagedAgentRecord = {
       agentId,
       principalId,
       organizationId: organization.organizationId,
@@ -513,6 +522,12 @@ export class ManagedAgentsService {
       exposurePolicy: input.exposurePolicy ?? "gateway_only",
       createdAt: now,
       updatedAt: now,
+    };
+    const agent: StoredManagedAgentRecord = {
+      ...agentBase,
+      agentCard: this.buildManagedAgentCard(agentBase, {
+        supervisorAgent,
+      }),
     };
 
     this.registry.savePrincipal(principal);
@@ -1023,6 +1038,32 @@ export class ManagedAgentsService {
       workspacePolicy,
       runtimeProfile,
     };
+  }
+
+  updateManagedAgentCard(input: UpdateManagedAgentCardInput): ManagedAgentDetailView {
+    const now = normalizeNow(input.now);
+
+    if (Object.keys(input.card).length === 0) {
+      throw new Error("At least one agent card field is required.");
+    }
+
+    const agent = this.ensureManagedAgentCard(this.requireOwnedAgent(input.ownerPrincipalId, input.agentId));
+    const nextCard = applyManagedAgentCardPatch(agent.agentCard, input.card, now);
+    const updatedAgent: StoredManagedAgentRecord = {
+      ...agent,
+      agentCard: nextCard,
+      updatedAt: now,
+    };
+
+    this.registry.saveManagedAgent(updatedAgent);
+
+    const detail = this.getManagedAgentDetailView(input.ownerPrincipalId, updatedAgent.agentId);
+
+    if (!detail) {
+      throw new Error("Managed agent does not exist.");
+    }
+
+    return detail;
   }
 
   listProjectWorkspaceBindings(
@@ -1704,19 +1745,91 @@ export class ManagedAgentsService {
       .some((organization) => organization.organizationId === organizationId);
   }
 
+  private ensureManagedAgentCard(agent: StoredManagedAgentRecord): StoredManagedAgentRecord {
+    const nextCard = this.buildManagedAgentCard(agent);
+
+    if (stableJson(agent.agentCard) === stableJson(nextCard)) {
+      return agent.agentCard ? agent : {
+        ...agent,
+        agentCard: nextCard,
+      };
+    }
+
+    const updatedAgent: StoredManagedAgentRecord = {
+      ...agent,
+      agentCard: nextCard,
+    };
+    this.registry.saveManagedAgent(updatedAgent);
+    return this.registry.getManagedAgent(updatedAgent.agentId) ?? updatedAgent;
+  }
+
+  private buildManagedAgentCard(
+    agent: StoredManagedAgentRecord,
+    options: { supervisorAgent?: StoredManagedAgentRecord | null } = {},
+  ): ManagedAgentCard {
+    const currentCard = agent.agentCard;
+    const supervisorPrincipalId = normalizeOptionalText(agent.supervisorPrincipalId) ?? undefined;
+    const supervisorPrincipal = supervisorPrincipalId
+      ? this.registry.getPrincipal(supervisorPrincipalId)
+      : null;
+    const supervisorAgent = options.supervisorAgent === undefined
+      ? (supervisorPrincipalId ? this.registry.getManagedAgentByPrincipal(supervisorPrincipalId) : null)
+      : options.supervisorAgent;
+    const currentReportLine = currentCard?.reportLine;
+    const supervisorDisplayName = normalizeOptionalText(currentReportLine?.supervisorDisplayName)
+      ?? normalizeOptionalText(supervisorPrincipal?.displayName);
+    const reportLine = supervisorPrincipalId
+      ? {
+        supervisorPrincipalId,
+        ...(supervisorAgent ? { supervisorAgentId: supervisorAgent.agentId } : {}),
+        ...(supervisorDisplayName ? { supervisorDisplayName } : {}),
+      }
+      : undefined;
+    const allowedScopes = normalizeStringList(currentCard?.allowedScopes);
+    const expectedScope = normalizeOptionalText(agent.bootstrapProfile?.expectedScope);
+
+    return {
+      employeeCode: normalizeOptionalText(currentCard?.employeeCode) ?? generateManagedAgentEmployeeCode(agent.agentId),
+      title: normalizeOptionalText(currentCard?.title) ?? agent.departmentRole,
+      ...(reportLine ? { reportLine } : {}),
+      domainTags: normalizeStringList(currentCard?.domainTags),
+      skillTags: normalizeStringList(currentCard?.skillTags),
+      responsibilitySummary: normalizeOptionalText(currentCard?.responsibilitySummary) ?? agent.mission,
+      allowedScopes: allowedScopes.length > 0
+        ? allowedScopes
+        : expectedScope
+          ? [expectedScope]
+          : [],
+      forbiddenScopes: normalizeStringList(currentCard?.forbiddenScopes),
+      ...(normalizeOptionalText(currentCard?.workStyle) ? { workStyle: normalizeOptionalText(currentCard?.workStyle) as string } : {}),
+      ...(normalizeOptionalText(currentCard?.collaborationNotes)
+        ? { collaborationNotes: normalizeOptionalText(currentCard?.collaborationNotes) as string }
+        : {}),
+      representativeProjects: normalizeStringList(currentCard?.representativeProjects),
+      ...(normalizeOptionalText(currentCard?.currentFocus) ? { currentFocus: normalizeOptionalText(currentCard?.currentFocus) as string } : {}),
+      ...(normalizeOptionalText(currentCard?.reviewSummary) ? { reviewSummary: normalizeOptionalText(currentCard?.reviewSummary) as string } : {}),
+      ...(normalizeOptionalText(currentCard?.lastReviewedAt)
+        ? { lastReviewedAt: normalizeOptionalText(currentCard?.lastReviewedAt) as string }
+        : {}),
+      createdAt: normalizeOptionalText(currentCard?.createdAt) ?? agent.createdAt,
+      updatedAt: normalizeOptionalText(currentCard?.updatedAt) ?? agent.updatedAt,
+    };
+  }
+
   private ensureManagedAgentExecutionBoundary(
     agent: StoredManagedAgentRecord,
     now = new Date().toISOString(),
   ): ManagedAgentExecutionBoundaryView {
-    const workspacePolicy = this.resolveOrCreateAgentWorkspacePolicy(agent, now);
-    const runtimeProfile = this.resolveOrCreateAgentRuntimeProfile(agent, now);
+    const normalizedAgent = this.ensureManagedAgentCard(agent);
+    const workspacePolicy = this.resolveOrCreateAgentWorkspacePolicy(normalizedAgent, now);
+    const runtimeProfile = this.resolveOrCreateAgentRuntimeProfile(normalizedAgent, now);
 
     if (
-      agent.defaultWorkspacePolicyId !== workspacePolicy.policyId
-      || agent.defaultRuntimeProfileId !== runtimeProfile.profileId
+      normalizedAgent.defaultWorkspacePolicyId !== workspacePolicy.policyId
+      || normalizedAgent.defaultRuntimeProfileId !== runtimeProfile.profileId
     ) {
       const updatedAgent: StoredManagedAgentRecord = {
-        ...agent,
+        ...normalizedAgent,
         defaultWorkspacePolicyId: workspacePolicy.policyId,
         defaultRuntimeProfileId: runtimeProfile.profileId,
         updatedAt: now,
@@ -1731,7 +1844,7 @@ export class ManagedAgentsService {
     }
 
     return {
-      agent,
+      agent: normalizedAgent,
       workspacePolicy,
       runtimeProfile,
     };
@@ -2017,6 +2130,16 @@ function generateManagedAgentSlug(displayName: string, existingSlugs: string[]):
   return `${base}-${counter}`;
 }
 
+function generateManagedAgentEmployeeCode(agentId: string): string {
+  const suffix = agentId
+    .split("-")
+    .at(-1)
+    ?.replace(/[^a-zA-Z0-9]/g, "")
+    .toUpperCase();
+
+  return `EMP-${suffix || "AGENT"}`;
+}
+
 function slugify(value: string): string {
   const lower = value.trim().toLowerCase();
   const ascii = lower
@@ -2031,6 +2154,119 @@ function createId(prefix: string): string {
 
 function dedupeStrings(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+function normalizeStringList(value?: string[] | null): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return dedupeStrings(
+    value
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+  );
+}
+
+function applyManagedAgentCardPatch(
+  current: ManagedAgentCard | undefined,
+  patch: ManagedAgentCardInput,
+  now: string,
+): ManagedAgentCard {
+  const base = current;
+
+  if (!base) {
+    throw new Error("Managed agent card does not exist.");
+  }
+
+  const next: ManagedAgentCard = {
+    ...base,
+    employeeCode: hasOwn(patch, "employeeCode")
+      ? normalizeRequiredText(patch.employeeCode ?? null, "employeeCode is required.")
+      : base.employeeCode,
+    title: hasOwn(patch, "title")
+      ? normalizeRequiredText(patch.title ?? null, "title is required.")
+      : base.title,
+    domainTags: hasOwn(patch, "domainTags") ? normalizeStringList(patch.domainTags) : base.domainTags,
+    skillTags: hasOwn(patch, "skillTags") ? normalizeStringList(patch.skillTags) : base.skillTags,
+    responsibilitySummary: hasOwn(patch, "responsibilitySummary")
+      ? normalizeRequiredText(patch.responsibilitySummary ?? null, "responsibilitySummary is required.")
+      : base.responsibilitySummary,
+    allowedScopes: hasOwn(patch, "allowedScopes") ? normalizeStringList(patch.allowedScopes) : base.allowedScopes,
+    forbiddenScopes: hasOwn(patch, "forbiddenScopes") ? normalizeStringList(patch.forbiddenScopes) : base.forbiddenScopes,
+    representativeProjects: hasOwn(patch, "representativeProjects")
+      ? normalizeStringList(patch.representativeProjects)
+      : base.representativeProjects,
+    createdAt: base.createdAt,
+    updatedAt: now,
+    ...(base.reportLine ? { reportLine: base.reportLine } : {}),
+  };
+
+  if (hasOwn(patch, "workStyle")) {
+    const workStyle = normalizeOptionalText(patch.workStyle);
+    if (workStyle) {
+      next.workStyle = workStyle;
+    } else {
+      delete next.workStyle;
+    }
+  } else if (base.workStyle) {
+    next.workStyle = base.workStyle;
+  }
+
+  if (hasOwn(patch, "collaborationNotes")) {
+    const collaborationNotes = normalizeOptionalText(patch.collaborationNotes);
+    if (collaborationNotes) {
+      next.collaborationNotes = collaborationNotes;
+    } else {
+      delete next.collaborationNotes;
+    }
+  } else if (base.collaborationNotes) {
+    next.collaborationNotes = base.collaborationNotes;
+  }
+
+  if (hasOwn(patch, "currentFocus")) {
+    const currentFocus = normalizeOptionalText(patch.currentFocus);
+    if (currentFocus) {
+      next.currentFocus = currentFocus;
+    } else {
+      delete next.currentFocus;
+    }
+  } else if (base.currentFocus) {
+    next.currentFocus = base.currentFocus;
+  }
+
+  if (hasOwn(patch, "reviewSummary")) {
+    const reviewSummary = normalizeOptionalText(patch.reviewSummary);
+    if (reviewSummary) {
+      next.reviewSummary = reviewSummary;
+    } else {
+      delete next.reviewSummary;
+    }
+  } else if (base.reviewSummary) {
+    next.reviewSummary = base.reviewSummary;
+  }
+
+  if (hasOwn(patch, "lastReviewedAt")) {
+    const lastReviewedAt = normalizeOptionalText(patch.lastReviewedAt ?? null);
+    if (lastReviewedAt) {
+      next.lastReviewedAt = lastReviewedAt;
+    } else {
+      delete next.lastReviewedAt;
+    }
+  } else if (base.lastReviewedAt) {
+    next.lastReviewedAt = base.lastReviewedAt;
+  }
+
+  return next;
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(value ?? null);
+}
+
+function hasOwn<T extends object, K extends PropertyKey>(value: T, key: K): value is T & Record<K, unknown> {
+  return Object.prototype.hasOwnProperty.call(value, key);
 }
 
 function normalizeTaskAccessMode(value?: string | null): TaskAccessMode {

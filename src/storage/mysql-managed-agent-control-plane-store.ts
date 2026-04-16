@@ -20,6 +20,7 @@ import type {
   StoredAgentMessageRecord,
   StoredAgentSpawnPolicyRecord,
   StoredAgentSpawnSuggestionStateRecord,
+  ManagedAgentCard,
   ManagedAgentBootstrapProfile,
   ManagedAgentRuntimeProfileSnapshot,
   ManagedAgentWorkspacePolicySnapshot,
@@ -81,6 +82,7 @@ interface ManagedAgentRow extends RowDataPacket {
   exposure_policy: string;
   default_workspace_policy_id: string | null;
   default_runtime_profile_id: string | null;
+  agent_card_json: unknown | null;
   bootstrap_profile_json: unknown | null;
   bootstrapped_at: MySqlDateTimeValue | null;
   created_at: MySqlDateTimeValue;
@@ -331,6 +333,7 @@ const MYSQL_CONTROL_PLANE_SCHEMA_STATEMENTS = [
     exposure_policy VARCHAR(64) NOT NULL,
     default_workspace_policy_id VARCHAR(191) NULL,
     default_runtime_profile_id VARCHAR(191) NULL,
+    agent_card_json JSON NULL,
     bootstrap_profile_json JSON NULL,
     bootstrapped_at DATETIME(3) NULL,
     created_at DATETIME(3) NOT NULL,
@@ -577,6 +580,16 @@ export class MySqlManagedAgentControlPlaneStore {
         "ALTER TABLE themis_agent_work_items ADD COLUMN project_id VARCHAR(191) NULL AFTER target_agent_id",
       );
     }
+
+    const [agentCardColumns] = await this.pool.query<Array<RowDataPacket & { Field: string }>>(
+      "SHOW COLUMNS FROM themis_managed_agents LIKE 'agent_card_json'",
+    );
+
+    if (agentCardColumns.length === 0) {
+      await this.pool.query(
+        "ALTER TABLE themis_managed_agents ADD COLUMN agent_card_json JSON NULL AFTER default_runtime_profile_id",
+      );
+    }
   }
 
   async exportSharedSnapshot(): Promise<ManagedAgentControlPlaneSnapshot> {
@@ -808,9 +821,9 @@ export class MySqlManagedAgentControlPlaneStore {
       `INSERT INTO themis_managed_agents (
         agent_id, principal_id, organization_id, created_by_principal_id, supervisor_principal_id,
         display_name, slug, department_role, mission, status, autonomy_level, creation_mode,
-        exposure_policy, default_workspace_policy_id, default_runtime_profile_id, bootstrap_profile_json,
-        bootstrapped_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), ?, ?, ?)
+        exposure_policy, default_workspace_policy_id, default_runtime_profile_id, agent_card_json,
+        bootstrap_profile_json, bootstrapped_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON), ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         principal_id = VALUES(principal_id),
         organization_id = VALUES(organization_id),
@@ -826,6 +839,7 @@ export class MySqlManagedAgentControlPlaneStore {
         exposure_policy = VALUES(exposure_policy),
         default_workspace_policy_id = VALUES(default_workspace_policy_id),
         default_runtime_profile_id = VALUES(default_runtime_profile_id),
+        agent_card_json = VALUES(agent_card_json),
         bootstrap_profile_json = VALUES(bootstrap_profile_json),
         bootstrapped_at = VALUES(bootstrapped_at),
         updated_at = VALUES(updated_at)`,
@@ -845,6 +859,7 @@ export class MySqlManagedAgentControlPlaneStore {
         record.exposurePolicy,
         record.defaultWorkspacePolicyId ?? null,
         record.defaultRuntimeProfileId ?? null,
+        stringifyJson(record.agentCard),
         stringifyJson(record.bootstrapProfile),
         record.bootstrappedAt ? toMySqlDateTime(record.bootstrappedAt) : null,
         toMySqlDateTime(record.createdAt),
@@ -858,11 +873,26 @@ export class MySqlManagedAgentControlPlaneStore {
       `SELECT
          agent_id, principal_id, organization_id, created_by_principal_id, supervisor_principal_id,
          display_name, slug, department_role, mission, status, autonomy_level, creation_mode,
-         exposure_policy, default_workspace_policy_id, default_runtime_profile_id, bootstrap_profile_json,
+         exposure_policy, default_workspace_policy_id, default_runtime_profile_id, agent_card_json, bootstrap_profile_json,
          bootstrapped_at, created_at, updated_at
        FROM themis_managed_agents
        WHERE agent_id = ? LIMIT 1`,
       [agentId],
+    );
+    const row = rows[0];
+    return row ? mapManagedAgentRow(row) : null;
+  }
+
+  async getManagedAgentByPrincipal(principalId: string): Promise<StoredManagedAgentRecord | null> {
+    const [rows] = await this.pool.query<ManagedAgentRow[]>(
+      `SELECT
+         agent_id, principal_id, organization_id, created_by_principal_id, supervisor_principal_id,
+         display_name, slug, department_role, mission, status, autonomy_level, creation_mode,
+         exposure_policy, default_workspace_policy_id, default_runtime_profile_id, agent_card_json, bootstrap_profile_json,
+         bootstrapped_at, created_at, updated_at
+       FROM themis_managed_agents
+       WHERE principal_id = ? LIMIT 1`,
+      [principalId],
     );
     const row = rows[0];
     return row ? mapManagedAgentRow(row) : null;
@@ -873,7 +903,7 @@ export class MySqlManagedAgentControlPlaneStore {
       `SELECT
          agent_id, principal_id, organization_id, created_by_principal_id, supervisor_principal_id,
          display_name, slug, department_role, mission, status, autonomy_level, creation_mode,
-         exposure_policy, default_workspace_policy_id, default_runtime_profile_id, bootstrap_profile_json,
+         exposure_policy, default_workspace_policy_id, default_runtime_profile_id, agent_card_json, bootstrap_profile_json,
          bootstrapped_at, created_at, updated_at
        FROM themis_managed_agents
        WHERE organization_id = ?
@@ -889,7 +919,7 @@ export class MySqlManagedAgentControlPlaneStore {
          agent.agent_id, agent.principal_id, agent.organization_id, agent.created_by_principal_id,
          agent.supervisor_principal_id, agent.display_name, agent.slug, agent.department_role, agent.mission,
          agent.status, agent.autonomy_level, agent.creation_mode, agent.exposure_policy,
-         agent.default_workspace_policy_id, agent.default_runtime_profile_id, agent.bootstrap_profile_json,
+         agent.default_workspace_policy_id, agent.default_runtime_profile_id, agent.agent_card_json, agent.bootstrap_profile_json,
          agent.bootstrapped_at, agent.created_at, agent.updated_at
        FROM themis_managed_agents agent
        INNER JOIN themis_organizations organization
@@ -2033,6 +2063,7 @@ function mapOrganizationRow(row: OrganizationRow): StoredOrganizationRecord {
 }
 
 function mapManagedAgentRow(row: ManagedAgentRow): StoredManagedAgentRecord {
+  const agentCard = safeParseJson<ManagedAgentCard>(row.agent_card_json);
   const bootstrapProfile = safeParseJson<ManagedAgentBootstrapProfile>(row.bootstrap_profile_json);
   return {
     agentId: row.agent_id,
@@ -2050,6 +2081,7 @@ function mapManagedAgentRow(row: ManagedAgentRow): StoredManagedAgentRecord {
     exposurePolicy: row.exposure_policy as StoredManagedAgentRecord["exposurePolicy"],
     ...(row.default_workspace_policy_id ? { defaultWorkspacePolicyId: row.default_workspace_policy_id } : {}),
     ...(row.default_runtime_profile_id ? { defaultRuntimeProfileId: row.default_runtime_profile_id } : {}),
+    ...(agentCard ? { agentCard } : {}),
     ...(bootstrapProfile ? { bootstrapProfile } : {}),
     ...(row.bootstrapped_at ? { bootstrappedAt: fromMySqlDateTime(row.bootstrapped_at) } : {}),
     createdAt: fromMySqlDateTime(row.created_at),

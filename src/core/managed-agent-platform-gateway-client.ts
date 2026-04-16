@@ -24,6 +24,7 @@ import type {
   ManagedAgentSpawnSuggestionDecisionInput,
   ManagedAgentSpawnSuggestionDecisionResult,
   RestoreManagedAgentSpawnSuggestionInput,
+  UpdateManagedAgentCardInput,
   UpdateManagedAgentExecutionBoundaryInput,
   UpdateManagedAgentSpawnPolicyInput,
 } from "./managed-agents-service.js";
@@ -45,6 +46,8 @@ import type {
   ManagedAgentPlatformRunListResult,
 } from "../contracts/managed-agent-platform-collaboration.js";
 import type {
+  ManagedAgentPlatformAgentCardUpdatePayload,
+  ManagedAgentPlatformAgentCardUpdateResult,
   ManagedAgentPlatformAgentCreateInput,
   ManagedAgentPlatformAgentCreateResult,
   ManagedAgentPlatformAgentExecutionBoundaryUpdateInput,
@@ -110,6 +113,9 @@ import type {
 } from "../types/index.js";
 
 export type {
+  ManagedAgentPlatformAgentCardUpdateInput,
+  ManagedAgentPlatformAgentCardUpdatePayload,
+  ManagedAgentPlatformAgentCardUpdateResult,
   ManagedAgentPlatformAgentCreateInput,
   ManagedAgentPlatformAgentCreatePayload,
   ManagedAgentPlatformAgentCreateResult,
@@ -341,6 +347,29 @@ export class ManagedAgentPlatformGatewayClient {
         ...(input.supervisorAgentId ? { supervisorAgentId: input.supervisorAgentId } : {}),
       },
     });
+  }
+
+  async updateManagedAgentCard(
+    input: UpdateManagedAgentCardInput,
+  ): Promise<ManagedAgentPlatformGatewayDetailResult> {
+    const payload = await this.requestJson<ManagedAgentPlatformAgentCardUpdateResult>(
+      "/api/platform/agents/card/update",
+      {
+        ownerPrincipalId: this.ownerPrincipalId,
+        agentId: input.agentId,
+        card: input.card,
+      } satisfies ManagedAgentPlatformAgentCardUpdatePayload,
+    );
+
+    return {
+      organization: payload.organization ?? null,
+      principal: payload.principal ?? null,
+      agent: payload.agent,
+      workspacePolicy: payload.workspacePolicy ?? null,
+      runtimeProfile: payload.runtimeProfile ?? null,
+      authAccounts: Array.isArray(payload.authAccounts) ? payload.authAccounts : [],
+      thirdPartyProviders: Array.isArray(payload.thirdPartyProviders) ? payload.thirdPartyProviders : [],
+    };
   }
 
   async updateManagedAgentExecutionBoundary(

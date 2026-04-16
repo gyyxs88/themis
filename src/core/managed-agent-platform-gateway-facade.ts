@@ -22,10 +22,12 @@ import type {
   ApproveManagedAgentIdleRecoverySuggestionInput,
   ApproveManagedAgentSpawnSuggestionInput,
   CreateManagedAgentInput,
+  ManagedAgentDetailView,
   ManagedAgentExecutionBoundaryView,
   ManagedAgentOwnerView,
   ManagedAgentSpawnSuggestionDecisionInput,
   RestoreManagedAgentSpawnSuggestionInput,
+  UpdateManagedAgentCardInput,
   UpdateManagedAgentExecutionBoundaryInput,
   UpdateManagedAgentSpawnPolicyInput,
   UpsertProjectWorkspaceBindingInput,
@@ -95,6 +97,11 @@ class ManagedAgentPlatformGatewayFacade implements ManagedAgentControlPlaneFacad
   async getManagedAgentDetailView(ownerPrincipalId: string, agentId: string) {
     this.assertOwned(ownerPrincipalId);
     return await this.client.getManagedAgentDetail(agentId);
+  }
+
+  async updateManagedAgentCard(input: UpdateManagedAgentCardInput): Promise<ManagedAgentDetailView> {
+    this.assertOwned(input.ownerPrincipalId);
+    return await this.client.updateManagedAgentCard(input);
   }
 
   async updateManagedAgentExecutionBoundary(

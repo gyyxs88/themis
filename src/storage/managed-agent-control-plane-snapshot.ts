@@ -73,6 +73,7 @@ export const MANAGED_AGENT_CONTROL_PLANE_SNAPSHOT_TABLES: ManagedAgentControlPla
       "exposure_policy",
       "default_workspace_policy_id",
       "default_runtime_profile_id",
+      "agent_card_json",
       "bootstrap_profile_json",
       "bootstrapped_at",
       "created_at",
