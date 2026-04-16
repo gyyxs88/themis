@@ -1415,6 +1415,8 @@ function resolveServerRequestAction(serverRequest: AppServerReverseRequest): Res
       return resolveFileChangeApprovalAction(serverRequest);
     case "item/permissions/requestApproval":
       return resolvePermissionsApprovalAction(serverRequest);
+    case "item/tool/requestApproval":
+      return resolveToolApprovalAction(serverRequest);
     case "execCommandApproval":
       return resolveExecCommandApprovalAction(serverRequest);
     case "applyPatchApproval":
@@ -1422,6 +1424,9 @@ function resolveServerRequestAction(serverRequest: AppServerReverseRequest): Res
     case "item/tool/requestUserInput":
       return resolveUserInputAction(serverRequest);
     default:
+      if (isGenericApprovalRequestMethod(serverRequest.method)) {
+        return resolveGenericApprovalAction(serverRequest);
+      }
       return null;
   }
 }
@@ -1491,6 +1496,30 @@ function resolvePermissionsApprovalAction(serverRequest: AppServerReverseRequest
   }));
 }
 
+function resolveToolApprovalAction(serverRequest: AppServerReverseRequest): ResolvedServerRequestAction | null {
+  const params = asRecord(serverRequest.params);
+  const actionId = pickActionId(
+    params?.approvalId,
+    params?.callId,
+    params?.itemId,
+    serverRequest.id,
+  );
+
+  if (!actionId) {
+    return null;
+  }
+
+  const prompt = buildGenericApprovalPrompt({
+    label: "MCP 工具调用需要审批",
+    params,
+    actionId,
+  });
+
+  return createApprovalServerRequestAction(actionId, prompt, (submission) => ({
+    decision: mapCommandStyleDecision(submission.decision, serverRequest.method),
+  }));
+}
+
 function resolveExecCommandApprovalAction(serverRequest: AppServerReverseRequest): ResolvedServerRequestAction | null {
   const params = asRecord(serverRequest.params);
   const actionId = pickActionId(params?.approvalId, params?.callId, serverRequest.id);
@@ -1530,6 +1559,30 @@ function resolveApplyPatchApprovalAction(serverRequest: AppServerReverseRequest)
 
   return createApprovalServerRequestAction(actionId, prompt, (submission) => ({
     decision: mapReviewDecision(submission.decision),
+  }));
+}
+
+function resolveGenericApprovalAction(serverRequest: AppServerReverseRequest): ResolvedServerRequestAction | null {
+  const params = asRecord(serverRequest.params);
+  const actionId = pickActionId(
+    params?.approvalId,
+    params?.callId,
+    params?.itemId,
+    serverRequest.id,
+  );
+
+  if (!actionId) {
+    return null;
+  }
+
+  const prompt = buildGenericApprovalPrompt({
+    label: "操作需要审批",
+    params,
+    actionId,
+  });
+
+  return createApprovalServerRequestAction(actionId, prompt, (submission) => ({
+    decision: mapCommandStyleDecision(submission.decision, serverRequest.method),
   }));
 }
 
@@ -1597,6 +1650,30 @@ function createApprovalServerRequestAction(
     },
     buildResponse,
   };
+}
+
+function isGenericApprovalRequestMethod(method: string): boolean {
+  return method.endsWith("/requestApproval");
+}
+
+function buildGenericApprovalPrompt(input: {
+  label: string;
+  params: Record<string, unknown> | null | undefined;
+  actionId: string;
+}): string {
+  const detail = [
+    normalizeTextValue(input.params?.reason),
+    normalizeTextValue(input.params?.message),
+    normalizeTextValue(input.params?.description),
+    normalizeTextValue(input.params?.command),
+    normalizeTextValue(input.params?.toolName),
+    normalizeTextValue(input.params?.name),
+  ].find((value): value is string => Boolean(value));
+
+  return [
+    detail ? `${input.label}：${detail}` : `${input.label}。`,
+    `使用 /approve ${input.actionId} 或 /deny ${input.actionId}`,
+  ].join("\n");
 }
 
 function mapCommandStyleDecision(

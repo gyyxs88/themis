@@ -2564,6 +2564,113 @@ test("AppServerTaskRuntime 会把 approval reverse request 转成等待中的 ac
   }
 });
 
+test("AppServerTaskRuntime 会把 MCP 工具审批 reverse request 转成等待中的 action，并在提交后回包", async () => {
+  const actionBridge = new AppServerActionBridge();
+  const approvalResolved = createDeferred();
+  const { state, sessionFactory } = createSessionFactory({
+    startTurn: async (sessionState) => {
+      sessionState.serverRequestHandler?.({
+        id: "server-tool-approval-1",
+        method: "item/tool/requestApproval",
+        params: {
+          itemId: "item-tool-approval-1",
+          callId: "tool-call-1",
+          approvalId: "tool-approval-1",
+          toolName: "list_managed_agents",
+          reason: "Need approval before calling MCP tool.",
+        },
+      });
+      await approvalResolved.promise;
+      scheduleCompletedTurn(sessionState, "turn-app-tool-approval-1", {
+        threadId: "thread-app-tool-approval-1",
+      });
+      return { turnId: "turn-app-tool-approval-1" };
+    },
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+  (fixture.runtime as unknown as { actionBridge: AppServerActionBridge }).actionBridge = actionBridge;
+  let resolveActionRequired!: (value: {
+    actionId?: string;
+    actionType?: string;
+    prompt?: string;
+  }) => void;
+  const actionRequiredPromise = new Promise<{
+    actionId?: string;
+    actionType?: string;
+    prompt?: string;
+  }>((resolve) => {
+    resolveActionRequired = resolve;
+  });
+  const runTaskPromise = fixture.runtime.runTask({
+    requestId: "req-app-tool-approval-1",
+    taskId: "task-app-tool-approval-1",
+    sourceChannel: "feishu",
+    user: { userId: "feishu-user-approval" },
+    goal: "please wait for MCP tool approval",
+    channelContext: { channelSessionKey: "feishu-session-tool-approval-1" },
+    createdAt: "2026-04-16T10:30:00.000Z",
+  }, {
+    onEvent: async (event) => {
+      if (event.type === "task.action_required") {
+        const actionRequired: {
+          actionId?: string;
+          actionType?: string;
+          prompt?: string;
+        } = {};
+
+        if (typeof event.payload?.actionId === "string") {
+          actionRequired.actionId = event.payload.actionId;
+        }
+
+        if (typeof event.payload?.actionType === "string") {
+          actionRequired.actionType = event.payload.actionType;
+        }
+
+        if (typeof event.payload?.prompt === "string") {
+          actionRequired.prompt = event.payload.prompt;
+        }
+
+        resolveActionRequired(actionRequired);
+      }
+    },
+  });
+
+  try {
+    const actionRequired = await Promise.race([
+      actionRequiredPromise,
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("missing tool action_required")), 80);
+      }),
+    ]);
+
+    assert.equal(actionRequired.actionId, "tool-approval-1");
+    assert.equal(actionRequired.actionType, "approval");
+    assert.match(actionRequired.prompt ?? "", /list_managed_agents|MCP 工具调用需要审批|Need approval/);
+    assert.equal(actionBridge.find("tool-approval-1", {
+      sessionId: "feishu-session-tool-approval-1",
+      principalId: "principal-local-owner",
+    })?.taskId, "task-app-tool-approval-1");
+
+    actionBridge.resolve({
+      taskId: "task-app-tool-approval-1",
+      requestId: "req-app-tool-approval-1",
+      actionId: "tool-approval-1",
+      decision: "approve",
+    });
+    approvalResolved.resolve();
+
+    await runTaskPromise;
+    assert.deepEqual(state.respondedServerRequests, [{
+      id: "server-tool-approval-1",
+      result: {
+        decision: "accept",
+      },
+    }]);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("AppServerTaskRuntime 在 waiting action 所在任务 abort 后会清理 pending action", async () => {
   const actionBridge = new AppServerActionBridge();
   const controller = new AbortController();
