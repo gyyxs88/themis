@@ -1424,6 +1424,8 @@ async function waitForPendingServerRequests(pendingServerRequests: Set<Promise<v
 
 function resolveServerRequestAction(serverRequest: AppServerReverseRequest): ResolvedServerRequestAction | null {
   switch (serverRequest.method) {
+    case "mcpServer/elicitation/request":
+      return resolveMcpElicitationAction(serverRequest);
     case "item/commandExecution/requestApproval":
       return resolveCommandApprovalAction(serverRequest);
     case "item/fileChange/requestApproval":
@@ -1447,18 +1449,99 @@ function resolveServerRequestAction(serverRequest: AppServerReverseRequest): Res
 }
 
 function resolveAutoApprovalServerRequestResponse(serverRequest: AppServerReverseRequest): unknown | undefined {
-  if (serverRequest.method !== "item/tool/requestApproval") {
-    return undefined;
-  }
-
-  const params = asRecord(serverRequest.params);
-  const toolName = normalizeTextValue(params?.toolName) ?? normalizeTextValue(params?.name);
+  const toolName = resolveManagedAgentApprovalToolName(serverRequest);
 
   if (!isThemisManagedAgentToolName(toolName)) {
     return undefined;
   }
 
-  return { decision: "accept" };
+  if (serverRequest.method === "mcpServer/elicitation/request") {
+    return {
+      action: "accept",
+      content: {},
+    };
+  }
+
+  return {
+    decision: "accept",
+  };
+}
+
+function resolveManagedAgentApprovalToolName(serverRequest: AppServerReverseRequest): string | null {
+  const params = asRecord(serverRequest.params);
+
+  if (serverRequest.method === "item/tool/requestApproval") {
+    return normalizeTextValue(params?.toolName) ?? normalizeTextValue(params?.name);
+  }
+
+  if (serverRequest.method !== "mcpServer/elicitation/request") {
+    return null;
+  }
+
+  return extractToolNameFromElicitationRequest(params);
+}
+
+function resolveMcpElicitationAction(serverRequest: AppServerReverseRequest): ResolvedServerRequestAction | null {
+  const params = asRecord(serverRequest.params);
+  const actionId = pickActionId(serverRequest.id);
+
+  if (!actionId) {
+    return null;
+  }
+
+  const prompt = buildMcpElicitationPrompt(params, actionId);
+
+  return createApprovalServerRequestAction(actionId, prompt, (submission) => ({
+    action: submission.decision === "approve" ? "accept" : "decline",
+    content: {},
+  }));
+}
+
+function extractToolNameFromElicitationRequest(
+  params: Record<string, unknown> | null | undefined,
+): string | null {
+  const candidates = [
+    normalizeTextValue(params?._meta && asRecord(params._meta)?.tool_name),
+    normalizeTextValue(params?.toolName),
+    normalizeTextValue(params?.tool),
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  const message = normalizeTextValue(params?.message);
+
+  if (!message) {
+    return null;
+  }
+
+  const matched = message.match(/tool\s+"([^"]+)"/i);
+  return matched?.[1]?.trim() || null;
+}
+
+function buildMcpElicitationPrompt(
+  params: Record<string, unknown> | null | undefined,
+  actionId: string,
+): string {
+  const meta = asRecord(params?._meta);
+  const toolTitle = normalizeTextValue(meta?.tool_title);
+  const message = normalizeTextValue(params?.message);
+  const serverName = normalizeTextValue(params?.serverName);
+  const toolName = extractToolNameFromElicitationRequest(params);
+  const detail = [
+    toolName ? `工具：${toolName}` : null,
+    toolTitle ? `标题：${toolTitle}` : null,
+    serverName ? `MCP server：${serverName}` : null,
+    message,
+  ].filter((value): value is string => Boolean(value));
+
+  return [
+    detail.length ? `MCP 工具调用需要审批：\n${detail.join("\n")}` : "MCP 工具调用需要审批。",
+    `使用 /approve ${actionId} 或 /deny ${actionId}`,
+  ].join("\n");
 }
 
 function resolveCommandApprovalAction(serverRequest: AppServerReverseRequest): ResolvedServerRequestAction | null {

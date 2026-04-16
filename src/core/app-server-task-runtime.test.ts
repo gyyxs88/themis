@@ -2676,13 +2676,19 @@ test("AppServerTaskRuntime 会自动批准 Themis managed-agent MCP 工具审批
     startTurn: async (sessionState) => {
       sessionState.serverRequestHandler?.({
         id: "server-managed-tool-approval-1",
-        method: "item/tool/requestApproval",
+        method: "mcpServer/elicitation/request",
         params: {
-          itemId: "item-managed-tool-approval-1",
-          callId: "managed-tool-call-1",
-          approvalId: "managed-tool-approval-1",
-          toolName: "list_managed_agents",
-          reason: "Need approval before calling Themis managed-agent tool.",
+          serverName: "themis_scheduled_tasks",
+          mode: "form",
+          message: "Allow the themis_scheduled_tasks MCP server to run tool \"list_managed_agents\"?",
+          requestedSchema: {
+            type: "object",
+            properties: {},
+          },
+          _meta: {
+            codex_approval_kind: "mcp_tool_call",
+            tool_title: "List Managed Agents",
+          },
         },
       });
       scheduleCompletedTurn(sessionState, "turn-app-managed-tool-approval-1", {
@@ -2721,7 +2727,129 @@ test("AppServerTaskRuntime 会自动批准 Themis managed-agent MCP 工具审批
     assert.deepEqual(state.respondedServerRequests, [{
       id: "server-managed-tool-approval-1",
       result: {
-        decision: "accept",
+        action: "accept",
+        content: {},
+      },
+    }]);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 会把非白名单 MCP elicitation 审批转成等待中的 action，并在提交后回包", async () => {
+  const actionBridge = new AppServerActionBridge();
+  const approvalResolved = createDeferred();
+  const { state, sessionFactory } = createSessionFactory({
+    startTurn: async (sessionState) => {
+      sessionState.serverRequestHandler?.({
+        id: "server-mcp-elicitation-1",
+        method: "mcpServer/elicitation/request",
+        params: {
+          serverName: "themis_scheduled_tasks",
+          mode: "form",
+          message: "Allow the themis_scheduled_tasks MCP server to run tool \"list_scheduled_tasks\"?",
+          requestedSchema: {
+            type: "object",
+            properties: {},
+          },
+          _meta: {
+            codex_approval_kind: "mcp_tool_call",
+            tool_title: "List Scheduled Tasks",
+          },
+        },
+      });
+      await approvalResolved.promise;
+      scheduleCompletedTurn(sessionState, "turn-app-mcp-elicitation-1", {
+        threadId: "thread-app-mcp-elicitation-1",
+      });
+      return { turnId: "turn-app-mcp-elicitation-1" };
+    },
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+  (fixture.runtime as unknown as { actionBridge: AppServerActionBridge }).actionBridge = actionBridge;
+  let resolveActionRequired!: (value: {
+    actionId?: string;
+    actionType?: string;
+    prompt?: string;
+  }) => void;
+  const actionRequiredPromise = new Promise<{
+    actionId?: string;
+    actionType?: string;
+    prompt?: string;
+  }>((resolve) => {
+    resolveActionRequired = resolve;
+  });
+
+  try {
+    seedCompletedPrincipalPersona(fixture.runtime, {
+      channel: "feishu",
+      channelUserId: "feishu-user-mcp-elicitation",
+      displayName: "MCP 审批测试用户",
+    });
+
+    const runTaskPromise = fixture.runtime.runTask({
+      requestId: "req-app-mcp-elicitation-1",
+      taskId: "task-app-mcp-elicitation-1",
+      sourceChannel: "feishu",
+      user: { userId: "feishu-user-mcp-elicitation" },
+      goal: "please wait for non-whitelist MCP elicitation approval",
+      channelContext: { channelSessionKey: "feishu-session-mcp-elicitation-1" },
+      createdAt: "2026-04-16T14:40:00.000Z",
+    }, {
+      onEvent: async (event) => {
+        if (event.type === "task.action_required") {
+          const actionRequired: {
+            actionId?: string;
+            actionType?: string;
+            prompt?: string;
+          } = {};
+
+          if (typeof event.payload?.actionId === "string") {
+            actionRequired.actionId = event.payload.actionId;
+          }
+
+          if (typeof event.payload?.actionType === "string") {
+            actionRequired.actionType = event.payload.actionType;
+          }
+
+          if (typeof event.payload?.prompt === "string") {
+            actionRequired.prompt = event.payload.prompt;
+          }
+
+          resolveActionRequired(actionRequired);
+        }
+      },
+    });
+
+    const actionRequired = await Promise.race([
+      actionRequiredPromise,
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("missing mcp elicitation action_required")), 80);
+      }),
+    ]);
+
+    assert.equal(actionRequired.actionId, "server-mcp-elicitation-1");
+    assert.equal(actionRequired.actionType, "approval");
+    assert.match(actionRequired.prompt ?? "", /list_scheduled_tasks|List Scheduled Tasks|themis_scheduled_tasks/);
+    assert.equal(actionBridge.find("server-mcp-elicitation-1", {
+      sessionId: "feishu-session-mcp-elicitation-1",
+      principalId: "principal-local-owner",
+    })?.taskId, "task-app-mcp-elicitation-1");
+
+    actionBridge.resolve({
+      taskId: "task-app-mcp-elicitation-1",
+      requestId: "req-app-mcp-elicitation-1",
+      actionId: "server-mcp-elicitation-1",
+      decision: "approve",
+    });
+    approvalResolved.resolve();
+
+    await runTaskPromise;
+    assert.deepEqual(state.respondedServerRequests, [{
+      id: "server-mcp-elicitation-1",
+      result: {
+        action: "accept",
+        content: {},
       },
     }]);
   } finally {
