@@ -1448,6 +1448,47 @@ test("AppServerTaskRuntime 会在 prompt 里明确注入定时任务工具使用
   }
 });
 
+test("AppServerTaskRuntime 会在 prompt 里明确注入员工治理工具使用说明", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-managed-agent-prompt-1",
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    seedCompletedPrincipalPersona(fixture.runtime, {
+      channel: "web",
+      channelUserId: "browser-user-managed-agent-1",
+      displayName: "Owner",
+    });
+
+    await fixture.runtime.runTask({
+      requestId: "req-app-managed-agent-prompt-1",
+      taskId: "task-app-managed-agent-prompt-1",
+      sourceChannel: "web",
+      user: {
+        userId: "browser-user-managed-agent-1",
+        displayName: "Owner",
+      },
+      goal: "帮我创建一个后端员工，并把 API 设计任务派给他",
+      channelContext: {
+        sessionId: "session-web-managed-agent-prompt-1",
+        channelSessionKey: "session-web-managed-agent-prompt-1",
+      },
+      createdAt: "2026-04-16T09:00:00.000Z",
+    });
+
+    assert.equal(state.turns.length, 1);
+    assert.match(state.turns[0]?.prompt ?? "", /Themis managed agent tools are available in this session/);
+    assert.match(state.turns[0]?.prompt ?? "", /create digital employees, inspect managed agents, update execution boundaries, dispatch work/);
+    assert.match(state.turns[0]?.prompt ?? "", /without asking for an extra confirmation/);
+    assert.match(state.turns[0]?.prompt ?? "", /sourceChannel=web/);
+    assert.match(state.turns[0]?.prompt ?? "", /channelUserId=browser-user-managed-agent-1/);
+    assert.match(state.turns[0]?.prompt ?? "", /sessionId=session-web-managed-agent-prompt-1/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("AppServerTaskRuntime 在 third-party 模式下会把 provider 隔离配置传给 sessionFactory", async () => {
   await withClearedOpenAICompatEnv(async () => {
     const { state, sessionFactory: baseSessionFactory } = createSessionFactory({

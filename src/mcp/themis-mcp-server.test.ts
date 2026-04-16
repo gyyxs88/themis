@@ -39,7 +39,7 @@ async function initializeServer(server: ThemisMcpServer): Promise<void> {
   assert.equal(notificationResponse, null);
 }
 
-test("Themis MCP server 会暴露定时任务工具列表", async () => {
+test("Themis MCP server 会暴露定时任务和员工治理工具列表", async () => {
   const workspace = createWorkspace("themis-mcp-tools");
   const registry = new SqliteCodexSessionRegistry({
     databaseFile: resolve(workspace, "infra/local/themis.db"),
@@ -68,7 +68,17 @@ test("Themis MCP server 会暴露定时任务工具列表", async () => {
     assert.equal(Array.isArray(payload.result?.tools), true);
     assert.deepEqual(
       payload.result.tools.map((tool: { name: string }) => tool.name),
-      ["create_scheduled_task", "list_scheduled_tasks", "cancel_scheduled_task"],
+      [
+        "create_scheduled_task",
+        "list_scheduled_tasks",
+        "cancel_scheduled_task",
+        "list_managed_agents",
+        "get_managed_agent_detail",
+        "create_managed_agent",
+        "update_managed_agent_execution_boundary",
+        "dispatch_work_item",
+        "update_managed_agent_lifecycle",
+      ],
     );
   } finally {
     rmSync(workspace, { recursive: true, force: true });
@@ -195,6 +205,151 @@ test("Themis MCP server 会把默认 session 上下文带进新建定时任务",
     );
     assert.equal(createPayload.result?.structuredContent?.task?.sourceChannel, "web");
     assert.equal(createPayload.result?.structuredContent?.task?.channelUserId, "browser-user-1");
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("Themis MCP server 支持员工治理工具闭环", async () => {
+  const workspace = createWorkspace("themis-mcp-managed-agents");
+  const registry = new SqliteCodexSessionRegistry({
+    databaseFile: resolve(workspace, "infra/local/themis.db"),
+  });
+  const server = new ThemisMcpServer({
+    workingDirectory: workspace,
+    registry,
+    identity: {
+      channel: "web",
+      channelUserId: "owner-user-1",
+      displayName: "Owner",
+    },
+  });
+
+  try {
+    await initializeServer(server);
+    const createResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 8,
+      method: "tools/call",
+      params: {
+        name: "create_managed_agent",
+        arguments: {
+          departmentRole: "前端",
+          displayName: "前端·澄",
+          mission: "负责 Web 工作台相关实现。",
+        },
+      },
+    }));
+
+    assert.ok(createResponse);
+    const createPayload = JSON.parse(createResponse);
+    assert.equal(createPayload.result?.isError, false);
+    const agentId = createPayload.result?.structuredContent?.agent?.agentId;
+    assert.equal(typeof agentId, "string");
+    assert.equal(createPayload.result?.structuredContent?.agent?.displayName, "前端·澄");
+
+    const listResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 9,
+      method: "tools/call",
+      params: {
+        name: "list_managed_agents",
+        arguments: {
+          statuses: ["active"],
+        },
+      },
+    }));
+
+    assert.ok(listResponse);
+    const listPayload = JSON.parse(listResponse);
+    assert.equal(listPayload.result?.isError, false);
+    assert.equal(listPayload.result?.structuredContent?.agents?.length, 1);
+    assert.equal(listPayload.result?.structuredContent?.agents?.[0]?.agentId, agentId);
+
+    const detailResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 10,
+      method: "tools/call",
+      params: {
+        name: "get_managed_agent_detail",
+        arguments: {
+          agentId,
+        },
+      },
+    }));
+
+    assert.ok(detailResponse);
+    const detailPayload = JSON.parse(detailResponse);
+    assert.equal(detailPayload.result?.isError, false);
+    assert.equal(detailPayload.result?.structuredContent?.agent?.agentId, agentId);
+    assert.equal(detailPayload.result?.structuredContent?.workspacePolicy?.workspacePath, workspace);
+
+    const agentWorkspace = resolve(workspace, "workspace/frontend");
+    mkdirSync(agentWorkspace, { recursive: true });
+    const boundaryResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 11,
+      method: "tools/call",
+      params: {
+        name: "update_managed_agent_execution_boundary",
+        arguments: {
+          agentId,
+          workspacePolicy: {
+            workspacePath: agentWorkspace,
+            allowNetworkAccess: false,
+          },
+          runtimeProfile: {
+            approvalPolicy: "never",
+            memoryMode: "auto",
+          },
+        },
+      },
+    }));
+
+    assert.ok(boundaryResponse);
+    const boundaryPayload = JSON.parse(boundaryResponse);
+    assert.equal(boundaryPayload.result?.isError, false);
+    assert.equal(boundaryPayload.result?.structuredContent?.workspacePolicy?.workspacePath, agentWorkspace);
+    assert.equal(boundaryPayload.result?.structuredContent?.workspacePolicy?.allowNetworkAccess, false);
+    assert.equal(boundaryPayload.result?.structuredContent?.runtimeProfile?.approvalPolicy, "never");
+
+    const dispatchResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 12,
+      method: "tools/call",
+      params: {
+        name: "dispatch_work_item",
+        arguments: {
+          targetAgentId: agentId,
+          dispatchReason: "推进官网改版",
+          goal: "完成首页首屏信息架构和交互方案。",
+        },
+      },
+    }));
+
+    assert.ok(dispatchResponse);
+    const dispatchPayload = JSON.parse(dispatchResponse);
+    assert.equal(dispatchPayload.result?.isError, false);
+    assert.equal(dispatchPayload.result?.structuredContent?.targetAgent?.agentId, agentId);
+    assert.equal(dispatchPayload.result?.structuredContent?.workItem?.targetAgentId, agentId);
+
+    const lifecycleResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 13,
+      method: "tools/call",
+      params: {
+        name: "update_managed_agent_lifecycle",
+        arguments: {
+          agentId,
+          action: "pause",
+        },
+      },
+    }));
+
+    assert.ok(lifecycleResponse);
+    const lifecyclePayload = JSON.parse(lifecycleResponse);
+    assert.equal(lifecyclePayload.result?.isError, false);
+    assert.equal(lifecyclePayload.result?.structuredContent?.agent?.status, "paused");
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }

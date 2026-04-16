@@ -80,6 +80,7 @@ import {
   buildThemisScheduledTaskMcpConfigOverrides,
   buildThemisScheduledTaskPromptSection,
 } from "./themis-scheduled-task-tools.js";
+import { buildThemisManagedAgentPromptSection } from "./themis-managed-agent-tools.js";
 import { compileTaskInputForRuntime } from "./runtime-input-compiler.js";
 import { resolveStoredSessionThreadReference } from "./session-thread-reference.js";
 import { validateWorkspacePath } from "./session-workspace.js";
@@ -679,6 +680,7 @@ export class AppServerTaskRuntime {
           fallbackPromptSections: [
             ...(compiledInput?.fallbackPromptSections ?? []),
             buildThemisScheduledTaskPromptSection(request),
+            buildThemisManagedAgentPromptSection(request),
           ],
         })
         : buildTaskPrompt(promptRequest, {
@@ -687,6 +689,7 @@ export class AppServerTaskRuntime {
           fallbackPromptSections: [
             ...(compiledInput?.fallbackPromptSections ?? []),
             buildThemisScheduledTaskPromptSection(request),
+            buildThemisManagedAgentPromptSection(request),
           ],
         });
       const turnInput = compiledInput?.nativeInputParts.length

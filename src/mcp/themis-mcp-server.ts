@@ -1,11 +1,43 @@
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { resolve } from "node:path";
+import {
+  ManagedAgentCoordinationService,
+  type DispatchWorkItemInput,
+} from "../core/managed-agent-coordination-service.js";
+import {
+  type ManagedAgentControlPlaneFacadeLike,
+  ManagedAgentControlPlaneFacade,
+} from "../core/managed-agent-control-plane-facade.js";
+import { createManagedAgentControlPlaneStoreFromEnv } from "../core/managed-agent-control-plane-bootstrap.js";
+import { ManagedAgentNodeService } from "../core/managed-agent-node-service.js";
+import {
+  createManagedAgentPlatformGatewayFacade,
+} from "../core/managed-agent-platform-gateway-facade.js";
+import {
+  ManagedAgentsService,
+  type CreateManagedAgentInput,
+  type ManagedAgentDetailView,
+  type ManagedAgentExecutionBoundaryRuntimeProfileInput,
+  type ManagedAgentExecutionBoundaryView,
+  type ManagedAgentExecutionBoundaryWorkspacePolicyInput,
+} from "../core/managed-agents-service.js";
+import {
+  readManagedAgentPlatformGatewayConfig,
+} from "../core/managed-agent-platform-gateway-client.js";
+import { ManagedAgentSchedulerService } from "../core/managed-agent-scheduler-service.js";
+import { ManagedAgentWorkerService } from "../core/managed-agent-worker-service.js";
 import { IdentityLinkService, type ChannelIdentityInput, type IdentityStatusSnapshot } from "../core/identity-link-service.js";
 import { ScheduledTasksService } from "../core/scheduled-tasks-service.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import {
   APPROVAL_POLICIES,
+  MANAGED_AGENT_AUTONOMY_LEVELS,
+  MANAGED_AGENT_CREATION_MODES,
+  MANAGED_AGENT_EXPOSURE_POLICIES,
+  MANAGED_AGENT_PRIORITIES,
+  MANAGED_AGENT_STATUSES,
+  MANAGED_AGENT_WORK_ITEM_SOURCE_TYPES,
   MEMORY_MODES,
   REASONING_LEVELS,
   SANDBOX_MODES,
@@ -68,6 +100,9 @@ export interface ThemisMcpServerOptions {
   identity?: ChannelIdentityInput;
   sessionId?: string;
   channelSessionKey?: string;
+  env?: NodeJS.ProcessEnv;
+  fetchImpl?: typeof fetch;
+  managedAgentControlPlaneFacade?: ManagedAgentControlPlaneFacadeLike;
 }
 
 export interface ThemisMcpServerRunOptions extends ThemisMcpServerOptions {
@@ -96,10 +131,59 @@ interface CancelScheduledTaskToolArgs {
   scheduledTaskId: string;
 }
 
+interface ListManagedAgentsToolArgs {
+  organizationId?: string;
+  statuses?: string[];
+  limit?: number;
+}
+
+interface GetManagedAgentDetailToolArgs {
+  agentId: string;
+}
+
+interface CreateManagedAgentToolArgs {
+  departmentRole: string;
+  displayName?: string;
+  mission?: string;
+  organizationId?: string;
+  supervisorAgentId?: string;
+  autonomyLevel?: CreateManagedAgentInput["autonomyLevel"];
+  creationMode?: CreateManagedAgentInput["creationMode"];
+  exposurePolicy?: CreateManagedAgentInput["exposurePolicy"];
+}
+
+interface UpdateManagedAgentExecutionBoundaryToolArgs {
+  agentId: string;
+  workspacePolicy?: ManagedAgentExecutionBoundaryWorkspacePolicyInput;
+  runtimeProfile?: ManagedAgentExecutionBoundaryRuntimeProfileInput;
+}
+
+interface DispatchWorkItemToolArgs {
+  targetAgentId: string;
+  projectId?: string;
+  sourceType?: DispatchWorkItemInput["sourceType"];
+  sourceAgentId?: string;
+  parentWorkItemId?: string;
+  dispatchReason: string;
+  goal: string;
+  contextPacket?: unknown;
+  priority?: DispatchWorkItemInput["priority"];
+  workspacePolicySnapshot?: Record<string, unknown>;
+  runtimeProfileSnapshot?: Record<string, unknown>;
+  scheduledAt?: string;
+}
+
+interface UpdateManagedAgentLifecycleToolArgs {
+  agentId: string;
+  action: "pause" | "resume" | "archive";
+}
+
 export class ThemisMcpServer {
   private readonly registry: SqliteCodexSessionRegistry;
   private readonly identityLinkService: IdentityLinkService;
   private readonly scheduledTasksService: ScheduledTasksService;
+  private readonly managedAgentControlPlaneFacade: ManagedAgentControlPlaneFacadeLike;
+  private readonly managedAgentOwnerPrincipalId: string | null;
   private readonly identityInput: ChannelIdentityInput;
   private readonly defaultSessionId: string | undefined;
   private readonly defaultChannelSessionKey: string | undefined;
@@ -117,6 +201,17 @@ export class ThemisMcpServer {
     this.scheduledTasksService = new ScheduledTasksService({
       registry: this.registry,
     });
+    const managedAgentControlPlane = resolveManagedAgentControlPlane({
+      workingDirectory,
+      registry: this.registry,
+      ...(options.env ? { env: options.env } : {}),
+      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+      ...(options.managedAgentControlPlaneFacade
+        ? { managedAgentControlPlaneFacade: options.managedAgentControlPlaneFacade }
+        : {}),
+    });
+    this.managedAgentControlPlaneFacade = managedAgentControlPlane.facade;
+    this.managedAgentOwnerPrincipalId = managedAgentControlPlane.ownerPrincipalId;
     const displayName = normalizeText(options.identity?.displayName) ?? DEFAULT_DISPLAY_NAME;
     this.identityInput = {
       channel: normalizeText(options.identity?.channel) ?? DEFAULT_CHANNEL,
@@ -209,13 +304,13 @@ export class ThemisMcpServer {
       },
       serverInfo: {
         name: "themis",
-        title: "Themis Scheduled Tasks",
+        title: "Themis Coordination Tools",
         version: MCP_SERVER_VERSION,
       },
       instructions: [
-        "This MCP server manages Themis scheduled tasks.",
-        "Use explicit scheduledAt timestamps and a concrete timezone.",
-        "This first cut only supports one-time tasks.",
+        "This MCP server manages Themis scheduled tasks and managed agents.",
+        "Use explicit scheduledAt timestamps and a concrete timezone for scheduled tasks.",
+        "Use managed agent tools to create and govern digital employees, update execution boundaries, and dispatch work.",
       ].join(" "),
     };
   }
@@ -244,6 +339,18 @@ export class ThemisMcpServer {
         return this.runToolSafely(() => this.listScheduledTasks(argumentsRecord));
       case "cancel_scheduled_task":
         return this.runToolSafely(() => this.cancelScheduledTask(argumentsRecord));
+      case "list_managed_agents":
+        return this.runToolSafely(() => this.listManagedAgents(argumentsRecord));
+      case "get_managed_agent_detail":
+        return this.runToolSafely(() => this.getManagedAgentDetail(argumentsRecord));
+      case "create_managed_agent":
+        return this.runToolSafely(() => this.createManagedAgent(argumentsRecord));
+      case "update_managed_agent_execution_boundary":
+        return this.runToolSafely(() => this.updateManagedAgentExecutionBoundary(argumentsRecord));
+      case "dispatch_work_item":
+        return this.runToolSafely(() => this.dispatchWorkItem(argumentsRecord));
+      case "update_managed_agent_lifecycle":
+        return this.runToolSafely(() => this.updateManagedAgentLifecycle(argumentsRecord));
       default:
         throw new JsonRpcProtocolError(JSON_RPC_INVALID_PARAMS, `Unknown tool: ${name}`);
     }
@@ -339,8 +446,184 @@ export class ThemisMcpServer {
     );
   }
 
+  private async listManagedAgents(argumentsRecord: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const args = normalizeListManagedAgentsToolArgs(argumentsRecord);
+    const identity = this.ensureIdentity();
+    const ownerPrincipalId = this.resolveManagedAgentOwnerPrincipalId(identity);
+    const result = await this.managedAgentControlPlaneFacade.listManagedAgents(ownerPrincipalId);
+    let organizations = result.organizations;
+    let agents = result.agents;
+
+    if (args.organizationId) {
+      organizations = organizations.filter((organization) => organization.organizationId === args.organizationId);
+      agents = agents.filter((agent) => agent.organizationId === args.organizationId);
+    }
+
+    if (args.statuses) {
+      const wantedStatuses = new Set(args.statuses);
+      agents = agents.filter((agent) => wantedStatuses.has(agent.status));
+    }
+
+    if (typeof args.limit === "number") {
+      agents = agents.slice(0, args.limit);
+    }
+
+    return createToolResult(
+      buildManagedAgentListSummary(agents),
+      {
+        identity,
+        ownerPrincipalId,
+        organizations,
+        agents,
+      },
+    );
+  }
+
+  private async getManagedAgentDetail(argumentsRecord: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const args = normalizeGetManagedAgentDetailToolArgs(argumentsRecord);
+    const identity = this.ensureIdentity();
+    const ownerPrincipalId = this.resolveManagedAgentOwnerPrincipalId(identity);
+    const detail = await this.managedAgentControlPlaneFacade.getManagedAgentDetailView(ownerPrincipalId, args.agentId);
+
+    if (!detail) {
+      throw new Error("Managed agent does not exist.");
+    }
+
+    return createToolResult(
+      buildManagedAgentDetailSummary(detail),
+      {
+        identity,
+        ownerPrincipalId,
+        organization: detail.organization,
+        principal: detail.principal,
+        agent: detail.agent,
+        workspacePolicy: detail.workspacePolicy,
+        runtimeProfile: detail.runtimeProfile,
+        authAccounts: detail.authAccounts,
+        thirdPartyProviders: detail.thirdPartyProviders,
+      },
+    );
+  }
+
+  private async createManagedAgent(argumentsRecord: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const args = normalizeCreateManagedAgentToolArgs(argumentsRecord);
+    const identity = this.ensureIdentity();
+    const ownerPrincipalId = this.resolveManagedAgentOwnerPrincipalId(identity);
+    const result = await this.managedAgentControlPlaneFacade.createManagedAgent({
+      ownerPrincipalId,
+      departmentRole: args.departmentRole,
+      ...(args.displayName ? { displayName: args.displayName } : {}),
+      ...(args.mission ? { mission: args.mission } : {}),
+      ...(args.organizationId ? { organizationId: args.organizationId } : {}),
+      ...(args.supervisorAgentId ? { supervisorAgentId: args.supervisorAgentId } : {}),
+      ...(args.autonomyLevel ? { autonomyLevel: args.autonomyLevel } : {}),
+      ...(args.creationMode ? { creationMode: args.creationMode } : {}),
+      ...(args.exposurePolicy ? { exposurePolicy: args.exposurePolicy } : {}),
+    });
+
+    return createToolResult(
+      `已创建员工 ${result.agent.displayName}（${result.agent.agentId}），当前状态 ${result.agent.status}。`,
+      {
+        identity,
+        ownerPrincipalId,
+        organization: result.organization,
+        principal: result.principal,
+        agent: result.agent,
+      },
+    );
+  }
+
+  private async updateManagedAgentExecutionBoundary(
+    argumentsRecord: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const args = normalizeUpdateManagedAgentExecutionBoundaryToolArgs(argumentsRecord);
+    const identity = this.ensureIdentity();
+    const ownerPrincipalId = this.resolveManagedAgentOwnerPrincipalId(identity);
+    const result = await this.managedAgentControlPlaneFacade.updateManagedAgentExecutionBoundary({
+      ownerPrincipalId,
+      agentId: args.agentId,
+      ...(args.workspacePolicy ? { workspacePolicy: args.workspacePolicy } : {}),
+      ...(args.runtimeProfile ? { runtimeProfile: args.runtimeProfile } : {}),
+    });
+
+    return createToolResult(
+      buildManagedAgentExecutionBoundarySummary(result),
+      {
+        identity,
+        ownerPrincipalId,
+        agent: result.agent,
+        workspacePolicy: result.workspacePolicy,
+        runtimeProfile: result.runtimeProfile,
+      },
+    );
+  }
+
+  private async dispatchWorkItem(argumentsRecord: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const args = normalizeDispatchWorkItemToolArgs(argumentsRecord);
+    const identity = this.ensureIdentity();
+    const ownerPrincipalId = this.resolveManagedAgentOwnerPrincipalId(identity);
+    const result = await this.managedAgentControlPlaneFacade.dispatchWorkItem({
+      ownerPrincipalId,
+      targetAgentId: args.targetAgentId,
+      ...(args.projectId ? { projectId: args.projectId } : {}),
+      ...(args.sourceType ? { sourceType: args.sourceType } : {}),
+      ...(args.sourceAgentId ? { sourceAgentId: args.sourceAgentId } : {}),
+      ...(args.parentWorkItemId ? { parentWorkItemId: args.parentWorkItemId } : {}),
+      dispatchReason: args.dispatchReason,
+      goal: args.goal,
+      ...(hasOwn(args, "contextPacket") ? { contextPacket: args.contextPacket } : {}),
+      ...(args.priority ? { priority: args.priority } : {}),
+      ...(hasOwn(args, "workspacePolicySnapshot") ? { workspacePolicySnapshot: args.workspacePolicySnapshot } : {}),
+      ...(hasOwn(args, "runtimeProfileSnapshot") ? { runtimeProfileSnapshot: args.runtimeProfileSnapshot } : {}),
+      ...(args.scheduledAt ? { scheduledAt: args.scheduledAt } : {}),
+    });
+
+    return createToolResult(
+      `已向员工 ${result.targetAgent.displayName}（${result.targetAgent.agentId}）派发工作项 ${result.workItem.workItemId}。`,
+      {
+        identity,
+        ownerPrincipalId,
+        organization: result.organization,
+        targetAgent: result.targetAgent,
+        workItem: result.workItem,
+        ...(result.dispatchMessage ? { dispatchMessage: result.dispatchMessage } : {}),
+        ...(result.mailboxEntry ? { mailboxEntry: result.mailboxEntry } : {}),
+      },
+    );
+  }
+
+  private async updateManagedAgentLifecycle(argumentsRecord: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const args = normalizeUpdateManagedAgentLifecycleToolArgs(argumentsRecord);
+    const identity = this.ensureIdentity();
+    const ownerPrincipalId = this.resolveManagedAgentOwnerPrincipalId(identity);
+    const ownerView = await this.managedAgentControlPlaneFacade.updateManagedAgentLifecycle({
+      ownerPrincipalId,
+      agentId: args.agentId,
+      action: args.action,
+    });
+
+    if (!ownerView) {
+      throw new Error("Managed agent does not exist.");
+    }
+
+    return createToolResult(
+      `已将员工 ${ownerView.agent.displayName}（${ownerView.agent.agentId}）切换为 ${ownerView.agent.status}。`,
+      {
+        identity,
+        ownerPrincipalId,
+        organization: ownerView.organization,
+        principal: ownerView.principal,
+        agent: ownerView.agent,
+      },
+    );
+  }
+
   private ensureIdentity(): IdentityStatusSnapshot {
     return this.identityLinkService.ensureIdentity(this.identityInput);
+  }
+
+  private resolveManagedAgentOwnerPrincipalId(identity: IdentityStatusSnapshot): string {
+    return this.managedAgentOwnerPrincipalId ?? identity.principalId;
   }
 }
 
@@ -493,6 +776,193 @@ function buildToolDefinitions(): McpToolDefinition[] {
         required: ["scheduledTaskId"],
       },
     },
+    {
+      name: "list_managed_agents",
+      title: "List Managed Agents",
+      description: "列出当前 Themis 员工队伍，可按组织、状态和数量过滤。",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          organizationId: {
+            type: "string",
+            description: "可选。只返回指定组织下的员工。",
+          },
+          statuses: {
+            type: "array",
+            description: "可选。只返回这些状态的员工。",
+            items: {
+              type: "string",
+              enum: [...MANAGED_AGENT_STATUSES],
+            },
+          },
+          limit: {
+            type: "integer",
+            description: "可选。限制返回条数，1 到 100。",
+            minimum: 1,
+            maximum: MAX_LIST_LIMIT,
+          },
+        },
+      },
+    },
+    {
+      name: "get_managed_agent_detail",
+      title: "Get Managed Agent Detail",
+      description: "读取指定员工的详细信息，包括当前执行边界。",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          agentId: {
+            type: "string",
+            description: "要查询的员工 id。",
+          },
+        },
+        required: ["agentId"],
+      },
+    },
+    {
+      name: "create_managed_agent",
+      title: "Create Managed Agent",
+      description: "创建一名新的 Themis 员工。",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          departmentRole: {
+            type: "string",
+            description: "岗位或职责，例如 后端、前端、运维、交付经理。",
+          },
+          displayName: {
+            type: "string",
+            description: "可选。员工显示名。",
+          },
+          mission: {
+            type: "string",
+            description: "可选。员工使命描述。",
+          },
+          organizationId: {
+            type: "string",
+            description: "可选。所属组织 id。",
+          },
+          supervisorAgentId: {
+            type: "string",
+            description: "可选。直属 supervisor 员工 id。",
+          },
+          autonomyLevel: {
+            type: "string",
+            enum: [...MANAGED_AGENT_AUTONOMY_LEVELS],
+          },
+          creationMode: {
+            type: "string",
+            enum: [...MANAGED_AGENT_CREATION_MODES],
+          },
+          exposurePolicy: {
+            type: "string",
+            enum: [...MANAGED_AGENT_EXPOSURE_POLICIES],
+          },
+        },
+        required: ["departmentRole"],
+      },
+    },
+    {
+      name: "update_managed_agent_execution_boundary",
+      title: "Update Managed Agent Execution Boundary",
+      description: "更新员工的工作区和运行时边界。",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          agentId: {
+            type: "string",
+            description: "要更新的员工 id。",
+          },
+          workspacePolicy: buildManagedAgentWorkspacePolicySchema(),
+          runtimeProfile: buildManagedAgentRuntimeProfileSchema(),
+        },
+        required: ["agentId"],
+      },
+    },
+    {
+      name: "dispatch_work_item",
+      title: "Dispatch Work Item",
+      description: "给指定员工派发一条新工作项。",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          targetAgentId: {
+            type: "string",
+            description: "目标员工 id。",
+          },
+          projectId: {
+            type: "string",
+            description: "可选。关联项目 id。",
+          },
+          sourceType: {
+            type: "string",
+            enum: [...MANAGED_AGENT_WORK_ITEM_SOURCE_TYPES],
+          },
+          sourceAgentId: {
+            type: "string",
+            description: "可选。当 sourceType=agent 时，填写来源员工 id。",
+          },
+          parentWorkItemId: {
+            type: "string",
+            description: "可选。父工作项 id。",
+          },
+          dispatchReason: {
+            type: "string",
+            description: "派工原因或一句话标题。",
+          },
+          goal: {
+            type: "string",
+            description: "这次派工的具体目标。",
+          },
+          contextPacket: {
+            type: "object",
+            description: "可选。补充上下文对象。",
+          },
+          priority: {
+            type: "string",
+            enum: [...MANAGED_AGENT_PRIORITIES],
+          },
+          workspacePolicySnapshot: {
+            type: "object",
+            description: "可选。覆盖默认工作区快照。",
+          },
+          runtimeProfileSnapshot: {
+            type: "object",
+            description: "可选。覆盖默认运行时快照。",
+          },
+          scheduledAt: {
+            type: "string",
+            description: "可选。指定计划开始时间。",
+          },
+        },
+        required: ["targetAgentId", "dispatchReason", "goal"],
+      },
+    },
+    {
+      name: "update_managed_agent_lifecycle",
+      title: "Update Managed Agent Lifecycle",
+      description: "暂停、恢复或归档员工。",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          agentId: {
+            type: "string",
+            description: "要更新的员工 id。",
+          },
+          action: {
+            type: "string",
+            enum: ["pause", "resume", "archive"],
+          },
+        },
+        required: ["agentId", "action"],
+      },
+    },
   ];
 }
 
@@ -572,6 +1042,71 @@ function buildAutomationOptionsSchema(): Record<string, unknown> {
   };
 }
 
+function buildManagedAgentWorkspacePolicySchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      displayName: { type: "string" },
+      workspacePath: { type: "string" },
+      additionalDirectories: {
+        type: "array",
+        items: {
+          type: "string",
+        },
+      },
+      allowNetworkAccess: {
+        type: "boolean",
+      },
+    },
+    required: ["workspacePath"],
+  };
+}
+
+function buildManagedAgentRuntimeProfileSchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      displayName: { type: "string" },
+      model: { type: "string" },
+      reasoning: {
+        type: "string",
+        enum: [...REASONING_LEVELS],
+      },
+      memoryMode: {
+        type: "string",
+        enum: [...MEMORY_MODES],
+      },
+      sandboxMode: {
+        type: "string",
+        enum: [...SANDBOX_MODES],
+      },
+      webSearchMode: {
+        type: "string",
+        enum: [...WEB_SEARCH_MODES],
+      },
+      networkAccessEnabled: {
+        type: "boolean",
+      },
+      approvalPolicy: {
+        type: "string",
+        enum: [...APPROVAL_POLICIES],
+      },
+      accessMode: {
+        type: "string",
+        enum: [...TASK_ACCESS_MODES],
+      },
+      authAccountId: {
+        type: "string",
+      },
+      thirdPartyProviderId: {
+        type: "string",
+      },
+    },
+  };
+}
+
 function normalizeCreateScheduledTaskToolArgs(value: Record<string, unknown>): CreateScheduledTaskToolArgs {
   const options = value.options === undefined
     ? undefined
@@ -637,6 +1172,181 @@ function normalizeCancelScheduledTaskToolArgs(value: Record<string, unknown>): C
   };
 }
 
+function normalizeListManagedAgentsToolArgs(value: Record<string, unknown>): ListManagedAgentsToolArgs {
+  let statuses: string[] | undefined;
+
+  if (value.statuses !== undefined) {
+    if (!Array.isArray(value.statuses)) {
+      throw new JsonRpcProtocolError(JSON_RPC_INVALID_PARAMS, "statuses must be an array.");
+    }
+
+    statuses = value.statuses.map((item) => expectEnumText(
+      item,
+      MANAGED_AGENT_STATUSES,
+      "statuses items must be managed agent statuses.",
+    ));
+  }
+
+  const limit = normalizeOptionalListLimit(value.limit);
+
+  return {
+    ...(normalizeText(value.organizationId) ? { organizationId: normalizeText(value.organizationId) as string } : {}),
+    ...(statuses ? { statuses } : {}),
+    ...(typeof limit === "number" ? { limit } : {}),
+  };
+}
+
+function normalizeGetManagedAgentDetailToolArgs(value: Record<string, unknown>): GetManagedAgentDetailToolArgs {
+  return {
+    agentId: expectRequiredText(value.agentId, "agentId is required."),
+  };
+}
+
+function normalizeCreateManagedAgentToolArgs(value: Record<string, unknown>): CreateManagedAgentToolArgs {
+  return {
+    departmentRole: expectRequiredText(value.departmentRole, "departmentRole is required."),
+    ...(normalizeText(value.displayName) ? { displayName: normalizeText(value.displayName) as string } : {}),
+    ...(normalizeOptionalMultilineText(value.mission) ? { mission: normalizeOptionalMultilineText(value.mission) as string } : {}),
+    ...(normalizeText(value.organizationId) ? { organizationId: normalizeText(value.organizationId) as string } : {}),
+    ...(normalizeText(value.supervisorAgentId) ? { supervisorAgentId: normalizeText(value.supervisorAgentId) as string } : {}),
+    ...(value.autonomyLevel !== undefined
+      ? { autonomyLevel: expectEnumText(value.autonomyLevel, MANAGED_AGENT_AUTONOMY_LEVELS, "Unsupported autonomyLevel.") }
+      : {}),
+    ...(value.creationMode !== undefined
+      ? { creationMode: expectEnumText(value.creationMode, MANAGED_AGENT_CREATION_MODES, "Unsupported creationMode.") }
+      : {}),
+    ...(value.exposurePolicy !== undefined
+      ? { exposurePolicy: expectEnumText(value.exposurePolicy, MANAGED_AGENT_EXPOSURE_POLICIES, "Unsupported exposurePolicy.") }
+      : {}),
+  };
+}
+
+function normalizeUpdateManagedAgentExecutionBoundaryToolArgs(
+  value: Record<string, unknown>,
+): UpdateManagedAgentExecutionBoundaryToolArgs {
+  const workspacePolicy = value.workspacePolicy === undefined
+    ? undefined
+    : normalizeManagedAgentWorkspacePolicyInput(
+      expectRecord(value.workspacePolicy, "workspacePolicy must be an object."),
+    );
+  const runtimeProfile = value.runtimeProfile === undefined
+    ? undefined
+    : normalizeManagedAgentRuntimeProfileInput(
+      expectRecord(value.runtimeProfile, "runtimeProfile must be an object."),
+    );
+
+  if (!workspacePolicy && !runtimeProfile) {
+    throw new JsonRpcProtocolError(
+      JSON_RPC_INVALID_PARAMS,
+      "At least one of workspacePolicy or runtimeProfile is required.",
+    );
+  }
+
+  return {
+    agentId: expectRequiredText(value.agentId, "agentId is required."),
+    ...(workspacePolicy ? { workspacePolicy } : {}),
+    ...(runtimeProfile ? { runtimeProfile } : {}),
+  };
+}
+
+function normalizeDispatchWorkItemToolArgs(value: Record<string, unknown>): DispatchWorkItemToolArgs {
+  return {
+    targetAgentId: expectRequiredText(value.targetAgentId, "targetAgentId is required."),
+    ...(normalizeText(value.projectId) ? { projectId: normalizeText(value.projectId) as string } : {}),
+    ...(value.sourceType !== undefined
+      ? { sourceType: expectEnumText(value.sourceType, MANAGED_AGENT_WORK_ITEM_SOURCE_TYPES, "Unsupported sourceType.") }
+      : {}),
+    ...(normalizeText(value.sourceAgentId) ? { sourceAgentId: normalizeText(value.sourceAgentId) as string } : {}),
+    ...(normalizeText(value.parentWorkItemId) ? { parentWorkItemId: normalizeText(value.parentWorkItemId) as string } : {}),
+    dispatchReason: expectRequiredText(value.dispatchReason, "dispatchReason is required."),
+    goal: expectRequiredText(value.goal, "goal is required."),
+    ...(hasOwn(value, "contextPacket") ? { contextPacket: value.contextPacket } : {}),
+    ...(value.priority !== undefined
+      ? { priority: expectEnumText(value.priority, MANAGED_AGENT_PRIORITIES, "Unsupported priority.") }
+      : {}),
+    ...(hasOwn(value, "workspacePolicySnapshot")
+      ? { workspacePolicySnapshot: expectRecord(value.workspacePolicySnapshot, "workspacePolicySnapshot must be an object.") }
+      : {}),
+    ...(hasOwn(value, "runtimeProfileSnapshot")
+      ? { runtimeProfileSnapshot: expectRecord(value.runtimeProfileSnapshot, "runtimeProfileSnapshot must be an object.") }
+      : {}),
+    ...(normalizeText(value.scheduledAt) ? { scheduledAt: normalizeText(value.scheduledAt) as string } : {}),
+  };
+}
+
+function normalizeUpdateManagedAgentLifecycleToolArgs(
+  value: Record<string, unknown>,
+): UpdateManagedAgentLifecycleToolArgs {
+  return {
+    agentId: expectRequiredText(value.agentId, "agentId is required."),
+    action: expectEnumText(value.action, ["pause", "resume", "archive"] as const, "Unsupported lifecycle action."),
+  };
+}
+
+function normalizeManagedAgentWorkspacePolicyInput(
+  value: Record<string, unknown>,
+): ManagedAgentExecutionBoundaryWorkspacePolicyInput {
+  const additionalDirectories = value.additionalDirectories === undefined
+    ? undefined
+    : normalizeStringArray(value.additionalDirectories, "additionalDirectories must be an array of strings.");
+
+  return {
+    workspacePath: expectRequiredText(value.workspacePath, "workspacePolicy.workspacePath is required."),
+    ...(normalizeText(value.displayName) ? { displayName: normalizeText(value.displayName) as string } : {}),
+    ...(additionalDirectories ? { additionalDirectories } : {}),
+    ...(hasOwn(value, "allowNetworkAccess")
+      ? { allowNetworkAccess: expectBoolean(value.allowNetworkAccess, "workspacePolicy.allowNetworkAccess must be a boolean.") }
+      : {}),
+  };
+}
+
+function normalizeManagedAgentRuntimeProfileInput(
+  value: Record<string, unknown>,
+): ManagedAgentExecutionBoundaryRuntimeProfileInput {
+  const result: ManagedAgentExecutionBoundaryRuntimeProfileInput = {
+    ...(normalizeText(value.displayName) ? { displayName: normalizeText(value.displayName) as string } : {}),
+    ...(normalizeText(value.model) ? { model: normalizeText(value.model) as string } : {}),
+    ...(value.reasoning !== undefined
+      ? { reasoning: expectEnumText(value.reasoning, REASONING_LEVELS, "Unsupported runtimeProfile.reasoning.") }
+      : {}),
+    ...(value.memoryMode !== undefined
+      ? { memoryMode: expectEnumText(value.memoryMode, MEMORY_MODES, "Unsupported runtimeProfile.memoryMode.") }
+      : {}),
+    ...(value.sandboxMode !== undefined
+      ? { sandboxMode: expectEnumText(value.sandboxMode, SANDBOX_MODES, "Unsupported runtimeProfile.sandboxMode.") }
+      : {}),
+    ...(value.webSearchMode !== undefined
+      ? { webSearchMode: expectEnumText(value.webSearchMode, WEB_SEARCH_MODES, "Unsupported runtimeProfile.webSearchMode.") }
+      : {}),
+    ...(hasOwn(value, "networkAccessEnabled")
+      ? { networkAccessEnabled: expectBoolean(
+        value.networkAccessEnabled,
+        "runtimeProfile.networkAccessEnabled must be a boolean.",
+      ) }
+      : {}),
+    ...(value.approvalPolicy !== undefined
+      ? { approvalPolicy: expectEnumText(
+        value.approvalPolicy,
+        APPROVAL_POLICIES,
+        "Unsupported runtimeProfile.approvalPolicy.",
+      ) }
+      : {}),
+    ...(value.accessMode !== undefined
+      ? { accessMode: expectEnumText(value.accessMode, TASK_ACCESS_MODES, "Unsupported runtimeProfile.accessMode.") }
+      : {}),
+    ...(normalizeText(value.authAccountId) ? { authAccountId: normalizeText(value.authAccountId) as string } : {}),
+    ...(normalizeText(value.thirdPartyProviderId)
+      ? { thirdPartyProviderId: normalizeText(value.thirdPartyProviderId) as string }
+      : {}),
+  };
+
+  if (Object.keys(result).length === 0) {
+    throw new JsonRpcProtocolError(JSON_RPC_INVALID_PARAMS, "runtimeProfile must not be empty.");
+  }
+
+  return result;
+}
+
 function createResultResponse(id: JsonRpcId, result: unknown): JsonRpcResponse {
   return {
     jsonrpc: JSON_RPC_VERSION,
@@ -690,6 +1400,43 @@ function buildListSummary(tasks: StoredScheduledTaskRecord[]): string {
   ].join("\n");
 }
 
+function buildManagedAgentListSummary(
+  agents: Array<{ agentId: string; displayName: string; departmentRole: string; status: string }>,
+): string {
+  if (agents.length === 0) {
+    return "当前没有匹配的员工。";
+  }
+
+  return [
+    `共找到 ${agents.length} 名员工。`,
+    ...agents.map((agent, index) =>
+      `${index + 1}. [${agent.status}] ${agent.displayName} (${agent.departmentRole}) - ${agent.agentId}`),
+  ].join("\n");
+}
+
+function buildManagedAgentDetailSummary(detail: ManagedAgentDetailView): string {
+  const workspacePath = detail.workspacePolicy?.workspacePath ?? "<unset>";
+  const model = detail.runtimeProfile?.model ?? "<default>";
+
+  return [
+    `员工 ${detail.agent.displayName}（${detail.agent.agentId}）当前状态 ${detail.agent.status}。`,
+    `角色：${detail.agent.departmentRole}`,
+    `workspace：${workspacePath}`,
+    `model：${model}`,
+  ].join("\n");
+}
+
+function buildManagedAgentExecutionBoundarySummary(result: ManagedAgentExecutionBoundaryView): string {
+  const workspacePath = result.workspacePolicy.workspacePath;
+  const model = result.runtimeProfile.model ?? "<default>";
+
+  return [
+    `已更新员工 ${result.agent.displayName}（${result.agent.agentId}）的执行边界。`,
+    `workspace：${workspacePath}`,
+    `model：${model}`,
+  ].join("\n");
+}
+
 function expectRecord(value: unknown, message: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new JsonRpcProtocolError(JSON_RPC_INVALID_PARAMS, message);
@@ -706,6 +1453,28 @@ function expectRequiredText(value: unknown, message: string): string {
   }
 
   return normalized;
+}
+
+function expectEnumText<const T extends readonly string[]>(
+  value: unknown,
+  allowed: T,
+  message: string,
+): T[number] {
+  const normalized = expectRequiredText(value, message);
+
+  if (!allowed.includes(normalized as T[number])) {
+    throw new JsonRpcProtocolError(JSON_RPC_INVALID_PARAMS, message);
+  }
+
+  return normalized as T[number];
+}
+
+function expectBoolean(value: unknown, message: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new JsonRpcProtocolError(JSON_RPC_INVALID_PARAMS, message);
+  }
+
+  return value;
 }
 
 function normalizeText(value: unknown): string | undefined {
@@ -732,6 +1501,99 @@ function normalizeOptionalMultilineText(value: unknown): string | undefined {
   return normalized ? normalized : undefined;
 }
 
+function normalizeOptionalListLimit(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new JsonRpcProtocolError(JSON_RPC_INVALID_PARAMS, "limit must be an integer.");
+  }
+
+  if (value < 1 || value > MAX_LIST_LIMIT) {
+    throw new JsonRpcProtocolError(JSON_RPC_INVALID_PARAMS, `limit must be between 1 and ${MAX_LIST_LIMIT}.`);
+  }
+
+  return value;
+}
+
+function normalizeStringArray(value: unknown, message: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new JsonRpcProtocolError(JSON_RPC_INVALID_PARAMS, message);
+  }
+
+  return value.map((item) => expectRequiredText(item, message));
+}
+
+function hasOwn(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
 function isValidJsonRpcId(value: unknown): value is JsonRpcId {
   return value === null || typeof value === "string" || typeof value === "number";
+}
+
+function resolveManagedAgentControlPlane(options: {
+  workingDirectory: string;
+  registry: SqliteCodexSessionRegistry;
+  env?: NodeJS.ProcessEnv;
+  fetchImpl?: typeof fetch;
+  managedAgentControlPlaneFacade?: ManagedAgentControlPlaneFacadeLike;
+}): {
+  facade: ManagedAgentControlPlaneFacadeLike;
+  ownerPrincipalId: string | null;
+} {
+  if (options.managedAgentControlPlaneFacade) {
+    return {
+      facade: options.managedAgentControlPlaneFacade,
+      ownerPrincipalId: null,
+    };
+  }
+
+  const gatewayConfig = readManagedAgentPlatformGatewayConfig(options.env);
+
+  if (gatewayConfig) {
+    return {
+      facade: createManagedAgentPlatformGatewayFacade({
+        ...gatewayConfig,
+        ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+      }),
+      ownerPrincipalId: gatewayConfig.ownerPrincipalId,
+    };
+  }
+
+  const controlPlaneStore = createManagedAgentControlPlaneStoreFromEnv({
+    workingDirectory: options.workingDirectory,
+    runtimeStore: options.registry,
+    ...(options.env ? { env: options.env } : {}),
+  });
+  const coordinationService = new ManagedAgentCoordinationService({
+    registry: controlPlaneStore.coordinationStore,
+  });
+  const schedulerService = new ManagedAgentSchedulerService({
+    registry: controlPlaneStore.schedulerStore,
+  });
+  const nodeService = new ManagedAgentNodeService({
+    registry: controlPlaneStore.nodeStore,
+  });
+  const workerService = new ManagedAgentWorkerService({
+    registry: controlPlaneStore.workerStore,
+    nodeService,
+    schedulerService,
+  });
+  const managedAgentsService = new ManagedAgentsService({
+    registry: controlPlaneStore.managedAgentsStore,
+    workingDirectory: options.workingDirectory,
+  });
+
+  return {
+    facade: new ManagedAgentControlPlaneFacade({
+      managedAgentsService,
+      coordinationService,
+      schedulerService,
+      nodeService,
+      workerService,
+    }),
+    ownerPrincipalId: null,
+  };
 }
