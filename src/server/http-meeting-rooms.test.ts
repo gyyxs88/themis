@@ -118,7 +118,17 @@ test("POST /api/meeting-rooms/message/stream 会把 manager 消息流式编排�
           createdAt: "2026-04-18T10:00:00.000Z",
           updatedAt: "2026-04-18T10:00:00.000Z",
         }],
-        rounds: [],
+        rounds: [{
+          roundId: "round-1",
+          roomId: "room-1",
+          triggerMessageId: "message-manager",
+          status: "running",
+          targetParticipantIds: ["participant-agent"],
+          respondedParticipantIds: [],
+          startedAt: "2026-04-18T10:01:00.000Z",
+          createdAt: "2026-04-18T10:01:00.000Z",
+          updatedAt: "2026-04-18T10:01:00.000Z",
+        }],
         messages: [{
           messageId: "message-manager",
           roomId: "room-1",
@@ -217,6 +227,8 @@ test("POST /api/meeting-rooms/message/stream 会把 manager 消息流式编排�
       "room.agent.reply",
       "room.round.completed",
     ]);
+    assert.equal(events[2]?.content, "我判断是 migration 阶段超时。");
+    assert.equal(events[2]?.audience, "all_participants");
     assert.equal(appendedReplies.length, 1);
   } finally {
     await closeServer(listeningServer);

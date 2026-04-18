@@ -1194,6 +1194,14 @@
                             placeholder="例如 发布阻塞讨论"
                           />
                         </label>
+
+                        <label class="settings-field">
+                          <span>讨论模式</span>
+                          <select id="meeting-rooms-create-discussion-mode-select">
+                            <option value="moderated">主持模式</option>
+                            <option value="collaborative">协作模式</option>
+                          </select>
+                        </label>
                       </div>
 
                       <label class="settings-field">
@@ -1209,10 +1217,13 @@
                         <span>参与员工</span>
                         <textarea
                           id="meeting-rooms-create-participants-input"
-                          rows="3"
-                          placeholder="输入 agentId，支持换行、空格或逗号分隔。"
+                          rows="4"
+                          placeholder="每行一个员工，格式 agentId[:entryMode[:context]]，例如 agent-backend:active_work_context 或 agent-pm:selected_context:work_item=wi-1|document=prd-v2"
                         ></textarea>
                       </label>
+                      <p class="settings-section-copy">
+                        当前主持台支持 `blank`、`active_work_context`、`selected_context`。`selected_context` 语法为 `agentId:selected_context:refType=refId|refType=refId`。
+                      </p>
 
                       <div class="settings-inline-actions">
                         <button id="meeting-rooms-create-button" type="button" class="primary-button">创建会议室</button>
@@ -1226,7 +1237,101 @@
                           </div>
                         </div>
 
+                        <div id="meeting-rooms-active-meta" class="meeting-room-meta-grid"></div>
+
+                        <div class="meeting-room-overview-grid">
+                          <section class="meeting-room-sidecard">
+                            <div class="tool-group-head">
+                              <h5>参与者</h5>
+                              <span class="meta-label">入场方式</span>
+                            </div>
+                            <div id="meeting-rooms-participants-list" class="meeting-room-participant-list"></div>
+                          </section>
+
+                          <section class="meeting-room-sidecard">
+                            <div class="tool-group-head">
+                              <h5>轮次状态</h5>
+                              <span class="meta-label">最近几轮</span>
+                            </div>
+                            <div id="meeting-rooms-rounds-summary" class="meeting-room-round-list"></div>
+                          </section>
+                        </div>
+
+                        <label class="settings-field">
+                          <span>动态加人</span>
+                          <textarea
+                            id="meeting-rooms-add-participants-input"
+                            rows="3"
+                            placeholder="例如 agent-qa:blank、agent-release:active_work_context 或 agent-pm:selected_context:document=prd-v2"
+                          ></textarea>
+                        </label>
+
+                        <div class="settings-inline-actions">
+                          <button id="meeting-rooms-add-participants-button" type="button" class="toolbar-button subtle">拉新员工入场</button>
+                          <p class="settings-inline-copy">员工进入后会自动出现在本轮发言对象里。</p>
+                        </div>
+
                         <div id="meeting-rooms-active-messages" class="meeting-room-message-stream"></div>
+
+                        <div class="meeting-room-governance-grid">
+                          <section class="meeting-room-sidecard">
+                            <div class="tool-group-head">
+                              <h5>会议结论</h5>
+                              <span id="meeting-rooms-resolution-selection-note" class="meta-label">先在上方消息流勾选要引用的消息。</span>
+                            </div>
+
+                            <label class="settings-field">
+                              <span>结论标题</span>
+                              <input
+                                id="meeting-rooms-resolution-title-input"
+                                type="text"
+                                placeholder="例如 补 migration 重试并先回滚风险变更"
+                              />
+                            </label>
+
+                            <label class="settings-field">
+                              <span>结论摘要</span>
+                              <textarea
+                                id="meeting-rooms-resolution-summary-input"
+                                rows="3"
+                                placeholder="把本轮会议收敛出的判断、动作和后续安排写清楚。"
+                              ></textarea>
+                            </label>
+
+                            <div class="settings-inline-actions">
+                              <button id="meeting-rooms-create-resolution-button" type="button" class="toolbar-button subtle">沉淀为会议结论</button>
+                              <p class="settings-inline-copy">建议先勾选依据消息，再沉淀结论，后面可以直接提升成正式 work item。</p>
+                            </div>
+
+                            <div id="meeting-rooms-resolutions-list" class="meeting-room-resolution-list"></div>
+                          </section>
+
+                          <section class="meeting-room-sidecard">
+                            <div class="tool-group-head">
+                              <h5>会议收口</h5>
+                              <span class="meta-label">只关闭房间，不影响已提升的 work item</span>
+                            </div>
+
+                            <label class="settings-field">
+                              <span>收口说明</span>
+                              <textarea
+                                id="meeting-rooms-close-summary-input"
+                                rows="3"
+                                placeholder="例如 已形成正式执行项，后续转到员工 work item 跟进。"
+                              ></textarea>
+                            </label>
+
+                            <div class="settings-inline-actions">
+                              <button id="meeting-rooms-close-button" type="button" class="toolbar-button subtle">关闭会议室</button>
+                              <p class="settings-inline-copy">关闭后房间进入只读态，后续只能回看消息、结论和收口说明。</p>
+                            </div>
+                          </section>
+                        </div>
+
+                        <div class="settings-field">
+                          <span>本轮发言对象</span>
+                          <div id="meeting-rooms-target-participants-list" class="meeting-room-target-list"></div>
+                        </div>
 
                         <label class="settings-field">
                           <span>发起下一轮讨论</span>

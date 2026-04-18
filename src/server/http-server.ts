@@ -3,6 +3,7 @@ import { networkInterfaces } from "node:os";
 import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import type { ManagedAgentControlPlaneFacadeLike } from "../core/managed-agent-control-plane-facade.js";
 import { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
+import { MeetingRoomRoundExecutor } from "../core/meeting-room-round-executor.js";
 import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
@@ -180,6 +181,7 @@ export interface ThemisHttpServerOptions {
   platformControlPlaneFacade?: ManagedAgentControlPlaneFacadeLike;
   platformMeetingRoomGateway?: PlatformMeetingRoomGateway | null;
   appServerRuntimeForMeetingRooms?: Pick<AppServerTaskRuntime, "runTaskAsPrincipal"> | null;
+  meetingRoomRoundExecutor?: MeetingRoomRoundExecutor | null;
   feishuService?: {
     handleCardActionWebhook(request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean>;
   };
@@ -231,6 +233,7 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
     ?? defaultAppServerRuntime.getManagedAgentControlPlaneFacadeAsync();
   const platformMeetingRoomGateway = options.platformMeetingRoomGateway ?? null;
   const appServerRuntimeForMeetingRooms = options.appServerRuntimeForMeetingRooms ?? defaultAppServerRuntime;
+  const meetingRoomRoundExecutor = options.meetingRoomRoundExecutor ?? new MeetingRoomRoundExecutor();
   const updateService = options.updateService ?? new ThemisUpdateService({
     workingDirectory: runtime.getWorkingDirectory(),
   });
@@ -579,6 +582,7 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
         return handleMeetingRoomMessageStream(request, response, {
           gateway: platformMeetingRoomGateway,
           runtime: appServerRuntimeForMeetingRooms,
+          roundExecutor: meetingRoomRoundExecutor,
         });
       }
 

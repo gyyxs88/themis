@@ -1,24 +1,18 @@
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
+import { MeetingRoomRoundExecutor } from "../core/meeting-room-round-executor.js";
 import type { PlatformMeetingRoomGateway, PlatformMeetingRoomGatewayStatus } from "../core/platform-meeting-room-gateway.js";
-import type {
-  ManagedAgentPlatformMeetingMessageRecord,
-  ManagedAgentPlatformMeetingParticipantRecord,
-} from "../contracts/managed-agent-platform-meetings.js";
 import {
   buildManagedAgentMeetingRoomStreamEvent,
 } from "../contracts/managed-agent-platform-meetings.js";
 import type {
   ManagedAgentPlatformMeetingRoomAppendFailureInput,
-  ManagedAgentPlatformMeetingRoomAppendReplyInput,
   ManagedAgentPlatformMeetingRoomCloseInput,
   ManagedAgentPlatformMeetingRoomCreateInput,
   ManagedAgentPlatformMeetingRoomCreateResolutionInput,
   ManagedAgentPlatformMeetingRoomMessageCreateInput,
   ManagedAgentPlatformMeetingRoomPromoteResolutionInput,
 } from "../contracts/managed-agent-platform-meetings.js";
-import type { TaskRequest } from "../types/task.js";
 import { readJsonBody } from "./http-request.js";
 import { writeJson, writeNdjson } from "./http-responses.js";
 
@@ -35,6 +29,7 @@ export interface MeetingRoomGatewayOptions {
 
 export interface MeetingRoomStreamOptions extends MeetingRoomGatewayOptions {
   runtime: Pick<AppServerTaskRuntime, "runTaskAsPrincipal"> | null;
+  roundExecutor: MeetingRoomRoundExecutor | null;
 }
 
 export function handleMeetingRoomStatus(
@@ -189,7 +184,7 @@ export async function handleMeetingRoomMessageStream(
   response: ServerResponse,
   options: MeetingRoomStreamOptions,
 ): Promise<void> {
-  if (!options.gateway || !options.runtime) {
+  if (!options.gateway || !options.runtime || !options.roundExecutor) {
     writeJson(response, 409, PLATFORM_MEETING_ROOMS_GATEWAY_REQUIRED);
     return;
   }
@@ -224,85 +219,14 @@ export async function handleMeetingRoomMessageStream(
       roundId: started.round.roundId,
     }));
 
-    const detail = await options.gateway.getRoomDetail(started.room.roomId);
-    const participantNames = new Map(
-      detail.participants
-        .filter((participant) => participant.agentId)
-        .map((participant) => [participant.agentId ?? "", participant.displayName]),
-    );
-
-    for (const participant of started.targetParticipants) {
-      writeNdjson(response, buildManagedAgentMeetingRoomStreamEvent("room.round.started", {
-        roomId: started.room.roomId,
-        roundId: started.round.roundId,
-        participantAgentId: participant.agentId ?? "",
-      }));
-
-      try {
-        const visibleMessages = detail.messages
-          .filter((message) => isMessageVisibleToParticipant(message, participant))
-          .map((message) => ({
-            speaker: resolveVisibleSpeaker(message, participantNames),
-            content: message.content,
-          }));
-
-        const result = await options.runtime.runTaskAsPrincipal(
-          buildMeetingRoomTaskRequest({
-            roomTitle: detail.room.title,
-            roomGoal: detail.room.goal,
-            managerMessage: started.message.content,
-            visibleMessages,
-            entryContextSnapshotJson: participant.entryContextSnapshotJson,
-          }),
-          {
-            principalId: participant.principalId,
-            ...(participant.roomSessionId ? { conversationId: participant.roomSessionId } : {}),
-          },
-        );
-
-        const replyText = typeof result.output === "string" && result.output.trim()
-          ? result.output.trim()
-          : typeof result.summary === "string" && result.summary.trim()
-            ? result.summary.trim()
-            : "收到，当前没有可直接输出的文字结论。";
-
-        const appended = await options.gateway.appendAgentReply({
-          roomId: started.room.roomId,
-          roundId: started.round.roundId,
-          participantId: participant.participantId,
-          content: replyText,
-        });
-
-        writeNdjson(response, buildManagedAgentMeetingRoomStreamEvent("room.agent.reply", {
-          roomId: started.room.roomId,
-          roundId: started.round.roundId,
-          participantAgentId: participant.agentId ?? "",
-          messageId: appended.message.messageId,
-        }));
-
-        writeNdjson(response, buildManagedAgentMeetingRoomStreamEvent("room.round.completed", {
-          roomId: started.room.roomId,
-          roundId: appended.round.roundId,
-          participantAgentId: participant.agentId ?? "",
-        }));
-      } catch (error) {
-        const failureMessage = error instanceof Error ? error.message : String(error);
-
-        await options.gateway.appendAgentFailure({
-          roomId: started.room.roomId,
-          roundId: started.round.roundId,
-          participantId: participant.participantId,
-          failureMessage,
-        });
-
-        writeNdjson(response, buildManagedAgentMeetingRoomStreamEvent("room.agent.failed", {
-          roomId: started.room.roomId,
-          roundId: started.round.roundId,
-          participantAgentId: participant.agentId ?? "",
-          failureMessage,
-        }));
-      }
-    }
+    await options.roundExecutor.enqueue({
+      gateway: options.gateway,
+      runtime: options.runtime,
+      started,
+      onEvent(event) {
+        writeNdjson(response, event);
+      },
+    });
 
     response.end();
   } catch (error) {
@@ -313,69 +237,6 @@ export async function handleMeetingRoomMessageStream(
 
     response.end();
   }
-}
-
-function buildMeetingRoomTaskRequest(input: {
-  roomTitle: string;
-  roomGoal: string;
-  managerMessage: string;
-  visibleMessages: Array<{ speaker: string; content: string }>;
-  entryContextSnapshotJson: unknown;
-}): TaskRequest {
-  const transcript = input.visibleMessages
-    .map((message) => `${message.speaker}: ${message.content}`)
-    .join("\n");
-  const timestamp = new Date().toISOString();
-
-  return {
-    requestId: randomUUID(),
-    sourceChannel: "web",
-    user: {
-      userId: "themis-internal-meeting-room",
-      displayName: "Themis Internal Meeting Room",
-    },
-    goal: `参与内部会议室讨论：${input.roomTitle}`,
-    inputText: [
-      `你正在参加 Themis 发起的内部会议室：${input.roomTitle}`,
-      `房间目标：${input.roomGoal}`,
-      transcript ? `房间可见历史：\n${transcript}` : "房间可见历史：暂无",
-      `你的入场上下文快照：${JSON.stringify(input.entryContextSnapshotJson ?? null)}`,
-      `Themis 刚才的问题：${input.managerMessage}`,
-      "请直接给出你的判断、建议或需要 Themis 澄清的问题。不要假设自己在和人类直接对话；你的上级是 Themis。",
-    ].join("\n\n"),
-    channelContext: {
-      sessionId: "",
-      channelSessionKey: "",
-    },
-    createdAt: timestamp,
-    options: {},
-  };
-}
-
-function isMessageVisibleToParticipant(
-  message: ManagedAgentPlatformMeetingMessageRecord,
-  participant: ManagedAgentPlatformMeetingParticipantRecord,
-): boolean {
-  if (message.audience === "all_participants") {
-    return true;
-  }
-
-  return Array.isArray(message.visibleParticipantIds) && message.visibleParticipantIds.includes(participant.participantId);
-}
-
-function resolveVisibleSpeaker(
-  message: ManagedAgentPlatformMeetingMessageRecord,
-  participantNames: Map<string, string>,
-): string {
-  if (message.speakerType === "themis") {
-    return "Themis";
-  }
-
-  if (message.speakerType === "managed_agent") {
-    return participantNames.get(message.speakerAgentId ?? "") ?? "Managed Agent";
-  }
-
-  return "System";
 }
 
 function requireMeetingRoomGateway(

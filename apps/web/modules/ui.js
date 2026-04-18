@@ -344,15 +344,20 @@ export function createRenderer(app) {
     const activeRoom = meetingRoomsState.activeRoom?.room?.roomId === meetingRoomsState.activeRoomId
       ? meetingRoomsState.activeRoom
       : null;
+    const managedParticipants = listMeetingRoomManagedParticipants(activeRoom);
     const busy = Boolean(
       meetingRoomsState.loadingStatus
       || meetingRoomsState.loadingRooms
       || meetingRoomsState.loadingDetail
       || meetingRoomsState.creating
-      || meetingRoomsState.streaming,
+      || meetingRoomsState.streaming
+      || meetingRoomsState.creatingResolution
+      || meetingRoomsState.promotingResolutionId
+      || meetingRoomsState.closingRoom
     );
     const ready = meetingRoomsState.accessMode === "platform_gateway";
     const statusMessage = resolveMeetingRoomsStatusMessage(meetingRoomsState, activeRoom);
+    const roomClosed = activeRoom?.room?.status === "closed";
 
     dom.meetingRoomsStatusNote.classList.toggle("hidden", !statusMessage);
     dom.meetingRoomsStatusNote.textContent = statusMessage;
@@ -372,11 +377,19 @@ export function createRenderer(app) {
       dom.meetingRoomsCreateOrganizationInput.value = meetingRoomsState.createDraft.organizationId;
     }
     dom.meetingRoomsCreateTitleInput.value = meetingRoomsState.createDraft.title;
+    dom.meetingRoomsCreateDiscussionModeSelect.value = meetingRoomsState.createDraft.discussionMode;
     dom.meetingRoomsCreateGoalInput.value = meetingRoomsState.createDraft.goal;
-    dom.meetingRoomsCreateParticipantsInput.value = meetingRoomsState.createDraft.participantAgentIdsText;
+    dom.meetingRoomsCreateParticipantsInput.value = meetingRoomsState.createDraft.participantSpecsText;
+    dom.meetingRoomsAddParticipantsInput.value = meetingRoomsState.addParticipantsText;
+    dom.meetingRoomsResolutionTitleInput.value = meetingRoomsState.resolutionDraft.title;
+    dom.meetingRoomsResolutionSummaryInput.value = meetingRoomsState.resolutionDraft.summary;
+    dom.meetingRoomsCloseSummaryInput.value = meetingRoomsState.closingSummaryText;
     dom.meetingRoomsComposerInput.value = meetingRoomsState.composerText;
     utils.autoResizeTextarea?.(dom.meetingRoomsCreateGoalInput);
     utils.autoResizeTextarea?.(dom.meetingRoomsCreateParticipantsInput);
+    utils.autoResizeTextarea?.(dom.meetingRoomsAddParticipantsInput);
+    utils.autoResizeTextarea?.(dom.meetingRoomsResolutionSummaryInput);
+    utils.autoResizeTextarea?.(dom.meetingRoomsCloseSummaryInput);
     utils.autoResizeTextarea?.(dom.meetingRoomsComposerInput);
 
     dom.meetingRoomsRefreshButton.disabled = Boolean(meetingRoomsState.loadingStatus || meetingRoomsState.loadingRooms);
@@ -390,8 +403,45 @@ export function createRenderer(app) {
       || !meetingRoomsState.createDraft.title.trim()
       || !meetingRoomsState.createDraft.goal.trim();
     dom.meetingRoomsCreateButton.textContent = meetingRoomsState.creating ? "创建中..." : "创建会议室";
-    dom.meetingRoomsComposerInput.disabled = busy || !ready || !meetingRoomsState.activeRoomId;
-    dom.meetingRoomsSendButton.disabled = busy || !ready || !meetingRoomsState.activeRoomId || !meetingRoomsState.composerText.trim();
+    dom.meetingRoomsCreateDiscussionModeSelect.disabled = busy || !ready;
+    dom.meetingRoomsAddParticipantsInput.disabled = busy || !ready || !meetingRoomsState.activeRoomId || roomClosed;
+    dom.meetingRoomsAddParticipantsButton.disabled = busy
+      || !ready
+      || !meetingRoomsState.activeRoomId
+      || roomClosed
+      || !meetingRoomsState.addParticipantsText.trim();
+    dom.meetingRoomsAddParticipantsButton.textContent = meetingRoomsState.streaming ? "处理中..." : "拉新员工入场";
+    dom.meetingRoomsResolutionTitleInput.disabled = busy || !ready || !meetingRoomsState.activeRoomId || roomClosed;
+    dom.meetingRoomsResolutionSummaryInput.disabled = busy || !ready || !meetingRoomsState.activeRoomId || roomClosed;
+    dom.meetingRoomsCreateResolutionButton.disabled = busy
+      || !ready
+      || !meetingRoomsState.activeRoomId
+      || roomClosed
+      || !meetingRoomsState.resolutionDraft.title.trim()
+      || !meetingRoomsState.resolutionDraft.summary.trim()
+      || resolveSelectedMeetingRoomResolutionSourceIds(meetingRoomsState, activeRoom).length === 0;
+    dom.meetingRoomsCreateResolutionButton.textContent = meetingRoomsState.creatingResolution
+      ? "沉淀中..."
+      : "沉淀为会议结论";
+    dom.meetingRoomsCloseSummaryInput.disabled = busy || !ready || !meetingRoomsState.activeRoomId || roomClosed;
+    dom.meetingRoomsCloseButton.disabled = busy
+      || !ready
+      || !meetingRoomsState.activeRoomId
+      || roomClosed
+      || !meetingRoomsState.closingSummaryText.trim();
+    dom.meetingRoomsCloseButton.textContent = meetingRoomsState.closingRoom ? "关闭中..." : "关闭会议室";
+    dom.meetingRoomsComposerInput.disabled = busy
+      || !ready
+      || !meetingRoomsState.activeRoomId
+      || roomClosed
+      || managedParticipants.length === 0;
+    dom.meetingRoomsSendButton.disabled = busy
+      || !ready
+      || !meetingRoomsState.activeRoomId
+      || !meetingRoomsState.composerText.trim()
+      || roomClosed
+      || managedParticipants.length === 0
+      || resolveSelectedMeetingRoomTargetIds(meetingRoomsState, activeRoom).length === 0;
     dom.meetingRoomsSendButton.textContent = meetingRoomsState.streaming ? "讨论中..." : "发起本轮讨论";
 
     dom.meetingRoomsListEmpty.classList.toggle("hidden", meetingRoomsState.rooms.length > 0);
@@ -411,16 +461,52 @@ export function createRenderer(app) {
       dom.meetingRoomsActiveGoal.textContent = ready
         ? "创建后或从左侧选择一个会议室，Themis 就能以主持人身份拉员工进入会议轮次。"
         : "接通平台 gateway 后，这里会显示内部会议室详情与消息流。";
+      dom.meetingRoomsActiveMeta.innerHTML = '<p class="settings-section-copy">这里会展示讨论模式、房间状态和当前轮次摘要。</p>';
+      dom.meetingRoomsParticipantsList.innerHTML = '<p class="settings-section-copy">选中房间后，这里会显示 Themis 与数字员工的参与情况。</p>';
+      dom.meetingRoomsRoundsSummary.innerHTML = '<p class="settings-section-copy">最近几轮会在这里展示进行中、排队中和已完成状态。</p>';
       dom.meetingRoomsActiveMessages.innerHTML = '<p class="settings-section-copy">这里会按时间线展示 Themis 与数字员工的内部会议消息。</p>';
+      dom.meetingRoomsResolutionSelectionNote.textContent = "选中房间后，先在消息流里勾选要引用的消息。";
+      dom.meetingRoomsResolutionsList.innerHTML = '<p class="settings-section-copy">这里会展示已经沉淀的会议结论，以及提升为 work item 的状态。</p>';
+      dom.meetingRoomsTargetParticipantsList.innerHTML = '<p class="settings-section-copy">选中房间后，可以指定本轮让哪些员工发言。</p>';
       return;
     }
 
     dom.meetingRoomsActiveTitle.textContent = activeRoom.room.title || "未命名会议室";
     dom.meetingRoomsActiveGoal.textContent = activeRoom.room.goal || "当前会议室还没有补充目标说明。";
+    dom.meetingRoomsActiveMeta.innerHTML = renderMeetingRoomMetaMarkup(activeRoom, {
+      escapeHtml: utils.escapeHtml,
+    });
+    dom.meetingRoomsParticipantsList.innerHTML = renderMeetingRoomParticipantsMarkup(activeRoom, {
+      escapeHtml: utils.escapeHtml,
+    });
+    dom.meetingRoomsRoundsSummary.innerHTML = renderMeetingRoomRoundsMarkup(activeRoom, {
+      escapeHtml: utils.escapeHtml,
+    });
     dom.meetingRoomsActiveMessages.innerHTML = renderMeetingRoomMessagesMarkup(activeRoom, {
       escapeHtml: utils.escapeHtml,
       formatRelativeTime: utils.formatRelativeTime,
+      roomClosed,
+      selectedResolutionSourceMessageIds: resolveSelectedMeetingRoomResolutionSourceIds(meetingRoomsState, activeRoom),
     });
+    dom.meetingRoomsResolutionSelectionNote.textContent = resolveMeetingRoomResolutionSelectionLabel(
+      meetingRoomsState,
+      activeRoom,
+    );
+    dom.meetingRoomsResolutionsList.innerHTML = renderMeetingRoomResolutionsMarkup(activeRoom, {
+      escapeHtml: utils.escapeHtml,
+      formatRelativeTime: utils.formatRelativeTime,
+      roomClosed,
+      busy,
+      promotingResolutionId: meetingRoomsState.promotingResolutionId,
+      resolutionPromotionTargetAgentIds: meetingRoomsState.resolutionPromotionTargetAgentIds,
+    });
+    dom.meetingRoomsTargetParticipantsList.innerHTML = renderMeetingRoomTargetParticipantsMarkup(
+      activeRoom,
+      resolveSelectedMeetingRoomTargetIds(meetingRoomsState, activeRoom),
+      {
+        escapeHtml: utils.escapeHtml,
+      },
+    );
   }
 
   function renderSkillsState() {
@@ -2477,6 +2563,9 @@ function normalizeMeetingRoomsState(value) {
     loadingDetail: Boolean(safeValue.loadingDetail),
     creating: Boolean(safeValue.creating),
     streaming: Boolean(safeValue.streaming),
+    creatingResolution: Boolean(safeValue.creatingResolution),
+    promotingResolutionId: typeof safeValue.promotingResolutionId === "string" ? safeValue.promotingResolutionId : "",
+    closingRoom: Boolean(safeValue.closingRoom),
     errorMessage: typeof safeValue.errorMessage === "string" ? safeValue.errorMessage : "",
     noticeMessage: typeof safeValue.noticeMessage === "string" ? safeValue.noticeMessage : "",
     rooms: Array.isArray(safeValue.rooms) ? safeValue.rooms.filter((room) => typeof room?.roomId === "string" && room.roomId.trim()) : [],
@@ -2486,10 +2575,30 @@ function normalizeMeetingRoomsState(value) {
       organizationId: typeof safeValue.createDraft?.organizationId === "string" ? safeValue.createDraft.organizationId : "",
       title: typeof safeValue.createDraft?.title === "string" ? safeValue.createDraft.title : "",
       goal: typeof safeValue.createDraft?.goal === "string" ? safeValue.createDraft.goal : "",
-      participantAgentIdsText: typeof safeValue.createDraft?.participantAgentIdsText === "string"
-        ? safeValue.createDraft.participantAgentIdsText
+      discussionMode: safeValue.createDraft?.discussionMode === "collaborative" ? "collaborative" : "moderated",
+      participantSpecsText: typeof safeValue.createDraft?.participantSpecsText === "string"
+        ? safeValue.createDraft.participantSpecsText
         : "",
     },
+    addParticipantsText: typeof safeValue.addParticipantsText === "string" ? safeValue.addParticipantsText : "",
+    selectedTargetParticipantIds: Array.isArray(safeValue.selectedTargetParticipantIds)
+      ? safeValue.selectedTargetParticipantIds.filter((item) => typeof item === "string" && item.trim())
+      : [],
+    selectedResolutionSourceMessageIds: Array.isArray(safeValue.selectedResolutionSourceMessageIds)
+      ? safeValue.selectedResolutionSourceMessageIds.filter((item) => typeof item === "string" && item.trim())
+      : [],
+    resolutionDraft: {
+      title: typeof safeValue.resolutionDraft?.title === "string" ? safeValue.resolutionDraft.title : "",
+      summary: typeof safeValue.resolutionDraft?.summary === "string" ? safeValue.resolutionDraft.summary : "",
+    },
+    resolutionPromotionTargetAgentIds: safeValue.resolutionPromotionTargetAgentIds
+      && typeof safeValue.resolutionPromotionTargetAgentIds === "object"
+      ? Object.fromEntries(
+          Object.entries(safeValue.resolutionPromotionTargetAgentIds)
+            .filter(([key, val]) => typeof key === "string" && key.trim() && typeof val === "string" && val.trim()),
+        )
+      : {},
+    closingSummaryText: typeof safeValue.closingSummaryText === "string" ? safeValue.closingSummaryText : "",
     composerText: typeof safeValue.composerText === "string" ? safeValue.composerText : "",
   };
 }
@@ -2523,8 +2632,24 @@ function resolveMeetingRoomsStatusMessage(meetingRoomsState, activeRoom) {
     return "Themis 正在主持本轮会议讨论。";
   }
 
+  if (meetingRoomsState.creatingResolution) {
+    return "Themis 正在沉淀本次会议结论。";
+  }
+
+  if (meetingRoomsState.promotingResolutionId) {
+    return "Themis 正在把会议结论提升为正式 work item。";
+  }
+
+  if (meetingRoomsState.closingRoom) {
+    return "Themis 正在关闭当前会议室。";
+  }
+
   if (meetingRoomsState.noticeMessage) {
     return meetingRoomsState.noticeMessage;
+  }
+
+  if (activeRoom?.room?.status === "closed") {
+    return "当前会议室已关闭，只读回看。";
   }
 
   if (activeRoom?.room?.title) {
@@ -2548,6 +2673,7 @@ function resolveMeetingRoomsEmptyLabel(meetingRoomsState) {
 
 function renderMeetingRoomListCard(room, { active, escapeHtml, formatRelativeTime }) {
   const status = resolveMeetingRoomStatusLabel(room.status);
+  const modeLabel = resolveMeetingRoomDiscussionModeLabel(room.discussionMode);
   const updatedAt = typeof room.updatedAt === "string" && room.updatedAt
     ? formatRelativeTime(room.updatedAt)
     : "刚刚";
@@ -2570,13 +2696,131 @@ function renderMeetingRoomListCard(room, { active, escapeHtml, formatRelativeTim
       </div>
       <div class="meeting-room-card-meta">
         <span>${escapeHtml(organizationLabel)}</span>
+        <span>${escapeHtml(modeLabel)}</span>
         <span>${escapeHtml(updatedAt)}</span>
       </div>
     </button>
   `;
 }
 
-function renderMeetingRoomMessagesMarkup(activeRoom, { escapeHtml, formatRelativeTime }) {
+function renderMeetingRoomMetaMarkup(activeRoom, { escapeHtml }) {
+  const managedParticipants = listMeetingRoomManagedParticipants(activeRoom);
+  const rounds = Array.isArray(activeRoom.rounds) ? activeRoom.rounds : [];
+  const runningCount = rounds.filter((round) => round?.status === "running").length;
+  const queuedCount = rounds.filter((round) => round?.status === "queued").length;
+  const closedCopy = activeRoom.room?.status === "closed" && typeof activeRoom.room?.closingSummary === "string" && activeRoom.room.closingSummary.trim()
+    ? `<div class="meeting-room-meta-card"><strong>收口说明</strong><span>${escapeHtml(activeRoom.room.closingSummary.trim())}</span></div>`
+    : "";
+
+  return `
+    <div class="meeting-room-meta-card">
+      <strong>讨论模式</strong>
+      <span>${escapeHtml(resolveMeetingRoomDiscussionModeLabel(activeRoom.room?.discussionMode))}</span>
+    </div>
+    <div class="meeting-room-meta-card">
+      <strong>房间状态</strong>
+      <span>${escapeHtml(resolveMeetingRoomStatusLabel(activeRoom.room?.status))}</span>
+    </div>
+    <div class="meeting-room-meta-card">
+      <strong>参与者</strong>
+      <span>${escapeHtml(`${managedParticipants.length} 位数字员工 + Themis`)}</span>
+    </div>
+    <div class="meeting-room-meta-card">
+      <strong>轮次队列</strong>
+      <span>${escapeHtml(`进行中 ${runningCount} / 排队中 ${queuedCount}`)}</span>
+    </div>
+    ${closedCopy}
+  `;
+}
+
+function renderMeetingRoomParticipantsMarkup(activeRoom, { escapeHtml }) {
+  const participants = Array.isArray(activeRoom.participants) ? activeRoom.participants : [];
+
+  if (!participants.length) {
+    return '<p class="settings-section-copy">当前房间还没有参与者。</p>';
+  }
+
+  return participants
+    .map((participant) => {
+      const isThemis = participant?.participantKind === "themis";
+      const roleLabel = isThemis ? "主持人" : "参与者";
+      const entryLabel = isThemis ? "固定主持位" : resolveMeetingRoomEntryModeLabel(participant?.entryMode);
+      const snapshotLabel = !isThemis && participant?.entryContextSnapshotJson ? "已带入快照" : "未带额外快照";
+
+      return `
+        <article class="meeting-room-participant-item">
+          <div>
+            <strong>${escapeHtml(participant?.displayName || participant?.agentId || "未命名参与者")}</strong>
+            <p>${escapeHtml(`${roleLabel}｜${entryLabel}`)}</p>
+          </div>
+          <span>${escapeHtml(snapshotLabel)}</span>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function renderMeetingRoomRoundsMarkup(activeRoom, { escapeHtml }) {
+  const rounds = Array.isArray(activeRoom.rounds)
+    ? [...activeRoom.rounds].sort((left, right) => {
+        const leftTime = typeof left?.createdAt === "string" ? new Date(left.createdAt).getTime() : 0;
+        const rightTime = typeof right?.createdAt === "string" ? new Date(right.createdAt).getTime() : 0;
+        return rightTime - leftTime;
+      })
+    : [];
+
+  if (!rounds.length) {
+    return '<p class="settings-section-copy">当前还没有会议轮次。</p>';
+  }
+
+  return rounds.slice(0, 5).map((round, index) => `
+      <article class="meeting-room-round-item">
+        <div>
+          <strong>${escapeHtml(`第 ${rounds.length - index} 轮`)}</strong>
+          <p>${escapeHtml(resolveMeetingRoomRoundStatusLabel(round?.status))}</p>
+        </div>
+        <span>${escapeHtml(`${Array.isArray(round?.respondedParticipantIds) ? round.respondedParticipantIds.length : 0} / ${Array.isArray(round?.targetParticipantIds) ? round.targetParticipantIds.length : 0} 已响应`)}</span>
+      </article>
+    `).join("");
+}
+
+function renderMeetingRoomTargetParticipantsMarkup(activeRoom, selectedTargetParticipantIds, { escapeHtml }) {
+  const participants = listMeetingRoomManagedParticipants(activeRoom);
+
+  if (!participants.length) {
+    return '<p class="settings-section-copy">当前房间还没有数字员工，请先拉员工进场。</p>';
+  }
+
+  return participants.map((participant) => {
+    const participantId = typeof participant?.participantId === "string" ? participant.participantId : "";
+    const checked = selectedTargetParticipantIds.includes(participantId);
+    const entryMode = resolveMeetingRoomEntryModeLabel(participant?.entryMode);
+
+    return `
+      <label class="meeting-room-target-option">
+        <input
+          type="checkbox"
+          data-meeting-room-target-participant-id="${escapeHtml(participantId)}"
+          ${checked ? "checked" : ""}
+        />
+        <span>
+          <strong>${escapeHtml(participant?.displayName || participant?.agentId || "数字员工")}</strong>
+          <small>${escapeHtml(entryMode)}</small>
+        </span>
+      </label>
+    `;
+  }).join("");
+}
+
+function renderMeetingRoomMessagesMarkup(
+  activeRoom,
+  {
+    escapeHtml,
+    formatRelativeTime,
+    roomClosed = false,
+    selectedResolutionSourceMessageIds = [],
+  },
+) {
   const participantsByAgentId = new Map(
     (Array.isArray(activeRoom.participants) ? activeRoom.participants : [])
       .filter((participant) => typeof participant?.agentId === "string" && participant.agentId.trim())
@@ -2606,14 +2850,52 @@ function renderMeetingRoomMessagesMarkup(activeRoom, { escapeHtml, formatRelativ
       return `
         <article class="meeting-room-message-card" data-speaker="${escapeHtml(speakerType)}">
           <div class="meeting-room-message-head">
-            <strong>${escapeHtml(speakerLabel)}</strong>
-            <span>${escapeHtml(`${kindLabel} · ${createdAt}`)}</span>
+            <div class="meeting-room-message-head-main">
+              <strong>${escapeHtml(speakerLabel)}</strong>
+              <span>${escapeHtml(`${kindLabel} · ${createdAt}`)}</span>
+            </div>
+            ${renderMeetingRoomVisibilityBadge(message, { escapeHtml })}
+            ${renderMeetingRoomMessageSelectionMarkup(message, selectedResolutionSourceMessageIds, {
+              escapeHtml,
+              roomClosed,
+            })}
           </div>
           <div class="meeting-room-message-body">${renderMeetingRoomMessageContent(message?.content, escapeHtml)}</div>
         </article>
       `;
     })
     .join("");
+}
+
+function renderMeetingRoomMessageSelectionMarkup(message, selectedResolutionSourceMessageIds, { escapeHtml, roomClosed }) {
+  if (!isMeetingRoomMessageResolvable(message)) {
+    return "";
+  }
+
+  const messageId = typeof message?.messageId === "string" ? message.messageId.trim() : "";
+  const checked = selectedResolutionSourceMessageIds.includes(messageId);
+
+  return `
+    <label class="meeting-room-message-select">
+      <input
+        type="checkbox"
+        data-meeting-room-resolution-source-message-id="${escapeHtml(messageId)}"
+        ${checked ? "checked" : ""}
+        ${roomClosed ? "disabled" : ""}
+      />
+      <span>用于结论</span>
+    </label>
+  `;
+}
+
+function renderMeetingRoomVisibilityBadge(message, { escapeHtml }) {
+  const audience = resolveMeetingRoomAudienceLabel(message?.audience);
+
+  if (!audience) {
+    return "";
+  }
+
+  return `<span class="meeting-room-visibility-badge">${escapeHtml(audience)}</span>`;
 }
 
 function renderMeetingRoomMessageContent(content, escapeHtml) {
@@ -2629,12 +2911,206 @@ function renderMeetingRoomMessageContent(content, escapeHtml) {
     .join("");
 }
 
+function renderMeetingRoomResolutionsMarkup(
+  activeRoom,
+  {
+    escapeHtml,
+    formatRelativeTime,
+    roomClosed = false,
+    busy = false,
+    promotingResolutionId = "",
+    resolutionPromotionTargetAgentIds = {},
+  },
+) {
+  const resolutions = Array.isArray(activeRoom?.resolutions)
+    ? [...activeRoom.resolutions].sort((left, right) => {
+        const leftTime = typeof left?.createdAt === "string" ? new Date(left.createdAt).getTime() : 0;
+        const rightTime = typeof right?.createdAt === "string" ? new Date(right.createdAt).getTime() : 0;
+        return rightTime - leftTime;
+      })
+    : [];
+  const managedParticipants = listMeetingRoomManagedParticipants(activeRoom)
+    .filter((participant) => typeof participant?.agentId === "string" && participant.agentId.trim());
+
+  if (!resolutions.length) {
+    return '<p class="settings-section-copy">当前还没有会议结论，先在消息流勾选消息，再沉淀一条结论。</p>';
+  }
+
+  return resolutions.map((resolution) => {
+    const resolutionId = typeof resolution?.resolutionId === "string" ? resolution.resolutionId.trim() : "";
+    const selectedAgentId = resolveMeetingRoomPromoteTargetAgentId(
+      managedParticipants,
+      resolutionPromotionTargetAgentIds,
+      resolutionId,
+    );
+    const createdAt = typeof resolution?.createdAt === "string" && resolution.createdAt
+      ? formatRelativeTime(resolution.createdAt)
+      : "刚刚";
+    const promoted = resolution?.status === "promoted";
+    const promoting = promotingResolutionId === resolutionId;
+
+    return `
+      <article class="meeting-room-resolution-card">
+        <div class="meeting-room-resolution-head">
+          <div>
+            <strong>${escapeHtml(resolution?.title || "未命名结论")}</strong>
+            <p>${escapeHtml(`${resolveMeetingRoomResolutionStatusLabel(resolution?.status)} · 来源 ${Array.isArray(resolution?.sourceMessageIds) ? resolution.sourceMessageIds.length : 0} 条消息 · ${createdAt}`)}</p>
+          </div>
+          <span class="meeting-room-badge" data-state="${escapeHtml(resolveMeetingRoomResolutionStatusTone(resolution?.status))}">${escapeHtml(resolveMeetingRoomResolutionStatusLabel(resolution?.status))}</span>
+        </div>
+        <div class="meeting-room-message-body">${renderMeetingRoomMessageContent(resolution?.summary, escapeHtml)}</div>
+        <div class="meeting-room-resolution-meta">
+          ${resolution?.promotedWorkItemId
+            ? `<span>已提升为 work item：${escapeHtml(resolution.promotedWorkItemId)}</span>`
+            : "<span>还未提升为正式执行项。</span>"}
+        </div>
+        <div class="meeting-room-resolution-actions">
+          <label class="meeting-room-resolution-target">
+            <span>目标员工</span>
+            <select
+              data-meeting-room-promote-target-resolution-id="${escapeHtml(resolutionId)}"
+              ${roomClosed || promoted || managedParticipants.length === 0 || busy ? "disabled" : ""}
+            >
+              ${managedParticipants.map((participant) => {
+                const agentId = typeof participant?.agentId === "string" ? participant.agentId : "";
+                return `
+                  <option value="${escapeHtml(agentId)}" ${selectedAgentId === agentId ? "selected" : ""}>
+                    ${escapeHtml(participant?.displayName || agentId)}
+                  </option>
+                `;
+              }).join("")}
+            </select>
+          </label>
+          <button
+            type="button"
+            class="toolbar-button subtle"
+            data-meeting-room-promote-resolution-id="${escapeHtml(resolutionId)}"
+            ${roomClosed || promoted || managedParticipants.length === 0 || busy ? "disabled" : ""}
+          >
+            ${promoting ? "提升中..." : promoted ? "已提升" : "提升成工作项"}
+          </button>
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
 function resolveMeetingRoomStatusLabel(status) {
   return {
     open: "进行中",
     closing: "收口中",
     closed: "已关闭",
   }[status] ?? "进行中";
+}
+
+function resolveMeetingRoomDiscussionModeLabel(mode) {
+  return {
+    moderated: "主持模式",
+    collaborative: "协作模式",
+  }[mode] ?? "主持模式";
+}
+
+function resolveMeetingRoomEntryModeLabel(mode) {
+  return {
+    blank: "空白入场",
+    active_work_context: "带当前工作上下文",
+    selected_context: "带指定上下文",
+  }[mode] ?? "空白入场";
+}
+
+function resolveMeetingRoomRoundStatusLabel(status) {
+  return {
+    queued: "排队中",
+    running: "进行中",
+    completed: "已完成",
+    failed: "已失败",
+  }[status] ?? "进行中";
+}
+
+function resolveMeetingRoomResolutionStatusLabel(status) {
+  return {
+    draft: "草案",
+    accepted: "已确认",
+    promoted: "已提升",
+  }[status] ?? "草案";
+}
+
+function resolveMeetingRoomResolutionStatusTone(status) {
+  return {
+    draft: "closing",
+    accepted: "open",
+    promoted: "open",
+  }[status] ?? "closing";
+}
+
+function listMeetingRoomManagedParticipants(activeRoom) {
+  return Array.isArray(activeRoom?.participants)
+    ? activeRoom.participants.filter((participant) => participant?.participantKind === "managed_agent" && !participant?.leftAt)
+    : [];
+}
+
+function resolveSelectedMeetingRoomResolutionSourceIds(meetingRoomsState, activeRoom) {
+  const validIds = Array.isArray(activeRoom?.messages)
+    ? activeRoom.messages
+      .filter((message) => isMeetingRoomMessageResolvable(message))
+      .map((message) => typeof message?.messageId === "string" ? message.messageId.trim() : "")
+      .filter(Boolean)
+    : [];
+  const validSet = new Set(validIds);
+  const selected = Array.isArray(meetingRoomsState.selectedResolutionSourceMessageIds)
+    ? meetingRoomsState.selectedResolutionSourceMessageIds
+      .map((item) => typeof item === "string" ? item.trim() : "")
+      .filter((item) => validSet.has(item))
+    : [];
+
+  return Array.from(new Set(selected));
+}
+
+function resolveMeetingRoomResolutionSelectionLabel(meetingRoomsState, activeRoom) {
+  const selectedCount = resolveSelectedMeetingRoomResolutionSourceIds(meetingRoomsState, activeRoom).length;
+
+  if (selectedCount <= 0) {
+    return "先在上方消息流勾选至少 1 条要引用的消息。";
+  }
+
+  return `已选 ${selectedCount} 条消息作为结论依据。`;
+}
+
+function resolveMeetingRoomPromoteTargetAgentId(managedParticipants, resolutionPromotionTargetAgentIds, resolutionId) {
+  const validAgentIds = managedParticipants
+    .map((participant) => typeof participant?.agentId === "string" ? participant.agentId.trim() : "")
+    .filter(Boolean);
+  const configured = typeof resolutionPromotionTargetAgentIds?.[resolutionId] === "string"
+    ? resolutionPromotionTargetAgentIds[resolutionId].trim()
+    : "";
+
+  return validAgentIds.includes(configured) ? configured : (validAgentIds[0] ?? "");
+}
+
+function isMeetingRoomMessageResolvable(message) {
+  const messageId = typeof message?.messageId === "string" ? message.messageId.trim() : "";
+  const speakerType = typeof message?.speakerType === "string" ? message.speakerType : "";
+  const messageKind = typeof message?.messageKind === "string" ? message.messageKind : "message";
+
+  if (!messageId || messageKind === "status") {
+    return false;
+  }
+
+  return speakerType === "themis" || speakerType === "managed_agent";
+}
+
+function resolveSelectedMeetingRoomTargetIds(meetingRoomsState, activeRoom) {
+  const validIds = listMeetingRoomManagedParticipants(activeRoom)
+    .map((participant) => typeof participant?.participantId === "string" ? participant.participantId.trim() : "")
+    .filter(Boolean);
+  const validSet = new Set(validIds);
+  const selected = Array.isArray(meetingRoomsState.selectedTargetParticipantIds)
+    ? meetingRoomsState.selectedTargetParticipantIds
+      .map((item) => typeof item === "string" ? item.trim() : "")
+      .filter((item) => validSet.has(item))
+    : [];
+
+  return selected.length > 0 ? Array.from(new Set(selected)) : validIds;
 }
 
 function resolveMeetingRoomSpeakerLabel(message, participantsByAgentId) {
@@ -2657,6 +3133,18 @@ function resolveMeetingRoomMessageKindLabel(messageKind) {
     summary: "总结",
     error: "异常",
   }[messageKind] ?? "消息";
+}
+
+function resolveMeetingRoomAudienceLabel(audience) {
+  if (audience === "themis_only") {
+    return "仅 Themis 可见";
+  }
+
+  if (audience === "selected_participants") {
+    return "定向可见";
+  }
+
+  return "";
 }
 
 function createPluginCardKey(marketplacePath, pluginKey) {

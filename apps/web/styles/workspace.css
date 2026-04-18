@@ -831,6 +831,100 @@
   gap: 12px;
 }
 
+.meeting-room-meta-grid,
+.meeting-room-overview-grid,
+.meeting-room-governance-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.meeting-room-meta-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.meeting-room-overview-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.meeting-room-governance-grid {
+  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.95fr);
+}
+
+.meeting-room-meta-card,
+.meeting-room-sidecard,
+.meeting-room-participant-item,
+.meeting-room-round-item,
+.meeting-room-target-option,
+.meeting-room-resolution-card {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #ffffff;
+}
+
+.meeting-room-meta-card,
+.meeting-room-participant-item,
+.meeting-room-round-item,
+.meeting-room-target-option {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.meeting-room-meta-card strong,
+.meeting-room-participant-item strong,
+.meeting-room-round-item strong,
+.meeting-room-target-option strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.meeting-room-meta-card span,
+.meeting-room-participant-item p,
+.meeting-room-participant-item span,
+.meeting-room-round-item p,
+.meeting-room-round-item span,
+.meeting-room-target-option small {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.meeting-room-sidecard {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.meeting-room-participant-list,
+.meeting-room-round-list,
+.meeting-room-target-list,
+.meeting-room-resolution-list {
+  display: grid;
+  gap: 10px;
+}
+
+.meeting-room-resolution-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.meeting-room-target-option {
+  cursor: pointer;
+}
+
+.meeting-room-target-option input {
+  margin-top: 4px;
+}
+
+.meeting-room-target-option span {
+  display: grid;
+  gap: 2px;
+}
+
 .meeting-room-active-head h4,
 .meeting-room-message-head strong {
   margin: 0;
@@ -879,9 +973,38 @@
   gap: 8px 14px;
 }
 
+.meeting-room-message-head-main {
+  display: grid;
+  gap: 2px;
+}
+
 .meeting-room-message-head span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.meeting-room-message-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.meeting-room-visibility-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #f5f1e8;
+  color: #6d5530;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.meeting-room-message-select input {
+  margin: 0;
 }
 
 .meeting-room-message-body {
@@ -894,6 +1017,49 @@
 
 .meeting-room-message-body p {
   margin: 0;
+}
+
+.meeting-room-resolution-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px 14px;
+}
+
+.meeting-room-resolution-head strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.meeting-room-resolution-head p,
+.meeting-room-resolution-meta span,
+.meeting-room-resolution-target span {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.meeting-room-resolution-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+}
+
+.meeting-room-resolution-target {
+  display: grid;
+  gap: 6px;
+  min-width: min(240px, 100%);
+}
+
+.meeting-room-resolution-target select {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #ffffff;
 }
 
 .skills-install-grid {
@@ -2064,6 +2230,21 @@
     grid-template-columns: 1fr;
   }
 
+  .meeting-room-overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .meeting-room-governance-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .meeting-room-resolution-actions,
+  .meeting-room-message-head {
+    width: 100%;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
   .settings-inline-actions {
     width: 100%;
     flex-direction: column;
@@ -2131,6 +2312,13 @@
   .meeting-room-message-head {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .meeting-room-meta-card,
+  .meeting-room-participant-item,
+  .meeting-room-round-item,
+  .meeting-room-target-option {
+    flex-direction: column;
   }
 
   .settings-submodal {
