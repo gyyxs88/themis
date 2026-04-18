@@ -13,6 +13,7 @@ import { ThemisUpdateService } from "../diagnostics/update-service.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createThemisHttpServer, resolveListenAddresses } from "./http-server.js";
 import { resolveMainPlatformGatewayFacade } from "./main-platform-gateway.js";
+import { resolvePlatformMeetingRoomGateway } from "../core/platform-meeting-room-gateway.js";
 
 const DEFAULT_PRIVATE_ASSISTANT_PRINCIPAL_ID = "principal-local-owner";
 
@@ -96,6 +97,7 @@ const updateService = new ThemisUpdateService({
   workingDirectory: runtime.getWorkingDirectory(),
 });
 const platformControlPlaneFacade = resolveMainPlatformGatewayFacade();
+const platformMeetingRoomGateway = resolvePlatformMeetingRoomGateway();
 feishuService = new FeishuChannelService({
   runtime,
   runtimeRegistry: feishuRuntimeRegistry,
@@ -115,7 +117,9 @@ const server = createThemisHttpServer({
   managedAgentExecutionService,
   feishuService,
   updateService,
+  appServerRuntimeForMeetingRooms: appServerRuntime,
   ...(platformControlPlaneFacade ? { platformControlPlaneFacade } : {}),
+  ...(platformMeetingRoomGateway ? { platformMeetingRoomGateway } : {}),
 });
 
 let agentSchedulerTickRunning = false;

@@ -145,6 +145,18 @@ import {
   handleThirdPartyProviderCreate,
 } from "./http-third-party-probe.js";
 import { SyntheticSmokeTaskRuntime } from "./synthetic-smoke-task-runtime.js";
+import type { PlatformMeetingRoomGateway } from "../core/platform-meeting-room-gateway.js";
+import {
+  handleMeetingRoomClose,
+  handleMeetingRoomCreate,
+  handleMeetingRoomCreateResolution,
+  handleMeetingRoomDetail,
+  handleMeetingRoomList,
+  handleMeetingRoomMessageStream,
+  handleMeetingRoomParticipantsAdd,
+  handleMeetingRoomPromoteResolution,
+  handleMeetingRoomStatus,
+} from "./http-meeting-rooms.js";
 
 const DEFAULT_PRIVATE_ASSISTANT_PRINCIPAL_ID = "principal-local-owner";
 
@@ -166,6 +178,8 @@ export interface ThemisHttpServerOptions {
   managedAgentExecutionService?: ManagedAgentExecutionService;
   platformManagedAgentExecutionService?: ManagedAgentWorkItemCancellationService;
   platformControlPlaneFacade?: ManagedAgentControlPlaneFacadeLike;
+  platformMeetingRoomGateway?: PlatformMeetingRoomGateway | null;
+  appServerRuntimeForMeetingRooms?: Pick<AppServerTaskRuntime, "runTaskAsPrincipal"> | null;
   feishuService?: {
     handleCardActionWebhook(request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean>;
   };
@@ -215,6 +229,8 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
   const webAccessService = new WebAccessService({ registry: runtimeStore });
   const platformControlPlaneFacade = options.platformControlPlaneFacade
     ?? defaultAppServerRuntime.getManagedAgentControlPlaneFacadeAsync();
+  const platformMeetingRoomGateway = options.platformMeetingRoomGateway ?? null;
+  const appServerRuntimeForMeetingRooms = options.appServerRuntimeForMeetingRooms ?? defaultAppServerRuntime;
   const updateService = options.updateService ?? new ThemisUpdateService({
     workingDirectory: runtime.getWorkingDirectory(),
   });
@@ -527,6 +543,61 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/platform/worker/runs/complete") {
         return handlePlatformWorkerRunComplete(request, response, platformControlPlaneFacade);
+      }
+
+      if ((request.method === "GET" || isHeadRequest) && url.pathname === "/api/meeting-rooms/status") {
+        return handleMeetingRoomStatus(response, {
+          gateway: platformMeetingRoomGateway,
+        }, isHeadRequest);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/meeting-rooms/list") {
+        return handleMeetingRoomList(request, response, {
+          gateway: platformMeetingRoomGateway,
+        });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/meeting-rooms/create") {
+        return handleMeetingRoomCreate(request, response, {
+          gateway: platformMeetingRoomGateway,
+        });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/meeting-rooms/detail") {
+        return handleMeetingRoomDetail(request, response, {
+          gateway: platformMeetingRoomGateway,
+        });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/meeting-rooms/participants/add") {
+        return handleMeetingRoomParticipantsAdd(request, response, {
+          gateway: platformMeetingRoomGateway,
+        });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/meeting-rooms/message/stream") {
+        return handleMeetingRoomMessageStream(request, response, {
+          gateway: platformMeetingRoomGateway,
+          runtime: appServerRuntimeForMeetingRooms,
+        });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/meeting-rooms/resolutions/create") {
+        return handleMeetingRoomCreateResolution(request, response, {
+          gateway: platformMeetingRoomGateway,
+        });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/meeting-rooms/resolutions/promote") {
+        return handleMeetingRoomPromoteResolution(request, response, {
+          gateway: platformMeetingRoomGateway,
+        });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/meeting-rooms/close") {
+        return handleMeetingRoomClose(request, response, {
+          gateway: platformMeetingRoomGateway,
+        });
       }
 
       if (request.method === "POST" && url.pathname === "/api/actors/list") {

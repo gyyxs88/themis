@@ -21,6 +21,7 @@ export function createActions(app) {
     app.auth.bindControls();
     app.updateManager.bindControls();
     app.modeSwitch.bindControls();
+    app.meetingRooms.bindControls();
     app.thirdPartyEditor.bindControls();
     app.thirdPartyEndpointProbe.bindControls();
     app.thirdPartyProbe.bindControls();
@@ -64,6 +65,17 @@ export function createActions(app) {
   function bindWorkspaceControls() {
     function canCloseWorkspaceTools() {
       return !app.runtime.thirdPartyEditor.submitting;
+    }
+
+    async function refreshMeetingRoomsPanel() {
+      try {
+        await app.meetingRooms.loadStatus();
+        if (app.runtime.meetingRooms?.accessMode === "platform_gateway") {
+          await app.meetingRooms.loadRooms({ refreshActive: true });
+        }
+      } catch {
+        // Errors are already reflected in meetingRooms state for the UI.
+      }
     }
 
     async function persistWorkspaceSettings() {
@@ -179,6 +191,8 @@ export function createActions(app) {
 
       if (nextSection === "auth") {
         void app.auth.load({ force: true, quiet: true });
+      } else if (nextSection === "meeting-rooms") {
+        void refreshMeetingRoomsPanel();
       }
     });
 
@@ -192,6 +206,8 @@ export function createActions(app) {
 
       if (nextOpen && app.runtime.workspaceToolsSection === "auth") {
         void app.auth.load({ force: true, quiet: true });
+      } else if (nextOpen && app.runtime.workspaceToolsSection === "meeting-rooms") {
+        void refreshMeetingRoomsPanel();
       }
     });
 

@@ -6,6 +6,7 @@ import { createHistoryController } from "./modules/history.js";
 import { createIdentityController } from "./modules/identity.js";
 import { createInputAssetsApi } from "./modules/input-assets.js";
 import { createLayoutController } from "./modules/layout.js";
+import { createDefaultMeetingRoomsState, createMeetingRoomsController } from "./modules/meeting-rooms.js";
 import { createDefaultMemoryCandidatesState, createMemoryCandidatesController } from "./modules/memory-candidates.js";
 import { createDefaultMcpState, createMcpController } from "./modules/mcp.js";
 import { createDefaultModeSwitchDraftState, createModeSwitchController } from "./modules/mode-switch.js";
@@ -53,6 +54,7 @@ const app = {
     workspaceToolsOpen: false,
     workspaceToolsSection: "runtime",
     memoryCandidates: createDefaultMemoryCandidatesState(),
+    meetingRooms: createDefaultMeetingRoomsState(),
     mcp: createDefaultMcpState(),
     plugins: createDefaultPluginsState(),
     skills: createDefaultSkillsState(),
@@ -73,6 +75,7 @@ app.layout = createLayoutController(app);
 app.auth = createAuthController(app);
 app.identity = createIdentityController(app);
 app.memoryCandidates = createMemoryCandidatesController(app);
+app.meetingRooms = createMeetingRoomsController(app);
 app.mcp = createMcpController(app);
 app.plugins = createPluginsController(app);
 app.runtimeConfig = createRuntimeConfigController(app);
@@ -83,6 +86,7 @@ app.mcp.bindControls();
 app.plugins.bindControls();
 app.skills.bindControls();
 app.memoryCandidates.bindControls();
+app.meetingRooms.bindControls();
 app.modeSwitch = createModeSwitchController(app);
 app.thirdPartyEditor = createThirdPartyEditorController(app);
 app.thirdPartyEndpointProbe = createThirdPartyEndpointProbeController(app);

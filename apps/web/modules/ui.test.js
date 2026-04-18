@@ -1987,6 +1987,68 @@ test("renderAgentsState 会在 loading 时更新入口状态和刷新按钮", ()
   assert.equal(harness.dom.agentsOpenPlatformNote.textContent, "已配置平台上游后，这里会给出独立 Platform 页面的直达入口。");
 });
 
+test("renderMeetingRoomsState 会渲染内部会议室列表和当前房间消息流", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      workspaceToolsSection: "meeting-rooms",
+      meetingRooms: {
+        accessMode: "platform_gateway",
+        platformBaseUrl: "https://platform.example.com",
+        ownerPrincipalId: "principal-owner",
+        loadingStatus: false,
+        loadingRooms: false,
+        creating: false,
+        streaming: false,
+        errorMessage: "",
+        noticeMessage: "",
+        rooms: [{
+          roomId: "room-1",
+          title: "发布阻塞讨论",
+          goal: "找根因",
+          status: "open",
+        }],
+        activeRoomId: "room-1",
+        activeRoom: {
+          room: {
+            roomId: "room-1",
+            title: "发布阻塞讨论",
+            goal: "找根因",
+            status: "open",
+          },
+          participants: [],
+          messages: [{
+            messageId: "message-1",
+            roomId: "room-1",
+            speakerType: "themis",
+            content: "先给出根因判断。",
+          }],
+          rounds: [],
+          resolutions: [],
+          artifactRefs: [],
+        },
+        createDraft: {
+          title: "发布阻塞讨论",
+          goal: "找根因",
+          participantAgentIdsText: "agent-1",
+        },
+        composerText: "",
+      },
+    },
+  });
+
+  harness.renderer.renderMeetingRoomsState();
+
+  assert.equal(harness.dom.meetingRoomsStatusNote.textContent, "平台会议室已就绪。");
+  assert.equal(harness.dom.meetingRoomsActiveTitle.textContent, "发布阻塞讨论");
+  assert.match(harness.dom.meetingRoomsList.innerHTML, /发布阻塞讨论/);
+  assert.match(harness.dom.meetingRoomsActiveMessages.innerHTML, /先给出根因判断/);
+});
+
 function createHarness({ actionBarState, threadControlState = null, runtime = {}, threadOverrides = {} }) {
   const thread = {
     id: "thread-composer",
@@ -2036,6 +2098,7 @@ function createHarness({ actionBarState, threadControlState = null, runtime = {}
     settingsSkillsSection: createPanelStub(true),
     settingsAgentsSection: createPanelStub(true),
     settingsMemoryCandidatesSection: createPanelStub(true),
+    settingsMeetingRoomsSection: createPanelStub(true),
     settingsThirdPartySection: createPanelStub(true),
     settingsModeSwitchSection: createPanelStub(true),
     threadSearchInput: createDisabledInputStub(),
@@ -2145,6 +2208,20 @@ function createHarness({ actionBarState, threadControlState = null, runtime = {}
     memoryCandidatesStatusNote: createTextStub(),
     memoryCandidatesListEmpty: createTextStub(),
     memoryCandidatesList: createTextStub(),
+    meetingRoomsStatusNote: createTextStub(),
+    meetingRoomsCreateOrganizationInput: createDisabledInputStub(),
+    meetingRoomsCreateTitleInput: createDisabledInputStub(),
+    meetingRoomsCreateGoalInput: createDisabledInputStub(),
+    meetingRoomsCreateParticipantsInput: createDisabledInputStub(),
+    meetingRoomsCreateButton: createButtonStub(),
+    meetingRoomsRefreshButton: createButtonStub(),
+    meetingRoomsListEmpty: createTextStub(),
+    meetingRoomsList: createTextStub(),
+    meetingRoomsActiveTitle: createTextStub(),
+    meetingRoomsActiveGoal: createTextStub(),
+    meetingRoomsActiveMessages: createTextStub(),
+    meetingRoomsComposerInput: createDisabledInputStub(),
+    meetingRoomsSendButton: createButtonStub(),
     accessModeSelect: createDisabledInputStub(),
     modeSwitchAuthAccountSelect: createDisabledInputStub(),
     accessModeApplyButton: createButtonStub(),
@@ -2197,6 +2274,7 @@ function createHarness({ actionBarState, threadControlState = null, runtime = {}
   };
 
   const store = {
+    ensureActiveThread() {},
     getActiveThread() {
       return thread;
     },

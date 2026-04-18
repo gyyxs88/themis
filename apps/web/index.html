@@ -333,6 +333,18 @@
                 </button>
 
                 <button
+                  id="settings-meeting-rooms-tab"
+                  type="button"
+                  class="settings-nav-button"
+                  data-settings-section="meeting-rooms"
+                  role="tab"
+                  aria-controls="settings-meeting-rooms-section"
+                  aria-selected="false"
+                >
+                  <span class="settings-nav-title">内部会议室</span>
+                </button>
+
+                <button
                   id="settings-third-party-tab"
                   type="button"
                   class="settings-nav-button"
@@ -1123,6 +1135,116 @@
                     <div id="memory-candidates-list" class="settings-stack"></div>
                   </div>
                 </section>
+              </section>
+
+              <section
+                id="settings-meeting-rooms-section"
+                class="settings-panel hidden"
+                role="tabpanel"
+                aria-labelledby="settings-meeting-rooms-tab"
+              >
+                <div class="meeting-rooms-layout">
+                  <section class="workspace-tool-group">
+                    <div class="tool-group-head">
+                      <h3>房间列表</h3>
+                      <span class="meta-label">平台基座</span>
+                    </div>
+
+                    <p class="settings-section-copy">
+                      平台层负责持有会议室真相源，Themis 在这里以管理者身份查看房间、创建讨论，并随时主持新一轮内部会议。
+                    </p>
+
+                    <div class="settings-stack">
+                      <div class="settings-inline-actions">
+                        <button id="meeting-rooms-refresh-button" type="button" class="toolbar-button subtle">刷新</button>
+                      </div>
+
+                      <p
+                        id="meeting-rooms-status-note"
+                        class="settings-section-copy settings-probe-note hidden"
+                        aria-live="polite"
+                      ></p>
+                      <div id="meeting-rooms-list-empty" class="settings-section-copy hidden">当前还没有内部会议室。</div>
+                      <div id="meeting-rooms-list" class="meeting-room-list"></div>
+                    </div>
+                  </section>
+
+                  <section class="workspace-tool-group">
+                    <div class="tool-group-head">
+                      <h3>主持台</h3>
+                      <span class="meta-label">创建与多轮讨论</span>
+                    </div>
+
+                    <div class="settings-stack">
+                      <div class="settings-grid">
+                        <label class="settings-field">
+                          <span>组织 ID</span>
+                          <input
+                            id="meeting-rooms-create-organization-input"
+                            type="text"
+                            placeholder="例如 org-ops"
+                          />
+                        </label>
+
+                        <label class="settings-field">
+                          <span>会议标题</span>
+                          <input
+                            id="meeting-rooms-create-title-input"
+                            type="text"
+                            placeholder="例如 发布阻塞讨论"
+                          />
+                        </label>
+                      </div>
+
+                      <label class="settings-field">
+                        <span>会议目标</span>
+                        <textarea
+                          id="meeting-rooms-create-goal-input"
+                          rows="3"
+                          placeholder="例如 统一判断发布失败根因，并给出下一步分工。"
+                        ></textarea>
+                      </label>
+
+                      <label class="settings-field">
+                        <span>参与员工</span>
+                        <textarea
+                          id="meeting-rooms-create-participants-input"
+                          rows="3"
+                          placeholder="输入 agentId，支持换行、空格或逗号分隔。"
+                        ></textarea>
+                      </label>
+
+                      <div class="settings-inline-actions">
+                        <button id="meeting-rooms-create-button" type="button" class="primary-button">创建会议室</button>
+                      </div>
+
+                      <div class="meeting-room-active-shell">
+                        <div class="meeting-room-active-head">
+                          <div>
+                            <h4 id="meeting-rooms-active-title">选择一个会议室</h4>
+                            <p id="meeting-rooms-active-goal" class="settings-section-copy">这里会展示当前会议目标和消息流。</p>
+                          </div>
+                        </div>
+
+                        <div id="meeting-rooms-active-messages" class="meeting-room-message-stream"></div>
+
+                        <label class="settings-field">
+                          <span>发起下一轮讨论</span>
+                          <textarea
+                            id="meeting-rooms-composer-input"
+                            rows="4"
+                            placeholder="例如 现在请三位分别给出根因判断、证据和建议动作。"
+                          ></textarea>
+                        </label>
+
+                        <div class="settings-inline-actions">
+                          <button id="meeting-rooms-send-button" type="button" class="primary-button">发起本轮讨论</button>
+                          <p class="settings-inline-copy">按 `Ctrl/Cmd + Enter` 可以直接发送。</p>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                </div>
               </section>
             </div>
           </div>

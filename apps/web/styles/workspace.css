@@ -717,6 +717,185 @@
   color: #715c1d;
 }
 
+.meeting-rooms-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.meeting-room-list {
+  display: grid;
+  gap: 10px;
+}
+
+.meeting-room-card {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(17, 17, 17, 0.03), transparent 32%),
+    #ffffff;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.meeting-room-card:hover,
+.meeting-room-card:focus-visible {
+  border-color: rgba(17, 17, 17, 0.18);
+  box-shadow: 0 18px 32px rgba(17, 17, 17, 0.07);
+  transform: translateY(-1px);
+}
+
+.meeting-room-card.active {
+  border-color: rgba(17, 17, 17, 0.28);
+  background:
+    radial-gradient(circle at top right, rgba(17, 17, 17, 0.08), transparent 32%),
+    linear-gradient(180deg, #ffffff 0%, #f6f6f3 100%);
+  box-shadow: 0 18px 32px rgba(17, 17, 17, 0.08);
+}
+
+.meeting-room-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.meeting-room-card-head h4,
+.meeting-room-card-copy,
+.meeting-room-card-meta {
+  margin: 0;
+}
+
+.meeting-room-card-head h4 {
+  font-size: 15px;
+}
+
+.meeting-room-card-copy {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.meeting-room-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.meeting-room-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 70px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #fafafb;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.meeting-room-badge[data-state="open"] {
+  border-color: #d8d4c8;
+  background: #fffaf1;
+  color: #76581d;
+}
+
+.meeting-room-badge[data-state="closing"] {
+  border-color: #d3dbe5;
+  background: #f5f8fc;
+  color: #35516f;
+}
+
+.meeting-room-badge[data-state="closed"] {
+  border-color: #ddd7cf;
+  background: #f7f4ef;
+  color: #66553d;
+}
+
+.meeting-room-active-shell {
+  display: grid;
+  gap: 12px;
+}
+
+.meeting-room-active-head h4,
+.meeting-room-message-head strong {
+  margin: 0;
+}
+
+.meeting-room-message-stream {
+  display: grid;
+  gap: 10px;
+  max-height: 420px;
+  padding: 4px;
+  overflow-y: auto;
+}
+
+.meeting-room-message-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #ffffff;
+}
+
+.meeting-room-message-card[data-speaker="themis"] {
+  background:
+    linear-gradient(180deg, #fffaf1 0%, #fffdf8 100%);
+  border-color: #e6ddbe;
+}
+
+.meeting-room-message-card[data-speaker="managed_agent"] {
+  background:
+    linear-gradient(180deg, #f7fafc 0%, #ffffff 100%);
+  border-color: #d7e0ea;
+}
+
+.meeting-room-message-card[data-speaker="system"] {
+  background:
+    linear-gradient(180deg, #fff7f6 0%, #ffffff 100%);
+  border-color: #f0d4cf;
+}
+
+.meeting-room-message-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 14px;
+}
+
+.meeting-room-message-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.meeting-room-message-body {
+  display: grid;
+  gap: 8px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.meeting-room-message-body p {
+  margin: 0;
+}
+
 .skills-install-grid {
   display: grid;
   gap: 12px;
@@ -1881,6 +2060,10 @@
     grid-template-columns: 1fr;
   }
 
+  .meeting-rooms-layout {
+    grid-template-columns: 1fr;
+  }
+
   .settings-inline-actions {
     width: 100%;
     flex-direction: column;
@@ -1942,6 +2125,12 @@
 
   .settings-modal-nav {
     grid-template-columns: 1fr;
+  }
+
+  .meeting-room-card-head,
+  .meeting-room-message-head {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .settings-submodal {
