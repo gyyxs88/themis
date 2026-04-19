@@ -12,6 +12,7 @@ import type { PlatformMeetingRoomGateway } from "./platform-meeting-room-gateway
 test("MeetingRoomRoundExecutor 会按房间串行 drain queued round", async () => {
   const delays: string[] = [];
   const eventsByRound = new Map<string, string[]>();
+  const runtimeContexts: Array<Record<string, unknown>> = [];
   const detailState: ManagedAgentPlatformMeetingRoomDetailResult = {
     room: {
       roomId: "room-1",
@@ -138,7 +139,21 @@ test("MeetingRoomRoundExecutor 会按房间串行 drain queued round", async () 
   } as Pick<PlatformMeetingRoomGateway, "getRoomDetail" | "appendAgentReply" | "appendAgentFailure">;
 
   const fakeRuntime: Pick<AppServerTaskRuntime, "runTaskAsPrincipal"> = {
-    async runTaskAsPrincipal(request: TaskRequest): Promise<TaskResult> {
+    async runTaskAsPrincipal(
+      request: TaskRequest,
+      context: {
+        principalId: string;
+        principalKind?: string;
+        principalDisplayName?: string;
+        principalOrganizationId?: string;
+      },
+    ): Promise<TaskResult> {
+      runtimeContexts.push({
+        principalId: context.principalId,
+        principalKind: context.principalKind,
+        principalDisplayName: context.principalDisplayName,
+        principalOrganizationId: context.principalOrganizationId,
+      });
       if (String(request.inputText ?? "").includes("Themis 刚才的问题：先给出第一轮判断。")) {
         delays.push("round-1-start");
         await new Promise((resolve) => setTimeout(resolve, 30));
@@ -212,6 +227,20 @@ test("MeetingRoomRoundExecutor 会按房间串行 drain queued round", async () 
     "room.round.started",
     "room.agent.reply",
     "room.round.completed",
+  ]);
+  assert.deepEqual(runtimeContexts, [
+    {
+      principalId: "principal-agent",
+      principalKind: "managed_agent",
+      principalDisplayName: "后端·衡",
+      principalOrganizationId: "org-1",
+    },
+    {
+      principalId: "principal-agent",
+      principalKind: "managed_agent",
+      principalDisplayName: "后端·衡",
+      principalOrganizationId: "org-1",
+    },
   ]);
 });
 

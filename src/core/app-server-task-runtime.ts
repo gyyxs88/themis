@@ -12,6 +12,7 @@ import {
   type CodexCliConfigOverrides,
 } from "./auth-accounts.js";
 import type {
+  PrincipalKind,
   PrincipalTaskSettings,
   RuntimeEngine,
   RuntimeInputCapabilities,
@@ -159,6 +160,9 @@ export interface AppServerTaskRuntimeOptions {
 export interface AppServerInternalTaskContext {
   principalId: string;
   conversationId?: string;
+  principalKind?: PrincipalKind;
+  principalDisplayName?: string;
+  principalOrganizationId?: string;
 }
 
 export interface AppServerTaskExecutionController {
@@ -325,6 +329,8 @@ export class AppServerTaskRuntime {
       throw new Error("Internal app-server execution requires principalId.");
     }
 
+    this.primeInternalPrincipalContext(request, context);
+
     const conversationId = normalizeTextValue(
       context.conversationId
         ?? request.channelContext.sessionId
@@ -350,6 +356,43 @@ export class AppServerTaskRuntime {
 
   private resolveExecutionRequest(request: TaskRequest): AppServerResolvedExecutionRequest {
     return this.applyPrincipalTaskSettings(this.conversationService.resolveRequest(request));
+  }
+
+  private primeInternalPrincipalContext(
+    request: TaskRequest,
+    context: AppServerInternalTaskContext,
+  ): void {
+    const principalId = normalizeTextValue(context.principalId);
+
+    if (!principalId) {
+      return;
+    }
+
+    const existing = this.runtimeStore.getPrincipal(principalId);
+    const principalKind = normalizePrincipalKindValue(context.principalKind) ?? existing?.kind;
+    const displayName = normalizeTextValue(context.principalDisplayName)
+      ?? existing?.displayName
+      ?? normalizeTextValue(request.user.displayName);
+    const organizationId = normalizeTextValue(context.principalOrganizationId) ?? existing?.organizationId;
+
+    if (
+      existing
+      && existing.kind === principalKind
+      && (existing.displayName ?? null) === (displayName ?? null)
+      && (existing.organizationId ?? null) === (organizationId ?? null)
+    ) {
+      return;
+    }
+
+    const now = request.createdAt || new Date().toISOString();
+    this.runtimeStore.savePrincipal({
+      principalId,
+      ...(displayName ? { displayName } : {}),
+      ...(principalKind ? { kind: principalKind } : {}),
+      ...(organizationId ? { organizationId } : {}),
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    });
   }
 
   private applyPrincipalTaskSettings(
@@ -1389,6 +1432,14 @@ function resolveActionScopeFromRequest(request: TaskRequest, principalId?: strin
   };
 
   return Object.keys(scope).length > 0 ? scope : undefined;
+}
+
+function normalizePrincipalKindValue(value: PrincipalKind | undefined): PrincipalKind | undefined {
+  if (value === "human_user" || value === "managed_agent" || value === "system") {
+    return value;
+  }
+
+  return undefined;
 }
 
 async function resolveActiveAppServerTurnId(

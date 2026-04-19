@@ -1645,6 +1645,75 @@ test("AppServerTaskRuntime 在 managed agent 的 auth 模式下会使用 agent �
   }
 });
 
+test("AppServerTaskRuntime 会把内部显式 managed_agent principal 从错误的人类状态纠正回来，并跳过 persona onboarding", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-meeting-managed-1",
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    fixture.runtimeStore.savePrincipal({
+      principalId: "principal-meeting-agent",
+      displayName: "旧的人类记录",
+      kind: "human_user",
+      organizationId: "org-stale",
+      createdAt: "2026-04-18T10:00:00.000Z",
+      updatedAt: "2026-04-18T10:00:00.000Z",
+    });
+    fixture.runtimeStore.savePrincipalPersonaProfile({
+      principalId: "principal-meeting-agent",
+      profile: {
+        preferredAddress: "老板",
+        workSummary: "这是错误写入的人类长期背景。",
+        collaborationStyle: "先给结论再展开。",
+        assistantLanguageStyle: "直接。",
+      },
+      createdAt: "2026-04-18T10:00:00.000Z",
+      updatedAt: "2026-04-18T10:00:00.000Z",
+      completedAt: "2026-04-18T10:00:00.000Z",
+    });
+
+    const result = await fixture.runtime.runTaskAsPrincipal({
+      requestId: "req-app-meeting-managed-1",
+      taskId: "task-app-meeting-managed-1",
+      sourceChannel: "web",
+      user: {
+        userId: "themis-internal-meeting-room",
+        displayName: "Themis Internal Meeting Room",
+      },
+      goal: "参与内部会议室讨论：发布验收顺序",
+      inputText: "请给出你对发布验收顺序的判断。",
+      channelContext: {
+        sessionId: "meeting-room:room-1:participant:agent-1",
+      },
+      createdAt: "2026-04-18T10:01:00.000Z",
+    }, {
+      principalId: "principal-meeting-agent",
+      principalKind: "managed_agent",
+      principalDisplayName: "联调验证·主机同工位",
+      principalOrganizationId: "org-wfdvffcd",
+      conversationId: "meeting-room:room-1:participant:agent-1",
+    });
+
+    const promptInput = state.turns[0]?.input;
+    const promptText = typeof promptInput === "string"
+      ? promptInput
+      : (promptInput?.find((part) => part.type === "text")?.text ?? "");
+
+    assert.equal(result.status, "completed");
+    assert.equal(result.structuredOutput?.personaOnboarding, undefined);
+    assert.equal(state.started.length, 1);
+    assert.doesNotMatch(promptText, /first-run persona bootstrap mode/);
+    assert.doesNotMatch(promptText, /Personalized long-term user profile:/);
+    assert.doesNotMatch(promptText, /Persistent Themis persona for this principal:/);
+    assert.equal(fixture.runtimeStore.getPrincipal("principal-meeting-agent")?.kind, "managed_agent");
+    assert.equal(fixture.runtimeStore.getPrincipal("principal-meeting-agent")?.displayName, "联调验证·主机同工位");
+    assert.equal(fixture.runtimeStore.getPrincipal("principal-meeting-agent")?.organizationId, "org-wfdvffcd");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("AppServerTaskRuntime 在 managed agent 的 third-party 模式下也会使用 agent 独立 CODEX_HOME", async () => {
   await withClearedOpenAICompatEnv(async () => {
     const { state, sessionFactory: baseSessionFactory } = createSessionFactory({

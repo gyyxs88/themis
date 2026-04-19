@@ -369,6 +369,12 @@ export class PrincipalPersonaService {
       return null;
     }
 
+    const principal = this.store.getPrincipal(normalizedPrincipalId);
+
+    if (principal?.kind && principal.kind !== "human_user") {
+      return null;
+    }
+
     const record = this.store.getPrincipalPersonaProfile(normalizedPrincipalId);
 
     if (!record) {
@@ -444,6 +450,12 @@ export class PrincipalPersonaService {
     const normalizedPrincipalId = principalId?.trim();
 
     if (!normalizedPrincipalId) {
+      return null;
+    }
+
+    const principal = this.store.getPrincipal(normalizedPrincipalId);
+
+    if (principal?.kind && principal.kind !== "human_user") {
       return null;
     }
 

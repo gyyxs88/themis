@@ -90,6 +90,9 @@ async function executeMeetingRoomRound(input: MeetingRoomRoundExecutorInput): Pr
         }),
         {
           principalId: participant.principalId,
+          principalKind: "managed_agent",
+          principalDisplayName: participant.displayName,
+          principalOrganizationId: detail.room.organizationId,
           ...(participant.roomSessionId ? { conversationId: participant.roomSessionId } : {}),
         },
       );
