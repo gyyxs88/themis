@@ -16,7 +16,7 @@ Themis 是一个围绕 `codex app-server` 构建的自托管协作壳。
 - 截至 `2026-04-15`，平台控制面、执行节点与真实局域网联调已经完成首轮验证；当前不再把这条线视为部署级阻塞。
 - 主 Themis 已不再保留 `Platform Agents` 页面，也不再暴露 `/api/agents/*` 这层平台兼容路由。
 - 平台值班、节点治理、`worker-fleet` 与 `nodes/*` 统一归 `themis-platform`。
-- `2026-04-18` 起，主 Themis Web 设置面板已新增“内部会议室”页，并通过 `/api/meeting-rooms/*` 作为平台会议室 gateway；Themis 现在可以作为唯一管理者创建会议室、按 `discussionMode / entryMode` 组织多员工讨论、查看实时消息流、沉淀 `resolution`、提升为正式 `work item`，并关闭房间收口。
+- `2026-04-18` 起，主 Themis Web 设置面板已新增“内部会议室”页，并通过 `/api/meeting-rooms/*` 作为平台会议室 gateway；Themis 现在可以作为唯一管理者创建会议室、按 `discussionMode / entryMode` 组织多员工讨论、查看实时消息流、沉淀 `resolution`、提升为正式 `work item`，并关闭房间收口。平台页则新增“会议室观察台”，负责只读观察与必要时的强制终止，不承担主持发言。
 - 本仓后续重点是主 Themis 自己的产品能力，以及通过共享契约消费平台事实的最小客户端能力。
 
 ## 当前定位
@@ -34,7 +34,7 @@ Themis 是一个围绕 `codex app-server` 构建的自托管协作壳。
 - 提供 `status / doctor / doctor smoke / doctor release` 这套运维诊断入口。
 - 提供 `POST /api/tasks/automation/run` 这类自动化接口。
 - 提供单次定时任务与员工治理能力，并通过 `themis mcp-server` 暴露 `create_scheduled_task / list_scheduled_tasks / cancel_scheduled_task / list_managed_agents / get_managed_agent_detail / create_managed_agent / update_managed_agent_execution_boundary / dispatch_work_item / update_managed_agent_lifecycle` 给 Codex 调用。
-- 提供平台会议室 gateway 与 Web 主持台，支持 `status / list / create / detail / participants/add / resolutions/create / resolutions/promote / close / message/stream` 这组内部会议能力，让 Themis 能以管理者身份拉多个数字员工进入同一个会议室讨论，并按轮次排队、定向发言、带上下文入场和会议收口。
+- 提供平台会议室 gateway 与 Web 主持台，支持 `status / list / create / detail / participants/add / resolutions/create / resolutions/promote / close / message/stream` 这组内部会议能力，让 Themis 能以管理者身份拉多个数字员工进入同一个会议室讨论，并按轮次排队、定向发言、带上下文入场和会议收口；平台页的会议室观察台会直接读取平台真相源，并提供只读观察与终止会议能力。
 
 ## 数字员工边界
 

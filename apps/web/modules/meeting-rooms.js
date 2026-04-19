@@ -1,4 +1,4 @@
-const ROOM_STATUSES = new Set(["open", "closing", "closed"]);
+const ROOM_STATUSES = new Set(["open", "closing", "closed", "terminated"]);
 const DISCUSSION_MODES = new Set(["moderated", "collaborative"]);
 const ENTRY_MODES = new Set(["blank", "active_work_context", "selected_context"]);
 const ARTIFACT_REF_TYPES = new Set([
@@ -8,6 +8,18 @@ const ARTIFACT_REF_TYPES = new Set([
   "conversation_summary",
   "document",
 ]);
+
+function isReadonlyRoomStatus(status) {
+  return normalizeText(status) === "closed" || normalizeText(status) === "terminated";
+}
+
+function resolveReadonlyRoomMessage(status, action) {
+  if (normalizeText(status) === "terminated") {
+    return `当前会议室已被平台终止，只能回看，${action}。`;
+  }
+
+  return `当前会议室已关闭，只能回看，${action}。`;
+}
 
 export function createDefaultMeetingRoomsState() {
   return {
@@ -638,6 +650,7 @@ export function createMeetingRoomsController(app) {
   async function addParticipants() {
     const current = app.runtime.meetingRooms ?? createDefaultMeetingRoomsState();
     const roomId = normalizeText(current.activeRoomId);
+    const activeRoom = current.activeRoom?.room?.roomId === roomId ? current.activeRoom : null;
     const participants = parseParticipantSpecs(current.addParticipantsText);
     const previousManagedParticipantIds = listManagedParticipantIds(current.activeRoom);
 
@@ -653,6 +666,15 @@ export function createMeetingRoomsController(app) {
     if (!roomId || participants.length === 0) {
       setState({
         errorMessage: "请先选择会议室，并输入至少一个待加入员工。",
+        noticeMessage: "",
+      });
+      render();
+      return current;
+    }
+
+    if (isReadonlyRoomStatus(activeRoom?.room?.status)) {
+      setState({
+        errorMessage: resolveReadonlyRoomMessage(activeRoom?.room?.status, "不能再拉新员工入场"),
         noticeMessage: "",
       });
       render();
@@ -747,9 +769,9 @@ export function createMeetingRoomsController(app) {
       return current;
     }
 
-    if (normalizeText(activeRoom?.room?.status) === "closed") {
+    if (isReadonlyRoomStatus(activeRoom?.room?.status)) {
       setState({
-        errorMessage: "当前会议室已关闭，只能回看，不能再新增会议结论。",
+        errorMessage: resolveReadonlyRoomMessage(activeRoom?.room?.status, "不能再新增会议结论"),
         noticeMessage: "",
       });
       render();
@@ -836,9 +858,9 @@ export function createMeetingRoomsController(app) {
       return current;
     }
 
-    if (normalizeText(activeRoom?.room?.status) === "closed") {
+    if (isReadonlyRoomStatus(activeRoom?.room?.status)) {
       setState({
-        errorMessage: "当前会议室已关闭，只能回看，不能再提升会议结论。",
+        errorMessage: resolveReadonlyRoomMessage(activeRoom?.room?.status, "不能再提升会议结论"),
         noticeMessage: "",
       });
       render();
@@ -914,9 +936,11 @@ export function createMeetingRoomsController(app) {
       return current;
     }
 
-    if (normalizeText(activeRoom?.room?.status) === "closed") {
+    if (isReadonlyRoomStatus(activeRoom?.room?.status)) {
       setState({
-        errorMessage: "当前会议室已经关闭，无需重复收口。",
+        errorMessage: normalizeText(activeRoom?.room?.status) === "terminated"
+          ? resolveReadonlyRoomMessage(activeRoom?.room?.status, "不能再按正常收口关闭")
+          : "当前会议室已经关闭，无需重复收口。",
         noticeMessage: "",
       });
       render();
@@ -997,9 +1021,9 @@ export function createMeetingRoomsController(app) {
       return current;
     }
 
-    if (normalizeText(activeRoom?.room?.status) === "closed") {
+    if (isReadonlyRoomStatus(activeRoom?.room?.status)) {
       setState({
-        errorMessage: "当前会议室已关闭，只能回看，不能继续发起讨论。",
+        errorMessage: resolveReadonlyRoomMessage(activeRoom?.room?.status, "不能继续发起讨论"),
         noticeMessage: "",
       });
       render();

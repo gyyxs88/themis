@@ -244,6 +244,224 @@ test("MeetingRoomRoundExecutor 会按房间串行 drain queued round", async () 
   ]);
 });
 
+test("MeetingRoomRoundExecutor 会在平台终止后停止执行排队轮次", async () => {
+  const events: string[] = [];
+  let detailCalls = 0;
+  let runtimeCalls = 0;
+  const queuedDetail: ManagedAgentPlatformMeetingRoomDetailResult = {
+    room: {
+      roomId: "room-terminated",
+      ownerPrincipalId: "principal-owner",
+      organizationId: "org-1",
+      title: "异常循环止损",
+      goal: "确认是否需要终止讨论",
+      status: "open",
+      discussionMode: "moderated",
+      createdByOperatorPrincipalId: "principal-owner",
+      createdAt: "2026-04-19T10:00:00.000Z",
+      updatedAt: "2026-04-19T10:00:00.000Z",
+    },
+    participants: [{
+      participantId: "participant-agent",
+      roomId: "room-terminated",
+      participantKind: "managed_agent",
+      principalId: "principal-agent",
+      agentId: "agent-1",
+      displayName: "后端·衡",
+      roomRole: "participant",
+      entryMode: "blank",
+      joinedAt: "2026-04-19T10:00:00.000Z",
+      createdAt: "2026-04-19T10:00:00.000Z",
+      updatedAt: "2026-04-19T10:00:00.000Z",
+    }],
+    rounds: [{
+      roundId: "round-terminated",
+      roomId: "room-terminated",
+      triggerMessageId: "message-terminated",
+      status: "queued",
+      targetParticipantIds: ["participant-agent"],
+      respondedParticipantIds: [],
+      createdAt: "2026-04-19T10:00:00.000Z",
+      updatedAt: "2026-04-19T10:00:00.000Z",
+    }],
+    messages: [{
+      messageId: "message-terminated",
+      roomId: "room-terminated",
+      speakerType: "themis",
+      audience: "all_participants",
+      content: "请先给出是否需要继续讨论的判断。",
+      messageKind: "message",
+      createdAt: "2026-04-19T10:00:00.000Z",
+      updatedAt: "2026-04-19T10:00:00.000Z",
+    }],
+    resolutions: [],
+    artifactRefs: [],
+  };
+
+  const terminatedDetail: ManagedAgentPlatformMeetingRoomDetailResult = {
+    ...structuredClone(queuedDetail),
+    room: {
+      ...structuredClone(queuedDetail.room),
+      status: "terminated",
+      terminatedAt: "2026-04-19T10:00:05.000Z",
+      terminatedByOperatorPrincipalId: "principal-owner",
+      terminationReason: "平台值班判断当前会议进入异常循环。",
+      updatedAt: "2026-04-19T10:00:05.000Z",
+    },
+    rounds: [{
+      ...structuredClone(queuedDetail.rounds[0]!),
+      status: "failed",
+      completedAt: "2026-04-19T10:00:05.000Z",
+      failureMessage: "平台已终止会议：平台值班判断当前会议进入异常循环。",
+      updatedAt: "2026-04-19T10:00:05.000Z",
+    }],
+  };
+
+  const fakeGateway = {
+    async getRoomDetail() {
+      detailCalls += 1;
+      return detailCalls === 1 ? structuredClone(queuedDetail) : structuredClone(terminatedDetail);
+    },
+    async appendAgentReply() {
+      throw new Error("终止后不应继续写回复。");
+    },
+    async appendAgentFailure() {
+      throw new Error("终止后不应继续写失败回执。");
+    },
+  } as Pick<PlatformMeetingRoomGateway, "getRoomDetail" | "appendAgentReply" | "appendAgentFailure">;
+
+  const fakeRuntime: Pick<AppServerTaskRuntime, "runTaskAsPrincipal"> = {
+    async runTaskAsPrincipal(): Promise<TaskResult> {
+      runtimeCalls += 1;
+      throw new Error("终止后不应继续调 runtime。");
+    },
+  };
+
+  const executor = new MeetingRoomRoundExecutor();
+  await executor.enqueue({
+    gateway: fakeGateway,
+    runtime: fakeRuntime,
+    started: {
+      room: structuredClone(queuedDetail.room),
+      message: structuredClone(queuedDetail.messages[0]!),
+      round: structuredClone(queuedDetail.rounds[0]!),
+      targetParticipants: [structuredClone(queuedDetail.participants[0]!)],
+    },
+    onEvent(event) {
+      events.push(event.event);
+    },
+  });
+
+  assert.equal(runtimeCalls, 0);
+  assert.deepEqual(events, ["room.round.queued"]);
+});
+
+test("MeetingRoomRoundExecutor 会在平台终止导致回写失败时优雅结束", async () => {
+  const events: Array<{ event: string; failureMessage: string | undefined }> = [];
+  const detail: ManagedAgentPlatformMeetingRoomDetailResult = {
+    room: {
+      roomId: "room-append-failure",
+      ownerPrincipalId: "principal-owner",
+      organizationId: "org-1",
+      title: "终止中的讨论",
+      goal: "验证回写失败时不炸流",
+      status: "open",
+      discussionMode: "moderated",
+      createdByOperatorPrincipalId: "principal-owner",
+      createdAt: "2026-04-19T10:00:00.000Z",
+      updatedAt: "2026-04-19T10:00:00.000Z",
+    },
+    participants: [{
+      participantId: "participant-agent",
+      roomId: "room-append-failure",
+      participantKind: "managed_agent",
+      principalId: "principal-agent",
+      agentId: "agent-1",
+      displayName: "后端·衡",
+      roomRole: "participant",
+      entryMode: "blank",
+      joinedAt: "2026-04-19T10:00:00.000Z",
+      createdAt: "2026-04-19T10:00:00.000Z",
+      updatedAt: "2026-04-19T10:00:00.000Z",
+    }],
+    rounds: [{
+      roundId: "round-append-failure",
+      roomId: "room-append-failure",
+      triggerMessageId: "message-append-failure",
+      status: "running",
+      targetParticipantIds: ["participant-agent"],
+      respondedParticipantIds: [],
+      startedAt: "2026-04-19T10:00:00.000Z",
+      createdAt: "2026-04-19T10:00:00.000Z",
+      updatedAt: "2026-04-19T10:00:00.000Z",
+    }],
+    messages: [{
+      messageId: "message-append-failure",
+      roomId: "room-append-failure",
+      speakerType: "themis",
+      audience: "all_participants",
+      content: "请给出你的判断。",
+      messageKind: "message",
+      createdAt: "2026-04-19T10:00:00.000Z",
+      updatedAt: "2026-04-19T10:00:00.000Z",
+    }],
+    resolutions: [],
+    artifactRefs: [],
+  };
+
+  const terminationError = new Error("Meeting room room-append-failure 已被平台终止，不能继续写入数字员工回复。");
+  const fakeGateway = {
+    async getRoomDetail() {
+      return structuredClone(detail);
+    },
+    async appendAgentReply() {
+      throw terminationError;
+    },
+    async appendAgentFailure() {
+      throw new Error("Meeting room room-append-failure 已被平台终止，不能继续写入失败回执。");
+    },
+  } as Pick<PlatformMeetingRoomGateway, "getRoomDetail" | "appendAgentReply" | "appendAgentFailure">;
+
+  const fakeRuntime: Pick<AppServerTaskRuntime, "runTaskAsPrincipal"> = {
+    async runTaskAsPrincipal(request: TaskRequest): Promise<TaskResult> {
+      return {
+        taskId: "task-append-failure",
+        requestId: request.requestId,
+        status: "completed",
+        output: "已经给出判断。",
+        summary: "已经给出判断。",
+        completedAt: "2026-04-19T10:00:03.000Z",
+      };
+    },
+  };
+
+  const executor = new MeetingRoomRoundExecutor();
+  await executor.enqueue({
+    gateway: fakeGateway,
+    runtime: fakeRuntime,
+    started: {
+      room: structuredClone(detail.room),
+      message: structuredClone(detail.messages[0]!),
+      round: structuredClone(detail.rounds[0]!),
+      targetParticipants: [structuredClone(detail.participants[0]!)],
+    },
+    onEvent(event) {
+      events.push({
+        event: event.event,
+        failureMessage: "failureMessage" in event ? event.failureMessage : undefined,
+      });
+    },
+  });
+
+  assert.deepEqual(events, [{
+    event: "room.round.started",
+    failureMessage: undefined,
+  }, {
+    event: "room.agent.failed",
+    failureMessage: "Meeting room room-append-failure 已被平台终止，不能继续写入数字员工回复。",
+  }]);
+});
+
 test("MeetingRoomRoundExecutor 会把入场上下文快照渲染成可读提示词", async () => {
   let capturedInputText = "";
   const detailState: ManagedAgentPlatformMeetingRoomDetailResult = {

@@ -1,6 +1,6 @@
 import type { ManagedAgentPlatformOwnerPayload } from "./managed-agent-platform-worker.js";
 
-export type ManagedAgentMeetingRoomStatus = "open" | "closing" | "closed";
+export type ManagedAgentMeetingRoomStatus = "open" | "closing" | "closed" | "terminated";
 export type ManagedAgentMeetingDiscussionMode = "moderated" | "collaborative";
 export type ManagedAgentMeetingParticipantKind = "themis" | "managed_agent";
 export type ManagedAgentMeetingRoomRole = "host" | "participant";
@@ -27,6 +27,9 @@ export interface ManagedAgentPlatformMeetingRoomRecord {
   createdByOperatorPrincipalId: string;
   closedAt?: string | null;
   closingSummary?: string;
+  terminatedAt?: string | null;
+  terminatedByOperatorPrincipalId?: string | null;
+  terminationReason?: string;
   createdAt: string;
   updatedAt: string;
   [key: string]: unknown;
@@ -107,7 +110,7 @@ export interface ManagedAgentPlatformMeetingArtifactRefRecord {
   [key: string]: unknown;
 }
 
-export const MANAGED_AGENT_MEETING_ROOM_STATUSES = ["open", "closing", "closed"] as const;
+export const MANAGED_AGENT_MEETING_ROOM_STATUSES = ["open", "closing", "closed", "terminated"] as const;
 export const MANAGED_AGENT_MEETING_ROUND_STATUSES = ["queued", "running", "completed", "failed"] as const;
 
 export interface ManagedAgentPlatformMeetingRoomCreateInput {
@@ -169,6 +172,12 @@ export interface ManagedAgentPlatformMeetingRoomCloseInput {
   closingSummary: string;
 }
 
+export interface ManagedAgentPlatformMeetingRoomTerminateInput {
+  roomId: string;
+  operatorPrincipalId: string;
+  terminationReason: string;
+}
+
 export interface ManagedAgentPlatformMeetingRoomListPayload extends ManagedAgentPlatformOwnerPayload {
   status?: ManagedAgentPlatformMeetingRoomRecord["status"];
 }
@@ -210,6 +219,10 @@ export interface ManagedAgentPlatformMeetingRoomClosePayload extends ManagedAgen
   room: ManagedAgentPlatformMeetingRoomCloseInput;
 }
 
+export interface ManagedAgentPlatformMeetingRoomTerminatePayload extends ManagedAgentPlatformOwnerPayload {
+  termination: ManagedAgentPlatformMeetingRoomTerminateInput;
+}
+
 export interface ManagedAgentPlatformMeetingRoomDetailResult {
   room: ManagedAgentPlatformMeetingRoomRecord;
   participants: ManagedAgentPlatformMeetingParticipantRecord[];
@@ -228,6 +241,7 @@ export type ManagedAgentPlatformMeetingRoomParticipantsAddResult = ManagedAgentP
 export type ManagedAgentPlatformMeetingRoomCreateResolutionResult = ManagedAgentPlatformMeetingRoomDetailResult;
 export type ManagedAgentPlatformMeetingRoomPromoteResolutionResult = ManagedAgentPlatformMeetingRoomDetailResult;
 export type ManagedAgentPlatformMeetingRoomCloseResult = ManagedAgentPlatformMeetingRoomDetailResult;
+export type ManagedAgentPlatformMeetingRoomTerminateResult = ManagedAgentPlatformMeetingRoomDetailResult;
 
 export interface ManagedAgentPlatformMeetingRoomMessageCreateResult {
   room: ManagedAgentPlatformMeetingRoomRecord;

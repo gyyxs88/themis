@@ -57,6 +57,12 @@ async function executeMeetingRoomRound(input: MeetingRoomRoundExecutorInput): Pr
   }
 
   const detail = await waitForRoundToBecomeRunnable(input.gateway, room.roomId, round.roundId);
+  const currentRound = getRoundOrThrow(detail, room.roomId, round.roundId);
+
+  if (shouldStopExecutingRound(detail.room.status, currentRound.status)) {
+    return;
+  }
+
   const participantNames = new Map(
     detail.participants
       .filter((participant) => participant.agentId)
@@ -64,6 +70,20 @@ async function executeMeetingRoomRound(input: MeetingRoomRoundExecutorInput): Pr
   );
 
   for (const participant of targetParticipants) {
+    const latestDetail = await input.gateway.getRoomDetail(room.roomId);
+    const latestRound = getRoundOrThrow(latestDetail, room.roomId, round.roundId);
+
+    if (shouldStopExecutingRound(latestDetail.room.status, latestRound.status)) {
+      return;
+    }
+
+    if (
+      !latestRound.targetParticipantIds.includes(participant.participantId)
+      || latestRound.respondedParticipantIds.includes(participant.participantId)
+    ) {
+      continue;
+    }
+
     emit(buildManagedAgentMeetingRoomStreamEvent("room.round.started", {
       roomId: room.roomId,
       roundId: round.roundId,
@@ -71,7 +91,7 @@ async function executeMeetingRoomRound(input: MeetingRoomRoundExecutorInput): Pr
     }));
 
     try {
-      const visibleMessages = detail.messages
+      const visibleMessages = latestDetail.messages
         .filter((message) => isMessageVisibleToParticipant(message, participant))
         .map((message) => ({
           speaker: resolveVisibleSpeaker(message, participantNames),
@@ -127,12 +147,18 @@ async function executeMeetingRoomRound(input: MeetingRoomRoundExecutorInput): Pr
     } catch (error) {
       const failureMessage = error instanceof Error ? error.message : String(error);
 
-      await input.gateway.appendAgentFailure({
-        roomId: room.roomId,
-        roundId: round.roundId,
-        participantId: participant.participantId,
-        failureMessage,
-      });
+      try {
+        await input.gateway.appendAgentFailure({
+          roomId: room.roomId,
+          roundId: round.roundId,
+          participantId: participant.participantId,
+          failureMessage,
+        });
+      } catch (appendFailureError) {
+        if (!isReadOnlyMeetingRoomError(appendFailureError)) {
+          throw appendFailureError;
+        }
+      }
 
       emit(buildManagedAgentMeetingRoomStreamEvent("room.agent.failed", {
         roomId: room.roomId,
@@ -165,6 +191,35 @@ async function waitForRoundToBecomeRunnable(
   }
 
   throw new Error(`Meeting room round ${roundId} did not become runnable in time.`);
+}
+
+function getRoundOrThrow(
+  detail: ManagedAgentPlatformMeetingRoomDetailResult,
+  roomId: string,
+  roundId: string,
+) {
+  const round = detail.rounds.find((item) => item.roundId === roundId);
+
+  if (!round) {
+    throw new Error(`Meeting room round ${roundId} not found in room ${roomId}.`);
+  }
+
+  return round;
+}
+
+function shouldStopExecutingRound(
+  roomStatus: ManagedAgentPlatformMeetingRoomDetailResult["room"]["status"],
+  roundStatus: ManagedAgentPlatformMeetingRoomDetailResult["rounds"][number]["status"],
+): boolean {
+  return roomStatus === "closed"
+    || roomStatus === "terminated"
+    || roundStatus === "failed"
+    || roundStatus === "completed";
+}
+
+function isReadOnlyMeetingRoomError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("已被平台终止") || message.includes("已关闭");
 }
 
 function buildMeetingRoomTaskRequest(input: {

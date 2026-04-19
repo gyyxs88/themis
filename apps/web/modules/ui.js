@@ -357,7 +357,7 @@ export function createRenderer(app) {
     );
     const ready = meetingRoomsState.accessMode === "platform_gateway";
     const statusMessage = resolveMeetingRoomsStatusMessage(meetingRoomsState, activeRoom);
-    const roomClosed = activeRoom?.room?.status === "closed";
+    const roomReadonly = isMeetingRoomReadonlyStatus(activeRoom?.room?.status);
 
     dom.meetingRoomsStatusNote.classList.toggle("hidden", !statusMessage);
     dom.meetingRoomsStatusNote.textContent = statusMessage;
@@ -404,42 +404,42 @@ export function createRenderer(app) {
       || !meetingRoomsState.createDraft.goal.trim();
     dom.meetingRoomsCreateButton.textContent = meetingRoomsState.creating ? "创建中..." : "创建会议室";
     dom.meetingRoomsCreateDiscussionModeSelect.disabled = busy || !ready;
-    dom.meetingRoomsAddParticipantsInput.disabled = busy || !ready || !meetingRoomsState.activeRoomId || roomClosed;
+    dom.meetingRoomsAddParticipantsInput.disabled = busy || !ready || !meetingRoomsState.activeRoomId || roomReadonly;
     dom.meetingRoomsAddParticipantsButton.disabled = busy
       || !ready
       || !meetingRoomsState.activeRoomId
-      || roomClosed
+      || roomReadonly
       || !meetingRoomsState.addParticipantsText.trim();
     dom.meetingRoomsAddParticipantsButton.textContent = meetingRoomsState.streaming ? "处理中..." : "拉新员工入场";
-    dom.meetingRoomsResolutionTitleInput.disabled = busy || !ready || !meetingRoomsState.activeRoomId || roomClosed;
-    dom.meetingRoomsResolutionSummaryInput.disabled = busy || !ready || !meetingRoomsState.activeRoomId || roomClosed;
+    dom.meetingRoomsResolutionTitleInput.disabled = busy || !ready || !meetingRoomsState.activeRoomId || roomReadonly;
+    dom.meetingRoomsResolutionSummaryInput.disabled = busy || !ready || !meetingRoomsState.activeRoomId || roomReadonly;
     dom.meetingRoomsCreateResolutionButton.disabled = busy
       || !ready
       || !meetingRoomsState.activeRoomId
-      || roomClosed
+      || roomReadonly
       || !meetingRoomsState.resolutionDraft.title.trim()
       || !meetingRoomsState.resolutionDraft.summary.trim()
       || resolveSelectedMeetingRoomResolutionSourceIds(meetingRoomsState, activeRoom).length === 0;
     dom.meetingRoomsCreateResolutionButton.textContent = meetingRoomsState.creatingResolution
       ? "沉淀中..."
       : "沉淀为会议结论";
-    dom.meetingRoomsCloseSummaryInput.disabled = busy || !ready || !meetingRoomsState.activeRoomId || roomClosed;
+    dom.meetingRoomsCloseSummaryInput.disabled = busy || !ready || !meetingRoomsState.activeRoomId || roomReadonly;
     dom.meetingRoomsCloseButton.disabled = busy
       || !ready
       || !meetingRoomsState.activeRoomId
-      || roomClosed
+      || roomReadonly
       || !meetingRoomsState.closingSummaryText.trim();
     dom.meetingRoomsCloseButton.textContent = meetingRoomsState.closingRoom ? "关闭中..." : "关闭会议室";
     dom.meetingRoomsComposerInput.disabled = busy
       || !ready
       || !meetingRoomsState.activeRoomId
-      || roomClosed
+      || roomReadonly
       || managedParticipants.length === 0;
     dom.meetingRoomsSendButton.disabled = busy
       || !ready
       || !meetingRoomsState.activeRoomId
       || !meetingRoomsState.composerText.trim()
-      || roomClosed
+      || roomReadonly
       || managedParticipants.length === 0
       || resolveSelectedMeetingRoomTargetIds(meetingRoomsState, activeRoom).length === 0;
     dom.meetingRoomsSendButton.textContent = meetingRoomsState.streaming ? "讨论中..." : "发起本轮讨论";
@@ -485,7 +485,7 @@ export function createRenderer(app) {
     dom.meetingRoomsActiveMessages.innerHTML = renderMeetingRoomMessagesMarkup(activeRoom, {
       escapeHtml: utils.escapeHtml,
       formatRelativeTime: utils.formatRelativeTime,
-      roomClosed,
+      roomReadonly,
       selectedResolutionSourceMessageIds: resolveSelectedMeetingRoomResolutionSourceIds(meetingRoomsState, activeRoom),
     });
     dom.meetingRoomsResolutionSelectionNote.textContent = resolveMeetingRoomResolutionSelectionLabel(
@@ -495,7 +495,7 @@ export function createRenderer(app) {
     dom.meetingRoomsResolutionsList.innerHTML = renderMeetingRoomResolutionsMarkup(activeRoom, {
       escapeHtml: utils.escapeHtml,
       formatRelativeTime: utils.formatRelativeTime,
-      roomClosed,
+      roomReadonly,
       busy,
       promotingResolutionId: meetingRoomsState.promotingResolutionId,
       resolutionPromotionTargetAgentIds: meetingRoomsState.resolutionPromotionTargetAgentIds,
@@ -2648,6 +2648,10 @@ function resolveMeetingRoomsStatusMessage(meetingRoomsState, activeRoom) {
     return meetingRoomsState.noticeMessage;
   }
 
+  if (activeRoom?.room?.status === "terminated") {
+    return "当前会议室已被平台终止，只读回看。";
+  }
+
   if (activeRoom?.room?.status === "closed") {
     return "当前会议室已关闭，只读回看。";
   }
@@ -2711,6 +2715,16 @@ function renderMeetingRoomMetaMarkup(activeRoom, { escapeHtml }) {
   const closedCopy = activeRoom.room?.status === "closed" && typeof activeRoom.room?.closingSummary === "string" && activeRoom.room.closingSummary.trim()
     ? `<div class="meeting-room-meta-card"><strong>收口说明</strong><span>${escapeHtml(activeRoom.room.closingSummary.trim())}</span></div>`
     : "";
+  const terminatedCopy = activeRoom.room?.status === "terminated"
+    ? [
+        typeof activeRoom.room?.terminationReason === "string" && activeRoom.room.terminationReason.trim()
+          ? `<div class="meeting-room-meta-card"><strong>终止原因</strong><span>${escapeHtml(activeRoom.room.terminationReason.trim())}</span></div>`
+          : "",
+        typeof activeRoom.room?.terminatedByOperatorPrincipalId === "string" && activeRoom.room.terminatedByOperatorPrincipalId.trim()
+          ? `<div class="meeting-room-meta-card"><strong>终止人</strong><span>${escapeHtml(activeRoom.room.terminatedByOperatorPrincipalId.trim())}</span></div>`
+          : "",
+      ].filter(Boolean).join("")
+    : "";
 
   return `
     <div class="meeting-room-meta-card">
@@ -2730,6 +2744,7 @@ function renderMeetingRoomMetaMarkup(activeRoom, { escapeHtml }) {
       <span>${escapeHtml(`进行中 ${runningCount} / 排队中 ${queuedCount}`)}</span>
     </div>
     ${closedCopy}
+    ${terminatedCopy}
   `;
 }
 
@@ -2817,7 +2832,7 @@ function renderMeetingRoomMessagesMarkup(
   {
     escapeHtml,
     formatRelativeTime,
-    roomClosed = false,
+    roomReadonly = false,
     selectedResolutionSourceMessageIds = [],
   },
 ) {
@@ -2857,7 +2872,7 @@ function renderMeetingRoomMessagesMarkup(
             ${renderMeetingRoomVisibilityBadge(message, { escapeHtml })}
             ${renderMeetingRoomMessageSelectionMarkup(message, selectedResolutionSourceMessageIds, {
               escapeHtml,
-              roomClosed,
+              roomReadonly,
             })}
           </div>
           <div class="meeting-room-message-body">${renderMeetingRoomMessageContent(message?.content, escapeHtml)}</div>
@@ -2867,7 +2882,7 @@ function renderMeetingRoomMessagesMarkup(
     .join("");
 }
 
-function renderMeetingRoomMessageSelectionMarkup(message, selectedResolutionSourceMessageIds, { escapeHtml, roomClosed }) {
+function renderMeetingRoomMessageSelectionMarkup(message, selectedResolutionSourceMessageIds, { escapeHtml, roomReadonly }) {
   if (!isMeetingRoomMessageResolvable(message)) {
     return "";
   }
@@ -2881,7 +2896,7 @@ function renderMeetingRoomMessageSelectionMarkup(message, selectedResolutionSour
         type="checkbox"
         data-meeting-room-resolution-source-message-id="${escapeHtml(messageId)}"
         ${checked ? "checked" : ""}
-        ${roomClosed ? "disabled" : ""}
+        ${roomReadonly ? "disabled" : ""}
       />
       <span>用于结论</span>
     </label>
@@ -2916,7 +2931,7 @@ function renderMeetingRoomResolutionsMarkup(
   {
     escapeHtml,
     formatRelativeTime,
-    roomClosed = false,
+    roomReadonly = false,
     busy = false,
     promotingResolutionId = "",
     resolutionPromotionTargetAgentIds = {},
@@ -2969,7 +2984,7 @@ function renderMeetingRoomResolutionsMarkup(
             <span>目标员工</span>
             <select
               data-meeting-room-promote-target-resolution-id="${escapeHtml(resolutionId)}"
-              ${roomClosed || promoted || managedParticipants.length === 0 || busy ? "disabled" : ""}
+              ${roomReadonly || promoted || managedParticipants.length === 0 || busy ? "disabled" : ""}
             >
               ${managedParticipants.map((participant) => {
                 const agentId = typeof participant?.agentId === "string" ? participant.agentId : "";
@@ -2985,7 +3000,7 @@ function renderMeetingRoomResolutionsMarkup(
             type="button"
             class="toolbar-button subtle"
             data-meeting-room-promote-resolution-id="${escapeHtml(resolutionId)}"
-            ${roomClosed || promoted || managedParticipants.length === 0 || busy ? "disabled" : ""}
+            ${roomReadonly || promoted || managedParticipants.length === 0 || busy ? "disabled" : ""}
           >
             ${promoting ? "提升中..." : promoted ? "已提升" : "提升成工作项"}
           </button>
@@ -3000,7 +3015,12 @@ function resolveMeetingRoomStatusLabel(status) {
     open: "进行中",
     closing: "收口中",
     closed: "已关闭",
+    terminated: "已终止",
   }[status] ?? "进行中";
+}
+
+function isMeetingRoomReadonlyStatus(status) {
+  return status === "closed" || status === "terminated";
 }
 
 function resolveMeetingRoomDiscussionModeLabel(mode) {
