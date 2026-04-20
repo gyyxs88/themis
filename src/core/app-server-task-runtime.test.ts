@@ -3363,6 +3363,57 @@ test("AppServerTaskRuntime 的 timeoutMs 会打断 notification event queue 阻�
   }
 });
 
+test("AppServerTaskRuntime 的 timeoutMs 会在持续收到 notification 活动时续期，而不是按总时长硬超时", {
+  timeout: 400,
+}, async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startTurn: async (sessionState) => {
+      setTimeout(() => {
+        sessionState.notificationHandler?.({
+          method: "item/agentMessage/delta",
+          params: {
+            itemId: "item-app-keepalive-1",
+            delta: "第一段进度",
+          },
+        });
+      }, 10);
+      setTimeout(() => {
+        sessionState.notificationHandler?.({
+          method: "item/agentMessage/delta",
+          params: {
+            itemId: "item-app-keepalive-1",
+            delta: "，第二段进度",
+          },
+        });
+      }, 25);
+      setTimeout(() => {
+        scheduleCompletedTurn(sessionState, "turn-app-keepalive-1");
+      }, 40);
+      return { turnId: "turn-app-keepalive-1" };
+    },
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    const result = await fixture.runtime.runTask({
+      requestId: "req-app-timeout-keepalive-1",
+      taskId: "task-app-timeout-keepalive-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "notification keepalive timeout",
+      channelContext: { channelSessionKey: "web-session-timeout-keepalive-1" },
+      createdAt: "2026-03-28T12:00:00.000Z",
+    }, {
+      timeoutMs: 20,
+    });
+
+    assert.equal(result.status, "completed");
+    assert.equal(state.closed, 1);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("AppServerTaskRuntime 在执行失败时也会关闭 session", async () => {
   const { state, sessionFactory } = createSessionFactory({
     startTurn: async () => {

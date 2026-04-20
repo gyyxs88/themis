@@ -23,7 +23,7 @@ export const PROJECT_CONFIG_DEFINITIONS: ProjectConfigDefinition[] = [
   {
     key: "THEMIS_TASK_TIMEOUT_MS",
     section: "服务监听",
-    description: "单个任务超时时间，单位毫秒。",
+    description: "单个任务的进度间静默超时时间，单位毫秒；持续有新进度时会自动续期。",
     defaultValue: "300000",
   },
   {

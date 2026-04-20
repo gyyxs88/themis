@@ -967,6 +967,79 @@ test("runTask 在 context build 阶段收到 abort 会尽快取消且不进入 a
   }
 });
 
+test("runTask 的 timeoutMs 会在持续收到 sdk events 时续期，而不是按总时长硬超时", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-timeout-keepalive-"));
+  const controlDirectory = join(root, "control");
+  mkdirSync(controlDirectory);
+  writeRuntimeFile(controlDirectory, "README.md", "# control");
+
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+
+  const sessionStore: CodexThreadSessionStore = {
+    getSessionRegistry: () => runtimeStore,
+    resolveThreadId: async () => null,
+    acquire: async (_request: TaskRequest) => ({
+      sessionId: _request.channelContext.sessionId,
+      threadId: "thread-timeout-keepalive",
+      sessionMode: "created",
+      thread: {
+        id: "thread-timeout-keepalive",
+        runStreamed: async () => ({
+          events: (async function* () {
+            yield { type: "thread.started", thread_id: "thread-timeout-keepalive" };
+            yield { type: "turn.started" };
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            yield {
+              type: "item.completed",
+              item: {
+                type: "agent_message",
+                id: "item-timeout-keepalive-1",
+                text: "第一段进度",
+              },
+            };
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            yield {
+              type: "item.completed",
+              item: {
+                type: "agent_message",
+                id: "item-timeout-keepalive-1",
+                text: "第一段进度，第二段进度",
+              },
+            };
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            yield { type: "turn.completed", usage: {} };
+          })(),
+        }),
+      } as never,
+      release: async () => {},
+    }),
+  } as unknown as CodexThreadSessionStore;
+
+  const runtime = new CodexTaskRuntime({
+    workingDirectory: controlDirectory,
+    runtimeStore,
+    sessionStore,
+  });
+
+  try {
+    const result = await runtime.runTask(createRequest({
+      requestId: "req-runtime-timeout-keepalive",
+      taskId: "task-runtime-timeout-keepalive",
+      channelContext: {
+        sessionId: "session-runtime-timeout-keepalive",
+      },
+    }), {
+      timeoutMs: 20,
+    });
+
+    assert.equal(result.status, "completed");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("runTask 成功时会写 memory updates、发 task.memory_updated，并落到 execution workspace", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-runtime-memory-success-"));
   const controlDirectory = join(root, "control");

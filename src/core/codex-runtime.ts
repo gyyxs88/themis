@@ -260,11 +260,12 @@ export class CodexTaskRuntime {
       : null;
 
     const taskId = request.taskId ?? createId("task");
+    const { signal, cleanup, touch } = createExecutionSignal(hooks.signal, hooks.timeoutMs);
     const emit = async (event: TaskEvent): Promise<void> => {
+      touch();
       this.runtimeStore.appendTaskEvent(event);
       await hooks.onEvent?.(event);
     };
-    const { signal, cleanup } = createExecutionSignal(hooks.signal, hooks.timeoutMs);
     let sessionLease: CodexSessionLease | null = null;
     let failureMessage: string | null = null;
     const memoryEnabled = request.options?.memoryMode !== "off";
@@ -419,6 +420,7 @@ export class CodexTaskRuntime {
       const { events } = await thread.runStreamed(prompt, { signal });
 
       for await (const sdkEvent of events) {
+        touch();
         throwIfAborted(signal);
         const translated = translateThreadEvent(taskId, request.requestId, sdkEvent);
 
@@ -1653,9 +1655,11 @@ function createExecutionSignal(
 ): {
   signal: AbortSignal;
   cleanup: () => void;
+  touch: () => void;
 } {
   const controller = new AbortController();
   const cleanups: Array<() => void> = [];
+  let timer: ReturnType<typeof setTimeout> | null = null;
 
   if (externalSignal) {
     if (externalSignal.aborted) {
@@ -1670,16 +1674,33 @@ function createExecutionSignal(
     }
   }
 
-  if (timeoutMs && timeoutMs > 0) {
-    const timer = setTimeout(() => {
+  const armTimeout = (): void => {
+    if (!timeoutMs || timeoutMs <= 0 || controller.signal.aborted) {
+      return;
+    }
+
+    if (timer) {
+      clearTimeout(timer);
+    }
+
+    timer = setTimeout(() => {
       controller.abort(new Error(`TASK_TIMEOUT:${timeoutMs}`));
     }, timeoutMs);
+  };
 
-    cleanups.push(() => clearTimeout(timer));
-  }
+  armTimeout();
+  cleanups.push(() => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  });
 
   return {
     signal: controller.signal,
+    touch: () => {
+      armTimeout();
+    },
     cleanup: () => {
       for (const cleanup of cleanups) {
         cleanup();
