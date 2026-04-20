@@ -632,7 +632,13 @@ function selectProgressFlushText(text: string, currentVisibleText: string | null
     return null;
   }
 
-  return normalizedText.slice(0, visibleText.length + boundary).trimEnd();
+  const nextVisibleText = normalizedText.slice(0, visibleText.length + boundary).trimEnd();
+
+  if (normalizeComparableReply(nextVisibleText) === normalizeComparableReply(visibleText)) {
+    return null;
+  }
+
+  return nextVisibleText;
 }
 
 function findLatestProgressBoundary(text: string): number | null {
