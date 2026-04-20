@@ -22,7 +22,9 @@ export interface FeishuTaskMessageBridgeOptions {
 export const FEISHU_PLACEHOLDER_TEXT = "处理中...";
 export const FEISHU_COMPLETED_TEXT = "已完成";
 export const DEFAULT_FEISHU_PROGRESS_FLUSH_TIMEOUT_MS = 60_000;
-const FEISHU_EAGER_PROGRESS_MIN_LENGTH = 100;
+const FEISHU_EAGER_PROGRESS_MIN_LENGTH = 220;
+const FEISHU_EAGER_PROGRESS_MIN_LENGTH_WITH_BULLETS = 120;
+const FEISHU_EAGER_PROGRESS_MIN_BULLET_COUNT = 2;
 
 export class FeishuTaskMessageBridge {
   private readonly deliveredProgress = new Map<string, string>();
@@ -526,7 +528,20 @@ function shouldFlushProgressImmediately(text: string, lastVisibleProgressText: s
     return false;
   }
 
-  return comparable.length >= FEISHU_EAGER_PROGRESS_MIN_LENGTH
-    || comparable.includes("\n\n")
-    || /(?:^|\n)[-*]\s/.test(comparable);
+  const bulletCount = comparable
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^(?:-|\*)\s+/.test(line))
+    .length;
+  const normalizedComparable = comparable.trim();
+  const endsCleanly = /[。！？.!?`”"'）)]$/.test(normalizedComparable);
+
+  if (
+    bulletCount >= FEISHU_EAGER_PROGRESS_MIN_BULLET_COUNT
+    && normalizedComparable.length >= FEISHU_EAGER_PROGRESS_MIN_LENGTH_WITH_BULLETS
+  ) {
+    return true;
+  }
+
+  return normalizedComparable.length >= FEISHU_EAGER_PROGRESS_MIN_LENGTH && endsCleanly;
 }
