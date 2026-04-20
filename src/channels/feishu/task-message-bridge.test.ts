@@ -109,6 +109,31 @@ test("静默超时会补发缓存 progress，并保留新的处理中占位", as
   ]);
 });
 
+test("静默超时后若最终结果与已补发正文一致：尾部占位应收口为已完成，而不是重复正文", async () => {
+  const operations: string[] = [];
+  let nextMessageId = 1;
+  const bridge = createBridge(operations, () => `message-${nextMessageId++}`, 20);
+
+  await bridge.prepareResponseSlot();
+  await bridge.deliver(createProgressMessage("req-4-same-final", "item-1", "已经补发的正文"));
+  await wait(50);
+
+  assert.deepEqual(operations, [
+    "create:处理中...",
+    "update:message-1:已经补发的正文",
+    "create:处理中...",
+  ]);
+
+  await bridge.deliver(createResultMessage("req-4-same-final", "已经补发的正文"));
+
+  assert.deepEqual(operations, [
+    "create:处理中...",
+    "update:message-1:已经补发的正文",
+    "create:处理中...",
+    "update:message-2:已完成",
+  ]);
+});
+
 test("状态类 progress 会单独发出状态摘要，不打断处理中占位", async () => {
   const operations: string[] = [];
   let nextMessageId = 1;

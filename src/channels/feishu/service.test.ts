@@ -2418,6 +2418,81 @@ test("飞书真实 app-server delta 正文不会被渲染成任务状态更新",
   }
 });
 
+test("飞书超时补发正文后，若最终结果一致，会保留运行中占位并以已完成收口", async () => {
+  const previousTimeout = process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS;
+  process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS = "20";
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      taskRuntimeCalls,
+    }) => ({
+      ...createTaskRuntimeDouble({
+        engine: "app-server",
+        runtimeStore,
+        identityService,
+        principalSkillsService,
+        taskRuntimeCalls,
+      }),
+      async runTask(request, hooks = {}) {
+        taskRuntimeCalls.appServer += 1;
+        await hooks.onEvent?.({
+          eventId: "event-feishu-timeout-same-final-1",
+          taskId: request.taskId ?? "task-feishu-timeout-same-final-1",
+          requestId: request.requestId,
+          type: "task.progress",
+          status: "running",
+          message: "已经补发的正文",
+          payload: {
+            itemType: "agent_message",
+            threadEventType: "item.completed",
+            itemId: "item-feishu-timeout-same-final-1",
+          },
+          timestamp: new Date().toISOString(),
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        const result: TaskResult = {
+          taskId: request.taskId ?? "task-feishu-timeout-same-final-1",
+          requestId: request.requestId,
+          status: "completed",
+          summary: "已经补发的正文",
+          output: "已经补发的正文",
+          structuredOutput: {
+            session: {
+              engine: "app-server",
+            },
+          },
+          completedAt: new Date().toISOString(),
+        };
+        return hooks.finalizeResult ? await hooks.finalizeResult(request, result) : result;
+      },
+    }),
+  });
+
+  try {
+    await harness.handleIncomingText("请复现飞书超时补发后相同终态收口");
+
+    const messages = harness.takeMessages();
+    assert.deepEqual(messages, [
+      "处理中...",
+      "已经补发的正文",
+      "处理中...",
+      "已完成",
+    ]);
+  } finally {
+    if (previousTimeout === undefined) {
+      delete process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS;
+    } else {
+      process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS = previousTimeout;
+    }
+    harness.cleanup();
+  }
+});
+
 test("飞书 /approve 会提交等待中的 approval action", async () => {
   const harness = createHarness();
 

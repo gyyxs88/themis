@@ -20,6 +20,7 @@ export interface FeishuTaskMessageBridgeOptions {
 }
 
 export const FEISHU_PLACEHOLDER_TEXT = "处理中...";
+export const FEISHU_COMPLETED_TEXT = "已完成";
 export const DEFAULT_FEISHU_PROGRESS_FLUSH_TIMEOUT_MS = 60_000;
 
 export class FeishuTaskMessageBridge {
@@ -34,8 +35,10 @@ export class FeishuTaskMessageBridge {
   private readonly progressFlushTimeoutMs: number;
   private currentPlaceholderMessageId: string | null = null;
   private currentPlaceholderUpdatable = false;
+  private currentPlaceholderFollowsVisibleProgress = false;
   private pendingProgressItemId: string | null = null;
   private pendingProgressText: string | null = null;
+  private lastVisibleProgressText: string | null = null;
   private pendingFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingFlushOperation: Promise<void> | null = null;
   private resolvePendingFlushOperation: (() => void) | null = null;
@@ -64,6 +67,7 @@ export class FeishuTaskMessageBridge {
     await this.cancelScheduledPendingFlush();
     this.pendingProgressItemId = null;
     this.pendingProgressText = null;
+    this.lastVisibleProgressText = null;
     await this.ensureCurrentPlaceholder();
 
     if (!this.currentPlaceholderUpdatable || !this.currentPlaceholderMessageId) {
@@ -219,17 +223,30 @@ export class FeishuTaskMessageBridge {
     this.pendingProgressText = null;
 
     if (!pendingProgressText) {
+      if (
+        this.currentPlaceholderFollowsVisibleProgress
+        && this.lastVisibleProgressText
+        && normalizeComparableReply(this.lastVisibleProgressText) === normalizeComparableReply(normalizedText)
+      ) {
+        await this.commitCurrentPlaceholder(FEISHU_COMPLETED_TEXT);
+        this.lastVisibleProgressText = null;
+        return;
+      }
+
       await this.commitCurrentPlaceholder(normalizedText);
+      this.lastVisibleProgressText = null;
       return;
     }
 
     if (normalizeComparableReply(pendingProgressText) === normalizeComparableReply(normalizedText)) {
       await this.commitCurrentPlaceholder(normalizedText);
+      this.lastVisibleProgressText = null;
       return;
     }
 
     await this.commitCurrentPlaceholder(pendingProgressText);
     await this.sendStandaloneMessage(normalizedText);
+    this.lastVisibleProgressText = null;
   }
 
   private async deliverTerminalText(text: string): Promise<void> {
@@ -242,6 +259,7 @@ export class FeishuTaskMessageBridge {
     await this.cancelScheduledPendingFlush();
     this.pendingProgressItemId = null;
     this.pendingProgressText = null;
+    this.lastVisibleProgressText = null;
     await this.commitCurrentPlaceholder(normalizedText);
   }
 
@@ -285,6 +303,18 @@ export class FeishuTaskMessageBridge {
     const placeholder = await this.sendStandaloneMessage(FEISHU_PLACEHOLDER_TEXT);
     this.currentPlaceholderMessageId = placeholder.messageId;
     this.currentPlaceholderUpdatable = placeholder.updatable;
+    this.currentPlaceholderFollowsVisibleProgress = false;
+  }
+
+  private async ensureFollowupPlaceholderAfterProgress(): Promise<void> {
+    if (this.currentPlaceholderUpdatable && this.currentPlaceholderMessageId) {
+      return;
+    }
+
+    const placeholder = await this.sendStandaloneMessage(FEISHU_PLACEHOLDER_TEXT);
+    this.currentPlaceholderMessageId = placeholder.messageId;
+    this.currentPlaceholderUpdatable = placeholder.updatable;
+    this.currentPlaceholderFollowsVisibleProgress = true;
   }
 
   private async fillCurrentPlaceholder(text: string): Promise<void> {
@@ -321,14 +351,16 @@ export class FeishuTaskMessageBridge {
     }
 
     await this.commitCurrentPlaceholder(pendingProgressText);
+    this.lastVisibleProgressText = pendingProgressText;
     this.pendingProgressItemId = null;
     this.pendingProgressText = null;
-    await this.ensureCurrentPlaceholder();
+    await this.ensureFollowupPlaceholderAfterProgress();
   }
 
   private clearCurrentPlaceholder(): void {
     this.currentPlaceholderMessageId = null;
     this.currentPlaceholderUpdatable = false;
+    this.currentPlaceholderFollowsVisibleProgress = false;
   }
 
   private schedulePendingFlush(): void {
