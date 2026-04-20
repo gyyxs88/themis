@@ -540,8 +540,18 @@ export class FeishuTaskMessageBridge {
         return false;
       }
 
-      await this.updateText(this.activeProgressMessageId, text);
       this.activeProgressTextUpdateCount += 1;
+      try {
+        await this.updateText(this.activeProgressMessageId, text);
+      } catch (error) {
+        if (isFeishuMessageEditLimitError(error)) {
+          this.activeProgressIncrementalUpdatesPaused = true;
+          return false;
+        }
+
+        this.activeProgressTextUpdateCount = Math.max(0, this.activeProgressTextUpdateCount - 1);
+        throw error;
+      }
       return true;
     }
 
@@ -652,6 +662,21 @@ function normalizeProgressMaxTextUpdates(value: number | undefined): number {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function isFeishuMessageEditLimitError(error: unknown): boolean {
+  const topLevel = asRecord(error);
+  const directCode = topLevel?.code;
+
+  if (directCode === 230072 || directCode === "230072") {
+    return true;
+  }
+
+  const response = asRecord(topLevel?.response);
+  const data = asRecord(response?.data);
+  const responseCode = data?.code;
+
+  return responseCode === 230072 || responseCode === "230072";
 }
 
 function normalizeText(value: unknown): string | null {
