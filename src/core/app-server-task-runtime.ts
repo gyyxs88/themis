@@ -527,7 +527,7 @@ export class AppServerTaskRuntime {
 
     const taskId = request.taskId ?? request.requestId;
     const { signal, cleanup, touch } = createExecutionSignal(hooks.signal, hooks.timeoutMs);
-    const eventDelivery = createEventDeliveryQueue(this.runtimeStore, hooks.onEvent);
+    const eventDelivery = createEventDeliveryQueue(this.runtimeStore, hooks.onEvent, touch);
     let session: AppServerTaskRuntimeSession | null = null;
     let unsubscribeNotification: (() => void) | undefined;
     let unsubscribeServerRequest: (() => void) | undefined;
@@ -2265,6 +2265,7 @@ async function withOperationTimeout<T>(promise: Promise<T>, label: string): Prom
 function createEventDeliveryQueue(
   runtimeStore: SqliteCodexSessionRegistry,
   onEvent: TaskRuntimeRunHooks["onEvent"],
+  onActivity?: () => void,
 ): {
   enqueue: (event: TaskEvent) => void;
   deliver: (event: TaskEvent) => Promise<void>;
@@ -2275,6 +2276,7 @@ function createEventDeliveryQueue(
 
   const schedule = (event: TaskEvent): Promise<void> => {
     const next = chain.then(async () => {
+      onActivity?.();
       runtimeStore.appendTaskEvent(event);
       await onEvent?.(event);
     });

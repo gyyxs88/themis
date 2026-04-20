@@ -18,6 +18,7 @@ import {
 } from "../../core/principal-task-settings.js";
 import { persistSessionTaskSettings } from "../../core/session-settings-service.js";
 import { appendTaskReplyQuotaFooter } from "../../core/task-reply-quota.js";
+import { createTaskActivityTimeoutController } from "../../core/task-activity-timeout.js";
 import { applyThemisGlobalDefaultsToRuntimeCatalog } from "../../core/task-defaults.js";
 import { createTaskError } from "../../server/http-errors.js";
 import {
@@ -1349,6 +1350,7 @@ export class FeishuChannelService {
     router.registerAdapter(adapter);
 
     let normalizedRequest: TaskRequest | null = null;
+    const activityTimeout = createTaskActivityTimeoutController(taskLease.signal, this.taskTimeoutMs);
     let shouldRestoreDraft = Boolean(reservedDraft) || Boolean(inlineDraft);
     const restorableDraft = inputEnvelope
       ? buildFeishuRestorableDraftFromEnvelope(inputEnvelope)
@@ -1381,24 +1383,24 @@ export class FeishuChannelService {
           ...(inputEnvelope ? { inputEnvelope } : {}),
         }),
       );
-      await bridge.prepareResponseSlot();
+      await activityTimeout.wrap(bridge.prepareResponseSlot());
       await ensureAuthAvailable(this.authRuntime, normalizedRequest);
       const selectedRuntime = resolvePublicTaskRuntime(this.runtimeRegistry, normalizedRequest.options?.runtimeEngine);
 
       const result = await selectedRuntime.runTask(normalizedRequest, {
-        signal: taskLease.signal,
-        timeoutMs: this.taskTimeoutMs,
+        signal: activityTimeout.signal,
         finalizeResult: (request, taskResult) => appendTaskReplyQuotaFooter(this.authRuntime, request, taskResult),
         onEvent: async (taskEvent) => {
+          activityTimeout.touch();
           if (shouldRestoreDraft && taskEvent.type === "task.started") {
             discardDraftRestore();
           }
-          await router.publishEvent(taskEvent);
+          await activityTimeout.wrap(router.publishEvent(taskEvent));
         },
       });
 
       discardDraftRestore();
-      await router.publishResult(result);
+      await activityTimeout.wrap(router.publishResult(result));
       await this.publishTaskResultAttachmentsIfNeeded(context.chatId, normalizedRequest, result);
       await this.publishTaskInputCompileFollowupIfNeeded(context.chatId, normalizedRequest.requestId, result.status);
     } catch (error) {
@@ -1412,6 +1414,7 @@ export class FeishuChannelService {
         await this.safeSendTaggedText(context.chatId, taskError.message, "执行异常");
       }
     } finally {
+      activityTimeout.cleanup();
       taskLease.release();
     }
   }

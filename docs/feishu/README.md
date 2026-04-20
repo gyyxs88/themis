@@ -26,6 +26,8 @@
 - 当前已支持飞书文本收发、`/help`、`/sessions`、`/new`、`/use`、`/current`、`/review`、`/steer`、`/workspace`、`/group`、`/link`、`/settings` 命令树、`/msgupdate`、`/quota`，以及 `/account`、`/sandbox`、`/search`、`/network`、`/approval` 这些兼容入口；其中 `/settings account` 已支持设备码登录、退出账号和取消登录。
 - Codex 在飞书里现在走“正文主消息 + 状态消息”桥接：用户发消息后先立刻返回 `处理中...`；第一条中途回复默认先缓存，但如果首条正文已经足够完整，会直接露出来并保留新的 `处理中...` 状态消息；同一 `agent_message itemId` 的连续 delta 不会一条条新起正文，而会按 `FEISHU_PROGRESS_FLUSH_TIMEOUT_MS` 的节拍尝试更新同一条已显示正文；soft flush 会优先截到最近句末或空行，不把半句硬刷出去；如果连续两个节拍仍找不到安全边界，则会在 hard flush 兜底强刷当前正文。
 - 如果某条正文已经因为静默超时被补发，随后最终结果和这条正文一致，飞书不会再重复发一遍正文；尾部的运行中占位会收口成 `已完成`。
+- 正文主消息会预留最后一次飞书编辑配额：当单条正文接近 `20` 次编辑上限时，桥接层会暂停中途正文更新，继续挂着 `处理中...`，等任务结束后再用最后一次编辑回写终稿，避免触发飞书 `230072`。
+- 飞书公开任务的 `THEMIS_TASK_TIMEOUT_MS` 现在按“进度间静默超时”理解：只要持续有新事件进入飞书桥接链，就会自动续期；只有静默超过窗口才会取消。
 - 飞书现在也支持最小结果附件回传：普通任务完成后，如果最终输出里显式引用了本地绝对路径文件，或 runtime `touchedFiles` 里产出了当前工作区 `temp/` 下的结果文件，桥接层会优先尝试用飞书 IM `image/file` 把这些结果直接发回聊天；源码文件不会误回传，超限或上传失败则只补 `[附件回传]` 文本说明。
 - 飞书移动端第一轮产品化表达已落地：`task.action_required` 会转成可直接执行的 waiting action 文本面，状态类 `task.progress` 会额外输出任务状态摘要，`/sessions`、`/use`、`/current` 会回显当前 native thread 摘要。
 - 飞书审批卡第一轮已经落地：仅覆盖 `task.action_required(approval)`，机器人会把审批等待面升级成 interactive 卡片；点击后通过 `POST /api/feishu/card-action` 回调复用现有审批提交流程，同时保留 `/approve` / `/deny` 文本降级链。

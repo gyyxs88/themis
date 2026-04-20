@@ -17,6 +17,7 @@ export interface FeishuTaskMessageBridgeOptions {
   createDraft?: (draft: FeishuRenderedMessageDraft) => Promise<FeishuMessageMutationResponse>;
   updateDraft?: (messageId: string, draft: FeishuRenderedMessageDraft) => Promise<FeishuMessageMutationResponse>;
   progressFlushTimeoutMs?: number;
+  progressMaxTextUpdates?: number;
 }
 
 export const FEISHU_PLACEHOLDER_TEXT = "处理中...";
@@ -26,6 +27,8 @@ const FEISHU_EAGER_PROGRESS_MIN_LENGTH = 220;
 const FEISHU_EAGER_PROGRESS_MIN_LENGTH_WITH_BULLETS = 120;
 const FEISHU_EAGER_PROGRESS_MIN_BULLET_COUNT = 2;
 const FEISHU_PROGRESS_FORCE_FLUSH_TIMEOUT_MULTIPLIER = 2;
+const DEFAULT_FEISHU_PROGRESS_MAX_TEXT_UPDATES = 20;
+const FEISHU_PROGRESS_RESERVED_FINAL_UPDATE_COUNT = 1;
 
 export class FeishuTaskMessageBridge {
   private readonly deliveredProgress = new Map<string, string>();
@@ -38,6 +41,8 @@ export class FeishuTaskMessageBridge {
   private readonly updateDraft: ((messageId: string, draft: FeishuRenderedMessageDraft) => Promise<FeishuMessageMutationResponse>) | null;
   private readonly progressFlushTimeoutMs: number;
   private readonly progressForceFlushTimeoutMs: number;
+  private readonly progressMaxTextUpdates: number;
+  private readonly progressIncrementalUpdateLimit: number;
   private currentPlaceholderMessageId: string | null = null;
   private currentPlaceholderUpdatable = false;
   private currentPlaceholderFollowsVisibleProgress = false;
@@ -45,6 +50,8 @@ export class FeishuTaskMessageBridge {
   private activeProgressMessageId: string | null = null;
   private activeProgressUpdatable = false;
   private activeProgressText: string | null = null;
+  private activeProgressTextUpdateCount = 0;
+  private activeProgressIncrementalUpdatesPaused = false;
   private pendingProgressItemId: string | null = null;
   private pendingProgressText: string | null = null;
   private pendingProgressStartedAt = 0;
@@ -64,6 +71,11 @@ export class FeishuTaskMessageBridge {
     this.progressForceFlushTimeoutMs = Math.max(
       this.progressFlushTimeoutMs + 1,
       this.progressFlushTimeoutMs * FEISHU_PROGRESS_FORCE_FLUSH_TIMEOUT_MULTIPLIER,
+    );
+    this.progressMaxTextUpdates = normalizeProgressMaxTextUpdates(options.progressMaxTextUpdates);
+    this.progressIncrementalUpdateLimit = Math.max(
+      0,
+      this.progressMaxTextUpdates - FEISHU_PROGRESS_RESERVED_FINAL_UPDATE_COUNT,
     );
   }
 
@@ -226,6 +238,10 @@ export class FeishuTaskMessageBridge {
     this.pendingProgressItemId = itemId;
     this.pendingProgressText = normalizedText;
 
+    if (this.activeProgressIncrementalUpdatesPaused && this.activeProgressItemId === itemId) {
+      return;
+    }
+
     if (shouldFlushProgressImmediately(normalizedText, this.activeProgressText)) {
       await this.cancelScheduledPendingFlush();
       await this.flushPendingProgress({ force: true });
@@ -264,8 +280,10 @@ export class FeishuTaskMessageBridge {
     }
 
     if (normalizeComparableReply(this.activeProgressText ?? "") !== normalizeComparableReply(normalizedText)) {
-      await this.writeActiveProgressText(normalizedText);
-      this.activeProgressText = normalizedText;
+      const updated = await this.writeActiveProgressText(normalizedText, { final: true });
+      if (updated) {
+        this.activeProgressText = normalizedText;
+      }
     }
 
     await this.ensureFollowupPlaceholderAfterProgress();
@@ -287,13 +305,16 @@ export class FeishuTaskMessageBridge {
     await this.commitCurrentPlaceholder(normalizedText);
   }
 
-  private async sendStandaloneMessage(text: string): Promise<{ messageId: string | null; updatable: boolean }> {
+  private async sendStandaloneMessage(
+    text: string,
+  ): Promise<{ messageId: string | null; updatable: boolean; textUpdateCount: number }> {
     const chunks = this.splitText(text);
 
     if (!chunks.length) {
       return {
         messageId: null,
         updatable: false,
+        textUpdateCount: 0,
       };
     }
 
@@ -303,6 +324,7 @@ export class FeishuTaskMessageBridge {
       return {
         messageId: null,
         updatable: false,
+        textUpdateCount: 0,
       };
     }
 
@@ -316,6 +338,7 @@ export class FeishuTaskMessageBridge {
     return {
       messageId,
       updatable: Boolean(messageId),
+      textUpdateCount: 0,
     };
   }
 
@@ -363,7 +386,7 @@ export class FeishuTaskMessageBridge {
 
   private async commitCurrentPlaceholder(
     text: string,
-  ): Promise<{ messageId: string | null; updatable: boolean }> {
+  ): Promise<{ messageId: string | null; updatable: boolean; textUpdateCount: number }> {
     await this.ensureCurrentPlaceholder();
     const messageId = this.currentPlaceholderMessageId;
     const updatable = this.currentPlaceholderUpdatable;
@@ -372,6 +395,7 @@ export class FeishuTaskMessageBridge {
     return {
       messageId,
       updatable,
+      textUpdateCount: updatable && messageId ? 1 : 0,
     };
   }
 
@@ -397,7 +421,10 @@ export class FeishuTaskMessageBridge {
     }
 
     if (this.activeProgressItemId && this.activeProgressItemId === pendingProgressItemId) {
-      await this.writeActiveProgressText(nextVisibleText);
+      const updated = await this.writeActiveProgressText(nextVisibleText);
+      if (!updated) {
+        return;
+      }
     } else {
       const committed = await this.commitCurrentPlaceholder(nextVisibleText);
       this.setActiveProgress(pendingProgressItemId, committed, nextVisibleText);
@@ -483,13 +510,15 @@ export class FeishuTaskMessageBridge {
 
   private setActiveProgress(
     itemId: string,
-    slot: { messageId: string | null; updatable: boolean },
+    slot: { messageId: string | null; updatable: boolean; textUpdateCount: number },
     text: string,
   ): void {
     this.activeProgressItemId = itemId;
     this.activeProgressMessageId = slot.messageId;
     this.activeProgressUpdatable = slot.updatable;
     this.activeProgressText = text;
+    this.activeProgressTextUpdateCount = slot.textUpdateCount;
+    this.activeProgressIncrementalUpdatesPaused = false;
   }
 
   private clearActiveProgress(): void {
@@ -497,17 +526,30 @@ export class FeishuTaskMessageBridge {
     this.activeProgressMessageId = null;
     this.activeProgressUpdatable = false;
     this.activeProgressText = null;
+    this.activeProgressTextUpdateCount = 0;
+    this.activeProgressIncrementalUpdatesPaused = false;
   }
 
-  private async writeActiveProgressText(text: string): Promise<void> {
+  private async writeActiveProgressText(
+    text: string,
+    options?: { final?: boolean },
+  ): Promise<boolean> {
     if (this.activeProgressUpdatable && this.activeProgressMessageId) {
+      if (options?.final !== true && this.activeProgressTextUpdateCount >= this.progressIncrementalUpdateLimit) {
+        this.activeProgressIncrementalUpdatesPaused = true;
+        return false;
+      }
+
       await this.updateText(this.activeProgressMessageId, text);
-      return;
+      this.activeProgressTextUpdateCount += 1;
+      return true;
     }
 
     const sent = await this.sendStandaloneMessage(text);
     this.activeProgressMessageId = sent.messageId;
     this.activeProgressUpdatable = sent.updatable;
+    this.activeProgressTextUpdateCount = sent.textUpdateCount;
+    return true;
   }
 }
 
@@ -595,6 +637,14 @@ function shouldSuppressPersonaOnboardingWaitingEvent(message: FeishuDeliveryMess
 function normalizeProgressFlushTimeoutMs(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return DEFAULT_FEISHU_PROGRESS_FLUSH_TIMEOUT_MS;
+  }
+
+  return Math.max(1, Math.round(value));
+}
+
+function normalizeProgressMaxTextUpdates(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return DEFAULT_FEISHU_PROGRESS_MAX_TEXT_UPDATES;
   }
 
   return Math.max(1, Math.round(value));

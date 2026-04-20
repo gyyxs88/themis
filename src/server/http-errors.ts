@@ -18,6 +18,16 @@ export function createTaskError(error: unknown, hasNormalizedRequest: boolean): 
     };
   }
 
+  const timeoutMessage = resolveTaskTimeoutMessage(error);
+
+  if (timeoutMessage) {
+    return {
+      code: "CORE_RUNTIME_ERROR",
+      message: timeoutMessage,
+      retryable: true,
+    };
+  }
+
   return {
     code: hasNormalizedRequest ? "CORE_RUNTIME_ERROR" : "INVALID_REQUEST",
     message: toErrorMessage(error),
@@ -46,4 +56,21 @@ function isAuthenticationError(error: unknown): boolean {
   return /not logged in/i.test(message)
     || /401 unauthorized/i.test(message)
     || /missing bearer or basic authentication/i.test(message);
+}
+
+function resolveTaskTimeoutMessage(error: unknown): string | null {
+  const message = toErrorMessage(error);
+
+  if (!message.startsWith("TASK_TIMEOUT:")) {
+    return null;
+  }
+
+  const timeoutMs = Number.parseInt(message.slice("TASK_TIMEOUT:".length), 10);
+
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return "任务因超时被取消。";
+  }
+
+  const seconds = Math.max(1, Math.round(timeoutMs / 1000));
+  return `任务因超时被取消，超时时间约为 ${seconds} 秒。`;
 }

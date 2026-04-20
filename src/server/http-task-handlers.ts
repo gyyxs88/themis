@@ -9,6 +9,7 @@ import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { appendTaskReplyQuotaFooter } from "../core/task-reply-quota.js";
+import { createTaskActivityTimeoutController } from "../core/task-activity-timeout.js";
 import {
   InvalidTaskRuntimeSelectionError,
   resolvePublicTaskRuntime,
@@ -36,6 +37,7 @@ export async function handleTaskStream(
   const payload = (await readJsonBody(request)) as WebTaskPayload;
   const router = new InMemoryCommunicationRouter();
   const abortController = new AbortController();
+  const activityTimeout = createTaskActivityTimeoutController(abortController.signal, taskTimeoutMs);
   let streamClosed = false;
   let streamCompleted = false;
   let detachedRecoveryActionId: string | null = null;
@@ -122,10 +124,10 @@ export async function handleTaskStream(
     });
 
     const result = await selectedRuntime.runTask(normalizedRequest, {
-      signal: abortController.signal,
-      timeoutMs: taskTimeoutMs,
+      signal: activityTimeout.signal,
       finalizeResult: (request, taskResult) => appendTaskReplyQuotaFooter(authRuntime, request, taskResult),
       onEvent: async (event) => {
+        activityTimeout.touch();
         if (event.type === "task.action_required" && typeof event.payload?.actionId === "string") {
           detachedRecoveryActionId = event.payload.actionId;
           if (streamClosed && hasRecoverableDetachedAction(normalizedRequest, event.payload.actionId, actionBridge)) {
@@ -134,7 +136,7 @@ export async function handleTaskStream(
           }
         }
 
-        await router.publishEvent(event);
+        await activityTimeout.wrap(router.publishEvent(event));
       },
     });
 
@@ -142,7 +144,7 @@ export async function handleTaskStream(
       recordTaskCancelledAudit(selectedRuntime, request, normalizedRequest, result, "/api/tasks/stream");
     }
 
-    await router.publishResult(result);
+    await activityTimeout.wrap(router.publishResult(result));
 
     safeWriteNdjson(response, {
       kind: "done",
@@ -179,6 +181,7 @@ export async function handleTaskStream(
     streamCompleted = true;
     response.end();
   } finally {
+    activityTimeout.cleanup();
     clearCloseAbortTimer();
     request.off("close", markClosed);
     response.off("close", markClosed);
@@ -208,6 +211,7 @@ export async function handleTaskRun(
   const payload = (await readJsonBody(request)) as WebTaskPayload;
   const deliveries: WebDeliveryMessage[] = [];
   const router = new InMemoryCommunicationRouter();
+  const activityTimeout = createTaskActivityTimeoutController(undefined, taskTimeoutMs);
   const webAdapter = new WebAdapter({
     deliver: async (message) => {
       deliveries.push(message);
@@ -230,10 +234,11 @@ export async function handleTaskRun(
     recordTaskAcceptedAudit(selectedRuntime, request, normalizedRequest, "/api/tasks/run");
 
     const result = await selectedRuntime.runTask(normalizedRequest, {
-      timeoutMs: taskTimeoutMs,
+      signal: activityTimeout.signal,
       finalizeResult: (request, taskResult) => appendTaskReplyQuotaFooter(authRuntime, request, taskResult),
       onEvent: async (event) => {
-        await router.publishEvent(event);
+        activityTimeout.touch();
+        await activityTimeout.wrap(router.publishEvent(event));
       },
     });
 
@@ -241,7 +246,7 @@ export async function handleTaskRun(
       recordTaskCancelledAudit(selectedRuntime, request, normalizedRequest, result, "/api/tasks/run");
     }
 
-    await router.publishResult(result);
+    await activityTimeout.wrap(router.publishResult(result));
 
     writeJson(response, 200, {
       requestId: normalizedRequest.requestId,
@@ -267,6 +272,8 @@ export async function handleTaskRun(
       ...(normalizedRequest ? { requestId: normalizedRequest.requestId } : {}),
       ...(deliveries.length ? { deliveries } : {}),
     });
+  } finally {
+    activityTimeout.cleanup();
   }
 }
 
@@ -280,6 +287,7 @@ export async function handleTaskAutomationRun(
 ): Promise<void> {
   const payload = (await readJsonBody(request)) as WebTaskPayload;
   const router = new InMemoryCommunicationRouter();
+  const activityTimeout = createTaskActivityTimeoutController(undefined, taskTimeoutMs);
   const webAdapter = new WebAdapter({
     deliver: async () => {},
   });
@@ -300,8 +308,12 @@ export async function handleTaskAutomationRun(
     recordTaskAcceptedAudit(selectedRuntime, request, normalizedRequest, "/api/tasks/automation/run");
 
     const result = await selectedRuntime.runTask(normalizedRequest, {
-      timeoutMs: taskTimeoutMs,
+      signal: activityTimeout.signal,
       finalizeResult: (request, taskResult) => appendTaskReplyQuotaFooter(authRuntime, request, taskResult),
+      onEvent: async (event) => {
+        activityTimeout.touch();
+        await activityTimeout.wrap(router.publishEvent(event));
+      },
     });
 
     if (result.status === "cancelled") {
@@ -319,6 +331,8 @@ export async function handleTaskAutomationRun(
       error: taskError,
       ...(normalizedRequest ? { requestId: normalizedRequest.requestId } : {}),
     });
+  } finally {
+    activityTimeout.cleanup();
   }
 }
 
