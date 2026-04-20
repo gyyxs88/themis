@@ -111,6 +111,46 @@ test("静默超时会补发缓存 progress，并保留新的处理中占位", as
   ]);
 });
 
+test("20 秒到点时会优先截到最近句末，而不是把半句直接露出来", async () => {
+  const operations: string[] = [];
+  let nextMessageId = 1;
+  const bridge = createBridge(operations, () => `message-${nextMessageId++}`, 20);
+  const progressText = "第一句已经完整。第二句还在继续展开但是现在还没有写完";
+
+  await bridge.prepareResponseSlot();
+  await bridge.deliver(createProgressMessage("req-boundary-soft-flush", "item-1", progressText));
+  await wait(25);
+
+  assert.deepEqual(operations, [
+    "create:处理中...",
+    "update:message-1:第一句已经完整。",
+    "create:处理中...",
+  ]);
+});
+
+test("20 秒没有句末或空行时不会半句露出，40 秒才会兜底强刷", async () => {
+  const operations: string[] = [];
+  let nextMessageId = 1;
+  const bridge = createBridge(operations, () => `message-${nextMessageId++}`, 20);
+  const progressText = "这是一段还没有句号也没有空行但是确实已经生成了很多内容只是仍然没有自然收口所以二十秒时不该把半句直接发出来";
+
+  await bridge.prepareResponseSlot();
+  await bridge.deliver(createProgressMessage("req-boundary-hard-flush", "item-1", progressText));
+  await wait(25);
+
+  assert.deepEqual(operations, [
+    "create:处理中...",
+  ]);
+
+  await wait(25);
+
+  assert.deepEqual(operations, [
+    "create:处理中...",
+    `update:message-1:${progressText}`,
+    "create:处理中...",
+  ]);
+});
+
 test("同一条正文持续输出时，会按时间节拍更新同一条已显示消息", async () => {
   const operations: string[] = [];
   let nextMessageId = 1;

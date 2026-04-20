@@ -21,10 +21,11 @@ export interface FeishuTaskMessageBridgeOptions {
 
 export const FEISHU_PLACEHOLDER_TEXT = "处理中...";
 export const FEISHU_COMPLETED_TEXT = "已完成";
-export const DEFAULT_FEISHU_PROGRESS_FLUSH_TIMEOUT_MS = 60_000;
+export const DEFAULT_FEISHU_PROGRESS_FLUSH_TIMEOUT_MS = 20_000;
 const FEISHU_EAGER_PROGRESS_MIN_LENGTH = 220;
 const FEISHU_EAGER_PROGRESS_MIN_LENGTH_WITH_BULLETS = 120;
 const FEISHU_EAGER_PROGRESS_MIN_BULLET_COUNT = 2;
+const FEISHU_PROGRESS_FORCE_FLUSH_TIMEOUT_MULTIPLIER = 2;
 
 export class FeishuTaskMessageBridge {
   private readonly deliveredProgress = new Map<string, string>();
@@ -36,6 +37,7 @@ export class FeishuTaskMessageBridge {
   private readonly createDraft: ((draft: FeishuRenderedMessageDraft) => Promise<FeishuMessageMutationResponse>) | null;
   private readonly updateDraft: ((messageId: string, draft: FeishuRenderedMessageDraft) => Promise<FeishuMessageMutationResponse>) | null;
   private readonly progressFlushTimeoutMs: number;
+  private readonly progressForceFlushTimeoutMs: number;
   private currentPlaceholderMessageId: string | null = null;
   private currentPlaceholderUpdatable = false;
   private currentPlaceholderFollowsVisibleProgress = false;
@@ -45,6 +47,7 @@ export class FeishuTaskMessageBridge {
   private activeProgressText: string | null = null;
   private pendingProgressItemId: string | null = null;
   private pendingProgressText: string | null = null;
+  private pendingProgressStartedAt = 0;
   private pendingFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingFlushOperation: Promise<void> | null = null;
   private resolvePendingFlushOperation: (() => void) | null = null;
@@ -57,6 +60,10 @@ export class FeishuTaskMessageBridge {
     this.createDraft = options.createDraft ?? null;
     this.updateDraft = options.updateDraft ?? null;
     this.progressFlushTimeoutMs = normalizeProgressFlushTimeoutMs(options.progressFlushTimeoutMs);
+    this.progressForceFlushTimeoutMs = Math.max(
+      this.progressFlushTimeoutMs + 1,
+      this.progressFlushTimeoutMs * FEISHU_PROGRESS_FORCE_FLUSH_TIMEOUT_MULTIPLIER,
+    );
   }
 
   async prepareResponseSlot(): Promise<void> {
@@ -71,8 +78,7 @@ export class FeishuTaskMessageBridge {
     }
 
     await this.cancelScheduledPendingFlush();
-    this.pendingProgressItemId = null;
-    this.pendingProgressText = null;
+    this.clearPendingProgress();
     this.clearActiveProgress();
     await this.ensureCurrentPlaceholder();
 
@@ -206,7 +212,11 @@ export class FeishuTaskMessageBridge {
 
     if (this.pendingProgressText && this.pendingProgressItemId !== itemId) {
       await this.cancelScheduledPendingFlush();
-      await this.flushPendingProgress();
+      await this.flushPendingProgress({ force: true });
+    }
+
+    if (this.pendingProgressItemId !== itemId || !this.pendingProgressStartedAt) {
+      this.pendingProgressStartedAt = Date.now();
     }
 
     this.pendingProgressItemId = itemId;
@@ -214,7 +224,7 @@ export class FeishuTaskMessageBridge {
 
     if (shouldFlushProgressImmediately(normalizedText, this.activeProgressText)) {
       await this.cancelScheduledPendingFlush();
-      await this.flushPendingProgress();
+      await this.flushPendingProgress({ force: true });
       return;
     }
 
@@ -231,8 +241,7 @@ export class FeishuTaskMessageBridge {
     await this.cancelScheduledPendingFlush();
 
     const pendingProgressItemId = this.pendingProgressItemId;
-    this.pendingProgressItemId = null;
-    this.pendingProgressText = null;
+    this.clearPendingProgress();
 
     if (!this.activeProgressItemId) {
       await this.commitCurrentPlaceholder(normalizedText);
@@ -267,8 +276,7 @@ export class FeishuTaskMessageBridge {
     }
 
     await this.cancelScheduledPendingFlush();
-    this.pendingProgressItemId = null;
-    this.pendingProgressText = null;
+    this.clearPendingProgress();
     this.clearActiveProgress();
     await this.commitCurrentPlaceholder(normalizedText);
   }
@@ -361,33 +369,48 @@ export class FeishuTaskMessageBridge {
     };
   }
 
-  private async flushPendingProgress(): Promise<void> {
+  private async flushPendingProgress(options?: { force?: boolean }): Promise<void> {
     const pendingProgressItemId = this.pendingProgressItemId;
     const pendingProgressText = this.pendingProgressText;
+    const force = options?.force === true;
 
     if (!pendingProgressItemId || !pendingProgressText) {
       return;
     }
 
-    if (this.activeProgressItemId && this.activeProgressItemId === pendingProgressItemId) {
-      await this.writeActiveProgressText(pendingProgressText);
-    } else {
-      const committed = await this.commitCurrentPlaceholder(pendingProgressText);
-      this.setActiveProgress(pendingProgressItemId, committed, pendingProgressText);
-      await this.ensureFollowupPlaceholderAfterProgress();
-    }
+    const activeProgressText = this.activeProgressItemId === pendingProgressItemId
+      ? this.activeProgressText
+      : null;
+    const nextVisibleText = force
+      ? pendingProgressText
+      : selectProgressFlushText(pendingProgressText, activeProgressText);
 
-    this.activeProgressText = pendingProgressText;
-
-    if (
-      this.pendingProgressItemId === pendingProgressItemId
-      && this.pendingProgressText === pendingProgressText
-    ) {
-      this.pendingProgressItemId = null;
-      this.pendingProgressText = null;
+    if (!nextVisibleText) {
+      this.schedulePendingFlush();
       return;
     }
 
+    if (this.activeProgressItemId && this.activeProgressItemId === pendingProgressItemId) {
+      await this.writeActiveProgressText(nextVisibleText);
+    } else {
+      const committed = await this.commitCurrentPlaceholder(nextVisibleText);
+      this.setActiveProgress(pendingProgressItemId, committed, nextVisibleText);
+      await this.ensureFollowupPlaceholderAfterProgress();
+    }
+
+    this.activeProgressText = nextVisibleText;
+
+    if (normalizeComparableReply(nextVisibleText) === normalizeComparableReply(pendingProgressText)) {
+      if (
+        this.pendingProgressItemId === pendingProgressItemId
+        && this.pendingProgressText === pendingProgressText
+      ) {
+        this.clearPendingProgress();
+      }
+      return;
+    }
+
+    this.pendingProgressStartedAt = Date.now();
     this.schedulePendingFlush();
   }
 
@@ -398,7 +421,7 @@ export class FeishuTaskMessageBridge {
   }
 
   private schedulePendingFlush(): void {
-    if (!this.pendingProgressText || this.pendingFlushTimer || this.pendingFlushOperation) {
+    if (!this.pendingProgressText || this.pendingFlushTimer) {
       return;
     }
 
@@ -406,14 +429,21 @@ export class FeishuTaskMessageBridge {
 
     this.pendingFlushOperation = new Promise<void>((resolve) => {
       this.resolvePendingFlushOperation = resolve;
+      const elapsedMs = this.pendingProgressStartedAt ? Math.max(0, Date.now() - this.pendingProgressStartedAt) : 0;
+      const remainingForceFlushMs = Math.max(1, this.progressForceFlushTimeoutMs - elapsedMs);
+      const delayMs = Math.max(1, Math.min(this.progressFlushTimeoutMs, remainingForceFlushMs));
+
       this.pendingFlushTimer = setTimeout(() => {
         this.pendingFlushTimer = null;
-        void this.flushPendingProgress()
+        const force = this.pendingProgressStartedAt
+          ? Date.now() - this.pendingProgressStartedAt >= this.progressForceFlushTimeoutMs
+          : false;
+        void this.flushPendingProgress({ force })
           .catch(() => {})
           .finally(() => {
             this.finishScheduledPendingFlush();
           });
-      }, this.progressFlushTimeoutMs);
+      }, delayMs);
     });
   }
 
@@ -437,6 +467,12 @@ export class FeishuTaskMessageBridge {
     this.resolvePendingFlushOperation = null;
     this.pendingFlushOperation = null;
     resolve?.();
+  }
+
+  private clearPendingProgress(): void {
+    this.pendingProgressItemId = null;
+    this.pendingProgressText = null;
+    this.pendingProgressStartedAt = 0;
   }
 
   private setActiveProgress(
@@ -569,6 +605,71 @@ function normalizeText(value: unknown): string | null {
 
   const text = value.trim();
   return text ? text : null;
+}
+
+function selectProgressFlushText(text: string, currentVisibleText: string | null): string | null {
+  const normalizedText = normalizeText(text);
+
+  if (!normalizedText) {
+    return null;
+  }
+
+  const visibleText = normalizeText(currentVisibleText);
+
+  if (!visibleText) {
+    const boundary = findLatestProgressBoundary(normalizedText);
+    return boundary ? normalizedText.slice(0, boundary).trimEnd() : null;
+  }
+
+  if (!normalizedText.startsWith(visibleText)) {
+    return null;
+  }
+
+  const suffix = normalizedText.slice(visibleText.length);
+  const boundary = findLatestProgressBoundary(suffix);
+
+  if (!boundary) {
+    return null;
+  }
+
+  return normalizedText.slice(0, visibleText.length + boundary).trimEnd();
+}
+
+function findLatestProgressBoundary(text: string): number | null {
+  if (!text) {
+    return null;
+  }
+
+  const blankLineBoundary = findLastBoundaryMatch(text, /\n\s*\n/g);
+
+  if (blankLineBoundary) {
+    return blankLineBoundary;
+  }
+
+  const chineseSentenceBoundary = findLastBoundaryMatch(text, /[。！？][`”"'）)]*/g);
+
+  if (chineseSentenceBoundary) {
+    return chineseSentenceBoundary;
+  }
+
+  return findLastBoundaryMatch(text, /[.!?][`”"'）)]*(?=\s|$)/g);
+}
+
+function findLastBoundaryMatch(text: string, pattern: RegExp): number | null {
+  let lastBoundary: number | null = null;
+
+  for (const match of text.matchAll(pattern)) {
+    const start = typeof match.index === "number" ? match.index : -1;
+    const matched = match[0] ?? "";
+
+    if (start < 0 || !matched) {
+      continue;
+    }
+
+    lastBoundary = start + matched.length;
+  }
+
+  return lastBoundary;
 }
 
 function shouldFlushProgressImmediately(text: string, lastVisibleProgressText: string | null): boolean {
