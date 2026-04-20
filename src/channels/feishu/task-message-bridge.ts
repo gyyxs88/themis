@@ -39,9 +39,12 @@ export class FeishuTaskMessageBridge {
   private currentPlaceholderMessageId: string | null = null;
   private currentPlaceholderUpdatable = false;
   private currentPlaceholderFollowsVisibleProgress = false;
+  private activeProgressItemId: string | null = null;
+  private activeProgressMessageId: string | null = null;
+  private activeProgressUpdatable = false;
+  private activeProgressText: string | null = null;
   private pendingProgressItemId: string | null = null;
   private pendingProgressText: string | null = null;
-  private lastVisibleProgressText: string | null = null;
   private pendingFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingFlushOperation: Promise<void> | null = null;
   private resolvePendingFlushOperation: (() => void) | null = null;
@@ -70,7 +73,7 @@ export class FeishuTaskMessageBridge {
     await this.cancelScheduledPendingFlush();
     this.pendingProgressItemId = null;
     this.pendingProgressText = null;
-    this.lastVisibleProgressText = null;
+    this.clearActiveProgress();
     await this.ensureCurrentPlaceholder();
 
     if (!this.currentPlaceholderUpdatable || !this.currentPlaceholderMessageId) {
@@ -201,17 +204,17 @@ export class FeishuTaskMessageBridge {
       return;
     }
 
-    await this.cancelScheduledPendingFlush();
-
     if (this.pendingProgressText && this.pendingProgressItemId !== itemId) {
-      await this.flushPendingProgressAndKeepPlaceholder();
+      await this.cancelScheduledPendingFlush();
+      await this.flushPendingProgress();
     }
 
     this.pendingProgressItemId = itemId;
     this.pendingProgressText = normalizedText;
 
-    if (shouldFlushProgressImmediately(normalizedText, this.lastVisibleProgressText)) {
-      await this.flushPendingProgressAndKeepPlaceholder();
+    if (shouldFlushProgressImmediately(normalizedText, this.activeProgressText)) {
+      await this.cancelScheduledPendingFlush();
+      await this.flushPendingProgress();
       return;
     }
 
@@ -227,35 +230,33 @@ export class FeishuTaskMessageBridge {
 
     await this.cancelScheduledPendingFlush();
 
-    const pendingProgressText = this.pendingProgressText;
+    const pendingProgressItemId = this.pendingProgressItemId;
     this.pendingProgressItemId = null;
     this.pendingProgressText = null;
 
-    if (!pendingProgressText) {
-      if (
-        this.currentPlaceholderFollowsVisibleProgress
-        && this.lastVisibleProgressText
-        && normalizeComparableReply(this.lastVisibleProgressText) === normalizeComparableReply(normalizedText)
-      ) {
-        await this.commitCurrentPlaceholder(FEISHU_COMPLETED_TEXT);
-        this.lastVisibleProgressText = null;
-        return;
-      }
-
+    if (!this.activeProgressItemId) {
       await this.commitCurrentPlaceholder(normalizedText);
-      this.lastVisibleProgressText = null;
+      this.clearActiveProgress();
       return;
     }
 
-    if (normalizeComparableReply(pendingProgressText) === normalizeComparableReply(normalizedText)) {
-      await this.commitCurrentPlaceholder(normalizedText);
-      this.lastVisibleProgressText = null;
+    if (pendingProgressItemId && pendingProgressItemId !== this.activeProgressItemId) {
+      const committed = await this.commitCurrentPlaceholder(normalizedText);
+      this.setActiveProgress(pendingProgressItemId, committed, normalizedText);
+      await this.ensureFollowupPlaceholderAfterProgress();
+      await this.commitCurrentPlaceholder(FEISHU_COMPLETED_TEXT);
+      this.clearActiveProgress();
       return;
     }
 
-    await this.commitCurrentPlaceholder(pendingProgressText);
-    await this.sendStandaloneMessage(normalizedText);
-    this.lastVisibleProgressText = null;
+    if (normalizeComparableReply(this.activeProgressText ?? "") !== normalizeComparableReply(normalizedText)) {
+      await this.writeActiveProgressText(normalizedText);
+      this.activeProgressText = normalizedText;
+    }
+
+    await this.ensureFollowupPlaceholderAfterProgress();
+    await this.commitCurrentPlaceholder(FEISHU_COMPLETED_TEXT);
+    this.clearActiveProgress();
   }
 
   private async deliverTerminalText(text: string): Promise<void> {
@@ -268,7 +269,7 @@ export class FeishuTaskMessageBridge {
     await this.cancelScheduledPendingFlush();
     this.pendingProgressItemId = null;
     this.pendingProgressText = null;
-    this.lastVisibleProgressText = null;
+    this.clearActiveProgress();
     await this.commitCurrentPlaceholder(normalizedText);
   }
 
@@ -346,24 +347,48 @@ export class FeishuTaskMessageBridge {
     }
   }
 
-  private async commitCurrentPlaceholder(text: string): Promise<void> {
+  private async commitCurrentPlaceholder(
+    text: string,
+  ): Promise<{ messageId: string | null; updatable: boolean }> {
     await this.ensureCurrentPlaceholder();
+    const messageId = this.currentPlaceholderMessageId;
+    const updatable = this.currentPlaceholderUpdatable;
     await this.fillCurrentPlaceholder(text);
     this.clearCurrentPlaceholder();
+    return {
+      messageId,
+      updatable,
+    };
   }
 
-  private async flushPendingProgressAndKeepPlaceholder(): Promise<void> {
+  private async flushPendingProgress(): Promise<void> {
+    const pendingProgressItemId = this.pendingProgressItemId;
     const pendingProgressText = this.pendingProgressText;
 
-    if (!pendingProgressText) {
+    if (!pendingProgressItemId || !pendingProgressText) {
       return;
     }
 
-    await this.commitCurrentPlaceholder(pendingProgressText);
-    this.lastVisibleProgressText = pendingProgressText;
-    this.pendingProgressItemId = null;
-    this.pendingProgressText = null;
-    await this.ensureFollowupPlaceholderAfterProgress();
+    if (this.activeProgressItemId && this.activeProgressItemId === pendingProgressItemId) {
+      await this.writeActiveProgressText(pendingProgressText);
+    } else {
+      const committed = await this.commitCurrentPlaceholder(pendingProgressText);
+      this.setActiveProgress(pendingProgressItemId, committed, pendingProgressText);
+      await this.ensureFollowupPlaceholderAfterProgress();
+    }
+
+    this.activeProgressText = pendingProgressText;
+
+    if (
+      this.pendingProgressItemId === pendingProgressItemId
+      && this.pendingProgressText === pendingProgressText
+    ) {
+      this.pendingProgressItemId = null;
+      this.pendingProgressText = null;
+      return;
+    }
+
+    this.schedulePendingFlush();
   }
 
   private clearCurrentPlaceholder(): void {
@@ -373,7 +398,7 @@ export class FeishuTaskMessageBridge {
   }
 
   private schedulePendingFlush(): void {
-    if (!this.pendingProgressText) {
+    if (!this.pendingProgressText || this.pendingFlushTimer || this.pendingFlushOperation) {
       return;
     }
 
@@ -383,7 +408,7 @@ export class FeishuTaskMessageBridge {
       this.resolvePendingFlushOperation = resolve;
       this.pendingFlushTimer = setTimeout(() => {
         this.pendingFlushTimer = null;
-        void this.flushPendingProgressAndKeepPlaceholder()
+        void this.flushPendingProgress()
           .catch(() => {})
           .finally(() => {
             this.finishScheduledPendingFlush();
@@ -412,6 +437,35 @@ export class FeishuTaskMessageBridge {
     this.resolvePendingFlushOperation = null;
     this.pendingFlushOperation = null;
     resolve?.();
+  }
+
+  private setActiveProgress(
+    itemId: string,
+    slot: { messageId: string | null; updatable: boolean },
+    text: string,
+  ): void {
+    this.activeProgressItemId = itemId;
+    this.activeProgressMessageId = slot.messageId;
+    this.activeProgressUpdatable = slot.updatable;
+    this.activeProgressText = text;
+  }
+
+  private clearActiveProgress(): void {
+    this.activeProgressItemId = null;
+    this.activeProgressMessageId = null;
+    this.activeProgressUpdatable = false;
+    this.activeProgressText = null;
+  }
+
+  private async writeActiveProgressText(text: string): Promise<void> {
+    if (this.activeProgressUpdatable && this.activeProgressMessageId) {
+      await this.updateText(this.activeProgressMessageId, text);
+      return;
+    }
+
+    const sent = await this.sendStandaloneMessage(text);
+    this.activeProgressMessageId = sent.messageId;
+    this.activeProgressUpdatable = sent.updatable;
   }
 }
 
