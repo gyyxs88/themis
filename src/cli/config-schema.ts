@@ -180,8 +180,8 @@ export const PROJECT_CONFIG_DEFINITIONS: ProjectConfigDefinition[] = [
   {
     key: "FEISHU_PROGRESS_FLUSH_TIMEOUT_MS",
     section: "飞书渠道",
-    description: "飞书顺序延迟桥接里缓存 progress 的静默补发超时，单位毫秒。",
-    defaultValue: "60000",
+    description: "飞书正文主消息的 soft flush 节拍，单位毫秒；到点会优先截到句末或空行。",
+    defaultValue: "20000",
   },
   {
     key: "THEMIS_OPENAI_COMPAT_BASE_URL",
