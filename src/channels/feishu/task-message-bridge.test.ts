@@ -109,6 +109,37 @@ test("静默超时会补发缓存 progress，并保留新的处理中占位", as
   ]);
 });
 
+test("足够完整的首条正文会立即露出，并保留新的处理中占位", async () => {
+  const operations: string[] = [];
+  let nextMessageId = 1;
+  const bridge = createBridge(operations, () => `message-${nextMessageId++}`);
+  const longProgress = [
+    "收到，老板，这段我先接住。",
+    "",
+    "- 要点一：这是翻译站，不是聚合站。",
+    "- 要点二：流量入口来自 Novel Updates。",
+    "- 要点三：这条判断已经足够支撑后续讨论。",
+  ].join("\n");
+
+  await bridge.prepareResponseSlot();
+  await bridge.deliver(createProgressMessage("req-eager-progress", "item-1", longProgress));
+
+  assert.deepEqual(operations, [
+    "create:处理中...",
+    `update:message-1:${longProgress}`,
+    "create:处理中...",
+  ]);
+
+  await bridge.deliver(createResultMessage("req-eager-progress", longProgress));
+
+  assert.deepEqual(operations, [
+    "create:处理中...",
+    `update:message-1:${longProgress}`,
+    "create:处理中...",
+    "update:message-2:已完成",
+  ]);
+});
+
 test("静默超时后若最终结果与已补发正文一致：尾部占位应收口为已完成，而不是重复正文", async () => {
   const operations: string[] = [];
   let nextMessageId = 1;

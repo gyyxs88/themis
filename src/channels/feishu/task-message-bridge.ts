@@ -22,6 +22,7 @@ export interface FeishuTaskMessageBridgeOptions {
 export const FEISHU_PLACEHOLDER_TEXT = "处理中...";
 export const FEISHU_COMPLETED_TEXT = "已完成";
 export const DEFAULT_FEISHU_PROGRESS_FLUSH_TIMEOUT_MS = 60_000;
+const FEISHU_EAGER_PROGRESS_MIN_LENGTH = 100;
 
 export class FeishuTaskMessageBridge {
   private readonly deliveredProgress = new Map<string, string>();
@@ -206,6 +207,12 @@ export class FeishuTaskMessageBridge {
 
     this.pendingProgressItemId = itemId;
     this.pendingProgressText = normalizedText;
+
+    if (shouldFlushProgressImmediately(normalizedText, this.lastVisibleProgressText)) {
+      await this.flushPendingProgressAndKeepPlaceholder();
+      return;
+    }
+
     this.schedulePendingFlush();
   }
 
@@ -506,4 +513,20 @@ function normalizeText(value: unknown): string | null {
 
   const text = value.trim();
   return text ? text : null;
+}
+
+function shouldFlushProgressImmediately(text: string, lastVisibleProgressText: string | null): boolean {
+  if (lastVisibleProgressText) {
+    return false;
+  }
+
+  const comparable = normalizeComparableReply(text);
+
+  if (!comparable) {
+    return false;
+  }
+
+  return comparable.length >= FEISHU_EAGER_PROGRESS_MIN_LENGTH
+    || comparable.includes("\n\n")
+    || /(?:^|\n)[-*]\s/.test(comparable);
 }
