@@ -1,5 +1,6 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
 import type { EventHandles, InteractiveCard, InteractiveCardActionEvent } from "@larksuiteoapi/node-sdk";
+import { createReadStream } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { InMemoryCommunicationRouter } from "../../communication/router.js";
@@ -84,6 +85,10 @@ import {
   type FeishuMessageResourceAsset,
   type FeishuMessageResourceReference,
 } from "./message-resource.js";
+import {
+  resolveFeishuOutboundAttachmentPlans,
+  type FeishuOutboundAttachmentPlan,
+} from "./outbound-attachments.js";
 import { FeishuSessionStore, type FeishuConversationKey } from "./session-store.js";
 import {
   DEFAULT_FEISHU_PROGRESS_FLUSH_TIMEOUT_MS,
@@ -1394,6 +1399,7 @@ export class FeishuChannelService {
 
       discardDraftRestore();
       await router.publishResult(result);
+      await this.publishTaskResultAttachmentsIfNeeded(context.chatId, normalizedRequest, result);
       await this.publishTaskInputCompileFollowupIfNeeded(context.chatId, normalizedRequest.requestId, result.status);
     } catch (error) {
       restoreDraft();
@@ -1447,6 +1453,99 @@ export class FeishuChannelService {
     }
 
     await this.safeSendText(chatId, text);
+  }
+
+  private async publishTaskResultAttachmentsIfNeeded(
+    chatId: string,
+    request: TaskRequest,
+    result: {
+      status: "completed" | "failed" | "cancelled";
+      output?: string;
+      summary: string;
+      touchedFiles?: string[];
+    },
+  ): Promise<void> {
+    if (result.status !== "completed" || !this.client) {
+      return;
+    }
+
+    const { plans, notices } = resolveFeishuOutboundAttachmentPlans({
+      outputText: result.output ?? result.summary,
+      workspaceDirectory: this.resolveTaskWorkspaceDirectory(request.channelContext.sessionId),
+      ...(result.touchedFiles ? { touchedFiles: result.touchedFiles } : {}),
+    });
+
+    if (plans.length === 0 && notices.length === 0) {
+      return;
+    }
+
+    const deliveryNotices = [...notices];
+
+    for (const plan of plans) {
+      try {
+        await this.sendResultAttachment(chatId, plan);
+      } catch (error) {
+        const message = `结果文件 ${plan.fileName} 回传失败：${toErrorMessage(error)}`;
+        this.logger.error(`[themis/feishu] ${message}`);
+        deliveryNotices.push(message);
+      }
+    }
+
+    if (deliveryNotices.length > 0) {
+      await this.safeSendTaggedText(chatId, deliveryNotices.join("\n"), "附件回传");
+    }
+  }
+
+  private resolveTaskWorkspaceDirectory(sessionId: string | undefined): string {
+    if (!sessionId) {
+      return this.runtime.getWorkingDirectory();
+    }
+
+    try {
+      return this.resolveAttachmentWorkingDirectory(sessionId);
+    } catch {
+      return this.runtime.getWorkingDirectory();
+    }
+  }
+
+  private async sendResultAttachment(chatId: string, plan: FeishuOutboundAttachmentPlan): Promise<void> {
+    const client = this.requireClient();
+
+    if (plan.messageType === "image") {
+      const uploaded = await client.im.v1.image.create({
+        data: {
+          image_type: "message",
+          image: createReadStream(plan.absolutePath),
+        },
+      });
+      const imageKey = normalizeText(uploaded?.image_key);
+
+      if (!imageKey) {
+        throw new Error("飞书图片上传未返回 image_key。");
+      }
+
+      await this.createAttachmentMessage(chatId, "image", {
+        image_key: imageKey,
+      });
+      return;
+    }
+
+    const uploaded = await client.im.v1.file.create({
+      data: {
+        file_type: plan.uploadFileType ?? "stream",
+        file_name: plan.fileName,
+        file: createReadStream(plan.absolutePath),
+      },
+    });
+    const fileKey = normalizeText(uploaded?.file_key);
+
+    if (!fileKey) {
+      throw new Error("飞书文件上传未返回 file_key。");
+    }
+
+    await this.createAttachmentMessage(chatId, "file", {
+      file_key: fileKey,
+    });
   }
 
   private buildTaskInputCompileFollowupText(requestId: string): string | null {
@@ -4472,6 +4571,20 @@ export class FeishuChannelService {
     return this.createMessage(chatId, renderFeishuAssistantMessage(text));
   }
 
+  private async createAttachmentMessage(
+    chatId: string,
+    msgType: "image" | "file",
+    content: {
+      image_key?: string;
+      file_key?: string;
+    },
+  ): Promise<FeishuMessageMutationResponse> {
+    return this.createRawMessage(chatId, {
+      msgType,
+      content: JSON.stringify(content),
+    });
+  }
+
   private async updateAssistantMessage(
     messageId: string,
     text: string,
@@ -4482,6 +4595,16 @@ export class FeishuChannelService {
   private async createMessage(
     chatId: string,
     draft: FeishuRenderedMessageDraft,
+  ): Promise<FeishuMessageMutationResponse> {
+    return this.createRawMessage(chatId, draft);
+  }
+
+  private async createRawMessage(
+    chatId: string,
+    draft: {
+      msgType: string;
+      content: string;
+    },
   ): Promise<FeishuMessageMutationResponse> {
     const client = this.client;
 

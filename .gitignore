@@ -26,6 +26,7 @@ docs/private/
 memory/local/
 memory/sessions/*.md
 !memory/sessions/README.md
+memory/tasks/done.md
 
 # Local infrastructure or overrides
 infra/local/

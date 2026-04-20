@@ -15,6 +15,9 @@ Themis 已接入飞书长连接渠道，特点如下：
 - 飞书附件不会立刻起任务，而是先按 `chatId + scopedConversationUserId + activeSessionId` 写入本地附件草稿；默认 `scopedConversationUserId = userId`，群聊切到 `shared` 会话策略后会改成整群共享作用域。草稿当前以 `parts + assets` 作为 canonical 结构，等下一条真正进入普通任务路径的文本时会构造 `inputEnvelope`，同时保留 legacy `attachments[]` 兼容
 - 命令和 waiting action 恢复优先级高于附件草稿消费；只有普通任务文本才会自动拼接附件
 - 附件任务真正开始执行后会清空已消费草稿；附件下载失败会直接返回错误且不留下脏草稿
+- 飞书普通任务完成后，如果最终输出里显式引用了本地绝对路径文件，或 runtime `touchedFiles` 里产出了当前工作区 `temp/` 下的结果文件，桥接层会尝试把这些结果作为飞书附件回传
+- 当前默认回传策略是：图片优先走飞书 IM `image`；其余白名单文件走飞书 IM `file`；源码文件和非白名单显式链接不会回传
+- 当前回传大小限制按飞书 IM 能力收口：图片 `10MB`，其他文件 `30MB`；超限或上传失败时不会中断正文回复，而是补一条 `[附件回传]` 文本说明
 - 群聊默认采用 `smart` 路由：首条普通文本如果没有显式触达（@ 机器人、同一用户当前有 waiting action、同一用户当前有运行中任务，或最近 10 分钟刚命中过群路由），会被静默忽略并写入 diagnostics；切到 `always` 后，群聊普通文本会默认直接进入 Themis
 - 群聊会话策略支持 `personal / shared`：`personal` 继续按人隔离当前会话与附件草稿，`shared` 则改为整群共用一条当前会话和同一份附件草稿
 - 飞书已补 `/group` 最小管理员控制：可查看和修改当前群的路由、会话策略与管理员名单；当前群还没有管理员时，首次成功修改群设置的人会自动成为首个管理员
@@ -207,6 +210,18 @@ infra/local/feishu-attachment-drafts.json
 - `/new`、`/use` 切会话后不会把旧草稿带到新会话。
 - 附件草稿只有在普通文本真正进入任务路径时才会被消费；命令和 waiting action 恢复不会消费草稿。
 - 任务请求会同时携带 `inputEnvelope` 和 legacy `attachments[]`，下游 runtime 先消费 `inputEnvelope`，旧路径仍可继续读 `attachments[]`。
+
+## 结果附件回传规则
+
+- 只有普通任务成功完成后，桥接层才会考虑回传结果附件；失败、取消和 waiting action 不会触发这一层。
+- 当前会从两类来源挑结果文件：
+  - 最终输出里的显式本地绝对路径 Markdown 链接，例如 `[报告](</abs/path/report.pdf:12>)`
+  - runtime 返回的 `touchedFiles` 中，位于当前工作区 `temp/` 下的文件
+- 显式链接目前只对白名单产物生效：图片、PDF、Markdown、文本、CSV/JSON、压缩包、Office 文档和常见音视频；源码扩展名会被直接跳过，不会把 `.ts/.js/.py/...` 当结果附件发回飞书。
+- 图片且 `<= 10MB` 时，会走飞书 IM `image` 上传并直接作为图片消息发送。
+- 其他文件且 `<= 30MB` 时，会走飞书 IM `file` 上传并直接作为文件消息发送；`pdf/doc/xls/ppt/mp4/opus` 会映射到对应飞书 `file_type`，其余默认走 `stream`。
+- 超过 `30MB` 的结果文件当前不会自动分流到云盘，也不会切成分片；桥接层只会补一条 `[附件回传] 结果文件 xxx 超过飞书 IM 附件 30MB 上限，当前没有自动回传。`
+- 单个文件上传失败时，不会影响正文回复和其他附件继续发送；失败信息会汇总到一条 `[附件回传]` 文本说明里。
 
 ## 飞书命令
 

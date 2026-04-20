@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -5132,6 +5132,233 @@ test("飞书后续普通文本不会重复消费同一份附件草稿", async ()
   }
 });
 
+test("飞书完成结果里的显式本地文档链接会回传 IM 文件附件", async () => {
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      taskRuntimeCalls,
+      runtimeStore,
+      identityService,
+      principalMcpService,
+      pluginService,
+      principalSkillsService,
+    }) => ({
+      ...createTaskRuntimeDouble({
+        engine: "app-server",
+        runtimeStore,
+        identityService,
+        principalMcpService,
+        pluginService,
+        principalSkillsService,
+        taskRuntimeCalls,
+      }),
+      async runTask(request, hooks = {}) {
+        taskRuntimeCalls.appServer += 1;
+        const reportPath = join(harness.getWorkingDirectory(), "docs", "handoff.md");
+        await hooks.onEvent?.({
+          eventId: "event-feishu-outbound-file-1",
+          taskId: request.taskId ?? "task-feishu-outbound-file-1",
+          requestId: request.requestId,
+          type: "task.progress",
+          status: "running",
+          message: request.goal,
+          payload: {
+            itemType: "agent_message",
+            threadEventType: "item.completed",
+            itemId: "item-feishu-outbound-file-1",
+          },
+          timestamp: new Date().toISOString(),
+        });
+
+        const result = {
+          taskId: request.taskId ?? "task-feishu-outbound-file-1",
+          requestId: request.requestId,
+          status: "completed" as const,
+          summary: "交付完成",
+          output: `请查看[交接文档](<${reportPath}:12>)`,
+          structuredOutput: {
+            session: {
+              engine: "app-server" as const,
+            },
+          },
+          completedAt: new Date().toISOString(),
+        };
+        return hooks.finalizeResult ? await hooks.finalizeResult(request, result) : result;
+      },
+    }),
+  });
+
+  try {
+    const reportPath = join(harness.getWorkingDirectory(), "docs", "handoff.md");
+    mkdirSync(join(harness.getWorkingDirectory(), "docs"), { recursive: true });
+    writeFileSync(reportPath, "# handoff\n", "utf8");
+
+    await harness.handleIncomingText("请交付会议纪要");
+
+    const uploadedFiles = harness.getUploadedImFiles();
+    assert.equal(uploadedFiles.length, 1);
+    assert.match(uploadedFiles[0]?.fileKey ?? "", /^file-key-\d+$/);
+    assert.deepEqual(uploadedFiles[0], {
+      fileKey: uploadedFiles[0]?.fileKey ?? "",
+      fileName: "handoff.md",
+      fileType: "stream",
+      filePath: reportPath,
+      size: Buffer.byteLength("# handoff\n", "utf8"),
+    });
+    assert.deepEqual(harness.getUploadedImImages(), []);
+
+    const attachmentMessages = harness.peekRenderedMessages().filter((item) => item.msgType === "file");
+    assert.equal(attachmentMessages.length, 1);
+    assert.deepEqual(JSON.parse(attachmentMessages[0]?.content ?? "{}"), {
+      file_key: uploadedFiles[0]?.fileKey,
+    });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书完成结果里的 temp 图片产物会回传 IM 图片附件", async () => {
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      taskRuntimeCalls,
+      runtimeStore,
+      identityService,
+      principalMcpService,
+      pluginService,
+      principalSkillsService,
+    }) => ({
+      ...createTaskRuntimeDouble({
+        engine: "app-server",
+        runtimeStore,
+        identityService,
+        principalMcpService,
+        pluginService,
+        principalSkillsService,
+        taskRuntimeCalls,
+      }),
+      async runTask(request, hooks = {}) {
+        taskRuntimeCalls.appServer += 1;
+        await hooks.onEvent?.({
+          eventId: "event-feishu-outbound-image-1",
+          taskId: request.taskId ?? "task-feishu-outbound-image-1",
+          requestId: request.requestId,
+          type: "task.progress",
+          status: "running",
+          message: request.goal,
+          payload: {
+            itemType: "agent_message",
+            threadEventType: "item.completed",
+            itemId: "item-feishu-outbound-image-1",
+          },
+          timestamp: new Date().toISOString(),
+        });
+
+        const result = {
+          taskId: request.taskId ?? "task-feishu-outbound-image-1",
+          requestId: request.requestId,
+          status: "completed" as const,
+          summary: "图片已生成",
+          output: "图片已生成，请查收。",
+          touchedFiles: ["temp/exports/chart.png"],
+          structuredOutput: {
+            session: {
+              engine: "app-server" as const,
+            },
+          },
+          completedAt: new Date().toISOString(),
+        };
+        return hooks.finalizeResult ? await hooks.finalizeResult(request, result) : result;
+      },
+    }),
+  });
+
+  try {
+    const imagePath = join(harness.getWorkingDirectory(), "temp", "exports", "chart.png");
+    mkdirSync(join(harness.getWorkingDirectory(), "temp", "exports"), { recursive: true });
+    writeFileSync(imagePath, "fake-image", "utf8");
+
+    await harness.handleIncomingText("请把图也发到飞书里");
+
+    assert.deepEqual(harness.getUploadedImFiles(), []);
+    const uploadedImages = harness.getUploadedImImages();
+    assert.equal(uploadedImages.length, 1);
+    assert.match(uploadedImages[0]?.imageKey ?? "", /^image-key-\d+$/);
+    assert.deepEqual(uploadedImages[0], {
+      imageKey: uploadedImages[0]?.imageKey ?? "",
+      filePath: imagePath,
+      size: Buffer.byteLength("fake-image", "utf8"),
+    });
+
+    const attachmentMessages = harness.peekRenderedMessages().filter((item) => item.msgType === "image");
+    assert.equal(attachmentMessages.length, 1);
+    assert.deepEqual(JSON.parse(attachmentMessages[0]?.content ?? "{}"), {
+      image_key: uploadedImages[0]?.imageKey,
+    });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书完成结果里的源码链接不会误回传 IM 附件", async () => {
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      taskRuntimeCalls,
+      runtimeStore,
+      identityService,
+      principalMcpService,
+      pluginService,
+      principalSkillsService,
+    }) => ({
+      ...createTaskRuntimeDouble({
+        engine: "app-server",
+        runtimeStore,
+        identityService,
+        principalMcpService,
+        pluginService,
+        principalSkillsService,
+        taskRuntimeCalls,
+      }),
+      async runTask(request, hooks = {}) {
+        taskRuntimeCalls.appServer += 1;
+        const sourcePath = join(harness.getWorkingDirectory(), "src", "demo.ts");
+        const result = {
+          taskId: request.taskId ?? "task-feishu-outbound-source-1",
+          requestId: request.requestId,
+          status: "completed" as const,
+          summary: "实现完成",
+          output: `实现见[source](<${sourcePath}:3>)`,
+          structuredOutput: {
+            session: {
+              engine: "app-server" as const,
+            },
+          },
+          completedAt: new Date().toISOString(),
+        };
+        return hooks.finalizeResult ? await hooks.finalizeResult(request, result) : result;
+      },
+    }),
+  });
+
+  try {
+    const sourcePath = join(harness.getWorkingDirectory(), "src", "demo.ts");
+    mkdirSync(join(harness.getWorkingDirectory(), "src"), { recursive: true });
+    writeFileSync(sourcePath, "export const demo = 1;\n", "utf8");
+
+    await harness.handleIncomingText("如果输出里带源码链接，不要把源码当附件发回去");
+
+    assert.deepEqual(harness.getUploadedImFiles(), []);
+    assert.deepEqual(harness.getUploadedImImages(), []);
+    assert.deepEqual(
+      harness.peekRenderedMessages().filter((item) => item.msgType === "file" || item.msgType === "image"),
+      [],
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("飞书普通任务在未显式指定 runtimeEngine 时默认走 app-server runtime", async () => {
   const harness = createHarness();
 
@@ -7112,6 +7339,45 @@ function createAppServerSessionThreadRuntime(
   };
 }
 
+async function settleUploadedReadStream(
+  stream:
+    | {
+      destroy?: (error?: Error) => void;
+      once?: (event: string, listener: (...args: unknown[]) => void) => unknown;
+    }
+    | undefined,
+): Promise<void> {
+  const once = stream?.once?.bind(stream);
+
+  if (!once || !stream) {
+    return;
+  }
+
+  const readableStream = stream;
+
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve();
+    };
+
+    once("open", () => {
+      readableStream.destroy?.();
+      finish();
+    });
+    once("error", () => {
+      finish();
+    });
+    once("close", () => {
+      finish();
+    });
+  });
+}
+
 function createHarness(
   runtimeCatalogOrSkillsOverrides?: CodexRuntimeCatalog | FeishuHarnessConfig | {
     listItems?: Array<FeishuHarnessSkillItem>;
@@ -7762,6 +8028,18 @@ function createHarness(
     content: string;
     messageId: string;
   }> = [];
+  const uploadedImFiles: Array<{
+    fileKey: string;
+    fileName: string;
+    fileType: string;
+    filePath: string;
+    size: number;
+  }> = [];
+  const uploadedImImages: Array<{
+    imageKey: string;
+    filePath: string;
+    size: number;
+  }> = [];
   const forcedResolveFailureActionIds = new Set(harnessConfig?.resolveFailureActionIds ?? []);
   const originalResolveAction = actionBridge.resolve.bind(actionBridge);
   actionBridge.resolve = (payload) => {
@@ -7862,6 +8140,59 @@ function createHarness(
   (service as unknown as { client: unknown }).client = {
     im: {
       v1: {
+        file: {
+          create: async ({ data }: {
+            data: {
+              file_type: string;
+              file_name: string;
+              file: {
+                path?: string;
+                destroy?: (error?: Error) => void;
+                once?: (event: string, listener: (...args: unknown[]) => void) => unknown;
+              };
+            };
+          }) => {
+            const fileKey = `file-key-${nextMessageId++}`;
+            const filePath = typeof data.file?.path === "string" ? data.file.path : "";
+            const size = filePath ? statSync(filePath).size : 0;
+            await settleUploadedReadStream(data.file);
+            uploadedImFiles.push({
+              fileKey,
+              fileName: data.file_name,
+              fileType: data.file_type,
+              filePath,
+              size,
+            });
+            return {
+              file_key: fileKey,
+            };
+          },
+        },
+        image: {
+          create: async ({ data }: {
+            data: {
+              image_type: string;
+              image: {
+                path?: string;
+                destroy?: (error?: Error) => void;
+                once?: (event: string, listener: (...args: unknown[]) => void) => unknown;
+              };
+            };
+          }) => {
+            const imageKey = `image-key-${nextMessageId++}`;
+            const filePath = typeof data.image?.path === "string" ? data.image.path : "";
+            const size = filePath ? statSync(filePath).size : 0;
+            await settleUploadedReadStream(data.image);
+            uploadedImImages.push({
+              imageKey,
+              filePath,
+              size,
+            });
+            return {
+              image_key: imageKey,
+            };
+          },
+        },
         message: {
           create: async ({ data }: { data: { content: string; msg_type?: string } }) => {
             const messageId = `msg-created-${nextMessageId++}`;
@@ -7871,7 +8202,10 @@ function createHarness(
               content: data.content,
               messageId,
             });
-            messages.push(extractFeishuRenderedText(data.content));
+            const renderedText = extractFeishuRenderedText(data.content);
+            if (renderedText) {
+              messages.push(renderedText);
+            }
             return {
               data: {
                 message_id: messageId,
@@ -7885,7 +8219,10 @@ function createHarness(
               content: data.content,
               messageId: path.message_id,
             });
-            messages.push(extractFeishuRenderedText(data.content));
+            const renderedText = extractFeishuRenderedText(data.content);
+            if (renderedText) {
+              messages.push(renderedText);
+            }
             return {
               data: {
                 message_id: path.message_id,
@@ -7992,6 +8329,12 @@ function createHarness(
     },
     getTaskRequests() {
       return [...taskRequests];
+    },
+    getUploadedImFiles() {
+      return [...uploadedImFiles];
+    },
+    getUploadedImImages() {
+      return [...uploadedImImages];
     },
     async waitForBackgroundMessages() {
       await waitForBackgroundMessages();
