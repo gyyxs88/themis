@@ -87,6 +87,7 @@ import {
   type FeishuMessageResourceReference,
 } from "./message-resource.js";
 import {
+  finalizeFeishuOutboundAttachmentResult,
   resolveFeishuOutboundAttachmentPlans,
   type FeishuOutboundAttachmentPlan,
 } from "./outbound-attachments.js";
@@ -1389,7 +1390,10 @@ export class FeishuChannelService {
 
       const result = await selectedRuntime.runTask(normalizedRequest, {
         signal: activityTimeout.signal,
-        finalizeResult: (request, taskResult) => appendTaskReplyQuotaFooter(this.authRuntime, request, taskResult),
+        finalizeResult: async (request, taskResult) => {
+          const explicitAttachmentResult = finalizeFeishuOutboundAttachmentResult(taskResult);
+          return await appendTaskReplyQuotaFooter(this.authRuntime, request, explicitAttachmentResult);
+        },
         onEvent: async (taskEvent) => {
           activityTimeout.touch();
           if (shouldRestoreDraft && taskEvent.type === "task.started") {
@@ -1465,6 +1469,7 @@ export class FeishuChannelService {
       status: "completed" | "failed" | "cancelled";
       output?: string;
       summary: string;
+      structuredOutput?: Record<string, unknown>;
       touchedFiles?: string[];
     },
   ): Promise<void> {
@@ -1473,9 +1478,8 @@ export class FeishuChannelService {
     }
 
     const { plans, notices } = resolveFeishuOutboundAttachmentPlans({
-      outputText: result.output ?? result.summary,
       workspaceDirectory: this.resolveTaskWorkspaceDirectory(request.channelContext.sessionId),
-      ...(result.touchedFiles ? { touchedFiles: result.touchedFiles } : {}),
+      ...(result.structuredOutput ? { structuredOutput: result.structuredOutput } : {}),
     });
 
     if (plans.length === 0 && notices.length === 0) {

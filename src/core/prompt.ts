@@ -10,6 +10,7 @@ export interface BuildTaskPromptOptions {
 }
 
 export function buildTaskPrompt(request: TaskRequest, options: BuildTaskPromptOptions = {}): string {
+  const isFeishu = request.sourceChannel === "feishu";
   const personalizedProfileContext = normalizePromptSection(options.personalizedProfileContext);
   const taskContextSection = normalizePromptSection(formatTaskContext(options.taskContext));
   const sections = [buildAssistantStylePromptBlock(request)];
@@ -54,6 +55,20 @@ export function buildTaskPrompt(request: TaskRequest, options: BuildTaskPromptOp
     sections.push(taskContextSection);
   }
 
+  if (isFeishu) {
+    sections.push(
+      [
+        "Feishu file delivery guidance:",
+        "- Local file links and touched files are not auto-sent as Feishu attachments.",
+        "- If and only if you explicitly want Themis to send completed result files back to the user in Feishu, append exactly one final fenced code block with language `themis-feishu-attachments`.",
+        "- Put one absolute local file path per line inside that block.",
+        "- Keep the block at the very end of the final response.",
+        "- Only list files you intentionally want sent to the user; do not list source code or internal-only files.",
+        "- This block is hidden from the user and used only as a delivery instruction.",
+      ].join("\n"),
+    );
+  }
+
   sections.push(
     [
       "Response guidance:",
@@ -63,6 +78,11 @@ export function buildTaskPrompt(request: TaskRequest, options: BuildTaskPromptOp
       "- Solve the requested task directly.",
       "- Keep the final answer practical and concise.",
       "- Mention touched files when relevant.",
+      ...(isFeishu
+        ? [
+          "- In Feishu, if a file should only be mentioned but not sent, refer to it naturally in text and do not emit the hidden attachment block.",
+        ]
+        : []),
     ].join("\n"),
   );
 

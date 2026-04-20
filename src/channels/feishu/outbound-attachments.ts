@@ -1,5 +1,6 @@
 import { existsSync, statSync } from "node:fs";
-import { basename, extname, isAbsolute, relative, resolve } from "node:path";
+import { basename, extname, relative, resolve } from "node:path";
+import type { TaskResult } from "../../types/index.js";
 
 export type FeishuImFileType = "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream";
 
@@ -11,8 +12,7 @@ export interface FeishuOutboundAttachmentPlan {
 }
 
 export interface ResolveFeishuOutboundAttachmentPlansOptions {
-  outputText?: string | null;
-  touchedFiles?: string[] | null;
+  structuredOutput?: Record<string, unknown>;
   workspaceDirectory: string;
 }
 
@@ -23,6 +23,10 @@ export interface ResolveFeishuOutboundAttachmentPlansResult {
 
 const MAX_FEISHU_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_FEISHU_FILE_BYTES = 30 * 1024 * 1024;
+const FEISHU_ATTACHMENT_DIRECTIVE_LANGUAGE = "themis-feishu-attachments";
+const CHANNEL_ACTIONS_KEY = "channelActions";
+const FEISHU_CHANNEL_ACTION_KEY = "feishu";
+const FEISHU_ATTACHMENT_PATHS_KEY = "attachmentPaths";
 
 const SUPPORTED_IMAGE_EXTENSIONS = new Set([
   ".png",
@@ -92,47 +96,48 @@ const SOURCE_CODE_EXTENSIONS = new Set([
   ".yaml",
 ]);
 
-type CandidateSource = "explicit" | "touched-temp";
+export function finalizeFeishuOutboundAttachmentResult(result: TaskResult): TaskResult {
+  if (result.status !== "completed" || typeof result.output !== "string" || !result.output.trim()) {
+    return result;
+  }
 
-interface CandidateRecord {
-  absolutePath: string;
-  source: CandidateSource;
+  const extracted = extractFeishuAttachmentDirective(result.output);
+
+  if (!extracted) {
+    return result;
+  }
+
+  const nextOutput = extracted.cleanedOutput.trim();
+  const nextStructuredOutput = extracted.attachmentPaths.length
+    ? mergeFeishuAttachmentPaths(result.structuredOutput, extracted.attachmentPaths)
+    : result.structuredOutput;
+  const nextSummary = nextOutput ? summarizeVisibleOutput(nextOutput, result.summary) : result.summary;
+  const { output: _output, ...rest } = result;
+
+  return {
+    ...rest,
+    summary: nextSummary,
+    ...(nextOutput ? { output: nextOutput } : {}),
+    ...(nextStructuredOutput ? { structuredOutput: nextStructuredOutput } : {}),
+  };
 }
 
 export function resolveFeishuOutboundAttachmentPlans(
   options: ResolveFeishuOutboundAttachmentPlansOptions,
 ): ResolveFeishuOutboundAttachmentPlansResult {
   const workspaceDirectory = resolve(options.workspaceDirectory);
-  const tempDirectory = resolve(workspaceDirectory, "temp");
-  const candidates = new Map<string, CandidateRecord>();
-
-  for (const absolutePath of extractExplicitLocalLinkPaths(options.outputText)) {
-    candidates.set(absolutePath, {
-      absolutePath,
-      source: "explicit",
-    });
-  }
-
-  for (const filePath of options.touchedFiles ?? []) {
-    const absolutePath = resolveTouchedFilePath(filePath, workspaceDirectory);
-
-    if (!absolutePath || !isWithinDirectory(tempDirectory, absolutePath)) {
-      continue;
-    }
-
-    if (!candidates.has(absolutePath)) {
-      candidates.set(absolutePath, {
-        absolutePath,
-        source: "touched-temp",
-      });
-    }
-  }
-
   const plans: FeishuOutboundAttachmentPlan[] = [];
   const notices: string[] = [];
 
-  for (const candidate of candidates.values()) {
-    const plan = buildAttachmentPlan(candidate);
+  for (const absolutePath of readFeishuExplicitAttachmentPaths(options.structuredOutput)) {
+    const normalizedPath = resolve(absolutePath);
+
+    if (!isWithinDirectory(workspaceDirectory, normalizedPath)) {
+      notices.push(`结果文件 ${basename(normalizedPath)} 不在当前工作区内，当前不会回传。`);
+      continue;
+    }
+
+    const plan = buildAttachmentPlan(normalizedPath);
 
     if (plan.kind === "ready") {
       plans.push(plan.plan);
@@ -150,81 +155,138 @@ export function resolveFeishuOutboundAttachmentPlans(
   };
 }
 
-function extractExplicitLocalLinkPaths(text: string | null | undefined): string[] {
-  if (typeof text !== "string" || !text.trim()) {
+export function readFeishuExplicitAttachmentPaths(structuredOutput: Record<string, unknown> | undefined): string[] {
+  if (!isRecord(structuredOutput)) {
     return [];
   }
 
-  const matches = text.matchAll(/!?\[[^\]\n]*\]\((<[^>\n]+>|[^)\n]+)\)/g);
-  const paths: string[] = [];
+  const channelActions = structuredOutput[CHANNEL_ACTIONS_KEY];
 
-  for (const match of matches) {
-    const rawTarget = typeof match[1] === "string" ? match[1].trim() : "";
-
-    if (!rawTarget) {
-      continue;
-    }
-
-    const normalizedTarget = rawTarget.startsWith("<") && rawTarget.endsWith(">")
-      ? rawTarget.slice(1, -1).trim()
-      : rawTarget;
-
-    if (!normalizedTarget.startsWith("/")) {
-      continue;
-    }
-
-    paths.push(stripLocalFileLineSuffix(normalizedTarget));
+  if (!isRecord(channelActions)) {
+    return [];
   }
 
-  return dedupeStrings(paths.map((item) => resolve(item)));
+  const feishuActions = channelActions[FEISHU_CHANNEL_ACTION_KEY];
+
+  if (!isRecord(feishuActions)) {
+    return [];
+  }
+
+  const attachmentPaths = feishuActions[FEISHU_ATTACHMENT_PATHS_KEY];
+
+  if (!Array.isArray(attachmentPaths)) {
+    return [];
+  }
+
+  return dedupeStrings(
+    attachmentPaths
+      .map((value) => normalizeExplicitAttachmentPath(typeof value === "string" ? value : ""))
+      .filter((value): value is string => Boolean(value)),
+  );
+}
+
+function extractFeishuAttachmentDirective(
+  output: string,
+): { cleanedOutput: string; attachmentPaths: string[] } | null {
+  const normalizedOutput = output.replace(/\r\n?/g, "\n");
+  const blockPattern = new RegExp(
+    `(?:^|\\n)\`\`\`${escapeRegExp(FEISHU_ATTACHMENT_DIRECTIVE_LANGUAGE)}[ \\t]*\\n([\\s\\S]*?)\\n\`\`\`[ \\t]*$`,
+  );
+  const match = blockPattern.exec(normalizedOutput);
+
+  if (!match || typeof match.index !== "number") {
+    return null;
+  }
+
+  const blockBody = typeof match[1] === "string" ? match[1] : "";
+  const attachmentPaths = dedupeStrings(
+    blockBody
+      .split("\n")
+      .map((line) => normalizeExplicitAttachmentPath(line))
+      .filter((value): value is string => Boolean(value)),
+  );
+
+  return {
+    cleanedOutput: normalizedOutput.slice(0, match.index).trimEnd(),
+    attachmentPaths,
+  };
+}
+
+function normalizeExplicitAttachmentPath(line: string): string | null {
+  const normalizedLine = line.trim().replace(/^[-*]\s+/, "");
+
+  if (!normalizedLine) {
+    return null;
+  }
+
+  const unwrapped = unwrapAttachmentPathToken(normalizedLine);
+
+  if (!unwrapped.startsWith("/")) {
+    return null;
+  }
+
+  return resolve(stripLocalFileLineSuffix(unwrapped));
+}
+
+function unwrapAttachmentPathToken(value: string): string {
+  const trimmed = value.trim();
+
+  if (trimmed.startsWith("<") && trimmed.endsWith(">")) {
+    return trimmed.slice(1, -1).trim();
+  }
+
+  if (trimmed.startsWith("`") && trimmed.endsWith("`")) {
+    return trimmed.slice(1, -1).trim();
+  }
+
+  return trimmed;
 }
 
 function stripLocalFileLineSuffix(target: string): string {
   return target.replace(/:\d+$/, "");
 }
 
-function resolveTouchedFilePath(filePath: string, workspaceDirectory: string): string | null {
-  const normalized = filePath.trim();
-
-  if (!normalized) {
-    return null;
-  }
-
-  return isAbsolute(normalized) ? resolve(normalized) : resolve(workspaceDirectory, normalized);
-}
-
-function buildAttachmentPlan(candidate: CandidateRecord):
+function buildAttachmentPlan(absolutePath: string):
   | { kind: "ready"; plan: FeishuOutboundAttachmentPlan }
-  | { kind: "skip" }
   | { kind: "notice"; message: string } {
-  const filePath = candidate.absolutePath;
-
-  if (!existsSync(filePath)) {
-    return { kind: "skip" };
+  if (!existsSync(absolutePath)) {
+    return {
+      kind: "notice",
+      message: `结果文件 ${basename(absolutePath)} 不存在，当前没有回传。`,
+    };
   }
 
-  const stats = statSync(filePath, { throwIfNoEntry: false });
+  const stats = statSync(absolutePath, { throwIfNoEntry: false });
 
   if (!stats || !stats.isFile()) {
-    return { kind: "skip" };
+    return {
+      kind: "notice",
+      message: `结果路径 ${basename(absolutePath)} 不是文件，当前没有回传。`,
+    };
   }
 
-  const extension = extname(filePath).toLowerCase();
+  const extension = extname(absolutePath).toLowerCase();
 
   if (SOURCE_CODE_EXTENSIONS.has(extension)) {
-    return { kind: "skip" };
+    return {
+      kind: "notice",
+      message: `结果文件 ${basename(absolutePath)} 属于源码文件，当前不会作为飞书附件回传。`,
+    };
   }
 
-  if (candidate.source === "explicit" && extension && !SUPPORTED_EXPLICIT_FILE_EXTENSIONS.has(extension)) {
-    return { kind: "skip" };
+  if (extension && !SUPPORTED_EXPLICIT_FILE_EXTENSIONS.has(extension)) {
+    return {
+      kind: "notice",
+      message: `结果文件 ${basename(absolutePath)} 当前不在飞书附件回传白名单内，已跳过。`,
+    };
   }
 
   if (SUPPORTED_IMAGE_EXTENSIONS.has(extension) && stats.size <= MAX_FEISHU_IMAGE_BYTES) {
     return {
       kind: "ready",
       plan: {
-        absolutePath: filePath,
-        fileName: basename(filePath),
+        absolutePath,
+        fileName: basename(absolutePath),
         messageType: "image",
       },
     };
@@ -233,19 +295,54 @@ function buildAttachmentPlan(candidate: CandidateRecord):
   if (stats.size > MAX_FEISHU_FILE_BYTES) {
     return {
       kind: "notice",
-      message: `结果文件 ${basename(filePath)} 超过飞书 IM 附件 30MB 上限，当前没有自动回传。`,
+      message: `结果文件 ${basename(absolutePath)} 超过飞书 IM 附件 30MB 上限，当前没有回传。`,
     };
   }
 
   return {
     kind: "ready",
     plan: {
-      absolutePath: filePath,
-      fileName: basename(filePath),
+      absolutePath,
+      fileName: basename(absolutePath),
       messageType: "file",
       uploadFileType: mapFeishuImFileType(extension),
     },
   };
+}
+
+function mergeFeishuAttachmentPaths(
+  structuredOutput: Record<string, unknown> | undefined,
+  attachmentPaths: string[],
+): Record<string, unknown> {
+  const existingChannelActions = isRecord(structuredOutput?.[CHANNEL_ACTIONS_KEY])
+    ? structuredOutput?.[CHANNEL_ACTIONS_KEY] as Record<string, unknown>
+    : {};
+  const existingFeishuActions = isRecord(existingChannelActions[FEISHU_CHANNEL_ACTION_KEY])
+    ? existingChannelActions[FEISHU_CHANNEL_ACTION_KEY] as Record<string, unknown>
+    : {};
+
+  return {
+    ...(structuredOutput ?? {}),
+    [CHANNEL_ACTIONS_KEY]: {
+      ...existingChannelActions,
+      [FEISHU_CHANNEL_ACTION_KEY]: {
+        ...existingFeishuActions,
+        [FEISHU_ATTACHMENT_PATHS_KEY]: attachmentPaths,
+      },
+    },
+  };
+}
+
+function summarizeVisibleOutput(output: string, fallbackSummary: string): string {
+  const normalized = output.trim();
+
+  if (!normalized) {
+    return fallbackSummary;
+  }
+
+  const [firstLine] = normalized.split("\n");
+  const summary = firstLine ? firstLine.slice(0, 200) : normalized.slice(0, 200);
+  return summary || fallbackSummary;
 }
 
 function mapFeishuImFileType(extension: string): FeishuImFileType {
@@ -272,7 +369,15 @@ function mapFeishuImFileType(extension: string): FeishuImFileType {
 
 function isWithinDirectory(parentDirectory: string, targetPath: string): boolean {
   const relativePath = relative(parentDirectory, targetPath);
-  return relativePath !== "" && !relativePath.startsWith("..") && !relativePath.startsWith("../");
+  return relativePath === "" || (!relativePath.startsWith("..") && !relativePath.startsWith("../"));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function dedupeStrings(values: string[]): string[] {
