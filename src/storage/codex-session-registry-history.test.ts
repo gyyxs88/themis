@@ -138,6 +138,63 @@ test("SqliteCodexSessionRegistry 默认不会把 agent-internal 会话暴露到 
   }
 });
 
+test("SqliteCodexSessionRegistry 不会让终态 turn 被晚到 progress 写回 running", () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-registry-history-late-progress-"));
+  const registry = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+
+  try {
+    const request: TaskRequest = {
+      requestId: "request-late-progress-1",
+      taskId: "task-late-progress-1",
+      sourceChannel: "feishu",
+      user: {
+        userId: "user-late-progress",
+        displayName: "Late Progress",
+      },
+      goal: "超时后又收到晚到 progress",
+      channelContext: {
+        sessionId: "session-late-progress-1",
+      },
+      createdAt: "2026-04-20T12:24:27.614Z",
+    };
+
+    registry.upsertTurnFromRequest(request, request.taskId ?? "task-late-progress-1");
+    registry.completeTaskTurn({
+      request,
+      result: {
+        requestId: request.requestId,
+        taskId: request.taskId ?? "task-late-progress-1",
+        status: "cancelled",
+        summary: "任务因超时被取消，超时时间约为 300 秒。",
+        completedAt: "2026-04-20T12:29:22.329Z",
+      },
+    });
+    registry.appendTaskEvent({
+      eventId: "event-late-progress-1",
+      requestId: request.requestId,
+      taskId: request.taskId ?? "task-late-progress-1",
+      type: "task.progress",
+      status: "running",
+      message: "老板，这台也查清了。",
+      payload: {
+        itemType: "agent_message",
+        threadEventType: "item.completed",
+        itemId: "item-late-progress-1",
+      },
+      timestamp: "2026-04-20T12:28:22.174Z",
+    });
+
+    const turn = registry.getTurn(request.requestId);
+    assert.equal(turn?.status, "cancelled");
+    assert.equal(turn?.updatedAt, "2026-04-20T12:29:22.329Z");
+    assert.equal(turn?.summary, "任务因超时被取消，超时时间约为 300 秒。");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function upsertCompletedTurn(
   registry: SqliteCodexSessionRegistry,
   input: {

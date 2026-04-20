@@ -51,6 +51,7 @@ export class FeishuTaskMessageBridge {
   private pendingFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingFlushOperation: Promise<void> | null = null;
   private resolvePendingFlushOperation: (() => void) | null = null;
+  private terminalDelivered = false;
 
   constructor(options: FeishuTaskMessageBridgeOptions) {
     this.createText = options.createText;
@@ -104,6 +105,9 @@ export class FeishuTaskMessageBridge {
   async deliver(message: FeishuDeliveryMessage): Promise<void> {
     switch (message.kind) {
       case "event":
+        if (this.terminalDelivered) {
+          return;
+        }
         if (message.title === "task.action_required") {
           if (shouldSuppressPersonaOnboardingWaitingEvent(message)) {
             return;
@@ -239,6 +243,7 @@ export class FeishuTaskMessageBridge {
     }
 
     await this.cancelScheduledPendingFlush();
+    this.terminalDelivered = true;
 
     const pendingProgressItemId = this.pendingProgressItemId;
     this.clearPendingProgress();
@@ -276,6 +281,7 @@ export class FeishuTaskMessageBridge {
     }
 
     await this.cancelScheduledPendingFlush();
+    this.terminalDelivered = true;
     this.clearPendingProgress();
     this.clearActiveProgress();
     await this.commitCurrentPlaceholder(normalizedText);

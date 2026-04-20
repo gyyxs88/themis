@@ -8993,8 +8993,17 @@ export class SqliteCodexSessionRegistry {
           `
             UPDATE themis_turns
             SET
-              status = @status,
-              updated_at = @updated_at,
+              status = CASE
+                WHEN status IN ('completed', 'failed', 'cancelled') AND @status IN ('queued', 'running') THEN status
+                ELSE @status
+              END,
+              updated_at = CASE
+                WHEN status IN ('completed', 'failed', 'cancelled') AND @status IN ('queued', 'running') THEN updated_at
+                ELSE CASE
+                  WHEN updated_at IS NULL OR updated_at < @updated_at THEN @updated_at
+                  ELSE updated_at
+                END
+              END,
               session_mode = CASE
                 WHEN @session_mode IS NOT NULL AND @session_mode <> '' THEN @session_mode
                 ELSE session_mode
@@ -9004,6 +9013,7 @@ export class SqliteCodexSessionRegistry {
                 ELSE codex_thread_id
               END,
               error_message = CASE
+                WHEN status IN ('completed', 'failed', 'cancelled') AND @status IN ('queued', 'running') THEN error_message
                 WHEN @status = 'failed' THEN COALESCE(@message, error_message)
                 ELSE error_message
               END
