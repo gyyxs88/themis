@@ -2,7 +2,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { buildPlatformServiceOwnerMismatchErrorResponse } from "../contracts/managed-agent-platform-access.js";
 import type { ManagedAgentControlPlaneFacadeLike } from "../core/managed-agent-control-plane-facade.js";
 import type { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
-import { PlatformGatewayHttpError } from "../core/managed-agent-platform-gateway-client.js";
 import type {
   ManagedAgentPlatformAgentCardUpdatePayload,
   ManagedAgentPlatformAgentCreatePayload,
@@ -102,7 +101,7 @@ async function readAndNormalizePayload<T extends ManagedAgentPlatformOwnerPayloa
 }
 
 function writePlatformError(response: ServerResponse, error: unknown): void {
-  if (error instanceof PlatformGatewayHttpError) {
+  if (isPlatformGatewayHttpErrorLike(error)) {
     writeJson(response, error.statusCode, {
       error: {
         code: error.errorCode,
@@ -116,6 +115,22 @@ function writePlatformError(response: ServerResponse, error: unknown): void {
   writeJson(response, resolveErrorStatusCode(error, true), {
     error: createTaskError(error, true),
   });
+}
+
+function isPlatformGatewayHttpErrorLike(
+  error: unknown,
+): error is {
+  statusCode: number;
+  errorCode: string;
+  message: string;
+  details?: Record<string, unknown>;
+} {
+  return typeof error === "object"
+    && error !== null
+    && typeof (error as { statusCode?: unknown }).statusCode === "number"
+    && Number.isFinite((error as { statusCode: number }).statusCode)
+    && typeof (error as { errorCode?: unknown }).errorCode === "string"
+    && typeof (error as { message?: unknown }).message === "string";
 }
 
 export async function handlePlatformAgentCreate(
