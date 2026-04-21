@@ -611,14 +611,15 @@ export class ThemisMcpServer {
       ...(hasOwn(args, "runtimeProfileSnapshot") ? { runtimeProfileSnapshot: args.runtimeProfileSnapshot } : {}),
       ...(args.scheduledAt ? { scheduledAt: args.scheduledAt } : {}),
     });
+    const targetAgent = await this.resolveDispatchTargetAgent(ownerPrincipalId, args.targetAgentId, result.targetAgent);
 
     return createToolResult(
-      `已向员工 ${result.targetAgent.displayName}（${result.targetAgent.agentId}）派发工作项 ${result.workItem.workItemId}。`,
+      `已向员工 ${targetAgent?.displayName ?? args.targetAgentId}（${targetAgent?.agentId ?? args.targetAgentId}）派发工作项 ${result.workItem.workItemId}。`,
       {
         identity,
         ownerPrincipalId,
         organization: result.organization,
-        targetAgent: result.targetAgent,
+        ...(targetAgent ? { targetAgent } : {}),
         workItem: result.workItem,
         ...(result.dispatchMessage ? { dispatchMessage: result.dispatchMessage } : {}),
         ...(result.mailboxEntry ? { mailboxEntry: result.mailboxEntry } : {}),
@@ -658,6 +659,19 @@ export class ThemisMcpServer {
 
   private resolveManagedAgentOwnerPrincipalId(identity: IdentityStatusSnapshot): string {
     return this.managedAgentOwnerPrincipalId ?? identity.principalId;
+  }
+
+  private async resolveDispatchTargetAgent(
+    ownerPrincipalId: string,
+    targetAgentId: string,
+    targetAgent?: ManagedAgentDetailView["agent"],
+  ): Promise<ManagedAgentDetailView["agent"] | null> {
+    if (targetAgent) {
+      return targetAgent;
+    }
+
+    const detail = await this.managedAgentControlPlaneFacade.getManagedAgentDetailView(ownerPrincipalId, targetAgentId);
+    return detail?.agent ?? null;
   }
 }
 

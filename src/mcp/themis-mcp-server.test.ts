@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
-import { ThemisMcpServer } from "./themis-mcp-server.js";
+import { type ThemisMcpServerOptions, ThemisMcpServer } from "./themis-mcp-server.js";
 
 function createWorkspace(prefix: string): string {
   const workspace = resolve(tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -375,6 +375,109 @@ test("Themis MCP server 支持员工治理工具闭环", async () => {
     const lifecyclePayload = JSON.parse(lifecycleResponse);
     assert.equal(lifecyclePayload.result?.isError, false);
     assert.equal(lifecyclePayload.result?.structuredContent?.agent?.status, "paused");
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("Themis MCP server 会兼容旧平台 dispatch 响应缺少 targetAgent", async () => {
+  const workspace = createWorkspace("themis-mcp-managed-agents-compat");
+  const registry = new SqliteCodexSessionRegistry({
+    databaseFile: resolve(workspace, "infra/local/themis.db"),
+  });
+  const managedAgentControlPlaneFacade = {
+    async dispatchWorkItem() {
+      return {
+        organization: {
+          organizationId: "org-alpha",
+          ownerPrincipalId: "owner-user-1",
+          displayName: "Alpha Org",
+          slug: "alpha-org",
+          createdAt: "2026-04-21T09:00:00.000Z",
+          updatedAt: "2026-04-21T09:00:00.000Z",
+        },
+        workItem: {
+          workItemId: "work-item-alpha",
+          organizationId: "org-alpha",
+          targetAgentId: "agent-alpha",
+          sourceType: "human",
+          dispatchReason: "兼容旧平台返回",
+          goal: "补齐 targetAgent 回查。",
+          status: "queued",
+          priority: "normal",
+          createdAt: "2026-04-21T09:00:00.000Z",
+          updatedAt: "2026-04-21T09:00:00.000Z",
+        },
+      };
+    },
+    async getManagedAgentDetailView() {
+      return {
+        organization: {
+          organizationId: "org-alpha",
+          ownerPrincipalId: "owner-user-1",
+          displayName: "Alpha Org",
+          slug: "alpha-org",
+          createdAt: "2026-04-21T09:00:00.000Z",
+          updatedAt: "2026-04-21T09:00:00.000Z",
+        },
+        principal: {
+          principalId: "principal-agent-alpha",
+          organizationId: "org-alpha",
+          displayName: "兼容员工",
+          kind: "managed_agent",
+          createdAt: "2026-04-21T09:00:00.000Z",
+          updatedAt: "2026-04-21T09:00:00.000Z",
+        },
+        agent: {
+          agentId: "agent-alpha",
+          principalId: "principal-agent-alpha",
+          organizationId: "org-alpha",
+          displayName: "兼容员工",
+          departmentRole: "平台值班",
+          status: "active",
+          createdByPrincipalId: "owner-user-1",
+          createdAt: "2026-04-21T09:00:00.000Z",
+          updatedAt: "2026-04-21T09:00:00.000Z",
+        },
+        workspacePolicy: null,
+        runtimeProfile: null,
+        authAccounts: [],
+        thirdPartyProviders: [],
+      };
+    },
+  } as unknown as NonNullable<ThemisMcpServerOptions["managedAgentControlPlaneFacade"]>;
+  const server = new ThemisMcpServer({
+    workingDirectory: workspace,
+    registry,
+    identity: {
+      channel: "web",
+      channelUserId: "owner-user-1",
+      displayName: "Owner",
+    },
+    managedAgentControlPlaneFacade,
+  });
+
+  try {
+    await initializeServer(server);
+    const dispatchResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 12.5,
+      method: "tools/call",
+      params: {
+        name: "dispatch_work_item",
+        arguments: {
+          targetAgentId: "agent-alpha",
+          dispatchReason: "兼容旧平台返回",
+          goal: "补齐 targetAgent 回查。",
+        },
+      },
+    }));
+
+    assert.ok(dispatchResponse);
+    const dispatchPayload = JSON.parse(dispatchResponse);
+    assert.equal(dispatchPayload.result?.isError, false);
+    assert.equal(dispatchPayload.result?.structuredContent?.targetAgent?.displayName, "兼容员工");
+    assert.match(dispatchPayload.result?.content?.[0]?.text ?? "", /兼容员工/);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }

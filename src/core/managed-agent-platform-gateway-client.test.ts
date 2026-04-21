@@ -191,6 +191,17 @@ test("ManagedAgentPlatformGatewayClient 会按 work-items 契约读写平台协�
           createdAt: "2026-04-13T10:05:00.000Z",
           updatedAt: "2026-04-13T10:05:00.000Z",
         },
+        targetAgent: {
+          agentId: "agent-alpha",
+          principalId: "principal-agent-alpha",
+          organizationId: "org-alpha",
+          displayName: "Alpha Agent",
+          departmentRole: "交付经理",
+          status: "active",
+          createdByPrincipalId: "principal-owner",
+          createdAt: "2026-04-13T09:00:00.000Z",
+          updatedAt: "2026-04-13T09:00:00.000Z",
+        },
       });
     }
 
@@ -345,6 +356,7 @@ test("ManagedAgentPlatformGatewayClient 会按 work-items 契约读写平台协�
   assert.equal(list.length, 1);
   assert.equal(list[0]?.workItemId, "work-item-alpha");
   assert.equal(dispatch.workItem.projectId, "project-alpha");
+  assert.equal(dispatch.targetAgent.agentId, "agent-alpha");
   assert.equal(responded.workItem.status, "running");
   assert.equal(escalated.workItem.status, "waiting_human");
   assert.equal(detail?.workItem.workItemId, "work-item-beta");
