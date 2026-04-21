@@ -889,6 +889,7 @@ export async function handlePlatformWorkItemDetail(
       sourcePrincipal: detail.sourcePrincipal,
       messages: detail.messages,
       collaboration: detail.collaboration,
+      ...(detail.latestCompletion !== undefined ? { latestCompletion: detail.latestCompletion } : {}),
     });
   } catch (error) {
     writePlatformError(response, error);
@@ -1086,6 +1087,7 @@ export async function handlePlatformRunDetail(
       run: detail.run,
       executionLease: detail.executionLease,
       node: detail.node,
+      ...(detail.completionResult !== undefined ? { completionResult: detail.completionResult } : {}),
     });
   } catch (error) {
     writePlatformError(response, error);

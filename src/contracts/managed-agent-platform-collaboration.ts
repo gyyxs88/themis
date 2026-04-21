@@ -34,6 +34,7 @@ export interface ManagedAgentPlatformRunDetailResult {
   run: ManagedAgentRunDetailView["run"];
   workItem: ManagedAgentRunDetailView["workItem"];
   targetAgent: ManagedAgentRunDetailView["targetAgent"];
+  completionResult?: ManagedAgentRunDetailView["completionResult"];
 }
 
 export interface ManagedAgentPlatformHandoffListInput {

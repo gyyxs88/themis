@@ -1,6 +1,7 @@
 import type { ManagedAgentCoordinationStore, StoredPrincipalRecord } from "../storage/index.js";
 import type {
   AgentMessageType,
+  TaskResult,
   ManagedAgentPriority,
   ManagedAgentRuntimeProfileSnapshot,
   ManagedAgentWorkItemSourceType,
@@ -136,6 +137,13 @@ export interface ManagedAgentWorkItemDetailView {
   sourcePrincipal: StoredPrincipalRecord | null;
   messages: StoredAgentMessageRecord[];
   collaboration: ManagedAgentWorkItemCollaborationView;
+  latestCompletion?: {
+    summary: string;
+    output?: unknown;
+    touchedFiles?: TaskResult["touchedFiles"];
+    structuredOutput?: Record<string, unknown> | null;
+    completedAt?: string;
+  } | null;
 }
 
 export interface ManagedAgentMailboxItem {

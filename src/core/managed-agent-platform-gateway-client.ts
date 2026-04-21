@@ -668,7 +668,9 @@ export class ManagedAgentPlatformGatewayClient {
   }
 
   async getWorkItemDetail(workItemId: string): Promise<ManagedAgentPlatformWorkItemDetailResult | null> {
-    const payload = await this.requestJson<Partial<ManagedAgentPlatformWorkItemDetailResult>>(
+    const payload = await this.requestJson<Partial<ManagedAgentPlatformWorkItemDetailResult> & {
+      latestCompletion?: ManagedAgentPlatformWorkItemDetailResult["latestCompletion"];
+    }>(
       "/api/platform/work-items/detail",
       {
         ownerPrincipalId: this.ownerPrincipalId,
@@ -680,6 +682,7 @@ export class ManagedAgentPlatformGatewayClient {
       return null;
     }
 
+    const latestCompletion = normalizePlatformWorkerCompletionResult(payload.latestCompletion);
     return {
       organization: payload.organization ?? null,
       workItem: payload.workItem,
@@ -700,6 +703,7 @@ export class ManagedAgentPlatformGatewayClient {
         childWorkItems: Array.isArray(payload.collaboration?.childWorkItems) ? payload.collaboration.childWorkItems : [],
       },
       messages: Array.isArray(payload.messages) ? payload.messages : [],
+      ...(latestCompletion !== undefined ? { latestCompletion } : {}),
     };
   }
 
@@ -717,6 +721,7 @@ export class ManagedAgentPlatformGatewayClient {
     const payload = await this.requestJson<Partial<ManagedAgentPlatformRunDetailResult> & {
       node?: ManagedAgentRunDetailView["node"];
       executionLease?: ManagedAgentRunDetailView["executionLease"];
+      completionResult?: ManagedAgentRunDetailView["completionResult"];
     }>(
       "/api/platform/runs/detail",
       {
@@ -729,6 +734,7 @@ export class ManagedAgentPlatformGatewayClient {
       return null;
     }
 
+    const completionResult = normalizePlatformWorkerCompletionResult(payload.completionResult);
     return {
       organization: payload.organization ?? null,
       run: payload.run,
@@ -736,6 +742,7 @@ export class ManagedAgentPlatformGatewayClient {
       targetAgent: payload.targetAgent ?? null,
       node: payload.node ?? null,
       executionLease: payload.executionLease ?? null,
+      ...(completionResult !== undefined ? { completionResult } : {}),
     };
   }
 
@@ -1072,6 +1079,37 @@ function toGatewayGovernanceFilters(filters: OrganizationGovernanceFilters): Rec
 
 function toFiniteNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function normalizePlatformWorkerCompletionResult(
+  value: unknown,
+): ManagedAgentRunDetailView["completionResult"] | undefined {
+  if (value === null) {
+    return null;
+  }
+
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const summary = normalizeOptionalText(typeof value.summary === "string" ? value.summary : null);
+
+  if (!summary) {
+    return undefined;
+  }
+
+  const completedAt = normalizeOptionalText(typeof value.completedAt === "string" ? value.completedAt : null);
+  return {
+    summary,
+    ...(Object.prototype.hasOwnProperty.call(value, "output") ? { output: value.output } : {}),
+    ...(Array.isArray(value.touchedFiles)
+      ? { touchedFiles: value.touchedFiles.filter((entry): entry is string => typeof entry === "string") }
+      : {}),
+    ...(isRecord(value.structuredOutput) || value.structuredOutput === null
+      ? { structuredOutput: value.structuredOutput as Record<string, unknown> | null }
+      : {}),
+    ...(completedAt ? { completedAt } : {}),
+  };
 }
 
 function buildPlatformGatewayHttpError(payload: unknown, statusCode: number): PlatformGatewayHttpError | null {

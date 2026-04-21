@@ -14,6 +14,7 @@ import type {
   StoredManagedAgentRecord,
   StoredManagedAgentNodeRecord,
   StoredOrganizationRecord,
+  TaskResult,
 } from "../types/index.js";
 
 const DEFAULT_SCHEDULER_ID = "scheduler-local";
@@ -66,6 +67,13 @@ export interface ManagedAgentRunDetailView {
   run: StoredAgentRunRecord;
   node: StoredManagedAgentNodeRecord | null;
   executionLease: StoredAgentExecutionLeaseRecord | null;
+  completionResult?: {
+    summary: string;
+    output?: unknown;
+    touchedFiles?: TaskResult["touchedFiles"];
+    structuredOutput?: Record<string, unknown> | null;
+    completedAt?: string;
+  } | null;
 }
 
 export class ManagedAgentSchedulerService {
