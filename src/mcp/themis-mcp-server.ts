@@ -517,12 +517,13 @@ export class ThemisMcpServer {
     const args = normalizeCreateManagedAgentToolArgs(argumentsRecord);
     const identity = this.ensureIdentity();
     const ownerPrincipalId = this.resolveManagedAgentOwnerPrincipalId(identity);
+    const organizationId = await this.resolveCreateManagedAgentOrganizationId(ownerPrincipalId, args);
     const result = await this.managedAgentControlPlaneFacade.createManagedAgent({
       ownerPrincipalId,
       departmentRole: args.departmentRole,
       ...(args.displayName ? { displayName: args.displayName } : {}),
       ...(args.mission ? { mission: args.mission } : {}),
-      ...(args.organizationId ? { organizationId: args.organizationId } : {}),
+      ...(organizationId ? { organizationId } : {}),
       ...(args.supervisorAgentId ? { supervisorAgentId: args.supervisorAgentId } : {}),
       ...(args.autonomyLevel ? { autonomyLevel: args.autonomyLevel } : {}),
       ...(args.creationMode ? { creationMode: args.creationMode } : {}),
@@ -672,6 +673,37 @@ export class ThemisMcpServer {
 
     const detail = await this.managedAgentControlPlaneFacade.getManagedAgentDetailView(ownerPrincipalId, targetAgentId);
     return detail?.agent ?? null;
+  }
+
+  private async resolveCreateManagedAgentOrganizationId(
+    ownerPrincipalId: string,
+    args: CreateManagedAgentToolArgs,
+  ): Promise<string | undefined> {
+    if (args.organizationId) {
+      return args.organizationId;
+    }
+
+    if (args.supervisorAgentId) {
+      const supervisorDetail = await this.managedAgentControlPlaneFacade.getManagedAgentDetailView(
+        ownerPrincipalId,
+        args.supervisorAgentId,
+      );
+
+      if (!supervisorDetail) {
+        throw new Error(`Managed agent ${args.supervisorAgentId} does not exist.`);
+      }
+
+      if (!supervisorDetail.organization) {
+        throw new Error(`Managed agent ${args.supervisorAgentId} does not have an organization.`);
+      }
+
+      return supervisorDetail.organization.organizationId;
+    }
+
+    const listView = await this.managedAgentControlPlaneFacade.listManagedAgents(ownerPrincipalId);
+    return listView.organizations.length === 1
+      ? listView.organizations[0]?.organizationId
+      : undefined;
   }
 }
 

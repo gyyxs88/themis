@@ -483,6 +483,239 @@ test("Themis MCP server 会兼容旧平台 dispatch 响应缺少 targetAgent", a
   }
 });
 
+test("Themis MCP server 会在唯一 organization 下自动带上 organizationId 创建员工", async () => {
+  const workspace = createWorkspace("themis-mcp-create-agent-default-org");
+  const registry = new SqliteCodexSessionRegistry({
+    databaseFile: resolve(workspace, "infra/local/themis.db"),
+  });
+  const capturedInputs: Array<Record<string, unknown>> = [];
+  const managedAgentControlPlaneFacade = {
+    async listManagedAgents() {
+      return {
+        organizations: [{
+          organizationId: "org-platform",
+          ownerPrincipalId: "owner-user-1",
+          displayName: "Platform Org",
+          slug: "platform-org",
+          createdAt: "2026-04-21T10:00:00.000Z",
+          updatedAt: "2026-04-21T10:00:00.000Z",
+        }],
+        agents: [],
+      };
+    },
+    async getManagedAgentDetailView() {
+      return null;
+    },
+    async createManagedAgent(input: Record<string, unknown>) {
+      capturedInputs.push(input);
+      return {
+        organization: {
+          organizationId: "org-platform",
+          ownerPrincipalId: "owner-user-1",
+          displayName: "Platform Org",
+          slug: "platform-org",
+          createdAt: "2026-04-21T10:00:00.000Z",
+          updatedAt: "2026-04-21T10:00:00.000Z",
+        },
+        principal: {
+          principalId: "principal-agent-alpha",
+          organizationId: "org-platform",
+          displayName: "平台负责人",
+          kind: "managed_agent",
+          createdAt: "2026-04-21T10:00:00.000Z",
+          updatedAt: "2026-04-21T10:00:00.000Z",
+        },
+        agent: {
+          agentId: "agent-alpha",
+          principalId: "principal-agent-alpha",
+          organizationId: "org-platform",
+          displayName: "平台负责人",
+          departmentRole: "Platform",
+          mission: "负责平台默认组织。",
+          status: "active",
+          createdByPrincipalId: "owner-user-1",
+          createdAt: "2026-04-21T10:00:00.000Z",
+          updatedAt: "2026-04-21T10:00:00.000Z",
+        },
+      };
+    },
+  } as unknown as NonNullable<ThemisMcpServerOptions["managedAgentControlPlaneFacade"]>;
+  const server = new ThemisMcpServer({
+    workingDirectory: workspace,
+    registry,
+    identity: {
+      channel: "web",
+      channelUserId: "owner-user-1",
+      displayName: "Owner",
+    },
+    managedAgentControlPlaneFacade,
+  });
+
+  try {
+    await initializeServer(server);
+    const createResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 12.6,
+      method: "tools/call",
+      params: {
+        name: "create_managed_agent",
+        arguments: {
+          departmentRole: "Platform",
+          displayName: "平台负责人",
+          mission: "负责平台默认组织。",
+        },
+      },
+    }));
+
+    assert.ok(createResponse);
+    const createPayload = JSON.parse(createResponse);
+    assert.equal(createPayload.result?.isError, false);
+    assert.equal(capturedInputs[0]?.organizationId, "org-platform");
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("Themis MCP server 会在指定 supervisor 时沿用其 organizationId 创建员工", async () => {
+  const workspace = createWorkspace("themis-mcp-create-agent-supervisor-org");
+  const registry = new SqliteCodexSessionRegistry({
+    databaseFile: resolve(workspace, "infra/local/themis.db"),
+  });
+  const capturedInputs: Array<Record<string, unknown>> = [];
+  const managedAgentControlPlaneFacade = {
+    async listManagedAgents() {
+      return {
+        organizations: [{
+          organizationId: "org-alpha",
+          ownerPrincipalId: "owner-user-1",
+          displayName: "Alpha Org",
+          slug: "alpha-org",
+          createdAt: "2026-04-21T10:00:00.000Z",
+          updatedAt: "2026-04-21T10:00:00.000Z",
+        }, {
+          organizationId: "org-beta",
+          ownerPrincipalId: "owner-user-1",
+          displayName: "Beta Org",
+          slug: "beta-org",
+          createdAt: "2026-04-21T10:00:00.000Z",
+          updatedAt: "2026-04-21T10:00:00.000Z",
+        }],
+        agents: [],
+      };
+    },
+    async getManagedAgentDetailView(_ownerPrincipalId: string, agentId: string) {
+      if (agentId !== "agent-supervisor") {
+        return null;
+      }
+
+      return {
+        organization: {
+          organizationId: "org-beta",
+          ownerPrincipalId: "owner-user-1",
+          displayName: "Beta Org",
+          slug: "beta-org",
+          createdAt: "2026-04-21T10:00:00.000Z",
+          updatedAt: "2026-04-21T10:00:00.000Z",
+        },
+        principal: {
+          principalId: "principal-agent-supervisor",
+          organizationId: "org-beta",
+          displayName: "监督负责人",
+          kind: "managed_agent",
+          createdAt: "2026-04-21T10:00:00.000Z",
+          updatedAt: "2026-04-21T10:00:00.000Z",
+        },
+        agent: {
+          agentId: "agent-supervisor",
+          principalId: "principal-agent-supervisor",
+          organizationId: "org-beta",
+          displayName: "监督负责人",
+          departmentRole: "Platform",
+          mission: "负责监督子员工。",
+          status: "active",
+          createdByPrincipalId: "owner-user-1",
+          createdAt: "2026-04-21T10:00:00.000Z",
+          updatedAt: "2026-04-21T10:00:00.000Z",
+        },
+        workspacePolicy: null,
+        runtimeProfile: null,
+        authAccounts: [],
+        thirdPartyProviders: [],
+      };
+    },
+    async createManagedAgent(input: Record<string, unknown>) {
+      capturedInputs.push(input);
+      return {
+        organization: {
+          organizationId: "org-beta",
+          ownerPrincipalId: "owner-user-1",
+          displayName: "Beta Org",
+          slug: "beta-org",
+          createdAt: "2026-04-21T10:00:00.000Z",
+          updatedAt: "2026-04-21T10:00:00.000Z",
+        },
+        principal: {
+          principalId: "principal-agent-child",
+          organizationId: "org-beta",
+          displayName: "子员工",
+          kind: "managed_agent",
+          createdAt: "2026-04-21T10:00:00.000Z",
+          updatedAt: "2026-04-21T10:00:00.000Z",
+        },
+        agent: {
+          agentId: "agent-child",
+          principalId: "principal-agent-child",
+          organizationId: "org-beta",
+          displayName: "子员工",
+          departmentRole: "Support",
+          mission: "负责辅助监督负责人。",
+          status: "active",
+          createdByPrincipalId: "owner-user-1",
+          createdAt: "2026-04-21T10:00:00.000Z",
+          updatedAt: "2026-04-21T10:00:00.000Z",
+          supervisorPrincipalId: "principal-agent-supervisor",
+        },
+      };
+    },
+  } as unknown as NonNullable<ThemisMcpServerOptions["managedAgentControlPlaneFacade"]>;
+  const server = new ThemisMcpServer({
+    workingDirectory: workspace,
+    registry,
+    identity: {
+      channel: "web",
+      channelUserId: "owner-user-1",
+      displayName: "Owner",
+    },
+    managedAgentControlPlaneFacade,
+  });
+
+  try {
+    await initializeServer(server);
+    const createResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 12.7,
+      method: "tools/call",
+      params: {
+        name: "create_managed_agent",
+        arguments: {
+          departmentRole: "Support",
+          displayName: "子员工",
+          mission: "负责辅助监督负责人。",
+          supervisorAgentId: "agent-supervisor",
+        },
+      },
+    }));
+
+    assert.ok(createResponse);
+    const createPayload = JSON.parse(createResponse);
+    assert.equal(createPayload.result?.isError, false);
+    assert.equal(capturedInputs[0]?.organizationId, "org-beta");
+    assert.equal(capturedInputs[0]?.supervisorAgentId, "agent-supervisor");
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("Themis MCP server 在业务失败时返回 tool error", async () => {
   const workspace = createWorkspace("themis-mcp-error");
   const registry = new SqliteCodexSessionRegistry({
