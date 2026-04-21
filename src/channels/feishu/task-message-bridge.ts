@@ -262,10 +262,20 @@ export class FeishuTaskMessageBridge {
     this.terminalDelivered = true;
 
     const pendingProgressItemId = this.pendingProgressItemId;
+    const pendingProgressText = this.pendingProgressText;
     this.clearPendingProgress();
+    const shouldExplicitlyCloseBufferedQuotaOnlyCompletion = Boolean(
+      pendingProgressItemId
+      && stripQuotaFooter(normalizedText).quotaFooter
+      && normalizeComparableReply(pendingProgressText ?? "") === normalizeComparableReply(normalizedText),
+    );
 
     if (!this.activeProgressItemId) {
       await this.commitCurrentPlaceholder(normalizedText);
+      if (shouldExplicitlyCloseBufferedQuotaOnlyCompletion) {
+        await this.ensureFollowupPlaceholderAfterProgress();
+        await this.commitCurrentPlaceholder(FEISHU_COMPLETED_TEXT);
+      }
       this.clearActiveProgress();
       return;
     }
