@@ -137,6 +137,129 @@ test("主 Themis 的 /api/platform/* 在配置 THEMIS_PLATFORM_* 后会通过 ga
   }
 });
 
+test("主 Themis 的 /api/platform/nodes/list 会通过 gateway facade 访问平台上游节点视图", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-http-platform-gateway-nodes-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new AppServerTaskRuntime({
+    workingDirectory: root,
+    runtimeStore,
+  });
+  const calls: Array<{
+    url: string;
+    headers: Record<string, string>;
+    body: Record<string, unknown>;
+  }> = [];
+  const facade = resolveMainPlatformGatewayFacade({
+    env: {
+      THEMIS_PLATFORM_BASE_URL: "https://platform.example.com/",
+      THEMIS_PLATFORM_OWNER_PRINCIPAL_ID: "principal-owner",
+      THEMIS_PLATFORM_WEB_ACCESS_TOKEN: "token-123",
+    },
+    fetchImpl: async (input, init) => {
+      const url = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+      const headers = normalizeHeaders(init?.headers);
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+
+      calls.push({
+        url,
+        headers,
+        body,
+      });
+
+      return new Response(JSON.stringify({
+        nodes: [{
+          nodeId: "node-alpha",
+          organizationId: "org-alpha",
+          displayName: "Worker Alpha",
+          status: "online",
+          slotCapacity: 2,
+          slotAvailable: 1,
+          labels: ["linux"],
+          workspaceCapabilities: ["/srv/alpha"],
+          credentialCapabilities: ["default"],
+          providerCapabilities: ["openai"],
+          heartbeatTtlSeconds: 30,
+          lastHeartbeatAt: "2026-04-21T11:58:00.000Z",
+          createdAt: "2026-04-21T11:00:00.000Z",
+          updatedAt: "2026-04-21T11:58:00.000Z",
+        }],
+      }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    },
+  });
+
+  assert.ok(facade);
+
+  const server = createThemisHttpServer({
+    runtime,
+    platformControlPlaneFacade: facade,
+  });
+  const listeningServer = await listenServer(server);
+  const address = listeningServer.address();
+
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to resolve server address.");
+  }
+
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  try {
+    const headers = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+    const response = await fetch(`${baseUrl}/api/platform/nodes/list`, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ownerPrincipalId: "principal-owner",
+        organizationId: "org-alpha",
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      ok: true,
+      nodes: [{
+        nodeId: "node-alpha",
+        organizationId: "org-alpha",
+        displayName: "Worker Alpha",
+        status: "online",
+        slotCapacity: 2,
+        slotAvailable: 1,
+        labels: ["linux"],
+        workspaceCapabilities: ["/srv/alpha"],
+        credentialCapabilities: ["default"],
+        providerCapabilities: ["openai"],
+        heartbeatTtlSeconds: 30,
+        lastHeartbeatAt: "2026-04-21T11:58:00.000Z",
+        createdAt: "2026-04-21T11:00:00.000Z",
+        updatedAt: "2026-04-21T11:58:00.000Z",
+      }],
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.url, "https://platform.example.com/api/platform/nodes/list");
+    assert.equal(calls[0]?.headers.authorization, "Bearer token-123");
+    assert.deepEqual(calls[0]?.body, {
+      ownerPrincipalId: "principal-owner",
+      organizationId: "org-alpha",
+    });
+  } finally {
+    await closeServer(listeningServer);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("主 Themis 的 /api/platform/* 会透传平台上游错误状态码和错误码", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-http-platform-gateway-error-"));
   const runtimeStore = new SqliteCodexSessionRegistry({

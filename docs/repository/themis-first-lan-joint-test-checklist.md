@@ -89,7 +89,7 @@ npm run start:web
 - `POST /api/agents/list` 继续稳定返回 `404 ROUTE_NOT_FOUND`
 - 主 Themis 本地 `POST /api/platform/agents/list|work-items/list|projects/workspace-binding/list` 能读到平台真数据
 - 主 Themis 本地 `POST /api/platform/work-items/dispatch` 能派工，随后可通过主 Themis 本地 `POST /api/platform/runs/list|detail` 回看到真实 run
-- `nodes/*` 当前不属于主 Themis gateway 验收范围；节点值班和 `worker-fleet` 继续只归独立 `themis-platform`
+- 主 Themis 本地 `POST /api/platform/nodes/list|detail|drain|offline|reclaim` 现在也属于 manager-side gateway 验收范围；节点运行态 `nodes/register|heartbeat` 与 `/api/platform/worker/*` 继续只归独立 `themis-platform` / `themis-worker-node`
 
 ## 3. 起第一个 Worker
 

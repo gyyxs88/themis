@@ -73,7 +73,7 @@ cd ~/services/themis-worker-node
 - `provider=missing / read_error`
 - `platform.status=failed`
 
-这里的 `--token` 当前应使用 `worker` 角色的平台服务令牌；主 Themis 自己配置的 `THEMIS_PLATFORM_WEB_ACCESS_TOKEN` 只负责主 Themis 的 `agents / projects / work-items / runs` gateway，不负责节点 `nodes/*` 或 `worker-fleet`。
+这里的 `--token` 当前仍应使用 `worker` 角色的平台服务令牌；主 Themis 自己配置的 `THEMIS_PLATFORM_WEB_ACCESS_TOKEN` 现在可以负责节点 `list|detail|drain|offline|reclaim` 这组管理者视角接口，但不负责节点运行态 `register|heartbeat`、`/api/platform/worker/*` 或 `worker-node run`。
 
 如果这是台 fresh 节点，但对应 `CODEX_HOME` 或 `infra/local/codex-auth/<id>` 里已经有真实 `auth.json`，当前 `doctor worker-node` 也会直接把该 credential 判成 `ok`，不需要先跑一次 daemon 才让预检通过。
 

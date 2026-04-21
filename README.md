@@ -117,7 +117,7 @@ npm run start:platform
 - 平台侧值班 / 平台令牌 / `worker-fleet`：`./themis-platform`
 - Worker Node 本机预检 / 常驻执行：`./themis-worker-node`
 - `themis-platform` 与 `themis-worker-node` 当前都通过 `file:../themis-contracts` 依赖共享契约；真实部署时要把 `themis-contracts` 放到同级目录，再执行 `npm ci`。
-- `THEMIS_PLATFORM_WEB_ACCESS_TOKEN` 只负责 `agents / projects / work-items / runs` 这组业务 gateway；`nodes/*`、`worker-fleet` 和 `worker-node run` 统一使用 `worker` 角色的平台服务令牌。
+- `THEMIS_PLATFORM_WEB_ACCESS_TOKEN` 当前负责主 Themis 的管理者 gateway：除了 `agents / projects / work-items / runs`，还可访问节点观察/治理接口 `nodes/list|detail|drain|offline|reclaim`；节点运行态 `nodes/register|heartbeat`、`/api/platform/worker/*` 和 `worker-node run` 仍统一使用 `worker` 角色的平台服务令牌。
 - Worker Node、平台值班和三机联调的完整命令顺序，直接看 [首轮局域网联调清单](./docs/repository/themis-first-lan-joint-test-checklist.md)、[Worker Node 常驻部署说明](./docs/repository/themis-worker-node-systemd-service.md) 和 [Worker Node 运维手册](./docs/repository/themis-worker-node-operations-runbook.md)。
 
 如果你希望像 `codex` 一样直接输入 `themis`，可以在仓库根目录执行一次：

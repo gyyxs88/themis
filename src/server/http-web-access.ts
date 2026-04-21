@@ -324,12 +324,22 @@ function isPublicWebAccessRoute(method: string, pathname: string): boolean {
 function isPlatformPathAllowedForRole(pathname: string, role: PlatformServiceRole): boolean {
   if (role === "gateway") {
     return pathname.startsWith("/api/platform/agents/")
+      || pathname.startsWith("/api/platform/projects/")
       || pathname.startsWith("/api/platform/work-items/")
-      || pathname.startsWith("/api/platform/runs/");
+      || pathname.startsWith("/api/platform/runs/")
+      || isGatewayNodeManagementPath(pathname);
   }
 
   return pathname.startsWith("/api/platform/nodes/")
     || pathname.startsWith("/api/platform/worker/");
+}
+
+function isGatewayNodeManagementPath(pathname: string): boolean {
+  return pathname === "/api/platform/nodes/list"
+    || pathname === "/api/platform/nodes/detail"
+    || pathname === "/api/platform/nodes/drain"
+    || pathname === "/api/platform/nodes/offline"
+    || pathname === "/api/platform/nodes/reclaim";
 }
 
 function normalizeOptionalText(value: unknown): string | null {
