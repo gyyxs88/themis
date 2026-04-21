@@ -795,6 +795,17 @@ test("群聊 shared 会话下非管理员不能切会话或修改工作区", asy
     }));
 
     assert.match(harness.takeSingleMessage(), /当前群是 shared 会话，只有群管理员才能执行 \/workspace/);
+
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-group-shared-admin-only",
+      userId: "user-group-shared-admin-member",
+      messageId: "message-group-shared-admin-only-4",
+      chatType: "group",
+      createTime: "1711958403000",
+      text: "/stop",
+    }));
+
+    assert.match(harness.takeSingleMessage(), /当前群是 shared 会话，只有群管理员才能执行 \/stop/);
   } finally {
     harness.cleanup();
   }
@@ -1178,6 +1189,19 @@ test("/help 会展示 /plugins 第一层入口", async () => {
 
     const message = harness.takeSingleMessage();
     assert.match(message, /\/plugins 查看和维护当前 principal 的 plugins/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/help 会展示 /stop 第一层入口", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("help", []);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /\/stop 停止当前会话正在运行的任务/);
   } finally {
     harness.cleanup();
   }
@@ -5094,6 +5118,67 @@ test("飞书原始入站回调会先返回，再在后台继续处理任务", as
     releaseTask();
     await accepted;
     await harness.waitForBackgroundMessages();
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/stop 会中断当前会话正在运行的任务", async () => {
+  let markTaskStarted = (): void => {};
+  const taskStarted = new Promise<void>((resolve) => {
+    markTaskStarted = resolve;
+  });
+  let aborted = false;
+  const harness = createHarness({
+    runtimeEngine: "app-server",
+    appServerRuntimeFactory: ({
+      runtimeStore,
+      identityService,
+      principalSkillsService,
+      taskRuntimeCalls,
+    }) => ({
+      ...createTaskRuntimeDouble({
+        engine: "app-server",
+        runtimeStore,
+        identityService,
+        principalSkillsService,
+        taskRuntimeCalls,
+      }),
+      async runTask(request, hooks = {}) {
+        taskRuntimeCalls.appServer += 1;
+        markTaskStarted();
+
+        await new Promise<void>((resolve) => {
+          hooks.signal?.addEventListener("abort", () => {
+            aborted = true;
+            resolve();
+          }, { once: true });
+        });
+
+        const result: TaskResult = {
+          taskId: request.taskId ?? "task-feishu-stop-1",
+          requestId: request.requestId,
+          status: "cancelled",
+          summary: "任务因 /stop 被取消。",
+          completedAt: new Date().toISOString(),
+        };
+        return hooks.finalizeResult ? await hooks.finalizeResult(request, result) : result;
+      },
+    }),
+  });
+
+  try {
+    const runningTask = harness.handleIncomingText("请持续运行，等我手动停止");
+    await taskStarted;
+
+    await harness.handleCommand("stop", []);
+    await runningTask;
+
+    assert.equal(aborted, true);
+    const messages = harness.takeMessages().join("\n");
+    assert.match(messages, /处理中/);
+    assert.match(messages, /任务已取消/);
+    assert.match(messages, /已停止当前会话正在运行的任务/);
   } finally {
     harness.cleanup();
   }

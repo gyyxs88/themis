@@ -1249,6 +1249,9 @@ export class FeishuChannelService {
       case "current":
         await this.sendCurrentSession(context.chatId, context);
         return;
+      case "stop":
+        await this.stopCurrentSessionTask(command.args, context);
+        return;
       case "review":
         await this.startReview(command.args, context);
         return;
@@ -2656,6 +2659,7 @@ export class FeishuChannelService {
       "/new 新建并切换到新会话",
       "/use <序号|conversationId> 切换到已有会话",
       "/current 查看当前会话",
+      "/stop 停止当前会话正在运行的任务",
       "/review <指令> 对当前会话发起 Review",
       "/steer <指令> 对当前会话发送 Steer",
       "/workspace 查看或设置当前会话工作区",
@@ -4250,6 +4254,49 @@ export class FeishuChannelService {
         ...(sessionState.latestStatus ? { latestStatus: sessionState.latestStatus } : {}),
         ...(sessionState.thread !== undefined ? { thread: sessionState.thread } : {}),
       }),
+    );
+  }
+
+  private async stopCurrentSessionTask(args: string[], context: FeishuIncomingContext): Promise<void> {
+    if (!await this.ensureSharedGroupSessionMutationAllowed(context, "/stop")) {
+      return;
+    }
+
+    if (args.length > 0) {
+      await this.safeSendText(context.chatId, "用法：/stop");
+      return;
+    }
+
+    const sessionId = this.sessionStore.getActiveSessionId(this.resolveConversationKey(context));
+
+    if (!sessionId) {
+      await this.safeSendText(context.chatId, "当前还没有激活会话。直接发消息时会自动创建，或使用 /new 手动新建。");
+      return;
+    }
+
+    const stopped = await this.withSessionMutation(sessionId, async () => await this.abortActiveSessionTask(
+      sessionId,
+      "FEISHU_SESSION_STOPPED",
+      `[themis/feishu] 当前会话任务被 /stop 中断：session=${sessionId}`,
+    ));
+
+    if (!stopped) {
+      await this.safeSendText(
+        context.chatId,
+        [
+          "当前会话没有正在运行的任务。",
+          `当前会话：${sessionId}`,
+        ].join("\n"),
+      );
+      return;
+    }
+
+    await this.safeSendText(
+      context.chatId,
+      [
+        "已停止当前会话正在运行的任务。",
+        `当前会话：${sessionId}`,
+      ].join("\n"),
     );
   }
 
