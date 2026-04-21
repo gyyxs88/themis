@@ -232,6 +232,20 @@ export interface ManagedAgentPlatformGatewayDetailResult {
   thirdPartyProviders: ManagedAgentDetailView["thirdPartyProviders"];
 }
 
+export class PlatformGatewayHttpError extends Error {
+  readonly statusCode: number;
+  readonly errorCode: string;
+  readonly details: Record<string, unknown> | undefined;
+
+  constructor(statusCode: number, errorCode: string, message: string, details?: Record<string, unknown>) {
+    super(message);
+    this.name = "PlatformGatewayHttpError";
+    this.statusCode = statusCode;
+    this.errorCode = errorCode;
+    this.details = details;
+  }
+}
+
 export class ManagedAgentPlatformGatewayClient {
   private readonly baseUrl: string;
   private readonly ownerPrincipalId: string;
@@ -961,6 +975,10 @@ export class ManagedAgentPlatformGatewayClient {
     const parsed = await readJsonResponse(response);
 
     if (!response.ok) {
+      const gatewayError = buildPlatformGatewayHttpError(parsed, response.status);
+      if (gatewayError) {
+        throw gatewayError;
+      }
       throw new Error(resolveHttpErrorMessage(parsed, response.status, `平台请求失败：${pathname}`));
     }
 
@@ -1054,6 +1072,22 @@ function toGatewayGovernanceFilters(filters: OrganizationGovernanceFilters): Rec
 
 function toFiniteNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function buildPlatformGatewayHttpError(payload: unknown, statusCode: number): PlatformGatewayHttpError | null {
+  if (!isRecord(payload) || !isRecord(payload.error)) {
+    return null;
+  }
+
+  const errorCode = typeof payload.error.code === "string" ? payload.error.code.trim() : "";
+  const message = typeof payload.error.message === "string" ? payload.error.message.trim() : "";
+
+  if (!errorCode || !message) {
+    return null;
+  }
+
+  const details = isRecord(payload.error.details) ? payload.error.details : undefined;
+  return new PlatformGatewayHttpError(statusCode, errorCode, message, details);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

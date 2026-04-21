@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { buildPlatformServiceOwnerMismatchErrorResponse } from "../contracts/managed-agent-platform-access.js";
 import type { ManagedAgentControlPlaneFacadeLike } from "../core/managed-agent-control-plane-facade.js";
 import type { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
+import { PlatformGatewayHttpError } from "../core/managed-agent-platform-gateway-client.js";
 import type {
   ManagedAgentPlatformAgentCardUpdatePayload,
   ManagedAgentPlatformAgentCreatePayload,
@@ -101,6 +102,17 @@ async function readAndNormalizePayload<T extends ManagedAgentPlatformOwnerPayloa
 }
 
 function writePlatformError(response: ServerResponse, error: unknown): void {
+  if (error instanceof PlatformGatewayHttpError) {
+    writeJson(response, error.statusCode, {
+      error: {
+        code: error.errorCode,
+        message: error.message,
+        ...(error.details ? { details: error.details } : {}),
+      },
+    });
+    return;
+  }
+
   writeJson(response, resolveErrorStatusCode(error, true), {
     error: createTaskError(error, true),
   });
