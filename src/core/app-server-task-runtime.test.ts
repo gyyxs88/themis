@@ -84,6 +84,7 @@ function createRuntimeFixture(overrides: {
   createContextBuilder?: AppServerTaskRuntimeOptions["createContextBuilder"];
   createMemoryService?: AppServerTaskRuntimeOptions["createMemoryService"];
   managedAgentControlPlaneStore?: AppServerTaskRuntimeOptions["managedAgentControlPlaneStore"];
+  toolTraceDebounceMs?: number;
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "themis-app-server-runtime-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
@@ -98,6 +99,9 @@ function createRuntimeFixture(overrides: {
     ...(overrides.createMemoryService ? { createMemoryService: overrides.createMemoryService } : {}),
     ...(overrides.managedAgentControlPlaneStore
       ? { managedAgentControlPlaneStore: overrides.managedAgentControlPlaneStore }
+      : {}),
+    ...(typeof overrides.toolTraceDebounceMs === "number"
+      ? { toolTraceDebounceMs: overrides.toolTraceDebounceMs }
       : {}),
   });
 
@@ -1990,6 +1994,156 @@ test("AppServerTaskRuntime 会把 item/completed 里的 final_answer 收口成�
   }
 });
 
+test("AppServerTaskRuntime 会按工具 item 生命周期发出 started/completed 的 tool trace progress", async () => {
+  const toolProgresses: string[] = [];
+  const { sessionFactory } = createSessionFactory({
+    startTurn: async (state) => {
+      state.notificationHandler?.({
+        method: "item/started",
+        params: {
+          threadId: "thread-tool-progress-1",
+          turnId: "turn-tool-progress-1",
+          item: {
+            type: "commandExecution",
+            id: "item-command-progress-1",
+            command: "npm run build",
+            cwd: "/workspace/demo",
+            processId: null,
+            source: "agent",
+            status: "inProgress",
+            commandActions: [],
+            aggregatedOutput: null,
+            exitCode: null,
+            durationMs: null,
+          },
+        },
+      });
+      setTimeout(() => {
+        state.notificationHandler?.({
+          method: "item/completed",
+          params: {
+            threadId: "thread-tool-progress-1",
+            turnId: "turn-tool-progress-1",
+            item: {
+              type: "commandExecution",
+              id: "item-command-progress-1",
+              command: "npm run build",
+              cwd: "/workspace/demo",
+              processId: "pty-1",
+              source: "agent",
+              status: "completed",
+              commandActions: [],
+              aggregatedOutput: "build ok",
+              exitCode: 0,
+              durationMs: 321,
+            },
+          },
+        });
+      }, 20);
+      setTimeout(() => {
+        scheduleCompletedTurn(state, "turn-tool-progress-1", {
+          threadId: "thread-tool-progress-1",
+        });
+      }, 40);
+      return { turnId: "turn-tool-progress-1" };
+    },
+  });
+  const fixture = createRuntimeFixture({
+    sessionFactory,
+    toolTraceDebounceMs: 5,
+  });
+
+  try {
+    await fixture.runtime.runTask({
+      requestId: "req-tool-progress-1",
+      taskId: "task-tool-progress-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "run build",
+      channelContext: { channelSessionKey: "web-session-tool-progress-1" },
+      createdAt: "2026-04-21T09:00:00.000Z",
+    }, {
+      onEvent: async (event) => {
+        if (event.type === "task.progress" && event.payload?.traceKind === "tool" && typeof event.message === "string") {
+          toolProgresses.push(event.message);
+        }
+      },
+    });
+
+    assert.deepEqual(toolProgresses, [
+      "工具轨迹\n1. 正在运行 npm run build",
+      "工具轨迹\n1. 已运行 npm run build",
+    ]);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 会在任务失败时把未完成的工具轨迹收口成 interrupted", async () => {
+  const toolProgresses: string[] = [];
+  const { sessionFactory } = createSessionFactory({
+    startTurn: async (state) => {
+      state.notificationHandler?.({
+        method: "item/started",
+        params: {
+          threadId: "thread-tool-progress-failed-1",
+          turnId: "turn-tool-progress-failed-1",
+          item: {
+            type: "commandExecution",
+            id: "item-command-progress-failed-1",
+            command: "npm run test",
+            cwd: "/workspace/demo",
+            processId: null,
+            source: "agent",
+            status: "inProgress",
+            commandActions: [],
+            aggregatedOutput: null,
+            exitCode: null,
+            durationMs: null,
+          },
+        },
+      });
+      setTimeout(() => {
+        scheduleCompletedTurn(state, "turn-tool-progress-failed-1", {
+          threadId: "thread-tool-progress-failed-1",
+          status: "failed",
+          errorMessage: "build failed",
+        });
+      }, 20);
+      return { turnId: "turn-tool-progress-failed-1" };
+    },
+  });
+  const fixture = createRuntimeFixture({
+    sessionFactory,
+    toolTraceDebounceMs: 5,
+  });
+
+  try {
+    await assert.rejects(async () => await fixture.runtime.runTask({
+      requestId: "req-tool-progress-failed-1",
+      taskId: "task-tool-progress-failed-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "run tests",
+      channelContext: { channelSessionKey: "web-session-tool-progress-failed-1" },
+      createdAt: "2026-04-21T09:05:00.000Z",
+    }, {
+      onEvent: async (event) => {
+        if (event.type === "task.progress" && event.payload?.traceKind === "tool" && typeof event.message === "string") {
+          toolProgresses.push(event.message);
+        }
+      },
+    }), /build failed/);
+
+    assert.deepEqual(toolProgresses, [
+      "工具轨迹\n1. 正在运行 npm run test",
+      "工具轨迹\n1. 中断 npm run test",
+    ]);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("AppServerTaskRuntime 会等待异步到达的 turn/completed，再用 final_answer 收口", async () => {
   const { sessionFactory } = createSessionFactory({
     startThreadId: "thread-app-async-final-answer",
@@ -2645,6 +2799,120 @@ test("AppServerTaskRuntime 会把 approval reverse request 转成等待中的 ac
   }
 });
 
+test("AppServerTaskRuntime 会把命令审批链路归一化成 waiting_approval -> started -> completed 的 tool trace", async () => {
+  const actionBridge = new AppServerActionBridge();
+  const approvalResolved = createDeferred();
+  const toolProgresses: string[] = [];
+  const { state, sessionFactory } = createSessionFactory({
+    startTurn: async (sessionState) => {
+      sessionState.serverRequestHandler?.({
+        id: "server-tool-trace-approval-1",
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-app-tool-trace-approval-1",
+          turnId: "turn-app-tool-trace-approval-1",
+          itemId: "item-app-tool-trace-approval-1",
+          approvalId: "approval-tool-trace-1",
+          command: "rm -rf tmp",
+          reason: "Need approval",
+        },
+      });
+      await approvalResolved.promise;
+      setTimeout(() => {
+        sessionState.notificationHandler?.({
+          method: "item/completed",
+          params: {
+            threadId: "thread-app-tool-trace-approval-1",
+            turnId: "turn-app-tool-trace-approval-1",
+            item: {
+              type: "commandExecution",
+              id: "item-app-tool-trace-approval-1",
+              command: "rm -rf tmp",
+              cwd: "/workspace/demo",
+              processId: "pty-tool-trace-1",
+              source: "agent",
+              status: "completed",
+              commandActions: [],
+              aggregatedOutput: "done",
+              exitCode: 0,
+              durationMs: 150,
+            },
+          },
+        });
+      }, 20);
+      setTimeout(() => {
+        scheduleCompletedTurn(sessionState, "turn-app-tool-trace-approval-1", {
+          threadId: "thread-app-tool-trace-approval-1",
+        });
+      }, 40);
+      return { turnId: "turn-app-tool-trace-approval-1" };
+    },
+  });
+  const fixture = createRuntimeFixture({
+    sessionFactory,
+    toolTraceDebounceMs: 5,
+  });
+  (fixture.runtime as unknown as { actionBridge: AppServerActionBridge }).actionBridge = actionBridge;
+  let resolveActionRequired!: () => void;
+  const actionRequiredPromise = new Promise<void>((resolve) => {
+    resolveActionRequired = resolve;
+  });
+  const runTaskPromise = fixture.runtime.runTask({
+    requestId: "req-app-tool-trace-approval-1",
+    taskId: "task-app-tool-trace-approval-1",
+    sourceChannel: "web",
+    user: { userId: "webui" },
+    goal: "please wait for approval and continue",
+    channelContext: { channelSessionKey: "web-session-tool-trace-approval-1" },
+    createdAt: "2026-04-21T09:10:00.000Z",
+  }, {
+    onEvent: async (event) => {
+      if (event.type === "task.action_required") {
+        resolveActionRequired();
+        return;
+      }
+
+      if (event.type === "task.progress" && event.payload?.traceKind === "tool" && typeof event.message === "string") {
+        toolProgresses.push(event.message);
+      }
+    },
+  });
+
+  try {
+    await Promise.race([
+      actionRequiredPromise,
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("missing action_required")), 80);
+      }),
+    ]);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    actionBridge.resolve({
+      taskId: "task-app-tool-trace-approval-1",
+      requestId: "req-app-tool-trace-approval-1",
+      actionId: "approval-tool-trace-1",
+      decision: "approve",
+    });
+    approvalResolved.resolve();
+
+    await runTaskPromise;
+
+    assert.deepEqual(toolProgresses, [
+      "工具轨迹\n1. 等待审批 rm -rf tmp",
+      "工具轨迹\n1. 正在运行 rm -rf tmp",
+      "工具轨迹\n1. 已运行 rm -rf tmp",
+    ]);
+    assert.deepEqual(state.respondedServerRequests, [{
+      id: "server-tool-trace-approval-1",
+      result: {
+        decision: "accept",
+      },
+    }]);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("AppServerTaskRuntime 会把 MCP 工具审批 reverse request 转成等待中的 action，并在提交后回包", async () => {
   const actionBridge = new AppServerActionBridge();
   const approvalResolved = createDeferred();
@@ -3250,7 +3518,7 @@ test("AppServerTaskRuntime 会把同一 agentMessage item 的 delta 累计成完
     assert.equal(storedProgressEvents.length, 1);
     assert.equal(storedProgressEvents[0]?.message, "你好");
     assert.deepEqual(JSON.parse(storedProgressEvents[0]?.payloadJson ?? "{}"), {
-      threadEventType: "item.completed",
+      threadEventType: "item.delta",
       itemType: "agent_message",
       itemId: "item-app-accumulate-1",
       itemText: "你好",

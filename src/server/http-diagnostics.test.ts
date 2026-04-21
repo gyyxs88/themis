@@ -246,7 +246,6 @@ test("GET /api/diagnostics 会返回 feishu summary", async () => {
     appId: process.env.FEISHU_APP_ID,
     appSecret: process.env.FEISHU_APP_SECRET,
     useEnvProxy: process.env.FEISHU_USE_ENV_PROXY,
-    progressFlushTimeoutMs: process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS,
   };
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
@@ -283,7 +282,6 @@ test("GET /api/diagnostics 会返回 feishu summary", async () => {
     process.env.FEISHU_APP_ID = "cli_xxx";
     process.env.FEISHU_APP_SECRET = "secret_xxx";
     process.env.FEISHU_USE_ENV_PROXY = "true";
-    process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS = "1500";
     mkdirSync(join(root, "docs", "feishu"), { recursive: true });
     writeFileSync(join(root, "docs", "feishu", "themis-feishu-real-journey-smoke.md"), "# smoke\n", "utf8");
     mkdirSync(join(root, "infra", "local"), { recursive: true });
@@ -515,7 +513,6 @@ test("GET /api/diagnostics 会返回 feishu summary", async () => {
     restoreEnv("FEISHU_APP_ID", previousEnv.appId);
     restoreEnv("FEISHU_APP_SECRET", previousEnv.appSecret);
     restoreEnv("FEISHU_USE_ENV_PROXY", previousEnv.useEnvProxy);
-    restoreEnv("FEISHU_PROGRESS_FLUSH_TIMEOUT_MS", previousEnv.progressFlushTimeoutMs);
     await closeServer(listeningServer);
     rmSync(root, { recursive: true, force: true });
   }
@@ -528,7 +525,6 @@ test("GET /api/diagnostics 会返回失败 action 的 feishu summary", async () 
     appId: process.env.FEISHU_APP_ID,
     appSecret: process.env.FEISHU_APP_SECRET,
     useEnvProxy: process.env.FEISHU_USE_ENV_PROXY,
-    progressFlushTimeoutMs: process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS,
   };
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
@@ -565,7 +561,6 @@ test("GET /api/diagnostics 会返回失败 action 的 feishu summary", async () 
     process.env.FEISHU_APP_ID = "cli_xxx";
     process.env.FEISHU_APP_SECRET = "secret_xxx";
     process.env.FEISHU_USE_ENV_PROXY = "true";
-    process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS = "1500";
     mkdirSync(join(root, "docs", "feishu"), { recursive: true });
     writeFileSync(join(root, "docs", "feishu", "themis-feishu-real-journey-smoke.md"), "# smoke\n", "utf8");
     mkdirSync(join(root, "infra", "local"), { recursive: true });
@@ -690,7 +685,6 @@ test("GET /api/diagnostics 会返回失败 action 的 feishu summary", async () 
     restoreEnv("FEISHU_APP_ID", previousEnv.appId);
     restoreEnv("FEISHU_APP_SECRET", previousEnv.appSecret);
     restoreEnv("FEISHU_USE_ENV_PROXY", previousEnv.useEnvProxy);
-    restoreEnv("FEISHU_PROGRESS_FLUSH_TIMEOUT_MS", previousEnv.progressFlushTimeoutMs);
     await closeServer(listeningServer);
     rmSync(root, { recursive: true, force: true });
   }
@@ -703,7 +697,6 @@ test("GET /api/diagnostics 会返回 feishu 最近窗口统计和最后一次 ac
     appId: process.env.FEISHU_APP_ID,
     appSecret: process.env.FEISHU_APP_SECRET,
     useEnvProxy: process.env.FEISHU_USE_ENV_PROXY,
-    progressFlushTimeoutMs: process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS,
   };
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
@@ -740,7 +733,6 @@ test("GET /api/diagnostics 会返回 feishu 最近窗口统计和最后一次 ac
     process.env.FEISHU_APP_ID = "cli_xxx";
     process.env.FEISHU_APP_SECRET = "secret_xxx";
     process.env.FEISHU_USE_ENV_PROXY = "true";
-    process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS = "1500";
     mkdirSync(join(root, "docs", "feishu"), { recursive: true });
     writeFileSync(join(root, "docs", "feishu", "themis-feishu-real-journey-smoke.md"), "# smoke\n", "utf8");
     mkdirSync(join(root, "infra", "local"), { recursive: true });
@@ -958,7 +950,6 @@ test("GET /api/diagnostics 会返回 feishu 最近窗口统计和最后一次 ac
     restoreEnv("FEISHU_APP_ID", previousEnv.appId);
     restoreEnv("FEISHU_APP_SECRET", previousEnv.appSecret);
     restoreEnv("FEISHU_USE_ENV_PROXY", previousEnv.useEnvProxy);
-    restoreEnv("FEISHU_PROGRESS_FLUSH_TIMEOUT_MS", previousEnv.progressFlushTimeoutMs);
     await closeServer(listeningServer);
     rmSync(root, { recursive: true, force: true });
   }

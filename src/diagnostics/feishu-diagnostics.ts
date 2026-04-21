@@ -70,7 +70,6 @@ export interface FeishuDiagnosticsSummary {
     appIdConfigured: boolean;
     appSecretConfigured: boolean;
     useEnvProxy: boolean;
-    progressFlushTimeoutMs: number | null;
   };
   service: {
     serviceReachable: boolean;
@@ -228,7 +227,6 @@ export async function readFeishuDiagnosticsSnapshot(
       appIdConfigured: Boolean(normalizeText(env.FEISHU_APP_ID)),
       appSecretConfigured: Boolean(normalizeText(env.FEISHU_APP_SECRET)),
       useEnvProxy: parseBooleanEnv(env.FEISHU_USE_ENV_PROXY),
-      progressFlushTimeoutMs: parseIntegerEnv(env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS) ?? null,
     },
     service,
     state: {

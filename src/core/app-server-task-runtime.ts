@@ -45,7 +45,11 @@ import {
   readCodexRuntimeCatalog,
   toRuntimeInputCapabilities,
 } from "./codex-app-server.js";
-import { translateAppServerNotification } from "./app-server-event-translator.js";
+import {
+  translateAppServerNotification,
+  translateAppServerToolSignal,
+  type AppServerToolTraceSignal,
+} from "./app-server-event-translator.js";
 import { ConversationService } from "./conversation-service.js";
 import { ManagedAgentCoordinationService } from "./managed-agent-coordination-service.js";
 import {
@@ -101,9 +105,13 @@ import {
   finalizeTaskResult,
 } from "./task-runtime-common.js";
 import { createUnifiedRuntimeCatalog } from "./runtime-catalog.js";
+import { ToolTraceTimeline } from "./tool-trace-timeline.js";
 
 const SESSION_WORKSPACE_UNAVAILABLE_ERROR = "当前会话绑定的工作区不可用，请新建会话后重新设置。";
 const APP_SERVER_AUX_TIMEOUT_MS = 15_000;
+const APP_SERVER_TOOL_TRACE_MAX_ENTRIES = 10;
+const APP_SERVER_TOOL_TRACE_MAX_EDITS = 12;
+const APP_SERVER_TOOL_TRACE_DEBOUNCE_MS = 1_000;
 const APP_SERVER_TRANSPORT_INPUT_CAPABILITIES: RuntimeInputCapabilities = {
   nativeTextInput: true,
   nativeImageInput: true,
@@ -167,6 +175,7 @@ export interface AppServerTaskRuntimeOptions {
   actionBridge?: AppServerActionBridge;
   runtimeCatalogReader?: () => Promise<CodexRuntimeCatalog>;
   managedAgentControlPlaneStore?: ManagedAgentControlPlaneStore;
+  toolTraceDebounceMs?: number;
 }
 
 export interface AppServerInternalTaskContext {
@@ -254,6 +263,7 @@ export class AppServerTaskRuntime {
   ) => Promise<AppServerTaskRuntimeSession>;
   private readonly actionBridge: AppServerActionBridge;
   private readonly runtimeCatalogReader: (() => Promise<CodexRuntimeCatalog>) | null;
+  private readonly toolTraceDebounceMs: number;
 
   constructor(options: AppServerTaskRuntimeOptions = {}) {
     this.workingDirectory = options.workingDirectory ?? process.cwd();
@@ -335,6 +345,9 @@ export class AppServerTaskRuntime {
         : async () => await readCodexRuntimeCatalog(this.workingDirectory, {
           configOverrides: APP_SERVER_TASK_CONFIG_OVERRIDES,
         }));
+    this.toolTraceDebounceMs = typeof options.toolTraceDebounceMs === "number"
+      ? Math.max(0, options.toolTraceDebounceMs)
+      : APP_SERVER_TOOL_TRACE_DEBOUNCE_MS;
   }
 
   async runTask(request: TaskRequest, hooks: TaskRuntimeRunHooks = {}): Promise<TaskResult> {
@@ -569,10 +582,98 @@ export class AppServerTaskRuntime {
     const sessionId = normalizeSessionId(request.channelContext.sessionId);
     let skipFinalEventFlush = false;
     const sessionAccess = this.resolveSessionFactoryOptions(request, principalId);
+    const toolTraceTimeline = new ToolTraceTimeline({
+      maxEntries: APP_SERVER_TOOL_TRACE_MAX_ENTRIES,
+      maxEdits: APP_SERVER_TOOL_TRACE_MAX_EDITS,
+    });
+    let toolTraceFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    let toolTraceFlushPromise: Promise<void> | null = null;
+    let lastToolTraceBucketId: string | null = null;
+    let lastToolTraceText: string | null = null;
 
     const emit = async (event: TaskEvent): Promise<void> => {
       touch();
       await abortable(() => eventDelivery.deliver(event), signal);
+    };
+
+    const flushToolTrace = async (): Promise<void> => {
+      const text = toolTraceTimeline.renderActiveBucket();
+      const bucketId = toolTraceTimeline.getActiveBucketId();
+
+      if (!text || !bucketId) {
+        return;
+      }
+
+      if (bucketId === lastToolTraceBucketId && text === lastToolTraceText) {
+        return;
+      }
+
+      lastToolTraceBucketId = bucketId;
+      lastToolTraceText = text;
+
+      await emit(createTaskEvent(
+        taskId,
+        request.requestId,
+        "task.progress",
+        "running",
+        text,
+        {
+          traceKind: "tool",
+          traceBucketId: bucketId,
+        },
+      ));
+    };
+
+    const flushToolTraceNow = async (): Promise<void> => {
+      if (toolTraceFlushTimer) {
+        clearTimeout(toolTraceFlushTimer);
+        toolTraceFlushTimer = null;
+      }
+
+      if (toolTraceFlushPromise) {
+        await toolTraceFlushPromise;
+        return;
+      }
+
+      await flushToolTrace();
+    };
+
+    const scheduleToolTraceFlush = (): void => {
+      if (toolTraceFlushTimer || signal.aborted) {
+        return;
+      }
+
+      const run = (): void => {
+        toolTraceFlushTimer = null;
+        const pending = flushToolTrace()
+          .catch(() => {
+            // 工具轨迹的定时推送不应抛出未处理异常，主链会在后续 flush 里感知事件队列错误。
+          })
+          .finally(() => {
+            if (toolTraceFlushPromise === pending) {
+              toolTraceFlushPromise = null;
+            }
+          });
+        toolTraceFlushPromise = pending;
+      };
+
+      if (this.toolTraceDebounceMs <= 0) {
+        run();
+        return;
+      }
+
+      toolTraceFlushTimer = setTimeout(run, this.toolTraceDebounceMs);
+      toolTraceFlushTimer.unref?.();
+    };
+
+    const recordToolTrace = (toolSignal: AppServerToolTraceSignal): void => {
+      const now = new Date().toISOString();
+      toolTraceTimeline.apply({
+        ...toolSignal,
+        startedAt: now,
+        updatedAt: now,
+      });
+      scheduleToolTraceFlush();
     };
 
     this.runtimeStore.upsertTurnFromRequest(request, taskId);
@@ -654,6 +755,12 @@ export class AppServerTaskRuntime {
         touch();
         collectAppServerResponseArtifacts(notification, responseArtifacts);
         observeAppServerTurnCompletion(notification, turnCompletion);
+        const toolSignal = translateAppServerToolSignal(notification);
+
+        if (toolSignal) {
+          recordToolTrace(toolSignal);
+        }
+
         const event = translateAppServerNotification(taskId, request.requestId, notification, {
           agentMessageTextByItemId,
         });
@@ -666,6 +773,12 @@ export class AppServerTaskRuntime {
       }));
       unsubscribeServerRequest = toUnsubscribe(activeSession.onServerRequest((serverRequest) => {
         touch();
+        const toolSignal = translateAppServerToolSignal(serverRequest);
+
+        if (toolSignal) {
+          recordToolTrace(toolSignal);
+        }
+
         const pendingServerRequest = this.handleServerRequest({
           session: activeSession,
           request,
@@ -675,6 +788,7 @@ export class AppServerTaskRuntime {
           serverRequest,
           signal,
           emit,
+          recordToolTrace,
         }).finally(() => {
           pendingServerRequests.delete(pendingServerRequest);
         });
@@ -789,6 +903,8 @@ export class AppServerTaskRuntime {
       });
       await abortable(() => waitForPendingServerRequests(pendingServerRequests), signal);
       await abortable(() => turnCompletion.promise, signal);
+      toolTraceTimeline.interruptOpenOps(new Date().toISOString());
+      await abortable(() => flushToolTraceNow(), signal);
       await abortable(() => eventDelivery.flush(), signal);
       throwIfAborted(signal);
 
@@ -930,6 +1046,9 @@ export class AppServerTaskRuntime {
         if (waitingError) {
           await eventDelivery.flush();
         } else if (!signal.aborted) {
+          if (toolTraceTimeline.interruptOpenOps(new Date().toISOString())) {
+            await abortable(() => flushToolTraceNow(), signal);
+          }
           await abortable(() => eventDelivery.flush(), signal);
           await emit(createTaskEvent(taskId, request.requestId, "task.failed", "failed", message));
         }
@@ -1075,6 +1194,9 @@ export class AppServerTaskRuntime {
       }
       if (pendingServerRequests.size > 0) {
         await Promise.allSettled([...pendingServerRequests]);
+      }
+      if (toolTraceFlushTimer) {
+        clearTimeout(toolTraceFlushTimer);
       }
       unsubscribeNotification?.();
       unsubscribeServerRequest?.();
@@ -1404,6 +1526,7 @@ export class AppServerTaskRuntime {
     serverRequest: AppServerReverseRequest;
     signal: AbortSignal;
     emit: (event: TaskEvent) => Promise<void>;
+    recordToolTrace?: (signal: AppServerToolTraceSignal) => void;
   }): Promise<void> {
     const autoApprovalResponse = resolveAutoApprovalServerRequestResponse(input.serverRequest);
 
@@ -1464,10 +1587,16 @@ export class AppServerTaskRuntime {
         },
       ));
 
+      const submittedAction = await submission;
       const response = await abortable(
-        async () => resolvedAction.buildResponse(await submission, registeredAction),
+        async () => resolvedAction.buildResponse(submittedAction, registeredAction),
         input.signal,
       );
+      const submittedToolTrace = resolveSubmittedToolTraceSignal(input.serverRequest, submittedAction);
+
+      if (submittedToolTrace) {
+        input.recordToolTrace?.(submittedToolTrace);
+      }
 
       if (typeof input.session.respondToServerRequest === "function") {
         await abortable(() => input.session.respondToServerRequest!(input.serverRequest.id, response), input.signal);
@@ -1567,6 +1696,35 @@ async function waitForPendingServerRequests(pendingServerRequests: Set<Promise<v
   while (pendingServerRequests.size > 0) {
     await Promise.all([...pendingServerRequests]);
   }
+}
+
+function resolveSubmittedToolTraceSignal(
+  serverRequest: AppServerReverseRequest,
+  submission: TaskPendingActionSubmitRequest,
+): AppServerToolTraceSignal | null {
+  const waitingTrace = translateAppServerToolSignal(serverRequest);
+
+  if (!waitingTrace) {
+    return null;
+  }
+
+  if (waitingTrace.phase === "waiting_input") {
+    return {
+      ...waitingTrace,
+      phase: "started",
+      summary: null,
+    };
+  }
+
+  if (waitingTrace.phase !== "waiting_approval") {
+    return null;
+  }
+
+  return {
+    ...waitingTrace,
+    phase: submission.decision === "deny" ? "interrupted" : "started",
+    summary: null,
+  };
 }
 
 function resolveServerRequestAction(serverRequest: AppServerReverseRequest): ResolvedServerRequestAction | null {
@@ -2457,6 +2615,7 @@ function createAppServerThreadStartParams(
 
   return {
     cwd,
+    experimentalRawEvents: true,
     persistExtendedHistory: true,
     ...(model ? { model } : {}),
     ...(approvalPolicy ? { approvalPolicy } : {}),

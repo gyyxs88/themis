@@ -363,7 +363,6 @@ async function handleStatus(): Promise<void> {
   const apiKey = resolveConfigValue("CODEX_API_KEY", envFiles);
   const feishuAppId = resolveConfigValue("FEISHU_APP_ID", envFiles);
   const feishuAppSecret = resolveConfigValue("FEISHU_APP_SECRET", envFiles);
-  const feishuProgressFlushTimeout = resolveConfigValue("FEISHU_PROGRESS_FLUSH_TIMEOUT_MS", envFiles);
   const envProviderBaseUrl = resolveConfigValue("THEMIS_OPENAI_COMPAT_BASE_URL", envFiles);
   const envProviderApiKey = resolveConfigValue("THEMIS_OPENAI_COMPAT_API_KEY", envFiles);
   const envProviderModel = resolveConfigValue("THEMIS_OPENAI_COMPAT_MODEL", envFiles);
@@ -415,7 +414,6 @@ async function handleStatus(): Promise<void> {
   console.log("飞书渠道");
   console.log(`- FEISHU_APP_ID：${formatDisplayValue(feishuAppId, false)}`);
   console.log(`- FEISHU_APP_SECRET：${formatDisplayValue(feishuAppSecret, true)}`);
-  console.log(`- FEISHU_PROGRESS_FLUSH_TIMEOUT_MS：${formatDisplayValue(feishuProgressFlushTimeout, false)}`);
   console.log(`- 当前判断：${feishuReady ? "已配置，可在启动后拉起飞书长连接服务。" : "未完整配置；不影响 Web 使用，但飞书 bot 不会启动。"} `);
   console.log("");
   console.log("第三方兼容 Provider");
@@ -2021,7 +2019,6 @@ function printFeishuDiagnosticsSummary(summary: FeishuDiagnosticsSummary): void 
   console.log(`appIdConfigured：${summary.env.appIdConfigured ? "yes" : "no"}`);
   console.log(`appSecretConfigured：${summary.env.appSecretConfigured ? "yes" : "no"}`);
   console.log(`useEnvProxy：${summary.env.useEnvProxy ? "yes" : "no"}`);
-  console.log(`progressFlushTimeoutMs：${summary.env.progressFlushTimeoutMs ?? "null"}`);
   console.log(`serviceReachable：${summary.service.serviceReachable ? "yes" : "no"}`);
   console.log(`statusCode：${summary.service.statusCode ?? "null"}`);
   console.log(`sessionStore：${summary.state.sessionStore.status}`);

@@ -93,7 +93,6 @@ import {
 } from "./outbound-attachments.js";
 import { FeishuSessionStore, type FeishuConversationKey } from "./session-store.js";
 import {
-  DEFAULT_FEISHU_PROGRESS_FLUSH_TIMEOUT_MS,
   FeishuTaskMessageBridge,
   type FeishuMessageMutationResponse,
 } from "./task-message-bridge.js";
@@ -188,7 +187,6 @@ export interface FeishuChannelServiceOptions {
   useEnvProxy?: boolean;
   verificationToken?: string;
   encryptKey?: string;
-  progressFlushTimeoutMs?: number;
   sessionStore?: FeishuSessionStore;
   diagnosticsStateStore?: FeishuDiagnosticsStateStore;
   chatSettingsStore?: FeishuChatSettingsStore;
@@ -222,7 +220,6 @@ export class FeishuChannelService {
   private readonly useEnvProxy: boolean;
   private readonly verificationToken: string;
   private readonly encryptKey: string;
-  private readonly progressFlushTimeoutMs: number;
   private readonly sessionStore: FeishuSessionStore;
   private readonly diagnosticsStateStore: FeishuDiagnosticsStateStore;
   private readonly attachmentDraftStore: FeishuAttachmentDraftStore;
@@ -260,10 +257,6 @@ export class FeishuChannelService {
     this.useEnvProxy = options.useEnvProxy ?? parseBooleanEnv(process.env.FEISHU_USE_ENV_PROXY);
     this.verificationToken = normalizeText(options.verificationToken ?? process.env.FEISHU_VERIFICATION_TOKEN) ?? "";
     this.encryptKey = normalizeText(options.encryptKey ?? process.env.FEISHU_ENCRYPT_KEY) ?? "";
-    this.progressFlushTimeoutMs = normalizePositiveInteger(
-      options.progressFlushTimeoutMs ?? parseIntegerEnv(process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS),
-      DEFAULT_FEISHU_PROGRESS_FLUSH_TIMEOUT_MS,
-    );
     this.sessionStore = options.sessionStore ?? new FeishuSessionStore();
     this.diagnosticsStateStore = options.diagnosticsStateStore ?? new FeishuDiagnosticsStateStore({
       filePath: join(this.runtime.getWorkingDirectory(), "infra/local/feishu-diagnostics.json"),
@@ -1334,7 +1327,6 @@ export class FeishuChannelService {
         await this.createAssistantMessage(context.chatId, text);
       },
       splitText: splitForFeishuText,
-      progressFlushTimeoutMs: this.progressFlushTimeoutMs,
     });
     const router = new InMemoryCommunicationRouter();
     const adapter = new FeishuAdapter({
@@ -6527,10 +6519,14 @@ function shouldRenderFeishuStatusSurface(
   }
 
   const metadata = asRecord(message.metadata);
+  const traceKind = normalizeText(metadata?.traceKind);
   const itemType = normalizeText(metadata?.itemType);
-  const threadEventType = normalizeText(metadata?.threadEventType);
 
-  if (itemType === "agent_message" && threadEventType === "item.completed") {
+  if (traceKind === "tool") {
+    return false;
+  }
+
+  if (itemType === "agent_message") {
     return false;
   }
 

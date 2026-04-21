@@ -372,7 +372,6 @@ test("RuntimeDiagnosticsService.readSummary 会汇总 feishu diagnostics 快照"
     feishuAppId: process.env.FEISHU_APP_ID,
     feishuAppSecret: process.env.FEISHU_APP_SECRET,
     feishuUseEnvProxy: process.env.FEISHU_USE_ENV_PROXY,
-    feishuProgressFlushTimeoutMs: process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS,
     themisBaseUrl: process.env.THEMIS_BASE_URL,
   };
   let server: ReturnType<typeof createServer> | null = null;
@@ -622,7 +621,6 @@ test("RuntimeDiagnosticsService.readSummary 会汇总 feishu diagnostics 快照"
     process.env.FEISHU_APP_ID = "cli_xxx";
     process.env.FEISHU_APP_SECRET = "secret_xxx";
     process.env.FEISHU_USE_ENV_PROXY = "1";
-    process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS = "60000";
     process.env.THEMIS_BASE_URL = `http://127.0.0.1:${address.port}`;
 
     const service = new RuntimeDiagnosticsService({
@@ -695,7 +693,6 @@ test("RuntimeDiagnosticsService.readSummary 会汇总 feishu diagnostics 快照"
     restoreEnv("FEISHU_APP_ID", previousEnv.feishuAppId);
     restoreEnv("FEISHU_APP_SECRET", previousEnv.feishuAppSecret);
     restoreEnv("FEISHU_USE_ENV_PROXY", previousEnv.feishuUseEnvProxy);
-    restoreEnv("FEISHU_PROGRESS_FLUSH_TIMEOUT_MS", previousEnv.feishuProgressFlushTimeoutMs);
     restoreEnv("THEMIS_BASE_URL", previousEnv.themisBaseUrl);
 
     if (server) {
@@ -715,7 +712,6 @@ test("RuntimeDiagnosticsService.readSummary 会透出飞书最近窗口统计和
     feishuAppId: process.env.FEISHU_APP_ID,
     feishuAppSecret: process.env.FEISHU_APP_SECRET,
     feishuUseEnvProxy: process.env.FEISHU_USE_ENV_PROXY,
-    feishuProgressFlushTimeoutMs: process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS,
     themisBaseUrl: process.env.THEMIS_BASE_URL,
   };
   let server: ReturnType<typeof createServer> | null = null;
@@ -907,7 +903,6 @@ test("RuntimeDiagnosticsService.readSummary 会透出飞书最近窗口统计和
     process.env.FEISHU_APP_ID = "cli_xxx";
     process.env.FEISHU_APP_SECRET = "secret_xxx";
     process.env.FEISHU_USE_ENV_PROXY = "1";
-    process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS = "60000";
     process.env.THEMIS_BASE_URL = `http://127.0.0.1:${address.port}`;
 
     const service = new RuntimeDiagnosticsService({
@@ -933,7 +928,6 @@ test("RuntimeDiagnosticsService.readSummary 会透出飞书最近窗口统计和
     restoreEnv("FEISHU_APP_ID", previousEnv.feishuAppId);
     restoreEnv("FEISHU_APP_SECRET", previousEnv.feishuAppSecret);
     restoreEnv("FEISHU_USE_ENV_PROXY", previousEnv.feishuUseEnvProxy);
-    restoreEnv("FEISHU_PROGRESS_FLUSH_TIMEOUT_MS", previousEnv.feishuProgressFlushTimeoutMs);
     restoreEnv("THEMIS_BASE_URL", previousEnv.themisBaseUrl);
 
     if (server) {
@@ -953,7 +947,6 @@ test("RuntimeDiagnosticsService.readSummary 会把失败 action 纳入 feishu la
     feishuAppId: process.env.FEISHU_APP_ID,
     feishuAppSecret: process.env.FEISHU_APP_SECRET,
     feishuUseEnvProxy: process.env.FEISHU_USE_ENV_PROXY,
-    feishuProgressFlushTimeoutMs: process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS,
     themisBaseUrl: process.env.THEMIS_BASE_URL,
   };
   let server: ReturnType<typeof createServer> | null = null;
@@ -1090,7 +1083,6 @@ test("RuntimeDiagnosticsService.readSummary 会把失败 action 纳入 feishu la
     process.env.FEISHU_APP_ID = "cli_xxx";
     process.env.FEISHU_APP_SECRET = "secret_xxx";
     process.env.FEISHU_USE_ENV_PROXY = "1";
-    process.env.FEISHU_PROGRESS_FLUSH_TIMEOUT_MS = "60000";
     process.env.THEMIS_BASE_URL = `http://127.0.0.1:${address.port}`;
 
     const service = new RuntimeDiagnosticsService({
@@ -1111,7 +1103,6 @@ test("RuntimeDiagnosticsService.readSummary 会把失败 action 纳入 feishu la
     restoreEnv("FEISHU_APP_ID", previousEnv.feishuAppId);
     restoreEnv("FEISHU_APP_SECRET", previousEnv.feishuAppSecret);
     restoreEnv("FEISHU_USE_ENV_PROXY", previousEnv.feishuUseEnvProxy);
-    restoreEnv("FEISHU_PROGRESS_FLUSH_TIMEOUT_MS", previousEnv.feishuProgressFlushTimeoutMs);
     restoreEnv("THEMIS_BASE_URL", previousEnv.themisBaseUrl);
 
     if (server) {
