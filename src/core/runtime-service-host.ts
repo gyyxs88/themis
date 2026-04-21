@@ -1,0 +1,26 @@
+import type { AppServerTaskRuntime } from "./app-server-task-runtime.js";
+
+export type RuntimeServiceHost = Pick<AppServerTaskRuntime,
+  | "runTask"
+  | "getRuntimeStore"
+  | "getWorkingDirectory"
+  | "getManagedAgentControlPlaneStore"
+  | "getManagedAgentControlPlaneFacade"
+  | "getManagedAgentControlPlaneFacadeAsync"
+  | "getIdentityLinkService"
+  | "getPrincipalPersonaService"
+  | "getPrincipalActorsService"
+  | "getManagedAgentsService"
+  | "getManagedAgentNodeService"
+  | "getManagedAgentCoordinationService"
+  | "getManagedAgentSchedulerService"
+  | "getPrincipalSkillsService"
+  | "getPrincipalMcpService"
+  | "getPrincipalPluginsService"
+  | "getScheduledTasksService"
+  | "resetPrincipalState"
+  | "getPrincipalTaskSettings"
+  | "savePrincipalTaskSettings"
+  | "readRuntimeConfig"
+  | "reloadProviderConfig"
+>;

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
-import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createThemisHttpServer } from "./http-server.js";
 import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
@@ -17,7 +17,7 @@ interface TestServerContext {
   baseUrl: string;
   root: string;
   runtimeStore: SqliteCodexSessionRegistry;
-  runtime: CodexTaskRuntime;
+  runtime: AppServerTaskRuntime;
   authHeaders: Record<string, string>;
 }
 
@@ -40,7 +40,7 @@ async function withMcpServer(
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });
@@ -196,8 +196,8 @@ test("POST /api/mcp/remove 会删除 principal MCP 主记录和物化状态", as
 test("POST /api/mcp/reload 会返回 runtime 槽位和刷新后的 principal MCP 列表", async () => {
   await withMcpServer(async ({ baseUrl, runtime, authHeaders }) => {
     const identity = runtime.getIdentityLinkService().ensureIdentity(buildIdentityPayload());
-    const service = runtime.getPrincipalMcpService() as ReturnType<CodexTaskRuntime["getPrincipalMcpService"]> & {
-      reloadPrincipalMcpServers?: ReturnType<CodexTaskRuntime["getPrincipalMcpService"]>["reloadPrincipalMcpServers"];
+    const service = runtime.getPrincipalMcpService() as ReturnType<AppServerTaskRuntime["getPrincipalMcpService"]> & {
+      reloadPrincipalMcpServers?: ReturnType<AppServerTaskRuntime["getPrincipalMcpService"]>["reloadPrincipalMcpServers"];
     };
 
     service.reloadPrincipalMcpServers = async (principalId) => {
@@ -260,8 +260,8 @@ test("POST /api/mcp/reload 会返回 runtime 槽位和刷新后的 principal MCP
 test("POST /api/mcp/oauth/login 会返回 OAuth 授权链接", async () => {
   await withMcpServer(async ({ baseUrl, runtime, authHeaders }) => {
     const identity = runtime.getIdentityLinkService().ensureIdentity(buildIdentityPayload());
-    const service = runtime.getPrincipalMcpService() as ReturnType<CodexTaskRuntime["getPrincipalMcpService"]> & {
-      startPrincipalMcpOauthLogin?: ReturnType<CodexTaskRuntime["getPrincipalMcpService"]>["startPrincipalMcpOauthLogin"];
+    const service = runtime.getPrincipalMcpService() as ReturnType<AppServerTaskRuntime["getPrincipalMcpService"]> & {
+      startPrincipalMcpOauthLogin?: ReturnType<AppServerTaskRuntime["getPrincipalMcpService"]>["startPrincipalMcpOauthLogin"];
     };
 
     service.startPrincipalMcpOauthLogin = async (principalId, serverName) => {

@@ -64,7 +64,7 @@ test("readSessionNativeThreadSummary 会返回 app-server thread 的完整摘要
   });
 });
 
-test("readSessionNativeThreadSummary 遇到非 app-server 会话时返回 null", async () => {
+test("readSessionNativeThreadSummary 会把历史 sdk thread 归并成 app-server 摘要", async () => {
   await withRuntimeStore(async (store) => {
     const sessionId = "session-native-sdk";
     const request = buildTaskRequest({
@@ -100,7 +100,11 @@ test("readSessionNativeThreadSummary 遇到非 app-server 会话时返回 null",
       }),
     }));
 
-    assert.equal(summary, null);
+    assert.deepEqual(summary, {
+      engine: "app-server",
+      threadId: "thread-sdk-1",
+      turnCount: 1,
+    });
   });
 });
 

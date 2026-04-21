@@ -3,11 +3,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { CodexTaskRuntime } from "./codex-runtime.js";
+import { AppServerTaskRuntime } from "./app-server-task-runtime.js";
 import { ScheduledTaskExecutionService } from "./scheduled-task-execution-service.js";
 import { ScheduledTasksService } from "./scheduled-tasks-service.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
-import type { AppServerTaskRuntime } from "./app-server-task-runtime.js";
 import type { TaskRequest, TaskResult } from "../types/index.js";
 
 test("ScheduledTaskExecutionService 会 claim 到期任务并按 principal 执行", async () => {
@@ -15,7 +14,7 @@ test("ScheduledTaskExecutionService 会 claim 到期任务并按 principal 执�
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });

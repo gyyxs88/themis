@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { CodexTaskRuntime } from "../core/codex-runtime.js";
+import type { RuntimeServiceHost } from "../core/runtime-service-host.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
 import { writeJson } from "./http-responses.js";
@@ -170,7 +170,7 @@ function writeRuntimeError(response: ServerResponse, error: unknown): void {
 export async function handleSkillsList(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalSkillsService">,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizeSkillsIdentityPayload);
 
@@ -194,7 +194,7 @@ export async function handleSkillsList(
 export async function handleSkillsInstall(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalSkillsService">,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizeSkillsInstallPayload);
 
@@ -236,7 +236,7 @@ export async function handleSkillsInstall(
 export async function handleSkillsRemove(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalSkillsService">,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(
     request,
@@ -264,7 +264,7 @@ export async function handleSkillsRemove(
 export async function handleSkillsSync(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalSkillsService">,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(
     request,
@@ -294,7 +294,7 @@ export async function handleSkillsSync(
 export async function handleSkillsCuratedCatalog(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalSkillsService">,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizeSkillsIdentityPayload);
 

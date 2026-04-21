@@ -9,7 +9,6 @@ import { AppServerTaskRuntime } from "../../core/app-server-task-runtime.js";
 import { IdentityLinkService } from "../../core/identity-link-service.js";
 import { PrincipalMcpService } from "../../core/principal-mcp-service.js";
 import { SESSION_WORKSPACE_LOCKED_ERROR } from "../../core/session-settings-service.js";
-import type { CodexTaskRuntime } from "../../core/codex-runtime.js";
 import type {
   PrincipalTaskSettings,
   SessionTaskSettings,
@@ -8204,7 +8203,7 @@ function createHarness(
       });
       return settings;
     },
-  } as unknown as CodexTaskRuntime;
+  } as unknown as AppServerTaskRuntime;
   const appServerRuntime = harnessConfig?.appServerRuntimeFactory
     ? harnessConfig.appServerRuntimeFactory({
       runtimeStore,

@@ -10,7 +10,6 @@ import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import { AppServerTaskRuntime, type AppServerTaskRuntimeSession } from "../core/app-server-task-runtime.js";
 import type { AppServerTurnInputPart } from "../core/codex-app-server.js";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
-import type { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { IdentityLinkService } from "../core/identity-link-service.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import type {
@@ -131,7 +130,19 @@ function extractComparableAppServerRequestText(input: string | AppServerTurnInpu
   const goalSection = extractPromptSection(promptText, "Goal:");
 
   if (goalSection) {
-    return goalSection;
+    return extractFirstPromptParagraph(goalSection);
+  }
+
+  const latestUserMessageSection = extractPromptSection(promptText, "Latest user message:");
+
+  if (latestUserMessageSection) {
+    return extractFirstPromptParagraph(latestUserMessageSection);
+  }
+
+  const firstParagraph = extractFirstPromptParagraph(promptText);
+
+  if (firstParagraph) {
+    return firstParagraph;
   }
 
   return promptText.trim();
@@ -166,6 +177,10 @@ function extractPromptSection(promptText: string, heading: string): string | nul
   const normalized = sectionText.trim();
 
   return normalized ? normalized : null;
+}
+
+function extractFirstPromptParagraph(text: string): string {
+  return text.split(/\n\s*\n/g)[0]?.trim() ?? "";
 }
 
 function findNextPromptSectionBoundary(text: string): number {
@@ -2669,7 +2684,7 @@ function createSharedRuntime(input: {
   workingDirectory: string;
   runtimeStore: SqliteCodexSessionRegistry;
   identityService: IdentityLinkService;
-}): CodexTaskRuntime {
+}): AppServerTaskRuntime {
   const principalSkillsService = {
     listPrincipalSkills: () => [],
     listCuratedSkills: async () => [],
@@ -2699,12 +2714,12 @@ function createSharedRuntime(input: {
       });
       return settings;
     },
-  } as unknown as CodexTaskRuntime;
+  } as unknown as AppServerTaskRuntime;
 }
 
 function createFeishuDriver(input: {
   root: string;
-  runtime: CodexTaskRuntime;
+  runtime: AppServerTaskRuntime;
   runtimeRegistry: TaskRuntimeRegistry;
   authRuntime: CodexAuthRuntime;
   actionBridge: AppServerActionBridge;

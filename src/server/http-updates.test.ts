@@ -4,7 +4,7 @@ import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createThemisHttpServer } from "./http-server.js";
 import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
@@ -14,7 +14,7 @@ test("GET /api/updates 会返回更新概览", async () => {
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });
@@ -99,7 +99,7 @@ test("POST /api/updates/apply 会在确认后启动后台升级", async () => {
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });
@@ -186,7 +186,7 @@ test("POST /api/updates/rollback 缺少 confirm 会返回 400", async () => {
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });

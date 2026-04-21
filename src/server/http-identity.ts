@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { CodexTaskRuntime } from "../core/codex-runtime.js";
+import type { RuntimeServiceHost } from "../core/runtime-service-host.js";
 import { normalizePrincipalTaskSettings } from "../core/principal-task-settings.js";
 import { appendWebAuditEvent, buildRemoteIpContext } from "./http-audit.js";
 import { readJsonBody } from "./http-request.js";
@@ -15,7 +15,7 @@ interface IdentityPayload {
 export async function handleIdentityStatus(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalPersonaService" | "getPrincipalTaskSettings">,
 ): Promise<void> {
   try {
     const payload = normalizeIdentityPayload(await readJsonBody(request));
@@ -36,7 +36,7 @@ export async function handleIdentityStatus(
 export async function handleIdentityLinkCodeCreate(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService">,
 ): Promise<void> {
   try {
     const payload = normalizeIdentityPayload(await readJsonBody(request));
@@ -55,7 +55,7 @@ export async function handleIdentityLinkCodeCreate(
 export async function handleIdentityReset(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "resetPrincipalState" | "getRuntimeStore">,
 ): Promise<void> {
   try {
     const payload = normalizeIdentityPayload(await readJsonBody(request));
@@ -92,7 +92,7 @@ export async function handleIdentityReset(
 export async function handleIdentityPersonaUpdate(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalPersonaService">,
 ): Promise<void> {
   try {
     const payload = normalizeIdentityPersonaPayload(await readJsonBody(request));
@@ -125,7 +125,7 @@ export async function handleIdentityPersonaUpdate(
 export async function handleIdentityTaskSettingsUpdate(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "savePrincipalTaskSettings" | "getRuntimeStore">,
 ): Promise<void> {
   try {
     const payload = normalizeIdentityTaskSettingsPayload(await readJsonBody(request));

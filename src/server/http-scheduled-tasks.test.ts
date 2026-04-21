@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
-import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
 import { createThemisHttpServer } from "./http-server.js";
@@ -15,7 +15,7 @@ interface TestServerContext {
   baseUrl: string;
   root: string;
   runtimeStore: SqliteCodexSessionRegistry;
-  runtime: CodexTaskRuntime;
+  runtime: AppServerTaskRuntime;
   authHeaders: Record<string, string>;
 }
 
@@ -38,7 +38,7 @@ async function withScheduledTaskServer(
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });

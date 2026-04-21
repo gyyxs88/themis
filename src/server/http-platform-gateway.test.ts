@@ -4,7 +4,7 @@ import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createThemisHttpServer } from "./http-server.js";
 import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
@@ -15,7 +15,7 @@ test("主 Themis 的 /api/platform/* 在配置 THEMIS_PLATFORM_* 后会通过 ga
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });

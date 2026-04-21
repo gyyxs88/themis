@@ -1,4 +1,4 @@
-import { SessionBusyError } from "../core/codex-session-store.js";
+import { SessionBusyError } from "../core/task-runtime-common.js";
 import type { TaskError } from "../types/index.js";
 
 export function createTaskError(error: unknown, hasNormalizedRequest: boolean): TaskError {

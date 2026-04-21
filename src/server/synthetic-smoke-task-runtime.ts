@@ -1,7 +1,7 @@
 import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import { ConversationService } from "../core/conversation-service.js";
-import { createTaskEvent } from "../core/codex-runtime.js";
-import type { CodexTaskRuntime } from "../core/codex-runtime.js";
+import type { RuntimeServiceHost } from "../core/runtime-service-host.js";
+import { createTaskEvent } from "../core/task-runtime-common.js";
 import type {
   TaskActionDescriptor,
   TaskActionScope,
@@ -15,13 +15,13 @@ import { SqliteCodexSessionRegistry } from "../storage/index.js";
 type SyntheticSmokeScenario = "user-input" | "mixed";
 
 export class SyntheticSmokeTaskRuntime {
-  private readonly baseRuntime: CodexTaskRuntime;
+  private readonly baseRuntime: Pick<RuntimeServiceHost, "getRuntimeStore" | "getIdentityLinkService" | "getPrincipalSkillsService">;
   private readonly runtimeStore: SqliteCodexSessionRegistry;
   private readonly conversationService: ConversationService;
   private readonly actionBridge: AppServerActionBridge;
 
   constructor(options: {
-    baseRuntime: CodexTaskRuntime;
+    baseRuntime: Pick<RuntimeServiceHost, "getRuntimeStore" | "getIdentityLinkService" | "getPrincipalSkillsService">;
     actionBridge: AppServerActionBridge;
   }) {
     this.baseRuntime = options.baseRuntime;

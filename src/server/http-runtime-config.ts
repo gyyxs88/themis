@@ -1,11 +1,11 @@
 import type { ServerResponse } from "node:http";
-import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import type { RuntimeServiceHost } from "../core/runtime-service-host.js";
 import { toErrorMessage } from "./http-errors.js";
 import { writeJson } from "./http-responses.js";
 
 export async function handleRuntimeConfig(
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "readRuntimeConfig">,
   headOnly = false,
 ): Promise<void> {
   try {

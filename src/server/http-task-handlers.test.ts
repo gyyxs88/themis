@@ -4,7 +4,7 @@ import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createThemisHttpServer, type ThemisServerRuntimeRegistry } from "./http-server.js";
@@ -14,7 +14,7 @@ interface TestServerContext {
   baseUrl: string;
   root: string;
   runtimeStore: SqliteCodexSessionRegistry;
-  runtime: CodexTaskRuntime;
+  runtime: AppServerTaskRuntime;
 }
 
 async function withHttpServer(
@@ -25,7 +25,7 @@ async function withHttpServer(
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });
@@ -77,8 +77,8 @@ test("/api/tasks/run 会记录任务已接受和 cancelled 审计", async () => 
       runtimeStore,
     });
 
-    (runtime as CodexTaskRuntime & {
-      runTask: CodexTaskRuntime["runTask"];
+    (runtime as AppServerTaskRuntime & {
+      runTask: AppServerTaskRuntime["runTask"];
     }).runTask = async (request) => ({
       taskId: request.taskId ?? "task-run-audit",
       requestId: request.requestId,
@@ -118,9 +118,7 @@ test("/api/tasks/run 会记录任务已接受和 cancelled 审计", async () => 
     assert.equal(cancelled?.remoteIp, "127.0.0.1");
   }, ({ runtime }) => ({
     defaultRuntime: runtime,
-    runtimes: {
-      sdk: runtime,
-    },
+    runtimes: {},
   }));
 });
 
@@ -134,8 +132,8 @@ test("/api/tasks/run 传 app-server runtimeEngine 时会走 selected runtime，�
     });
     let sdkRunCount = 0;
 
-    (runtime as CodexTaskRuntime & {
-      runTask: CodexTaskRuntime["runTask"];
+    (runtime as AppServerTaskRuntime & {
+      runTask: AppServerTaskRuntime["runTask"];
     }).runTask = async (request) => {
       sdkRunCount += 1;
       return {
@@ -313,7 +311,7 @@ test("/api/tasks/run 显式传 sdk runtimeEngine 时返回 400，且不会执行
       };
     };
     assert.equal(payload.error?.code, "INVALID_REQUEST");
-    assert.match(payload.error?.message ?? "", /public task execution: sdk/);
+    assert.match(payload.error?.message ?? "", /Invalid runtimeEngine: sdk/);
     assert.equal(defaultRunCount, 0);
     assert.equal(sdkRunCount, 0);
   }, ({ runtimeStore }) => ({
@@ -326,17 +324,7 @@ test("/api/tasks/run 显式传 sdk runtimeEngine 时返回 400，且不会执行
       getIdentityLinkService: () => ({}),
       getPrincipalSkillsService: () => ({}),
     },
-    runtimes: {
-      sdk: {
-        runTask: async () => {
-          sdkRunCount += 1;
-          throw new Error("sdk runtime should not be used");
-        },
-        getRuntimeStore: () => runtimeStore,
-        getIdentityLinkService: () => ({}),
-        getPrincipalSkillsService: () => ({}),
-      },
-    },
+    runtimes: {},
   }));
 });
 
@@ -385,16 +373,7 @@ test("/api/tasks/run 显式请求未注册的 app-server runtime 时返回 400�
       getIdentityLinkService: () => ({}),
       getPrincipalSkillsService: () => ({}),
     },
-    runtimes: {
-      sdk: {
-        runTask: async () => {
-          throw new Error("sdk runtime should not be used");
-        },
-        getRuntimeStore: () => runtimeStore,
-        getIdentityLinkService: () => ({}),
-        getPrincipalSkillsService: () => ({}),
-      },
-    },
+    runtimes: {},
   }));
 });
 
@@ -443,16 +422,7 @@ test("/api/tasks/run 在显式传非法 runtimeEngine 时返回 400，且不会�
       getIdentityLinkService: () => ({}),
       getPrincipalSkillsService: () => ({}),
     },
-    runtimes: {
-      sdk: {
-        runTask: async () => {
-          throw new Error("sdk runtime should not be used");
-        },
-        getRuntimeStore: () => runtimeStore,
-        getIdentityLinkService: () => ({}),
-        getPrincipalSkillsService: () => ({}),
-      },
-    },
+    runtimes: {},
   }));
 });
 
@@ -501,16 +471,7 @@ test("/api/tasks/run 在显式传 null runtimeEngine 时返回 400，且不会�
       getIdentityLinkService: () => ({}),
       getPrincipalSkillsService: () => ({}),
     },
-    runtimes: {
-      sdk: {
-        runTask: async () => {
-          throw new Error("sdk runtime should not be used");
-        },
-        getRuntimeStore: () => runtimeStore,
-        getIdentityLinkService: () => ({}),
-        getPrincipalSkillsService: () => ({}),
-      },
-    },
+    runtimes: {},
   }));
 });
 
@@ -1327,7 +1288,7 @@ test("/api/tasks/automation/run 显式传 sdk runtimeEngine 时返回 400，且�
     assert.equal(payload.mode, "automation");
     assert.equal(payload.automationVersion, 1);
     assert.equal(payload.error?.code, "INVALID_REQUEST");
-    assert.match(payload.error?.message ?? "", /public task execution: sdk/);
+    assert.match(payload.error?.message ?? "", /Invalid runtimeEngine: sdk/);
     assert.equal(defaultRunCount, 0);
     assert.equal(sdkRunCount, 0);
   }, ({ runtimeStore }) => ({
@@ -1340,17 +1301,7 @@ test("/api/tasks/automation/run 显式传 sdk runtimeEngine 时返回 400，且�
       getIdentityLinkService: () => ({}),
       getPrincipalSkillsService: () => ({}),
     },
-    runtimes: {
-      sdk: {
-        runTask: async () => {
-          sdkRunCount += 1;
-          throw new Error("sdk runtime should not be used");
-        },
-        getRuntimeStore: () => runtimeStore,
-        getIdentityLinkService: () => ({}),
-        getPrincipalSkillsService: () => ({}),
-      },
-    },
+    runtimes: {},
   }));
 });
 
@@ -1362,7 +1313,7 @@ test("createThemisHttpServer 会拒绝使用与 base runtime 不共享 store 的
   const otherStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis-other.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });
@@ -1408,8 +1359,8 @@ test("/api/tasks/stream 会记录任务已接受审计", async () => {
       runtimeStore,
     });
 
-    (runtime as CodexTaskRuntime & {
-      runTask: CodexTaskRuntime["runTask"];
+    (runtime as AppServerTaskRuntime & {
+      runTask: AppServerTaskRuntime["runTask"];
     }).runTask = async (request) => ({
       taskId: request.taskId ?? "task-stream-audit",
       requestId: request.requestId,
@@ -1444,9 +1395,7 @@ test("/api/tasks/stream 会记录任务已接受审计", async () => {
     assert.equal(accepted?.remoteIp, "127.0.0.1");
   }, ({ runtime }) => ({
     defaultRuntime: runtime,
-    runtimes: {
-      sdk: runtime,
-    },
+    runtimes: {},
   }));
 });
 
@@ -1458,8 +1407,8 @@ test("/api/tasks/stream 会把 inputEnvelope 送进真实提交链", async () =>
     });
     let receivedEnvelope: unknown = null;
 
-    (runtime as CodexTaskRuntime & {
-      runTask: CodexTaskRuntime["runTask"];
+    (runtime as AppServerTaskRuntime & {
+      runTask: AppServerTaskRuntime["runTask"];
     }).runTask = async (request) => {
       receivedEnvelope = request.inputEnvelope ?? null;
       return {
@@ -1518,9 +1467,7 @@ test("/api/tasks/stream 会把 inputEnvelope 送进真实提交链", async () =>
     });
   }, ({ runtime }) => ({
     defaultRuntime: runtime,
-    runtimes: {
-      sdk: runtime,
-    },
+    runtimes: {},
   }));
 });
 

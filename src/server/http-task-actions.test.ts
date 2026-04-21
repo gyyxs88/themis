@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
-import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createThemisHttpServer, type ThemisServerRuntimeRegistry } from "./http-server.js";
@@ -25,7 +25,7 @@ async function withHttpServer(
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });
@@ -438,6 +438,26 @@ test("/api/tasks/actions 的 steer 模式在 runtime 不支持时返回清晰错
         },
       });
     },
+    ({ runtimeStore }) => ({
+      defaultRuntime: {
+        runTask: async () => {
+          throw new Error("default runtime should not be used");
+        },
+        getRuntimeStore: () => runtimeStore,
+        getIdentityLinkService: () => ({}),
+        getPrincipalSkillsService: () => ({}),
+      },
+      runtimes: {
+        "app-server": {
+          runTask: async () => {
+            throw new Error("runTask should not be used");
+          },
+          getRuntimeStore: () => runtimeStore,
+          getIdentityLinkService: () => ({}),
+          getPrincipalSkillsService: () => ({}),
+        },
+      },
+    }),
   );
 });
 
@@ -578,7 +598,7 @@ test("/api/tasks/actions 的 review 模式会为预绑定但无 completed turn �
         reviewThreadId: "thread-review-prebound-1-review",
         turnId: "turn-review-prebound-2",
       });
-      assert.equal(readCalls, 1);
+      assert.equal(readCalls, 0);
       assert.equal(reviewCalls, 1);
     },
     ({ runtimeStore }) => ({

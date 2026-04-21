@@ -8,7 +8,6 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import { AppServerTaskRuntime, type AppServerTaskRuntimeSession } from "../core/app-server-task-runtime.js";
-import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { handleTaskStream } from "./http-task-handlers.js";
@@ -19,7 +18,7 @@ interface TestServerContext {
   baseUrl: string;
   root: string;
   runtimeStore: SqliteCodexSessionRegistry;
-  runtime: CodexTaskRuntime;
+  runtime: AppServerTaskRuntime;
 }
 
 interface AppServerSessionDoubleState {
@@ -42,7 +41,7 @@ async function withHttpServer(
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });
@@ -86,8 +85,8 @@ test("/api/tasks/stream 会按 ack -> event* -> result -> done 顺序返回 NDJS
       runtimeStore,
     });
 
-    (runtime as CodexTaskRuntime & {
-      runTask: CodexTaskRuntime["runTask"];
+    (runtime as AppServerTaskRuntime & {
+      runTask: AppServerTaskRuntime["runTask"];
     }).runTask = async (request, hooks = {}) => {
       const { onEvent } = hooks;
 
@@ -147,9 +146,7 @@ test("/api/tasks/stream 会按 ack -> event* -> result -> done 顺序返回 NDJS
     requiresOpenaiAuth: false,
   }, ({ runtime }) => ({
     defaultRuntime: runtime,
-    runtimes: {
-      sdk: runtime,
-    },
+    runtimes: {},
   }));
 });
 
@@ -162,8 +159,8 @@ test("/api/tasks/stream 显式传 app-server runtimeEngine 时会走对应 runti
       runtimeStore,
     });
 
-    (runtime as CodexTaskRuntime & {
-      runTask: CodexTaskRuntime["runTask"];
+    (runtime as AppServerTaskRuntime & {
+      runTask: AppServerTaskRuntime["runTask"];
     }).runTask = async (request) => ({
       taskId: request.taskId ?? "task-stream-runtime-engine-sdk",
       requestId: request.requestId,
@@ -308,7 +305,7 @@ test("/api/tasks/stream 显式传 sdk runtimeEngine 时会返回 INVALID_REQUEST
     const lines = parseNdjson(await response.text());
     assert.deepEqual(lines.map((line) => line.kind), ["error", "fatal"]);
     assert.equal(lines[0]?.title, "INVALID_REQUEST");
-    assert.match(String(lines[0]?.text ?? ""), /public task execution: sdk/);
+    assert.match(String(lines[0]?.text ?? ""), /Invalid runtimeEngine: sdk/);
     assert.equal(defaultRuntimeRunCount, 0);
     assert.equal(sdkRunCount, 0);
   }, {
@@ -324,17 +321,7 @@ test("/api/tasks/stream 显式传 sdk runtimeEngine 时会返回 INVALID_REQUEST
       getIdentityLinkService: () => ({}),
       getPrincipalSkillsService: () => ({}),
     },
-    runtimes: {
-      sdk: {
-        runTask: async () => {
-          sdkRunCount += 1;
-          throw new Error("sdk runtime should not be used");
-        },
-        getRuntimeStore: () => runtimeStore,
-        getIdentityLinkService: () => ({}),
-        getPrincipalSkillsService: () => ({}),
-      },
-    },
+    runtimes: {},
   }));
 });
 
@@ -366,8 +353,8 @@ test("/api/tasks/stream 在未传 runtimeRegistry 时默认走内建 app-server 
         runtimeStore,
       });
 
-      (runtime as CodexTaskRuntime & {
-        runTask: CodexTaskRuntime["runTask"];
+      (runtime as AppServerTaskRuntime & {
+        runTask: AppServerTaskRuntime["runTask"];
       }).runTask = async (request) => {
         sdkCalls += 1;
         return {
@@ -445,7 +432,7 @@ test("/api/tasks/stream 未显式传 runtimeEngine 时会遵循 runtimeRegistry.
     requiresOpenaiAuth: true,
   }, ({ runtimeStore, runtime }) => {
     const appServerRuntime = {
-      runTask: async (request: Parameters<CodexTaskRuntime["runTask"]>[0]) => {
+      runTask: async (request: Parameters<AppServerTaskRuntime["runTask"]>[0]) => {
         appServerCalls += 1;
         return {
           taskId: request.taskId ?? "task-app-default-1",
@@ -468,7 +455,6 @@ test("/api/tasks/stream 未显式传 runtimeEngine 时会遵循 runtimeRegistry.
     return {
       defaultRuntime: appServerRuntime,
       runtimes: {
-        sdk: runtime,
         "app-server": appServerRuntime,
       },
     };
@@ -483,8 +469,8 @@ test("/api/tasks/stream 显式请求未注册的 app-server runtime 时会 fail-
     });
     let sdkRunCount = 0;
 
-    (runtime as CodexTaskRuntime & {
-      runTask: CodexTaskRuntime["runTask"];
+    (runtime as AppServerTaskRuntime & {
+      runTask: AppServerTaskRuntime["runTask"];
     }).runTask = async (request) => {
       sdkRunCount += 1;
       return {
@@ -523,9 +509,7 @@ test("/api/tasks/stream 显式请求未注册的 app-server runtime 时会 fail-
     requiresOpenaiAuth: false,
   }, ({ runtime }) => ({
     defaultRuntime: runtime,
-    runtimes: {
-      sdk: runtime,
-    },
+    runtimes: {},
   }));
 });
 
@@ -537,8 +521,8 @@ test("/api/tasks/stream 显式传非法 runtimeEngine 时会返回 INVALID_REQUE
     });
     let sdkRunCount = 0;
 
-    (runtime as CodexTaskRuntime & {
-      runTask: CodexTaskRuntime["runTask"];
+    (runtime as AppServerTaskRuntime & {
+      runTask: AppServerTaskRuntime["runTask"];
     }).runTask = async (request) => {
       sdkRunCount += 1;
       return {
@@ -613,7 +597,7 @@ test("/api/tasks/stream 显式传 runtimeEngine 为 null 时会返回 INVALID_RE
     requiresOpenaiAuth: false,
   }, ({ runtimeStore, runtime }) => {
     const defaultRuntime = {
-      runTask: async (request: Parameters<CodexTaskRuntime["runTask"]>[0]) => {
+      runTask: async (request: Parameters<AppServerTaskRuntime["runTask"]>[0]) => {
         defaultRuntimeRunCount += 1;
         return {
           taskId: request.taskId ?? "task-stream-null-runtime-default",
@@ -628,8 +612,8 @@ test("/api/tasks/stream 显式传 runtimeEngine 为 null 时会返回 INVALID_RE
       getPrincipalSkillsService: () => runtime.getPrincipalSkillsService(),
     };
 
-    (runtime as CodexTaskRuntime & {
-      runTask: CodexTaskRuntime["runTask"];
+    (runtime as AppServerTaskRuntime & {
+      runTask: AppServerTaskRuntime["runTask"];
     }).runTask = async (request) => {
       sdkRunCount += 1;
       return {
@@ -644,7 +628,6 @@ test("/api/tasks/stream 显式传 runtimeEngine 为 null 时会返回 INVALID_RE
     return {
       defaultRuntime,
       runtimes: {
-        sdk: runtime,
         "app-server": defaultRuntime,
       },
     };
@@ -658,8 +641,8 @@ test("/api/tasks/stream 在 runtime.runTask() 抛错时会先 ack，再 error，
       runtimeStore,
     });
 
-    (runtime as CodexTaskRuntime & {
-      runTask: CodexTaskRuntime["runTask"];
+    (runtime as AppServerTaskRuntime & {
+      runTask: AppServerTaskRuntime["runTask"];
     }).runTask = async () => {
       throw new Error("runtime exploded");
     };
@@ -687,9 +670,7 @@ test("/api/tasks/stream 在 runtime.runTask() 抛错时会先 ack，再 error，
     requiresOpenaiAuth: false,
   }, ({ runtime }) => ({
     defaultRuntime: runtime,
-    runtimes: {
-      sdk: runtime,
-    },
+    runtimes: {},
   }));
 });
 
@@ -729,7 +710,7 @@ test("handleTaskStream 在 close 后会中止任务并停止继续写流", async
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });
@@ -749,8 +730,8 @@ test("handleTaskStream 在 close 后会中止任务并停止继续写流", async
   let abortMessage: string | null = null;
 
   try {
-    (runtime as CodexTaskRuntime & {
-      runTask: CodexTaskRuntime["runTask"];
+    (runtime as AppServerTaskRuntime & {
+      runTask: AppServerTaskRuntime["runTask"];
     }).runTask = async (taskRequest, hooks = {}) => {
       const { onEvent, signal } = hooks;
       assert.ok(signal);
@@ -873,7 +854,7 @@ test("handleTaskStream 在 task.action_required 后 close 不会中止 waiting a
     requiresOpenaiAuth: false,
   }, ({ runtimeStore, runtime }) => {
     const actionRuntime = {
-      runTask: async (taskRequest: Parameters<CodexTaskRuntime["runTask"]>[0], hooks: Parameters<CodexTaskRuntime["runTask"]>[1] = {}) => {
+      runTask: async (taskRequest: Parameters<AppServerTaskRuntime["runTask"]>[0], hooks: Parameters<AppServerTaskRuntime["runTask"]>[1] = {}) => {
         const { onEvent, signal } = hooks;
         assert.ok(signal);
         capturedTaskId = taskRequest.taskId ?? "task-stream-action-disconnect";
@@ -928,9 +909,7 @@ test("handleTaskStream 在 task.action_required 后 close 不会中止 waiting a
 
     return {
       defaultRuntime: actionRuntime,
-      runtimes: {
-        sdk: runtime,
-      },
+      runtimes: {},
     };
   });
 });
@@ -995,7 +974,7 @@ test("handleTaskStream 在 user-input task.action_required 后 close 不会丢�
     requiresOpenaiAuth: false,
   }, ({ runtimeStore, runtime }) => {
     const inputRuntime = {
-      runTask: async (taskRequest: Parameters<CodexTaskRuntime["runTask"]>[0], hooks: Parameters<CodexTaskRuntime["runTask"]>[1] = {}) => {
+      runTask: async (taskRequest: Parameters<AppServerTaskRuntime["runTask"]>[0], hooks: Parameters<AppServerTaskRuntime["runTask"]>[1] = {}) => {
         const { onEvent, signal } = hooks;
         assert.ok(signal);
         capturedTaskId = taskRequest.taskId ?? "task-stream-input-disconnect";
@@ -1051,9 +1030,7 @@ test("handleTaskStream 在 user-input task.action_required 后 close 不会丢�
 
     return {
       defaultRuntime: inputRuntime,
-      runtimes: {
-        sdk: runtime,
-      },
+      runtimes: {},
     };
   });
 });
@@ -1063,7 +1040,7 @@ test("handleTaskStream 在 pending action resolve 后再次 close 会恢复 CLIE
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });
@@ -1094,8 +1071,8 @@ test("handleTaskStream 在 pending action resolve 后再次 close 会恢复 CLIE
   });
 
   try {
-    (runtime as CodexTaskRuntime & {
-      runTask: CodexTaskRuntime["runTask"];
+    (runtime as AppServerTaskRuntime & {
+      runTask: AppServerTaskRuntime["runTask"];
     }).runTask = async (taskRequest, hooks = {}) => {
       const { onEvent, signal } = hooks;
       assert.ok(signal);
@@ -1191,7 +1168,7 @@ test("handleTaskStream 在 approval resolve 后延迟注册第二轮 user-input 
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });
@@ -1215,7 +1192,7 @@ test("handleTaskStream 在 approval resolve 后延迟注册第二轮 user-input 
   let streamFailure: unknown = null;
 
   try {
-    (runtime as CodexTaskRuntime & { runTask: CodexTaskRuntime["runTask"] }).runTask = async (taskRequest, hooks = {}) => {
+    (runtime as AppServerTaskRuntime & { runTask: AppServerTaskRuntime["runTask"] }).runTask = async (taskRequest, hooks = {}) => {
       const { onEvent, signal } = hooks;
       assert.ok(signal);
       capturedTaskId = taskRequest.taskId ?? "task-stream-detached-mixed-window";
@@ -1353,7 +1330,7 @@ test("handleTaskStream 在连续两轮 task.action_required 下会把恢复窗�
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });
@@ -1394,8 +1371,8 @@ test("handleTaskStream 在连续两轮 task.action_required 下会把恢复窗�
   });
 
   try {
-    (runtime as CodexTaskRuntime & {
-      runTask: CodexTaskRuntime["runTask"];
+    (runtime as AppServerTaskRuntime & {
+      runTask: AppServerTaskRuntime["runTask"];
     }).runTask = async (taskRequest, hooks = {}) => {
       const { onEvent, signal } = hooks;
       assert.ok(signal);
@@ -1531,7 +1508,7 @@ test("handleTaskStream 仅收到无 bridge pending action 的 task.action_requir
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });
@@ -1554,8 +1531,8 @@ test("handleTaskStream 仅收到无 bridge pending action 的 task.action_requir
   let abortMessage: string | null = null;
 
   try {
-    (runtime as CodexTaskRuntime & {
-      runTask: CodexTaskRuntime["runTask"];
+    (runtime as AppServerTaskRuntime & {
+      runTask: AppServerTaskRuntime["runTask"];
     }).runTask = async (taskRequest, hooks = {}) => {
       const { onEvent, signal } = hooks;
       assert.ok(signal);
@@ -1620,7 +1597,7 @@ test("handleTaskStream 在 streamClosed 后收到非 bridge 的 task.action_requ
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });
@@ -1643,8 +1620,8 @@ test("handleTaskStream 在 streamClosed 后收到非 bridge 的 task.action_requ
   let abortMessage: string | null = null;
 
   try {
-    (runtime as CodexTaskRuntime & {
-      runTask: CodexTaskRuntime["runTask"];
+    (runtime as AppServerTaskRuntime & {
+      runTask: AppServerTaskRuntime["runTask"];
     }).runTask = async (taskRequest, hooks = {}) => {
       const { onEvent, signal } = hooks;
       assert.ok(signal);

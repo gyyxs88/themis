@@ -14,7 +14,6 @@ import type {
   AppServerTaskRuntimeSession,
 } from "./app-server-task-runtime.js";
 import { AppServerTaskRuntime } from "./app-server-task-runtime.js";
-import { CodexTaskRuntime } from "./codex-runtime.js";
 import { ManagedAgentPlatformWorkerClient } from "./managed-agent-platform-worker-client.js";
 import { ManagedAgentWorkerDaemon } from "./managed-agent-worker-daemon.js";
 import { WebAccessService } from "./web-access.js";
@@ -35,7 +34,7 @@ interface WorkerHarness {
   platformRoot: string;
   workerRoot: string;
   platformRuntimeStore: SqliteCodexSessionRegistry;
-  platformRuntime: CodexTaskRuntime;
+  platformRuntime: AppServerTaskRuntime;
   workerRuntimeStore: SqliteCodexSessionRegistry;
   workerRuntime: AppServerTaskRuntime;
   baseUrl: string;
@@ -52,7 +51,7 @@ interface WorkerRuntimeHarness {
 interface DualWorkerHarness {
   platformRoot: string;
   platformRuntimeStore: SqliteCodexSessionRegistry;
-  platformRuntime: CodexTaskRuntime;
+  platformRuntime: AppServerTaskRuntime;
   workerA: WorkerRuntimeHarness;
   workerB: WorkerRuntimeHarness;
   baseUrl: string;
@@ -182,7 +181,7 @@ async function createWorkerHarness(
   const platformRuntimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(platformRoot, "infra/local/themis.db"),
   });
-  const platformRuntime = new CodexTaskRuntime({
+  const platformRuntime = new AppServerTaskRuntime({
     workingDirectory: platformRoot,
     runtimeStore: platformRuntimeStore,
   });
@@ -273,7 +272,7 @@ async function createDualWorkerHarness(
   const platformRuntimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(platformRoot, "infra/local/themis.db"),
   });
-  const platformRuntime = new CodexTaskRuntime({
+  const platformRuntime = new AppServerTaskRuntime({
     workingDirectory: platformRoot,
     runtimeStore: platformRuntimeStore,
   });

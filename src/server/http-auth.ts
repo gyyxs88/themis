@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
 import { CodexAuthRuntime, type CodexAuthSnapshot } from "../core/codex-auth.js";
-import type { CodexTaskRuntime } from "../core/codex-runtime.js";
+import type { RuntimeServiceHost } from "../core/runtime-service-host.js";
 import { appendWebAuditEvent, buildRemoteIpContext } from "./http-audit.js";
 import { readJsonBody } from "./http-request.js";
 import { toErrorMessage } from "./http-errors.js";
@@ -154,7 +154,7 @@ export async function handleAuthAccountCreate(
   request: IncomingMessage,
   response: ServerResponse,
   authRuntime: CodexAuthRuntime,
-  runtime?: CodexTaskRuntime,
+  runtime?: Pick<RuntimeServiceHost, "getPrincipalSkillsService">,
 ): Promise<void> {
   try {
     const payload = (await readJsonBody(request)) as AuthAccountCreatePayload;

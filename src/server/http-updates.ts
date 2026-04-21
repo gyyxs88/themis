@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { appendWebAuditEvent, buildRemoteIpContext } from "./http-audit.js";
-import type { CodexTaskRuntime } from "../core/codex-runtime.js";
+import type { RuntimeServiceHost } from "../core/runtime-service-host.js";
 import type { ThemisManagedUpdateOverview, ThemisUpdateService } from "../diagnostics/update-service.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
@@ -28,7 +28,7 @@ export async function handleUpdatesOverview(
 export async function handleUpdateApplyHttp(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getRuntimeStore">,
   updateService: Pick<ThemisUpdateService, "startApply">,
 ): Promise<void> {
   await handleManagedUpdateMutation(
@@ -43,7 +43,7 @@ export async function handleUpdateApplyHttp(
 export async function handleUpdateRollbackHttp(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getRuntimeStore">,
   updateService: Pick<ThemisUpdateService, "startRollback">,
 ): Promise<void> {
   await handleManagedUpdateMutation(
@@ -58,7 +58,7 @@ export async function handleUpdateRollbackHttp(
 async function handleManagedUpdateMutation(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getRuntimeStore">,
   updateService: Pick<ThemisUpdateService, "startApply"> | Pick<ThemisUpdateService, "startRollback">,
   action: "apply" | "rollback",
 ): Promise<void> {

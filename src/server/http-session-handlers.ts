@@ -3,14 +3,13 @@ import {
   buildForkContextFromThread,
   buildPreferredForkContext,
 } from "../core/codex-session-fork.js";
-import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { resolveStoredSessionThreadReference } from "../core/session-thread-reference.js";
 import {
   SESSION_WORKSPACE_LOCKED_ERROR,
   persistSessionTaskSettings,
 } from "../core/session-settings-service.js";
 import type { SqliteCodexSessionRegistry } from "../storage/index.js";
-import type { RuntimeEngine, TaskRuntimeRegistry } from "../types/index.js";
+import type { TaskRuntimeRegistry } from "../types/index.js";
 import { resolveTaskRuntime } from "../types/index.js";
 import { appendWebAuditEvent, buildRemoteIpContext } from "./http-audit.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
@@ -55,16 +54,13 @@ export async function handleSessionForkContext(
     }
 
     const sourceThreadId = resolveForkSourceThreadId(store, sessionId, threadId);
-    const runtimeEngine = sessionId ? resolveSessionRuntimeEngine(store, sessionId) : null;
-    const selectedRuntime = runtimeEngine
-      ? resolveTaskRuntime(runtimeRegistry, runtimeEngine)
-      : runtimeRegistry.defaultRuntime;
-    const optimisticAppServerRuntime = runtimeRegistry.runtimes?.["app-server"];
-    const nativeForkRuntime = runtimeEngine === "app-server"
-      ? selectedRuntime
-      : (sourceThreadId && targetSessionId && optimisticAppServerRuntime && typeof optimisticAppServerRuntime.forkThread === "function"
-        ? optimisticAppServerRuntime
-        : null);
+    const runtimeEngine = sessionId ? resolveStoredSessionThreadReference(store, sessionId).engine : null;
+    const appServerRuntime = resolveTaskRuntime(runtimeRegistry, "app-server");
+    const nativeForkRuntime = sourceThreadId
+      && targetSessionId
+      && typeof appServerRuntime.forkThread === "function"
+      ? appServerRuntime
+      : null;
     const nativeFork = sourceThreadId && nativeForkRuntime && typeof nativeForkRuntime.forkThread === "function"
       ? nativeForkRuntime.forkThread
       : null;
@@ -266,13 +262,6 @@ function resolveForkSourceThreadId(
   }
 
   return resolveStoredSessionThreadReference(store, sessionId).threadId;
-}
-
-function resolveSessionRuntimeEngine(
-  store: SqliteCodexSessionRegistry,
-  sessionId: string,
-): RuntimeEngine | null {
-  return resolveStoredSessionThreadReference(store, sessionId).engine;
 }
 
 function bindForkedSession(

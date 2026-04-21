@@ -41,7 +41,7 @@
 - 当前激活会话不会跨端自动同步；Web 和飞书各自保留“当前正在聊哪一条”的本地状态，需要手动切到目标 `conversationId`。
 - 飞书与 Web 现在共用同一份 principal 级 Themis 默认任务配置；`sandbox / search / network / approval / account` 都不再是会话配置，而是会同时影响两个渠道后续新任务的长期默认值。
 - Web 仍保留浏览器级 identity 与绑定码，但它已降级为可选能力，主要用于认领旧浏览器身份，不再是跨渠道共享会话的前提。
-- 默认任务执行主链路已经切到 `codex app-server`；飞书当前用户可达路径走默认 runtime，`@openai/codex-sdk` 仅保留显式兼容入口。
+- 默认任务执行主链路已经切到 `codex app-server`；飞书当前用户可达路径统一走 `app-server` runtime，仓库已不再依赖 `@openai/codex-sdk`。
 
 ## 推荐复跑顺序
 

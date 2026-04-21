@@ -4,14 +4,14 @@ import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createThemisHttpServer } from "./http-server.js";
 import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
 
 interface TestServerContext {
   baseUrl: string;
-  runtime: CodexTaskRuntime;
+  runtime: AppServerTaskRuntime;
   runtimeStore: SqliteCodexSessionRegistry;
 }
 
@@ -32,7 +32,7 @@ async function withHttpServer(run: (context: TestServerContext) => Promise<void>
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });

@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { InMemoryCommunicationRouter } from "../communication/router.js";
 import { WebAdapter, type WebDeliveryMessage, type WebTaskPayload } from "../channels/index.js";
-import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import type { RuntimeServiceHost } from "../core/runtime-service-host.js";
 import {
   addOpenAICompatibleProvider,
   addOpenAICompatibleProviderModel,
@@ -62,7 +62,7 @@ const THIRD_PARTY_ENDPOINT_PROBE_TIMEOUT_MS = 6000;
 export async function handleThirdPartyProbe(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "readRuntimeConfig" | "runTask">,
   taskTimeoutMs: number,
 ): Promise<void> {
   const payload = ((await readJsonBody(request)) ?? {}) as ThirdPartyProbePayload;
@@ -119,7 +119,6 @@ export async function handleThirdPartyProbe(
   try {
     const result = await runtime.runTask(normalizedRequest, {
       timeoutMs: Math.min(taskTimeoutMs, 120000),
-      allowUnsupportedThirdPartyModel: true,
       onEvent: async (event) => {
         await router.publishEvent(event);
       },
@@ -163,7 +162,7 @@ export async function handleThirdPartyProbe(
 export async function handleThirdPartyCapabilityWriteback(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getRuntimeStore" | "reloadProviderConfig">,
 ): Promise<void> {
   const payload = ((await readJsonBody(request)) ?? {}) as ThirdPartyCapabilityWritebackPayload;
   const model = normalizeOptionalText(payload.model);
@@ -209,7 +208,7 @@ export async function handleThirdPartyCapabilityWriteback(
 export async function handleThirdPartyEndpointProbe(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getRuntimeStore" | "reloadProviderConfig">,
 ): Promise<void> {
   const payload = ((await readJsonBody(request)) ?? {}) as ThirdPartyEndpointProbePayload;
   const requestedProviderId = normalizeOptionalText(payload.providerId);
@@ -286,7 +285,7 @@ export async function handleThirdPartyEndpointProbe(
 export async function handleThirdPartyProviderCreate(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getRuntimeStore" | "reloadProviderConfig">,
 ): Promise<void> {
   const payload = ((await readJsonBody(request)) ?? {}) as ThirdPartyProviderCreatePayload;
 
@@ -320,7 +319,7 @@ export async function handleThirdPartyProviderCreate(
 export async function handleThirdPartyModelCreate(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getRuntimeStore" | "reloadProviderConfig">,
 ): Promise<void> {
   const payload = ((await readJsonBody(request)) ?? {}) as ThirdPartyModelCreatePayload;
 

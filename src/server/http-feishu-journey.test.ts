@@ -8,7 +8,6 @@ import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import type { AppServerReverseRequest } from "../core/codex-app-server.js";
 import { AppServerTaskRuntime, type AppServerTaskRuntimeSession } from "../core/app-server-task-runtime.js";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
-import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { FeishuChannelService } from "../channels/feishu/service.js";
 import { FeishuSessionStore } from "../channels/feishu/session-store.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
@@ -631,7 +630,7 @@ async function withHttpFeishuJourneyServer(
     databaseFile: join(root, "infra/local/themis.db"),
   });
   const actionBridge = new AppServerActionBridge();
-  const baseRuntime = new CodexTaskRuntime({
+  const baseRuntime = new AppServerTaskRuntime({
     workingDirectory: controlDirectory,
     runtimeStore,
   });
@@ -701,7 +700,7 @@ async function withHttpFeishuJourneyServer(
 function createFeishuJourneyHarness(input: {
   root: string;
   runtimeStore: SqliteCodexSessionRegistry;
-  runtime: CodexTaskRuntime;
+  runtime: AppServerTaskRuntime;
   state: JourneyScenarioState;
   runtimeRegistry: {
     defaultRuntime: TaskRuntimeFacade;

@@ -32,7 +32,6 @@
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.59.0",
-    "@openai/codex-sdk": "^0.121.0",
     "better-sqlite3": "^12.8.0",
     "mysql2": "^3.22.0"
   },

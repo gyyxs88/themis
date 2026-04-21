@@ -6,7 +6,7 @@ import { ManagedAgentExecutionService } from "../core/managed-agent-execution-se
 import { MeetingRoomRoundExecutor } from "../core/meeting-room-round-executor.js";
 import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
-import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import type { RuntimeServiceHost } from "../core/runtime-service-host.js";
 import type { RuntimeEngine, TaskRuntimeFacade } from "../types/index.js";
 import { WebAccessService } from "../core/web-access.js";
 import { ThemisUpdateService } from "../diagnostics/update-service.js";
@@ -170,7 +170,7 @@ export interface ThemisHttpServerOptions {
   host?: string;
   port?: number;
   surface?: ThemisHttpServerSurface;
-  runtime?: CodexTaskRuntime;
+  runtime?: RuntimeServiceHost;
   runtimeRegistry?: ThemisServerRuntimeRegistry;
   authRuntime?: CodexAuthRuntime;
   taskTimeoutMs?: number;
@@ -191,9 +191,11 @@ export interface ThemisHttpServerOptions {
 export type ThemisHttpServerSurface = "themis" | "platform";
 
 export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): Server {
-  const runtime = options.runtime ?? new CodexTaskRuntime();
-  const surface = resolveHttpServerSurface(options.surface);
   const actionBridge = options.actionBridge ?? new AppServerActionBridge();
+  const runtime = options.runtime ?? new AppServerTaskRuntime({
+    actionBridge,
+  });
+  const surface = resolveHttpServerSurface(options.surface);
   const defaultAppServerRuntime = resolveAppServerRuntime(options.runtimeRegistry)
     ?? new AppServerTaskRuntime({
       workingDirectory: runtime.getWorkingDirectory(),
@@ -871,7 +873,7 @@ async function serveHttpSurfaceAsset(
 }
 
 function normalizeRuntimeRegistry(
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getRuntimeStore">,
   defaultAppServerRuntime: TaskRuntimeFacade,
   runtimeRegistry: ThemisServerRuntimeRegistry | undefined,
 ): ThemisServerRuntimeRegistry {
@@ -879,7 +881,6 @@ function normalizeRuntimeRegistry(
     return {
       defaultRuntime: defaultAppServerRuntime,
       runtimes: {
-        sdk: runtime,
         "app-server": defaultAppServerRuntime,
       },
     };
@@ -888,10 +889,7 @@ function normalizeRuntimeRegistry(
   const defaultRuntime = runtimeRegistry.defaultRuntime;
   const normalizedRegistry: ThemisServerRuntimeRegistry = {
     defaultRuntime,
-    runtimes: {
-      sdk: runtime,
-      ...(runtimeRegistry.runtimes ?? {}),
-    },
+    ...(runtimeRegistry.runtimes ? { runtimes: { ...runtimeRegistry.runtimes } } : {}),
   };
   const baseStore = runtime.getRuntimeStore();
 

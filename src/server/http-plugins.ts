@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
-import type { CodexTaskRuntime } from "../core/codex-runtime.js";
+import type { RuntimeServiceHost } from "../core/runtime-service-host.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
 import { writeJson } from "./http-responses.js";
@@ -139,7 +139,7 @@ function writeRuntimeError(response: ServerResponse, error: unknown): void {
 export async function handlePluginsList(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalPluginsService">,
   authRuntime: CodexAuthRuntime,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizePluginListPayload);
@@ -168,7 +168,7 @@ export async function handlePluginsList(
 export async function handlePluginsRead(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalPluginsService">,
   authRuntime: CodexAuthRuntime,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(
@@ -204,7 +204,7 @@ export async function handlePluginsRead(
 export async function handlePluginsInstall(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalPluginsService">,
   authRuntime: CodexAuthRuntime,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(
@@ -240,7 +240,7 @@ export async function handlePluginsInstall(
 export async function handlePluginsUninstall(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalPluginsService">,
   authRuntime: CodexAuthRuntime,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(
@@ -277,7 +277,7 @@ export async function handlePluginsUninstall(
 export async function handlePluginsSync(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalPluginsService">,
   authRuntime: CodexAuthRuntime,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizePluginListPayload);

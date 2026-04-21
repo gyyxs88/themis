@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
-import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { PrincipalSkillsService } from "../core/principal-skills-service.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createThemisHttpServer } from "./http-server.js";
@@ -18,7 +18,7 @@ interface TestServerContext {
   baseUrl: string;
   root: string;
   runtimeStore: SqliteCodexSessionRegistry;
-  runtime: CodexTaskRuntime;
+  runtime: AppServerTaskRuntime;
   authRuntime: CodexAuthRuntime;
   principalSkillsService: PrincipalSkillsService;
   managedAccountId: string;
@@ -55,7 +55,7 @@ async function withSkillsServer(
     registry: runtimeStore,
     ...(options.execScript ? { execScript: options.execScript } : {}),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
     principalSkillsService,

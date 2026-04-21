@@ -8,7 +8,7 @@ import { AppServerActionBridge } from "../../core/app-server-action-bridge.js";
 import { AppServerTaskRuntime } from "../../core/app-server-task-runtime.js";
 import type { CodexRuntimeCatalog } from "../../core/codex-app-server.js";
 import { CodexAuthRuntime } from "../../core/codex-auth.js";
-import { CodexTaskRuntime } from "../../core/codex-runtime.js";
+import type { RuntimeServiceHost } from "../../core/runtime-service-host.js";
 import { readSessionNativeThreadSummary } from "../../core/native-thread-summary.js";
 import { validateWorkspacePath } from "../../core/session-workspace.js";
 import { resolveStoredSessionThreadReference } from "../../core/session-thread-reference.js";
@@ -177,7 +177,7 @@ interface FeishuActiveSessionTask {
 }
 
 export interface FeishuChannelServiceOptions {
-  runtime: CodexTaskRuntime;
+  runtime: RuntimeServiceHost;
   runtimeRegistry?: TaskRuntimeRegistry;
   actionBridge?: AppServerActionBridge;
   authRuntime: CodexAuthRuntime;
@@ -211,7 +211,7 @@ const SESSION_WORKSPACE_UNAVAILABLE_ERROR = "当前会话绑定的工作区不�
 const FEISHU_SHARED_GROUP_SCOPE_USER_ID = "__shared_group__";
 
 export class FeishuChannelService {
-  private readonly runtime: CodexTaskRuntime;
+  private readonly runtime: RuntimeServiceHost;
   private readonly runtimeRegistry: TaskRuntimeRegistry;
   private readonly actionBridge: AppServerActionBridge;
   private readonly authRuntime: CodexAuthRuntime;
@@ -3937,7 +3937,7 @@ export class FeishuChannelService {
     } = {},
   ): Promise<{
     principal: { principalId: string; principalDisplayName?: string };
-    result: Awaited<ReturnType<ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]>["listPrincipalPlugins"]>>;
+    result: Awaited<ReturnType<ReturnType<RuntimeServiceHost["getPrincipalPluginsService"]>["listPrincipalPlugins"]>>;
   }> {
     const principal = this.ensurePrincipalIdentity(context);
     const result = await this.runtime.getPrincipalPluginsService().listPrincipalPlugins(
@@ -4337,13 +4337,13 @@ export class FeishuChannelService {
   private async selectRuntimeForSession(sessionId: string): Promise<TaskRuntimeFacade> {
     const runtimeStore = this.runtime.getRuntimeStore();
     const reference = resolveStoredSessionThreadReference(runtimeStore, sessionId);
+    const appServerRuntime = resolveTaskRuntime(this.runtimeRegistry, "app-server");
 
-    if (reference.engine) {
-      return resolveTaskRuntime(this.runtimeRegistry, reference.engine);
+    if (reference.engine === "app-server") {
+      return appServerRuntime;
     }
 
-    const storedThreadId = normalizeText(runtimeStore.getSession(sessionId)?.threadId);
-    const appServerRuntime = this.runtimeRegistry.runtimes?.["app-server"];
+    const storedThreadId = normalizeText(reference.threadId ?? runtimeStore.getSession(sessionId)?.threadId);
 
     if (storedThreadId && appServerRuntime?.readThreadSnapshot) {
       try {
@@ -5058,7 +5058,7 @@ export class FeishuChannelService {
 }
 
 function normalizeFeishuRuntimeRegistry(
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getRuntimeStore">,
   defaultAppServerRuntime: TaskRuntimeFacade,
   runtimeRegistry?: TaskRuntimeRegistry,
 ): TaskRuntimeRegistry {
@@ -5066,7 +5066,6 @@ function normalizeFeishuRuntimeRegistry(
     return {
       defaultRuntime: defaultAppServerRuntime,
       runtimes: {
-        sdk: runtime,
         "app-server": defaultAppServerRuntime,
       },
     };
@@ -5074,10 +5073,7 @@ function normalizeFeishuRuntimeRegistry(
 
   const normalizedRegistry: TaskRuntimeRegistry = {
     defaultRuntime: runtimeRegistry.defaultRuntime,
-    runtimes: {
-      sdk: runtime,
-      ...(runtimeRegistry.runtimes ?? {}),
-    },
+    ...(runtimeRegistry.runtimes ? { runtimes: { ...runtimeRegistry.runtimes } } : {}),
   };
   const baseStore = runtime.getRuntimeStore();
 

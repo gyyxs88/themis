@@ -1,14 +1,13 @@
 import { loadProjectEnv } from "../config/project-env.js";
 import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
+import { CodexAuthRuntime } from "../core/codex-auth.js";
 import {
-  CodexAuthRuntime,
-  CodexTaskRuntime,
   createManagedAgentControlPlaneFacadeAsyncAdapter,
-  createManagedAgentControlPlaneRuntimeFromEnv,
-  ManagedAgentExecutionService,
-  ManagedAgentSchedulerService,
-} from "../core/index.js";
+} from "../core/managed-agent-control-plane-facade.js";
+import { createManagedAgentControlPlaneRuntimeFromEnv } from "../core/managed-agent-control-plane-bootstrap.js";
+import { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
+import { ManagedAgentSchedulerService } from "../core/managed-agent-scheduler-service.js";
 import { ThemisUpdateService } from "../diagnostics/update-service.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createThemisHttpServer, resolveListenAddresses } from "./http-server.js";
@@ -27,14 +26,9 @@ const managedAgentControlPlaneRuntime = await createManagedAgentControlPlaneRunt
   workingDirectory,
   runtimeStore,
 });
-const runtime = new CodexTaskRuntime({
-  workingDirectory,
-  runtimeStore,
-  managedAgentControlPlaneStore: managedAgentControlPlaneRuntime.controlPlaneStore,
-});
 const actionBridge = new AppServerActionBridge();
 const appServerRuntime = new AppServerTaskRuntime({
-  workingDirectory: runtime.getWorkingDirectory(),
+  workingDirectory,
   runtimeStore,
   actionBridge,
   managedAgentControlPlaneStore: managedAgentControlPlaneRuntime.controlPlaneStore,
@@ -67,14 +61,13 @@ const platformWorkItemCancellationService = managedAgentControlPlaneRuntime.mirr
     }
   : managedAgentExecutionService;
 const sharedRuntimes = {
-  sdk: runtime,
   "app-server": appServerRuntime,
 };
 const authRuntime = new CodexAuthRuntime({
-  registry: runtime.getRuntimeStore(),
+  registry: appServerRuntime.getRuntimeStore(),
   onManagedAccountReady: async (account) => {
     try {
-      await runtime.getPrincipalSkillsService().syncAllSkillsToAuthAccount(
+      await appServerRuntime.getPrincipalSkillsService().syncAllSkillsToAuthAccount(
         DEFAULT_PRIVATE_ASSISTANT_PRINCIPAL_ID,
         account.accountId,
       );
@@ -85,13 +78,13 @@ const authRuntime = new CodexAuthRuntime({
   },
 });
 const updateService = new ThemisUpdateService({
-  workingDirectory: runtime.getWorkingDirectory(),
+  workingDirectory: appServerRuntime.getWorkingDirectory(),
 });
 const server = createThemisHttpServer({
   host,
   port,
   surface: "platform",
-  runtime,
+  runtime: appServerRuntime,
   runtimeRegistry: {
     defaultRuntime: appServerRuntime,
     runtimes: {

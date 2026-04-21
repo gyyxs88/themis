@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   InvalidTaskRuntimeSelectionError,
-  UnsupportedPublicTaskRuntimeSelectionError,
   parseRuntimeEngine,
   resolvePublicTaskRuntime,
   resolveRequestedTaskRuntime,
@@ -10,35 +9,19 @@ import {
   resolveRuntimeEngine,
 } from "./runtime-engine.js";
 
-test("parseRuntimeEngine 会接受 sdk", () => {
-  assert.equal(parseRuntimeEngine("sdk"), "sdk");
-});
-
-test("parseRuntimeEngine 会接受 app-server", () => {
+test("parseRuntimeEngine 仅接受 app-server", () => {
   assert.equal(parseRuntimeEngine("app-server"), "app-server");
-});
-
-test("parseRuntimeEngine 会拒绝空串和非法值", () => {
+  assert.equal(parseRuntimeEngine("sdk"), null);
   assert.equal(parseRuntimeEngine(""), null);
   assert.equal(parseRuntimeEngine("bad-value"), null);
   assert.equal(parseRuntimeEngine(undefined), null);
   assert.equal(parseRuntimeEngine(null), null);
 });
 
-test("resolveRuntimeEngine 会在未配置时使用 sdk 作为后备值", () => {
-  assert.equal(resolveRuntimeEngine(undefined, "sdk"), "sdk");
-});
-
-test("resolveRuntimeEngine 在未显式传 fallback 时默认回 app-server", () => {
+test("resolveRuntimeEngine 默认和回退都收敛到 app-server", () => {
   assert.equal(resolveRuntimeEngine(undefined), "app-server");
-});
-
-test("resolveRuntimeEngine 会在未配置时使用 app-server 作为后备值", () => {
   assert.equal(resolveRuntimeEngine(undefined, "app-server"), "app-server");
-});
-
-test("resolveRuntimeEngine 会忽略非法配置并回退到 sdk", () => {
-  assert.equal(resolveRuntimeEngine("bad-value", "sdk"), "sdk");
+  assert.equal(resolveRuntimeEngine("bad-value", "app-server"), "app-server");
 });
 
 test("resolveTaskRuntime 会命中已注册 runtime", () => {
@@ -61,15 +44,11 @@ test("resolveTaskRuntime 会命中已注册 runtime", () => {
 
 test("resolveTaskRuntime 会在未注册时回退 defaultRuntime", () => {
   const defaultRuntime = createRuntime("default");
-  const otherRuntime = createRuntime("other");
 
   assert.equal(
     resolveTaskRuntime(
       {
         defaultRuntime,
-        runtimes: {
-          sdk: otherRuntime,
-        },
       },
       "app-server",
     ),
@@ -79,15 +58,11 @@ test("resolveTaskRuntime 会在未注册时回退 defaultRuntime", () => {
 
 test("resolveRequestedTaskRuntime 在未显式请求时返回 defaultRuntime", () => {
   const defaultRuntime = createRuntime("default");
-  const otherRuntime = createRuntime("other");
 
   assert.equal(
     resolveRequestedTaskRuntime(
       {
         defaultRuntime,
-        runtimes: {
-          sdk: otherRuntime,
-        },
       },
       undefined,
     ),
@@ -102,9 +77,6 @@ test("resolveRequestedTaskRuntime 在显式请求 null 时抛 InvalidTaskRuntime
     () => resolveRequestedTaskRuntime(
       {
         defaultRuntime,
-        runtimes: {
-          sdk: createRuntime("sdk"),
-        },
       },
       null,
     ),
@@ -123,9 +95,6 @@ test("resolveRequestedTaskRuntime 在显式请求未启用 runtime 时抛 Invali
     () => resolveRequestedTaskRuntime(
       {
         defaultRuntime,
-        runtimes: {
-          sdk: createRuntime("sdk"),
-        },
       },
       "app-server",
     ),
@@ -144,9 +113,6 @@ test("resolveRequestedTaskRuntime 在显式请求非法 runtime 时抛 InvalidTa
     () => resolveRequestedTaskRuntime(
       {
         defaultRuntime,
-        runtimes: {
-          sdk: createRuntime("sdk"),
-        },
       },
       "bad-runtime",
     ),
@@ -166,7 +132,6 @@ test("resolvePublicTaskRuntime 在未显式请求时返回 defaultRuntime", () =
       {
         defaultRuntime,
         runtimes: {
-          sdk: createRuntime("sdk"),
           "app-server": createRuntime("app-server"),
         },
       },
@@ -185,7 +150,6 @@ test("resolvePublicTaskRuntime 在显式请求 app-server 时返回已注册 run
       {
         defaultRuntime,
         runtimes: {
-          sdk: createRuntime("sdk"),
           "app-server": appServerRuntime,
         },
       },
@@ -195,7 +159,7 @@ test("resolvePublicTaskRuntime 在显式请求 app-server 时返回已注册 run
   );
 });
 
-test("resolvePublicTaskRuntime 在显式请求 sdk 时抛 UnsupportedPublicTaskRuntimeSelectionError", () => {
+test("resolvePublicTaskRuntime 在显式请求 sdk 时抛 InvalidTaskRuntimeSelectionError", () => {
   const defaultRuntime = createRuntime("default");
 
   assert.throws(
@@ -203,15 +167,14 @@ test("resolvePublicTaskRuntime 在显式请求 sdk 时抛 UnsupportedPublicTaskR
       {
         defaultRuntime,
         runtimes: {
-          sdk: createRuntime("sdk"),
           "app-server": createRuntime("app-server"),
         },
       },
       "sdk",
     ),
     (error) => {
-      assert.ok(error instanceof UnsupportedPublicTaskRuntimeSelectionError);
-      assert.match(error.message, /no longer available for public task execution: sdk/);
+      assert.ok(error instanceof InvalidTaskRuntimeSelectionError);
+      assert.match(error.message, /Invalid runtimeEngine: sdk/);
       return true;
     },
   );
@@ -224,9 +187,6 @@ test("resolvePublicTaskRuntime 在显式请求未注册的 app-server 时抛 Inv
     () => resolvePublicTaskRuntime(
       {
         defaultRuntime,
-        runtimes: {
-          sdk: createRuntime("sdk"),
-        },
       },
       "app-server",
     ),

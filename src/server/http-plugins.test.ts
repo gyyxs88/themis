@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
-import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createThemisHttpServer } from "./http-server.js";
 import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
@@ -14,7 +14,7 @@ interface TestServerContext {
   server: Server;
   baseUrl: string;
   root: string;
-  runtime: CodexTaskRuntime;
+  runtime: AppServerTaskRuntime;
   authHeaders: Record<string, string>;
 }
 
@@ -25,7 +25,7 @@ async function withPluginsServer(
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });
@@ -84,8 +84,8 @@ test("POST /api/plugins/list 会返回当前运行环境可见的 marketplaces",
       channelUserId: "browser-1",
       displayName: "Themis Web er-1",
     });
-    const service = runtime.getPrincipalPluginsService() as ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]> & {
-      listPrincipalPlugins?: ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]>["listPrincipalPlugins"];
+    const service = runtime.getPrincipalPluginsService() as ReturnType<AppServerTaskRuntime["getPrincipalPluginsService"]> & {
+      listPrincipalPlugins?: ReturnType<AppServerTaskRuntime["getPrincipalPluginsService"]>["listPrincipalPlugins"];
     };
 
     service.listPrincipalPlugins = async (principalId, options) => {
@@ -153,8 +153,8 @@ test("POST /api/plugins/read 会返回 plugin 详情", async () => {
       channelUserId: "browser-2",
       displayName: "Themis Web er-2",
     });
-    const service = runtime.getPrincipalPluginsService() as ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]> & {
-      readPrincipalPlugin?: ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]>["readPrincipalPlugin"];
+    const service = runtime.getPrincipalPluginsService() as ReturnType<AppServerTaskRuntime["getPrincipalPluginsService"]> & {
+      readPrincipalPlugin?: ReturnType<AppServerTaskRuntime["getPrincipalPluginsService"]>["readPrincipalPlugin"];
     };
 
     service.readPrincipalPlugin = async (principalId, input) => {
@@ -227,9 +227,9 @@ test("POST /api/plugins/install 和 /api/plugins/uninstall 会调用对应写操
       channelUserId: "browser-3",
       displayName: "Themis Web er-3",
     });
-    const service = runtime.getPrincipalPluginsService() as ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]> & {
-      installPrincipalPlugin?: ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]>["installPrincipalPlugin"];
-      uninstallPrincipalPlugin?: ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]>["uninstallPrincipalPlugin"];
+    const service = runtime.getPrincipalPluginsService() as ReturnType<AppServerTaskRuntime["getPrincipalPluginsService"]> & {
+      installPrincipalPlugin?: ReturnType<AppServerTaskRuntime["getPrincipalPluginsService"]>["installPrincipalPlugin"];
+      uninstallPrincipalPlugin?: ReturnType<AppServerTaskRuntime["getPrincipalPluginsService"]>["uninstallPrincipalPlugin"];
     };
 
     service.installPrincipalPlugin = async (principalId, input) => {
@@ -306,8 +306,8 @@ test("POST /api/plugins/sync 会把当前 principal 已拥有 plugins 对齐到�
       channelUserId: "browser-4",
       displayName: "Themis Web er-4",
     });
-    const service = runtime.getPrincipalPluginsService() as ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]> & {
-      syncPrincipalPlugins?: ReturnType<CodexTaskRuntime["getPrincipalPluginsService"]>["syncPrincipalPlugins"];
+    const service = runtime.getPrincipalPluginsService() as ReturnType<AppServerTaskRuntime["getPrincipalPluginsService"]> & {
+      syncPrincipalPlugins?: ReturnType<AppServerTaskRuntime["getPrincipalPluginsService"]>["syncPrincipalPlugins"];
     };
 
     service.syncPrincipalPlugins = async (principalId, options) => {

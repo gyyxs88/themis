@@ -1,14 +1,11 @@
 import { FeishuChannelService } from "../channels/index.js";
 import { loadProjectEnv } from "../config/project-env.js";
 import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
-import {
-  CodexAuthRuntime,
-  CodexTaskRuntime,
-  createManagedAgentControlPlaneStoreFromEnv,
-  ManagedAgentExecutionService,
-  ScheduledTaskExecutionService,
-} from "../core/index.js";
 import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
+import { CodexAuthRuntime } from "../core/codex-auth.js";
+import { createManagedAgentControlPlaneStoreFromEnv } from "../core/managed-agent-control-plane-bootstrap.js";
+import { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
+import { ScheduledTaskExecutionService } from "../core/scheduled-task-execution-service.js";
 import { ThemisUpdateService } from "../diagnostics/update-service.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createThemisHttpServer, resolveListenAddresses } from "./http-server.js";
@@ -30,14 +27,9 @@ const managedAgentControlPlaneStore = createManagedAgentControlPlaneStoreFromEnv
   workingDirectory,
   runtimeStore,
 });
-const runtime = new CodexTaskRuntime({
-  workingDirectory,
-  runtimeStore,
-  managedAgentControlPlaneStore,
-});
 const actionBridge = new AppServerActionBridge();
 const appServerRuntime = new AppServerTaskRuntime({
-  workingDirectory: runtime.getWorkingDirectory(),
+  workingDirectory,
   runtimeStore,
   actionBridge,
   managedAgentControlPlaneStore,
@@ -50,7 +42,7 @@ const managedAgentExecutionService = new ManagedAgentExecutionService({
 });
 let feishuService: FeishuChannelService | null = null;
 const scheduledTaskExecutionService = new ScheduledTaskExecutionService({
-  registry: runtime.getRuntimeStore(),
+  registry: appServerRuntime.getRuntimeStore(),
   runtime: appServerRuntime,
   onExecutionFinished: async (notification) => {
     if (notification.task.sourceChannel !== "feishu" || !feishuService) {
@@ -66,7 +58,6 @@ const scheduledTaskExecutionService = new ScheduledTaskExecutionService({
   },
 });
 const sharedRuntimes = {
-  sdk: runtime,
   "app-server": appServerRuntime,
 };
 const feishuRuntimeRegistry = {
@@ -80,10 +71,10 @@ const httpRuntimeRegistry = {
   },
 };
 const authRuntime = new CodexAuthRuntime({
-  registry: runtime.getRuntimeStore(),
+  registry: appServerRuntime.getRuntimeStore(),
   onManagedAccountReady: async (account) => {
     try {
-      await runtime.getPrincipalSkillsService().syncAllSkillsToAuthAccount(
+      await appServerRuntime.getPrincipalSkillsService().syncAllSkillsToAuthAccount(
         DEFAULT_PRIVATE_ASSISTANT_PRINCIPAL_ID,
         account.accountId,
       );
@@ -94,12 +85,12 @@ const authRuntime = new CodexAuthRuntime({
   },
 });
 const updateService = new ThemisUpdateService({
-  workingDirectory: runtime.getWorkingDirectory(),
+  workingDirectory: appServerRuntime.getWorkingDirectory(),
 });
 const platformControlPlaneFacade = resolveMainPlatformGatewayFacade();
 const platformMeetingRoomGateway = resolvePlatformMeetingRoomGateway();
 feishuService = new FeishuChannelService({
-  runtime,
+  runtime: appServerRuntime,
   runtimeRegistry: feishuRuntimeRegistry,
   actionBridge,
   authRuntime,
@@ -109,7 +100,7 @@ feishuService = new FeishuChannelService({
 const server = createThemisHttpServer({
   host,
   port,
-  runtime,
+  runtime: appServerRuntime,
   runtimeRegistry: httpRuntimeRegistry,
   authRuntime,
   taskTimeoutMs,
@@ -117,7 +108,6 @@ const server = createThemisHttpServer({
   managedAgentExecutionService,
   feishuService,
   updateService,
-  appServerRuntimeForMeetingRooms: appServerRuntime,
   ...(platformControlPlaneFacade ? { platformControlPlaneFacade } : {}),
   ...(platformMeetingRoomGateway ? { platformMeetingRoomGateway } : {}),
 });

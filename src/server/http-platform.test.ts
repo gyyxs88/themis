@@ -6,14 +6,13 @@ import { join } from "node:path";
 import test from "node:test";
 import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { createManagedAgentControlPlaneStoreFromEnv, THEMIS_MANAGED_AGENT_CONTROL_PLANE_DATABASE_FILE_ENV_KEY } from "../core/managed-agent-control-plane-bootstrap.js";
-import { CodexTaskRuntime } from "../core/codex-runtime.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createThemisHttpServer } from "./http-server.js";
 import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
 
 interface TestServerContext {
   baseUrl: string;
-  runtime: CodexTaskRuntime;
+  runtime: AppServerTaskRuntime;
   runtimeStore: SqliteCodexSessionRegistry;
 }
 
@@ -22,7 +21,7 @@ async function withHttpServer(run: (context: TestServerContext) => Promise<void>
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });
@@ -51,7 +50,7 @@ test("createThemisHttpServer 会优先复用 runtimeRegistry 里的 app-server r
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });
@@ -72,7 +71,6 @@ test("createThemisHttpServer 会优先复用 runtimeRegistry 里的 app-server r
     runtimeRegistry: {
       defaultRuntime: appServerRuntime,
       runtimes: {
-        sdk: runtime,
         "app-server": appServerRuntime,
       },
     },
@@ -359,7 +357,7 @@ test("platform surface 不再复用主 Themis Web 静态页面", async () => {
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const runtime = new CodexTaskRuntime({
+  const runtime = new AppServerTaskRuntime({
     workingDirectory: root,
     runtimeStore,
   });

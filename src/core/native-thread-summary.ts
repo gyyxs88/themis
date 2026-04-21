@@ -22,14 +22,8 @@ export async function readSessionNativeThreadSummary(
   }
 
   const reference = resolveStoredSessionThreadReference(store, sessionId);
-  if (reference.engine === "sdk") {
-    return null;
-  }
-
   const resolvedThreadId = reference.threadId ?? normalizeText(store.getSession(sessionId)?.threadId);
-  const runtime = reference.engine === "app-server"
-    ? resolveTaskRuntime(runtimeRegistry, reference.engine)
-    : runtimeRegistry.runtimes?.["app-server"] ?? null;
+  const runtime = resolveTaskRuntime(runtimeRegistry, "app-server");
 
   if (!resolvedThreadId || !runtime || typeof runtime.readThreadSnapshot !== "function") {
     return null;

@@ -1,7 +1,7 @@
 import type { ServerResponse } from "node:http";
 import { RuntimeDiagnosticsService } from "../diagnostics/runtime-diagnostics.js";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
-import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import type { RuntimeServiceHost } from "../core/runtime-service-host.js";
 import { McpInspector } from "../mcp/mcp-inspector.js";
 import { toErrorMessage } from "./http-errors.js";
 import { writeJson } from "./http-responses.js";
@@ -10,7 +10,7 @@ export type CreateMcpInspector = (workingDirectory: string) => Pick<McpInspector
 
 export async function handleDiagnostics(
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getWorkingDirectory" | "getRuntimeStore">,
   authRuntime: CodexAuthRuntime,
   createMcpInspector?: CreateMcpInspector,
   headOnly = false,
@@ -36,7 +36,7 @@ export async function handleDiagnostics(
 
 export async function handleDiagnosticsMcp(
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getWorkingDirectory" | "getRuntimeStore">,
   authRuntime: CodexAuthRuntime,
   createMcpInspector?: CreateMcpInspector,
   headOnly = false,
@@ -62,7 +62,7 @@ export async function handleDiagnosticsMcp(
 
 export async function handleDiagnosticsMcpProbe(
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getWorkingDirectory">,
   createMcpInspector?: CreateMcpInspector,
 ): Promise<void> {
   try {
@@ -81,7 +81,7 @@ export async function handleDiagnosticsMcpProbe(
 
 export async function handleDiagnosticsMcpReload(
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getWorkingDirectory">,
   createMcpInspector?: CreateMcpInspector,
 ): Promise<void> {
   try {
@@ -99,7 +99,7 @@ export async function handleDiagnosticsMcpReload(
 }
 
 function createDiagnosticsService(
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getWorkingDirectory" | "getRuntimeStore">,
   authRuntime: CodexAuthRuntime,
   createMcpInspector?: CreateMcpInspector,
 ): RuntimeDiagnosticsService {

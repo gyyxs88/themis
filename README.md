@@ -22,7 +22,7 @@ Themis 是一个围绕 `codex app-server` 构建的自托管协作壳。
 ## 当前定位
 
 - 当前主要面向自托管、同机或局域网部署场景。
-- 当前主执行链路是 `codex app-server`；`@openai/codex-sdk` 只保留历史兼容路径。
+- 当前主执行链路是 `codex app-server`；仓库已不再依赖 `@openai/codex-sdk`。
 - 公开 GitHub 仓是正式版本源；`themis status` 会检查 GitHub 最新提交并给出升级建议。
 - 当前不是通用云服务，也不是以 npm 包发布为目标的项目。
 

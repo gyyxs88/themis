@@ -57,11 +57,6 @@ import { ManagedAgentNodeService } from "./managed-agent-node-service.js";
 import { ManagedAgentsService } from "./managed-agents-service.js";
 import { ManagedAgentSchedulerService } from "./managed-agent-scheduler-service.js";
 import { ManagedAgentWorkerService } from "./managed-agent-worker-service.js";
-import {
-  buildStoredTurnInputCompileSummary,
-  createTaskEvent,
-  finalizeTaskResult,
-} from "./codex-runtime.js";
 import { IdentityLinkService } from "./identity-link-service.js";
 import {
   readOpenAICompatibleProviderConfigs,
@@ -69,14 +64,19 @@ import {
 } from "./openai-compatible-provider.js";
 import { PrincipalActorsService } from "./principal-actors-service.js";
 import { PrincipalMcpService } from "./principal-mcp-service.js";
+import { PrincipalPluginsService } from "./principal-plugins-service.js";
 import {
   PrincipalPersonaService,
   type PrincipalPersonaOnboardingInterceptResult,
 } from "./principal-persona-service.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
+import { PluginService } from "./plugin-service.js";
 import { buildBootstrapPrompt, buildTaskPrompt } from "./prompt.js";
 import { ScheduledTasksService } from "./scheduled-tasks-service.js";
-import { applyThemisGlobalDefaultsToTaskOptions } from "./task-defaults.js";
+import {
+  applyThemisGlobalDefaultsToRuntimeCatalog,
+  applyThemisGlobalDefaultsToTaskOptions,
+} from "./task-defaults.js";
 import {
   buildThemisScheduledTaskMcpConfigOverrides,
   buildThemisScheduledTaskPromptSection,
@@ -91,6 +91,16 @@ import { validateWorkspacePath } from "./session-workspace.js";
 import { ContextBuilder } from "../context/context-builder.js";
 import { MemoryService } from "../memory/memory-service.js";
 import { buildAssistantStyleSessionPayload } from "./assistant-style.js";
+import {
+  isPrincipalTaskSettingsEmpty,
+  normalizePrincipalTaskSettings,
+} from "./principal-task-settings.js";
+import {
+  buildStoredTurnInputCompileSummary,
+  createTaskEvent,
+  finalizeTaskResult,
+} from "./task-runtime-common.js";
+import { createUnifiedRuntimeCatalog } from "./runtime-catalog.js";
 
 const SESSION_WORKSPACE_UNAVAILABLE_ERROR = "当前会话绑定的工作区不可用，请新建会话后重新设置。";
 const APP_SERVER_AUX_TIMEOUT_MS = 15_000;
@@ -146,7 +156,9 @@ export interface AppServerTaskRuntimeOptions {
   workingDirectory?: string;
   runtimeStore?: SqliteCodexSessionRegistry;
   principalMcpService?: PrincipalMcpService;
+  principalPluginsService?: PrincipalPluginsService;
   principalSkillsService?: PrincipalSkillsService;
+  pluginService?: PluginService;
   createContextBuilder?: (workingDirectory: string) => ContextBuilder;
   createMemoryService?: (workingDirectory: string) => MemoryService;
   sessionFactory?: (
@@ -231,7 +243,9 @@ export class AppServerTaskRuntime {
   private readonly managedAgentWorkerService: ManagedAgentWorkerService;
   private readonly principalActorsService: PrincipalActorsService;
   private readonly principalMcpService: PrincipalMcpService;
+  private readonly principalPluginsService: PrincipalPluginsService;
   private readonly principalSkillsService: PrincipalSkillsService;
+  private readonly pluginService: PluginService;
   private readonly scheduledTasksService: ScheduledTasksService;
   private readonly createContextBuilder: (workingDirectory: string) => ContextBuilder;
   private readonly createMemoryService: (workingDirectory: string) => MemoryService;
@@ -283,7 +297,16 @@ export class AppServerTaskRuntime {
     this.principalMcpService = options.principalMcpService ?? new PrincipalMcpService({
       registry: this.runtimeStore,
     });
+    this.principalPluginsService = options.principalPluginsService ?? new PrincipalPluginsService({
+      workingDirectory: this.workingDirectory,
+      registry: this.runtimeStore,
+      ...(options.pluginService ? { runtimePluginService: options.pluginService } : {}),
+    });
     this.principalSkillsService = options.principalSkillsService ?? new PrincipalSkillsService({
+      workingDirectory: this.workingDirectory,
+      registry: this.runtimeStore,
+    });
+    this.pluginService = options.pluginService ?? new PluginService({
       workingDirectory: this.workingDirectory,
       registry: this.runtimeStore,
     });
@@ -1105,6 +1128,23 @@ export class AppServerTaskRuntime {
     return this.identityLinkService;
   }
 
+  async readRuntimeConfig(): Promise<CodexRuntimeCatalog> {
+    if (!this.runtimeCatalogReader) {
+      throw new Error("App-server runtime catalog reader is not configured.");
+    }
+
+    const runtimeCatalog = await this.runtimeCatalogReader();
+    const providerConfigs = readOpenAICompatibleProviderConfigs(this.workingDirectory, this.runtimeStore);
+
+    return applyThemisGlobalDefaultsToRuntimeCatalog(
+      createUnifiedRuntimeCatalog(runtimeCatalog, providerConfigs),
+    );
+  }
+
+  getPrincipalPersonaService(): PrincipalPersonaService {
+    return this.principalPersonaService;
+  }
+
   private async buildTaskContext(
     executionWorkingDirectory: string,
     input: {
@@ -1162,8 +1202,61 @@ export class AppServerTaskRuntime {
     return this.principalMcpService;
   }
 
+  getPrincipalPluginsService(): PrincipalPluginsService {
+    return this.principalPluginsService;
+  }
+
+  getPluginService(): PluginService {
+    return this.pluginService;
+  }
+
   getScheduledTasksService(): ScheduledTasksService {
     return this.scheduledTasksService;
+  }
+
+  resetPrincipalState(principalId: string, resetAt: string) {
+    this.principalSkillsService.removeAllSkills(principalId);
+    return this.runtimeStore.resetPrincipalState(principalId, resetAt);
+  }
+
+  getPrincipalTaskSettings(principalId?: string): PrincipalTaskSettings | null {
+    return this.readPrincipalTaskSettings(principalId);
+  }
+
+  savePrincipalTaskSettings(principalId: string, patch: PrincipalTaskSettings): PrincipalTaskSettings {
+    const normalizedPrincipalId = normalizeTextValue(principalId);
+
+    if (!normalizedPrincipalId) {
+      throw new Error("Principal id is required.");
+    }
+
+    const principal = this.runtimeStore.getPrincipal(normalizedPrincipalId);
+
+    if (!principal) {
+      throw new Error("Principal does not exist.");
+    }
+
+    const now = new Date().toISOString();
+    const existing = this.runtimeStore.getPrincipalTaskSettings(normalizedPrincipalId);
+    const next = normalizePrincipalTaskSettings(patch);
+
+    if (isPrincipalTaskSettingsEmpty(next)) {
+      this.runtimeStore.deletePrincipalTaskSettings(normalizedPrincipalId);
+      return {};
+    }
+
+    this.runtimeStore.savePrincipalTaskSettings({
+      principalId: normalizedPrincipalId,
+      settings: next,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    });
+
+    return next;
+  }
+
+  reloadProviderConfig(): void {
+    // App-server runtime reads provider config from storage on demand.
   }
 
   async forkThread(request: TaskRuntimeForkThreadRequest): Promise<TaskRuntimeForkedThread | null> {
@@ -2334,16 +2427,6 @@ function resolveAppServerThreadId(
   sessionId: string,
 ): string | null {
   const reference = resolveStoredSessionThreadReference(runtimeStore, sessionId);
-  const hasSettledTurn = runtimeStore.listSessionTurns(sessionId).some((turn) => turn.status === "completed" || turn.status === "failed");
-
-  if (reference.engine === "sdk") {
-    return null;
-  }
-
-  if (reference.engine === null && hasSettledTurn) {
-    return null;
-  }
-
   return normalizeSessionId(reference.threadId ?? undefined) || null;
 }
 

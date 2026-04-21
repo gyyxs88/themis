@@ -4,7 +4,6 @@ import { resolveStoredSessionThreadReference } from "../core/session-thread-refe
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import {
   resolveTaskRuntime,
-  type RuntimeEngine,
   type TaskActionSubmitRequest,
   type TaskPendingActionSubmitRequest,
   type TaskRuntimeRegistry,
@@ -189,14 +188,14 @@ async function selectRuntimeForSession(
   sessionId: string,
 ){
   const store = runtimeRegistry.defaultRuntime.getRuntimeStore() as SqliteCodexSessionRegistry;
-  const runtimeEngine = resolveSessionRuntimeEngine(store, sessionId);
+  const reference = resolveStoredSessionThreadReference(store, sessionId);
+  const appServerRuntime = resolveTaskRuntime(runtimeRegistry, "app-server");
 
-  if (runtimeEngine) {
-    return resolveTaskRuntime(runtimeRegistry, runtimeEngine);
+  if (reference.engine === "app-server") {
+    return appServerRuntime;
   }
 
-  const storedThreadId = normalizeText(store.getSession(sessionId)?.threadId);
-  const appServerRuntime = runtimeRegistry.runtimes?.["app-server"];
+  const storedThreadId = normalizeText(reference.threadId ?? store.getSession(sessionId)?.threadId);
 
   if (storedThreadId && appServerRuntime?.readThreadSnapshot) {
     try {
@@ -213,13 +212,6 @@ async function selectRuntimeForSession(
   }
 
   return runtimeRegistry.defaultRuntime;
-}
-
-function resolveSessionRuntimeEngine(
-  store: SqliteCodexSessionRegistry,
-  sessionId: string,
-): RuntimeEngine | null {
-  return resolveStoredSessionThreadReference(store, sessionId).engine;
 }
 
 function isPendingActionSubmitRequest(payload: TaskActionSubmitRequest): payload is TaskPendingActionSubmitRequest {

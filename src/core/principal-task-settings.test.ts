@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { CodexTaskRuntime } from "./codex-runtime.js";
+import { AppServerTaskRuntime } from "./app-server-task-runtime.js";
 import {
   mergePrincipalTaskSettings,
   normalizePrincipalTaskSettings,
@@ -91,14 +91,14 @@ test("SqliteCodexSessionRegistry 可以按 principal 读写任务默认配置", 
   }
 });
 
-test("CodexTaskRuntime 会把 principal 默认配置并入后续新任务", () => {
+test("AppServerTaskRuntime 会把 principal 默认配置并入后续新任务", () => {
   const workingDirectory = mkdtempSync(join(tmpdir(), "themis-principal-runtime-"));
 
   try {
     const runtimeStore = new SqliteCodexSessionRegistry({
       databaseFile: join(workingDirectory, "infra/local/themis.db"),
     });
-    const runtime = new CodexTaskRuntime({
+    const runtime = new AppServerTaskRuntime({
       workingDirectory,
       runtimeStore,
     });
@@ -121,7 +121,32 @@ test("CodexTaskRuntime 会把 principal 默认配置并入后续新任务", () =
       updatedAt: "2026-03-26T00:00:00.000Z",
     });
 
-    const resolved = runtime.resolveExecutionRequest({
+    const resolved = (runtime as unknown as {
+      resolveExecutionRequest(request: {
+        requestId: string;
+        sourceChannel: "web";
+        user: {
+          userId: string;
+          displayName: string;
+        };
+        goal: string;
+        channelContext: {
+          channelSessionKey: string;
+        };
+        createdAt: string;
+      }): {
+        request: {
+          options?: {
+            sandboxMode?: string;
+            webSearchMode?: string;
+            networkAccessEnabled?: boolean;
+            approvalPolicy?: string;
+            authAccountId?: string;
+          };
+        };
+        principalId?: string;
+      };
+    }).resolveExecutionRequest({
       requestId: "request-1",
       sourceChannel: "web",
       user: {

@@ -30,10 +30,6 @@ export function resolveStoredSessionThreadReference(
 
     const engine = normalizeRuntimeEngine(session?.engine);
 
-    if (!engine) {
-      continue;
-    }
-
     if (storedThreadId && newestCompletedOrFailedThreadId && storedThreadId !== newestCompletedOrFailedThreadId) {
       return {
         engine: "app-server",
@@ -41,14 +37,18 @@ export function resolveStoredSessionThreadReference(
       };
     }
 
+    if (!engine && !turnThreadId && !storedThreadId) {
+      continue;
+    }
+
     return {
-      engine,
+      engine: engine ?? "app-server",
       threadId: storedThreadId || newestCompletedOrFailedThreadId || null,
     };
   }
 
   return {
-    engine: null,
+    engine: storedThreadId ? "app-server" : null,
     threadId: storedThreadId || newestCompletedOrFailedThreadId || null,
   };
 }
@@ -84,7 +84,7 @@ function parseStructuredSession(structuredOutputJson: string | undefined): {
 }
 
 function normalizeRuntimeEngine(value: string | undefined): RuntimeEngine | null {
-  return value === "sdk" || value === "app-server" ? value : null;
+  return value === "app-server" ? "app-server" : null;
 }
 
 function normalizeText(value: string | undefined | null): string | null {

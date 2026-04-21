@@ -8,7 +8,7 @@
 - `2026-04-13` 已完成 `Step A / 异步 shared control plane 契约` 的第一刀：
   - `ManagedAgentControlPlaneStore` 新增 `Awaitable / AsyncMethods` 工具类型与 `createAsyncMethodAdapter(...)`
   - `ManagedAgentControlPlaneFacade` 新增 async 适配器类型与工厂
-  - `CodexTaskRuntime` / `AppServerTaskRuntime` 都已暴露 `getManagedAgentControlPlaneFacadeAsync()`
+  - `AppServerTaskRuntime` 已暴露 `getManagedAgentControlPlaneFacadeAsync()`
   - `createThemisHttpServer(...)` 与 `/api/platform/*` 已切到 awaitable facade
 - 这一刀的意义不是“现有 service 已全部 async 化”，而是先把平台路径和未来 MySQL shared store 之间的调用模型缝开出来，后续可以在不重写整套业务服务的前提下继续推进。
 - `2026-04-13` 同日已完成 `Step B / MySQL 控制面对象覆盖面补齐` 的主链收口：
@@ -21,7 +21,7 @@
   - `createManagedAgentControlPlaneRuntimeFromEnv(...)` 已支持 `THEMIS_PLATFORM_CONTROL_PLANE_DRIVER=mysql`，会自动装配本地 shared cache、MySQL snapshot store、启动时 bootstrap 和镜像对象
   - `ManagedAgentControlPlaneFacade` 的 async 适配器已支持 mutation runner；平台 API 写请求会在成功后回刷 MySQL，失败时回滚本地 shared cache
   - 已新增独立入口 `src/server/platform-main.ts` 与 `npm run dev:platform / start:platform`，可单独启动平台层进程
-  - 已补单测 `managed-agent-control-plane-bootstrap.test.ts`、`managed-agent-control-plane-mirror.test.ts`、`managed-agent-control-plane-facade.test.ts`，并回归 `codex-runtime / app-server-task-runtime / http-platform`
+  - 已补单测 `managed-agent-control-plane-bootstrap.test.ts`、`managed-agent-control-plane-mirror.test.ts`、`managed-agent-control-plane-facade.test.ts`，并回归 `app-server-task-runtime / http-platform`
 - `2026-04-13` 同日已完成 `Step E / MySQL 控制面烟测、回归与切换文档`：
   - 已新增 Docker 真库烟测 `src/core/managed-agent-control-plane-mirror.mysql.test.ts`，覆盖“本地 shared cache -> MySQL bootstrap -> 第二份本地 cache restore -> 本地变更 flush 回 MySQL”闭环
   - `MySqlManagedAgentControlPlaneStore` 的 snapshot replace 已补齐 datetime 规范化，保证从 SQLite snapshot 写回 MySQL 时不会因为 ISO 时间戳格式失败
@@ -44,7 +44,7 @@
 
 ### 2.1 已经具备的前提
 
-- `CodexTaskRuntime` 与 `AppServerTaskRuntime` 已支持注入统一的 `ManagedAgentControlPlaneStore`。
+- `AppServerTaskRuntime` 已支持注入统一的 `ManagedAgentControlPlaneStore`。
 - 当前已支持通过 `createSplitManagedAgentExecutionStateStore(...)` 拆开：
   - `sharedStore`
   - `executionStateStore`

@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { CodexTaskRuntime } from "../core/codex-runtime.js";
+import type { RuntimeServiceHost } from "../core/runtime-service-host.js";
 import type { TaskRequest, TaskResult } from "../types/index.js";
 import { createTaskError, resolveErrorStatusCode, toErrorMessage } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
@@ -88,7 +88,7 @@ function writeActorBoundaryError(response: ServerResponse, error: unknown): void
 export async function handleActorCreate(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalActorsService">,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizeActorCreatePayload);
 
@@ -117,7 +117,7 @@ export async function handleActorCreate(
 export async function handleActorList(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalActorsService">,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizeIdentityPayload);
 
@@ -141,7 +141,7 @@ export async function handleActorList(
 export async function handleActorTimeline(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalActorsService">,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizeActorScopePayload);
 
@@ -169,7 +169,7 @@ export async function handleActorTimeline(
 export async function handleActorTakeover(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalActorsService">,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizeActorScopePayload);
 
@@ -194,7 +194,7 @@ export async function handleActorTakeover(
 export async function handleMainMemoryCandidateSuggest(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalActorsService">,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizeMainMemoryCandidateSuggestPayload);
 
@@ -232,7 +232,7 @@ export async function handleMainMemoryCandidateSuggest(
 export async function handleMainMemoryCandidateList(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalActorsService">,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizeMainMemoryCandidateListPayload);
 
@@ -262,7 +262,7 @@ export async function handleMainMemoryCandidateList(
 export async function handleMainMemoryCandidateReview(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalActorsService">,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizeMainMemoryCandidateReviewPayload);
 
@@ -292,7 +292,7 @@ export async function handleMainMemoryCandidateReview(
 export async function handleMainMemoryCandidateExtract(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalActorsService" | "getRuntimeStore">,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizeMainMemoryCandidateExtractPayload);
 

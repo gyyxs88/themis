@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { CodexTaskRuntime } from "../core/codex-runtime.js";
+import type { RuntimeServiceHost } from "../core/runtime-service-host.js";
 import type {
   ScheduledTaskAutomationOptions,
   ScheduledTaskRuntimeOptions,
@@ -133,7 +133,7 @@ function writeRuntimeError(response: ServerResponse, error: unknown): void {
 export async function handleScheduledTaskCreate(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getScheduledTasksService">,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizeScheduledTaskCreatePayload);
 
@@ -170,7 +170,7 @@ export async function handleScheduledTaskCreate(
 export async function handleScheduledTaskList(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getScheduledTasksService">,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizeScheduledTaskIdentityPayload);
 
@@ -194,7 +194,7 @@ export async function handleScheduledTaskList(
 export async function handleScheduledTaskCancel(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getScheduledTasksService">,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizeScheduledTaskCancelPayload);
 

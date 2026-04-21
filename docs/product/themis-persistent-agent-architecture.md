@@ -550,7 +550,7 @@ agent 间通信不走自由文本聊天模型，而走结构化消息信封。
 - 收口结果
 - 生成 handoff 和审计事实
 
-第一阶段直接复用现有 `AppServerTaskRuntime` / `CodexTaskRuntime`。
+第一阶段直接复用现有 `AppServerTaskRuntime`。
 
 ## 7. 为什么不推荐直接把现有 actor 升级成持久化 agent
 
@@ -1159,7 +1159,6 @@ Web 需要新增一个正式的 `Agents` 面，而不是只在设置里塞零散
 - `Principal task settings`
 - `ConversationService`
 - `AppServerTaskRuntime`
-- `CodexTaskRuntime`
 - `sessionFactory` 扩展点
 - `memory candidate` 候选池机制
 - `history / diagnostics / doctor` 基础链路

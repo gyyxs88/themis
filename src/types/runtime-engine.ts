@@ -1,8 +1,7 @@
 import type { TaskEvent, TaskRequest, TaskResult } from "./task.js";
 
-export const RUNTIME_ENGINES = ["sdk", "app-server"] as const;
-
-export type RuntimeEngine = (typeof RUNTIME_ENGINES)[number];
+export const RUNTIME_ENGINES = ["app-server"] as const;
+export type RuntimeEngine = "app-server";
 
 export interface TaskRuntimeRunHooks {
   onEvent?: (event: TaskEvent) => Promise<void> | void;
@@ -85,11 +84,9 @@ export interface TaskRuntimeRegistry {
 
 export class InvalidTaskRuntimeSelectionError extends Error {}
 
-export class UnsupportedPublicTaskRuntimeSelectionError extends InvalidTaskRuntimeSelectionError {}
-
 export function parseRuntimeEngine(value: string | undefined | null): RuntimeEngine | null {
-  if (value === "sdk" || value === "app-server") {
-    return value;
+  if (value === "app-server") {
+    return "app-server";
   }
   return null;
 }
@@ -146,13 +143,6 @@ export function resolvePublicTaskRuntime(
 
   if (!parsedEngine) {
     throw new InvalidTaskRuntimeSelectionError(`Invalid runtimeEngine: ${String(requestedValue)}`);
-  }
-
-  if (parsedEngine !== "app-server") {
-    throw new UnsupportedPublicTaskRuntimeSelectionError(
-      `Requested runtimeEngine is no longer available for public task execution: ${parsedEngine}. ` +
-      "Themis 现在只接受 app-server 作为公开任务执行入口；历史 sdk 会话兼容仅保留给恢复与 fork。",
-    );
   }
 
   const selectedRuntime = registry.runtimes?.[parsedEngine];

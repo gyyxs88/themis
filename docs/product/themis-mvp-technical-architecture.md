@@ -53,7 +53,7 @@ These are the product-added responsibilities:
 
 - Node.js 18+
 - TypeScript
-- `@openai/codex-sdk`
+- `codex app-server`
 
 ### Product Surfaces
 

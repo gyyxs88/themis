@@ -7,7 +7,7 @@ import {
 } from "../channels/index.js";
 import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
-import { CodexTaskRuntime } from "../core/codex-runtime.js";
+import type { RuntimeServiceHost } from "../core/runtime-service-host.js";
 import { appendTaskReplyQuotaFooter } from "../core/task-reply-quota.js";
 import { createTaskActivityTimeoutController } from "../core/task-activity-timeout.js";
 import {
@@ -28,7 +28,7 @@ import { safeWriteNdjson, writeJson, writeNdjson } from "./http-responses.js";
 export async function handleTaskStream(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getRuntimeStore">,
   runtimeRegistry: TaskRuntimeRegistry,
   authRuntime: CodexAuthRuntime,
   actionBridge: AppServerActionBridge,
@@ -203,7 +203,7 @@ function hasRecoverableDetachedAction(
 export async function handleTaskRun(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getRuntimeStore">,
   runtimeRegistry: TaskRuntimeRegistry,
   authRuntime: CodexAuthRuntime,
   taskTimeoutMs: number,
@@ -280,7 +280,7 @@ export async function handleTaskRun(
 export async function handleTaskAutomationRun(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getRuntimeStore">,
   runtimeRegistry: TaskRuntimeRegistry,
   authRuntime: CodexAuthRuntime,
   taskTimeoutMs: number,

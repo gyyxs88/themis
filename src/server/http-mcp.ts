@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
-import type { CodexTaskRuntime } from "../core/codex-runtime.js";
+import type { RuntimeServiceHost } from "../core/runtime-service-host.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
 import { writeJson } from "./http-responses.js";
@@ -147,7 +147,7 @@ function writeRuntimeError(response: ServerResponse, error: unknown): void {
 export async function handleMcpList(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalMcpService">,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizeIdentityPayload);
 
@@ -170,7 +170,7 @@ export async function handleMcpList(
 export async function handleMcpReload(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalMcpService" | "getWorkingDirectory">,
   authRuntime: CodexAuthRuntime,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizeIdentityPayload);
@@ -198,7 +198,7 @@ export async function handleMcpReload(
 export async function handleMcpUpsert(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalMcpService">,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(request, response, normalizeMcpUpsertPayload);
 
@@ -230,7 +230,7 @@ export async function handleMcpUpsert(
 export async function handleMcpRemove(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalMcpService">,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(
     request,
@@ -261,7 +261,7 @@ export async function handleMcpRemove(
 export async function handleMcpOauthLogin(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalMcpService" | "getWorkingDirectory">,
   authRuntime: CodexAuthRuntime,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(
@@ -297,7 +297,7 @@ export async function handleMcpOauthLogin(
 export async function handleMcpEnable(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalMcpService">,
 ): Promise<void> {
   return await handleMcpSetEnabled(request, response, runtime, true);
 }
@@ -305,7 +305,7 @@ export async function handleMcpEnable(
 export async function handleMcpDisable(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalMcpService">,
 ): Promise<void> {
   return await handleMcpSetEnabled(request, response, runtime, false);
 }
@@ -313,7 +313,7 @@ export async function handleMcpDisable(
 async function handleMcpSetEnabled(
   request: IncomingMessage,
   response: ServerResponse,
-  runtime: CodexTaskRuntime,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalMcpService">,
   enabled: boolean,
 ): Promise<void> {
   const payload = await readAndNormalizePayload(

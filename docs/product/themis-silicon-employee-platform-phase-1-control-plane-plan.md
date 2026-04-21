@@ -41,9 +41,8 @@
 
 ### 2.2 runtime 装配也默认假设本地 registry 是唯一真相来源
 
-当前 `CodexTaskRuntime` 和 `AppServerTaskRuntime` 都会直接 new 出依赖 registry 的数字员工服务：
+当前 `AppServerTaskRuntime` 会直接 new 出依赖 registry 的数字员工服务：
 
-- [codex-runtime.ts](/home/leyi/projects/themis/src/core/codex-runtime.ts:150)
 - [app-server-task-runtime.ts](/home/leyi/projects/themis/src/core/app-server-task-runtime.ts:225)
 
 所以如果不先抽持久化边界，后面无论加多少“平台”概念，本质仍然是单机 runtime 在管理一切。
@@ -250,7 +249,6 @@ Phase 1 的 MySQL 原型建议只覆盖：
 
 建议修改：
 
-- `src/core/codex-runtime.ts`
 - `src/core/app-server-task-runtime.ts`
 
 目标：
@@ -368,7 +366,7 @@ Phase 1 的 MySQL 原型建议只覆盖：
 
 完成标准：
 
-- 控制面 API handler 不强耦合当前 `CodexTaskRuntime`
+- 控制面 API handler 不强耦合当前 `AppServerTaskRuntime`
 - 未来可以抽到独立 platform server 进程
 
 ## 8. 验证方案
@@ -396,7 +394,7 @@ Phase 1 结束前，至少要保住下面这组验证：
 1. 定义 4 组控制面 store 接口。
 2. 写 SQLite 控制面适配器。
 3. 把 `ManagedAgentsService`、`ManagedAgentCoordinationService`、`ManagedAgentSchedulerService` 改成依赖窄接口。
-4. 让 `CodexTaskRuntime` / `AppServerTaskRuntime` 通过 SQLite 适配器装配这些服务。
+4. 让 `AppServerTaskRuntime` 通过 SQLite 适配器装配这些服务。
 
 这样做的好处是：
 

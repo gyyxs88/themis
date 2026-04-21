@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
-import { CodexTaskRuntime } from "./codex-runtime.js";
+import { AppServerTaskRuntime } from "./app-server-task-runtime.js";
 import { PrincipalActorsService } from "./principal-actors-service.js";
 
 function createServiceContext() {
@@ -674,17 +674,16 @@ test("getActorTaskTimeline 在传 scopeId 和冲突 taskId 时仍以 scope 元�
   }
 });
 
-test("CodexTaskRuntime 会暴露 PrincipalActorsService", () => {
+test("AppServerTaskRuntime 会暴露 PrincipalActorsService", () => {
   const root = mkdtempSync(join(tmpdir(), "themis-principal-actors-runtime-"));
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
 
   try {
-    const runtime = new CodexTaskRuntime({
+    const runtime = new AppServerTaskRuntime({
       runtimeStore,
       workingDirectory: root,
-      skipGitRepoCheck: true,
     });
 
     assert.ok(runtime.getPrincipalActorsService() instanceof PrincipalActorsService);

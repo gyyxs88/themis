@@ -4,13 +4,10 @@ import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import type { Codex, Thread, ThreadEvent, ThreadOptions } from "@openai/codex-sdk";
 import { AppServerActionBridge } from "../core/app-server-action-bridge.js";
 import { AppServerTaskRuntime, type AppServerTaskRuntimeSession } from "../core/app-server-task-runtime.js";
 import type { AppServerTurnInputPart } from "../core/codex-app-server.js";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
-import { CodexTaskRuntime } from "../core/codex-runtime.js";
-import { CodexThreadSessionStore } from "../core/codex-session-store.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import { createThemisHttpServer } from "./http-server.js";
 import { createAuthenticatedWebHeaders } from "./http-test-helpers.js";
@@ -20,17 +17,7 @@ interface TestServerContext {
   root: string;
   runtimeStore: SqliteCodexSessionRegistry;
   authHeaders: Record<string, string>;
-  journeyCodex: JourneyCodexDouble;
   appServerJourneyState: AppServerJourneySessionState;
-}
-
-interface JourneyCodexDouble {
-  capturedThreadOptions: ThreadOptions[];
-  capturedPrompts: string[];
-  calls: {
-    start: ThreadOptions[];
-    resume: Array<{ threadId: string; options: ThreadOptions }>;
-  };
 }
 
 interface AppServerJourneySessionState {
@@ -714,16 +701,6 @@ async function withHttpServer(
   const runtimeStore = new SqliteCodexSessionRegistry({
     databaseFile: join(root, "infra/local/themis.db"),
   });
-  const { codex, journeyCodex } = createJourneyCodexDouble();
-  const journeyStore = new CodexThreadSessionStore({
-    codex,
-    sessionRegistry: runtimeStore,
-  });
-  const runtime = new CodexTaskRuntime({
-    workingDirectory: controlDirectory,
-    runtimeStore,
-    sessionStore: journeyStore,
-  });
   const actionBridge = new AppServerActionBridge();
   const appServerJourneyState = createAppServerJourneySessionState(
     options.appServerApprovalPlan ?? (options.appServerRequiresApproval
@@ -854,9 +831,9 @@ async function withHttpServer(
     }),
   });
   const server = createThemisHttpServer({
-    runtime,
+    runtime: appServerRuntime,
     runtimeRegistry: {
-      defaultRuntime: runtime,
+      defaultRuntime: appServerRuntime,
       runtimes: {
         "app-server": appServerRuntime,
       },
@@ -886,58 +863,11 @@ async function withHttpServer(
       root,
       runtimeStore,
       authHeaders,
-      journeyCodex,
       appServerJourneyState,
     });
   } finally {
     await closeServer(listeningServer);
     rmSync(root, { recursive: true, force: true });
-  }
-}
-
-function createJourneyCodexDouble(): {
-  codex: Codex;
-  journeyCodex: JourneyCodexDouble;
-} {
-  const capturedThreadOptions: ThreadOptions[] = [];
-  const capturedPrompts: string[] = [];
-  const calls = {
-    start: [] as ThreadOptions[],
-    resume: [] as Array<{ threadId: string; options: ThreadOptions }>,
-  };
-
-  return {
-    codex: {
-      startThread(options: ThreadOptions) {
-        calls.start.push(options);
-        capturedThreadOptions.push(options);
-        return createJourneyThread(options);
-      },
-      resumeThread(threadId: string, options: ThreadOptions) {
-        calls.resume.push({ threadId, options });
-        capturedThreadOptions.push(options);
-        return createJourneyThread(options);
-      },
-    } as Codex,
-    journeyCodex: {
-      calls,
-      capturedThreadOptions,
-      capturedPrompts,
-    },
-  };
-
-  function createJourneyThread(threadOptions: ThreadOptions): Thread {
-    return {
-      id: "thread-web-journey-1",
-      runStreamed: async (prompt: string) => {
-        capturedPrompts.push(prompt);
-        const workspace = String(threadOptions.workingDirectory ?? "");
-
-        return {
-          events: createThreadEvents(workspace),
-        };
-      },
-    } as Thread;
   }
 }
 
@@ -1287,54 +1217,6 @@ function writeRuntimeFile(root: string, path: string, content: string): void {
   const absolutePath = join(root, path);
   mkdirSync(dirname(absolutePath), { recursive: true });
   writeFileSync(absolutePath, `${content}\n`, "utf8");
-}
-
-function createThreadEvents(workspace: string): AsyncGenerator<ThreadEvent> {
-  const events: ThreadEvent[] = [
-    {
-      type: "thread.started",
-      thread_id: "thread-web-journey-1",
-    },
-    {
-      type: "turn.started",
-    },
-    {
-      type: "item.completed",
-      item: {
-        type: "agent_message",
-        id: "item-web-journey-message",
-        text: "真实 web 旅程测试已完成",
-      },
-    },
-    {
-      type: "item.completed",
-      item: {
-        type: "file_change",
-        id: "item-web-journey-file",
-        status: "completed",
-        changes: [
-          {
-            path: join(workspace, "notes.txt"),
-            kind: "update",
-          },
-        ],
-      },
-    },
-    {
-      type: "turn.completed",
-      usage: {
-        input_tokens: 1,
-        cached_input_tokens: 0,
-        output_tokens: 1,
-      },
-    },
-  ];
-
-  return (async function* () {
-    for (const event of events) {
-      yield event;
-    }
-  })();
 }
 
 function createAuthRuntime(snapshot: {
