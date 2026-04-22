@@ -3117,6 +3117,101 @@ test("AppServerTaskRuntime 会自动批准 Themis managed-agent MCP 工具审批
   }
 });
 
+test("AppServerTaskRuntime 会自动批准 create_scheduled_task，且不会发 action_required，也不会留下等待审批的 tool trace", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startTurn: async (sessionState) => {
+      sessionState.serverRequestHandler?.({
+        id: "server-scheduled-tool-approval-1",
+        method: "mcpServer/elicitation/request",
+        params: {
+          serverName: "themis_scheduled_tasks",
+          mode: "form",
+          message: "Allow the themis_scheduled_tasks MCP server to run tool \"create_scheduled_task\"?",
+          requestedSchema: {
+            type: "object",
+            properties: {},
+          },
+          _meta: {
+            codex_approval_kind: "mcp_tool_call",
+            tool_title: "Create Scheduled Task",
+          },
+        },
+      });
+      setTimeout(() => {
+        sessionState.notificationHandler?.({
+          method: "item/completed",
+          params: {
+            threadId: "thread-app-scheduled-tool-approval-1",
+            turnId: "turn-app-scheduled-tool-approval-1",
+            item: {
+              type: "mcpToolCall",
+              id: "item-scheduled-tool-call-1",
+              server: "themis_scheduled_tasks",
+              tool: "create_scheduled_task",
+              status: "completed",
+            },
+          },
+        });
+      }, 20);
+      setTimeout(() => {
+        scheduleCompletedTurn(sessionState, "turn-app-scheduled-tool-approval-1", {
+          threadId: "thread-app-scheduled-tool-approval-1",
+        });
+      }, 40);
+      return { turnId: "turn-app-scheduled-tool-approval-1" };
+    },
+  });
+  const fixture = createRuntimeFixture({
+    sessionFactory,
+    toolTraceDebounceMs: 5,
+  });
+  let sawActionRequired = false;
+  const toolProgresses: string[] = [];
+
+  try {
+    seedCompletedPrincipalPersona(fixture.runtime, {
+      channel: "feishu",
+      channelUserId: "feishu-user-scheduled-tool-approval",
+      displayName: "数字员工主管",
+    });
+
+    await fixture.runtime.runTask({
+      requestId: "req-app-scheduled-tool-approval-1",
+      taskId: "task-app-scheduled-tool-approval-1",
+      sourceChannel: "feishu",
+      user: { userId: "feishu-user-scheduled-tool-approval" },
+      goal: "please auto-approve scheduled task creation",
+      channelContext: { channelSessionKey: "feishu-session-scheduled-tool-approval-1" },
+      createdAt: "2026-04-22T14:00:00.000Z",
+    }, {
+      onEvent: async (event) => {
+        if (event.type === "task.action_required") {
+          sawActionRequired = true;
+          return;
+        }
+
+        if (event.type === "task.progress" && event.payload?.traceKind === "tool" && typeof event.message === "string") {
+          toolProgresses.push(event.message);
+        }
+      },
+    });
+
+    assert.equal(sawActionRequired, false);
+    assert.deepEqual(toolProgresses, [
+      "工具轨迹\n1. 已调用 MCP themis_scheduled_tasks.create_scheduled_task",
+    ]);
+    assert.deepEqual(state.respondedServerRequests, [{
+      id: "server-scheduled-tool-approval-1",
+      result: {
+        action: "accept",
+        content: {},
+      },
+    }]);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("AppServerTaskRuntime 会把非白名单 MCP elicitation 审批转成等待中的 action，并在提交后回包", async () => {
   const actionBridge = new AppServerActionBridge();
   const approvalResolved = createDeferred();

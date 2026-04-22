@@ -6,6 +6,9 @@ import type { CodexCliConfigOverrides } from "./auth-accounts.js";
 
 export const THEMIS_SCHEDULED_TASK_MCP_SERVER_NAME = "themis_scheduled_tasks";
 const REPO_THEMIS_LAUNCHER_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../../themis");
+const THEMIS_SCHEDULED_TASK_AUTO_APPROVED_TOOL_NAME_SET = new Set<string>([
+  "create_scheduled_task",
+]);
 
 export function buildThemisScheduledTaskMcpConfigOverrides(
   workingDirectory: string,
@@ -66,6 +69,11 @@ export function buildThemisScheduledTaskPromptSection(request: TaskRequest): str
     `Current scheduling context: sourceChannel=${request.sourceChannel}, channelUserId=${request.user.userId}, displayName=${displayName}, sessionId=${sessionId}, channelSessionKey=${channelSessionKey}.`,
     "The MCP server already defaults to this context, so you usually do not need to pass sessionId or channelSessionKey unless you intentionally want a different target session.",
   ].join("\n");
+}
+
+export function isThemisScheduledTaskAutoApprovedToolName(value: string | null | undefined): boolean {
+  const normalized = normalizeText(value ?? undefined);
+  return normalized ? THEMIS_SCHEDULED_TASK_AUTO_APPROVED_TOOL_NAME_SET.has(normalized) : false;
 }
 
 function normalizeText(value: string | undefined): string | undefined {

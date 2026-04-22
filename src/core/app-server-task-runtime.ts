@@ -84,6 +84,7 @@ import {
 import {
   buildThemisScheduledTaskMcpConfigOverrides,
   buildThemisScheduledTaskPromptSection,
+  isThemisScheduledTaskAutoApprovedToolName,
 } from "./themis-scheduled-task-tools.js";
 import {
   buildThemisManagedAgentPromptSection,
@@ -1757,7 +1758,7 @@ function resolveServerRequestAction(serverRequest: AppServerReverseRequest): Res
 function resolveAutoApprovalServerRequestResponse(serverRequest: AppServerReverseRequest): unknown | undefined {
   const toolName = resolveManagedAgentApprovalToolName(serverRequest);
 
-  if (!isThemisManagedAgentToolName(toolName)) {
+  if (!isThemisManagedAgentToolName(toolName) && !isThemisScheduledTaskAutoApprovedToolName(toolName)) {
     return undefined;
   }
 
