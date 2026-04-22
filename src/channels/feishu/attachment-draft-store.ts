@@ -232,6 +232,27 @@ export class FeishuAttachmentDraftStore {
     return snapshotDraftRecord(record);
   }
 
+  listRecentByUser(userId: string, limit = 10): FeishuAttachmentDraftSnapshot[] {
+    const normalizedUserId = userId.trim();
+    if (!normalizedUserId) {
+      return [];
+    }
+
+    const store = this.readStore();
+    const changed = cleanupExpiredDrafts(store, this.now());
+    const records = store.drafts
+      .filter((entry) => entry.userId === normalizedUserId)
+      .sort((left, right) => parseTimestamp(right.updatedAt, 0) - parseTimestamp(left.updatedAt, 0))
+      .slice(0, normalizeListLimit(limit))
+      .map((record) => snapshotDraftRecord(record));
+
+    if (changed) {
+      this.writeStore(store);
+    }
+
+    return records;
+  }
+
   private readStore(): FeishuAttachmentDraftStoreData {
     try {
       const raw = readFileSync(this.filePath, "utf8");
@@ -669,6 +690,10 @@ function parseTimestamp(value: string | null | undefined, fallback: number): num
     return fallback;
   }
   return parsed;
+}
+
+function normalizeListLimit(value: number, fallback = 10): number {
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

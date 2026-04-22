@@ -1,6 +1,6 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
 import type { EventHandles, InteractiveCard, InteractiveCardActionEvent } from "@larksuiteoapi/node-sdk";
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { InMemoryCommunicationRouter } from "../../communication/router.js";
@@ -93,6 +93,7 @@ import {
   resolveFeishuOutboundAttachmentPlans,
   type FeishuOutboundAttachmentPlan,
 } from "./outbound-attachments.js";
+import type { StoredChannelInputAssetRecord } from "../../storage/index.js";
 import { FeishuSessionStore, type FeishuConversationKey } from "./session-store.js";
 import {
   FeishuTaskMessageBridge,
@@ -209,6 +210,24 @@ const FEISHU_DEFAULT_AUTH_TARGET_LABEL = "Themis 系统默认认证入口（默�
 const FEISHU_ATTACHMENT_DRAFT_CONFIRMATION = "请直接回复你的问题，我会和附件一起处理。";
 const SESSION_WORKSPACE_UNAVAILABLE_ERROR = "当前会话绑定的工作区不可用，请新建会话后重新设置。";
 const FEISHU_SHARED_GROUP_SCOPE_USER_ID = "__shared_group__";
+const FEISHU_ATTACHMENT_LOOKUP_SCAN_LIMIT = 40;
+const FEISHU_ATTACHMENT_LOOKUP_PROMPT_LIMIT = 5;
+
+interface FeishuAttachmentLookupIntent {
+  active: boolean;
+  requireKeyBias: boolean;
+  exactTokens: string[];
+}
+
+interface RecoveredFeishuAttachmentCandidate {
+  source: "draft" | "history";
+  sessionId?: string;
+  name?: string;
+  localPath: string;
+  sourceMessageId?: string;
+  createdAt: string;
+  exists: boolean;
+}
 
 export class FeishuChannelService {
   private readonly runtime: RuntimeServiceHost;
@@ -1344,6 +1363,7 @@ export class FeishuChannelService {
     const inlineAssets = await this.downloadInlineAttachments(context, sessionId);
     const reservedDraft = this.attachmentDraftStore.consume(draftKey);
     const inputEnvelope = buildFeishuInputEnvelope(context, sessionId, reservedDraft, inlineAssets);
+    const recoveredAttachmentPromptSection = this.buildRecoveredAttachmentPromptSection(context);
     const inlineDraft = inlineAssets.length > 0
       ? {
         parts: buildFeishuDraftPartsFromAssets(inlineAssets),
@@ -1409,6 +1429,7 @@ export class FeishuChannelService {
       normalizedRequest = router.normalizeRequest(
         this.createTaskPayload(context, sessionId, {
           ...(inputEnvelope ? { inputEnvelope } : {}),
+          ...(recoveredAttachmentPromptSection ? { additionalPromptSections: [recoveredAttachmentPromptSection] } : {}),
         }),
       );
       await activityTimeout.wrap(bridge.prepareResponseSlot());
@@ -1528,6 +1549,37 @@ export class FeishuChannelService {
     if (deliveryNotices.length > 0) {
       await this.safeSendTaggedText(chatId, deliveryNotices.join("\n"), "附件回传");
     }
+  }
+
+  private buildRecoveredAttachmentPromptSection(
+    context: Extract<FeishuIncomingContext, { kind: "text" }>,
+  ): string | null {
+    const intent = parseFeishuAttachmentLookupIntent(context.text);
+    if (!intent.active) {
+      return null;
+    }
+
+    const draftCandidates = this.attachmentDraftStore
+      .listRecentByUser(context.userId, FEISHU_ATTACHMENT_LOOKUP_SCAN_LIMIT)
+      .flatMap((snapshot) => snapshot.assets.map((asset) => ({
+        source: "draft" as const,
+        sessionId: snapshot.key.sessionId,
+        ...(asset.name ? { name: asset.name } : {}),
+        localPath: asset.localPath,
+        ...(asset.sourceMessageId ? { sourceMessageId: asset.sourceMessageId } : {}),
+        createdAt: asset.createdAt,
+        exists: existsSync(asset.localPath),
+      })));
+    const storedCandidates = this.runtime.getRuntimeStore()
+      .listRecentInputAssetsByChannelUser({
+        sourceChannel: "feishu",
+        userId: context.userId,
+        limit: FEISHU_ATTACHMENT_LOOKUP_SCAN_LIMIT,
+      })
+      .map((asset) => mapStoredFeishuAttachmentCandidate(asset));
+    const candidates = selectRecoveredFeishuAttachmentCandidates(intent, [...draftCandidates, ...storedCandidates]);
+
+    return formatRecoveredFeishuAttachmentPromptSection(candidates);
   }
 
   private resolveTaskWorkspaceDirectory(sessionId: string | undefined): string {
@@ -1816,6 +1868,7 @@ export class FeishuChannelService {
     context: Extract<FeishuIncomingContext, { kind: "text" }>,
     sessionId: string,
     input?: {
+      additionalPromptSections?: string[];
       inputEnvelope?: TaskInputEnvelope;
       attachments?: FeishuTaskPayload["attachments"];
     },
@@ -1842,6 +1895,7 @@ export class FeishuChannelService {
         ...(context.threadId ? { threadId: context.threadId } : {}),
         text: context.text,
       },
+      ...(input?.additionalPromptSections?.length ? { additionalPromptSections: input.additionalPromptSections } : {}),
       ...(inputEnvelope ? { inputEnvelope } : {}),
       ...(attachments?.length ? { attachments } : {}),
       ...(options ? { options } : {}),
@@ -5941,6 +5995,231 @@ function normalizeText(value: unknown): string | null {
 
   const text = value.trim();
   return text ? text : null;
+}
+
+function parseFeishuAttachmentLookupIntent(text: string): FeishuAttachmentLookupIntent {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) {
+    return {
+      active: false,
+      requireKeyBias: false,
+      exactTokens: [],
+    };
+  }
+
+  const exactTokens = extractFeishuAttachmentLookupTokens(normalized);
+  const hasHistoricalRef = [
+    "之前",
+    "以前",
+    "上次",
+    "刚才",
+    "发过",
+    "发给你",
+    "给你发",
+    "还在",
+    "不见",
+    "没了",
+    "找不到",
+    "在哪",
+    "哪里",
+    "那个",
+    "那份",
+  ].some((token) => normalized.includes(token));
+  const hasAttachmentRef = [
+    "附件",
+    "文件",
+    "图片",
+    "文档",
+    "pdf",
+    "png",
+    "jpg",
+    "jpeg",
+    "csv",
+    "zip",
+    "key",
+    "ssh",
+    "密钥",
+    "私钥",
+  ].some((token) => normalized.includes(token));
+  const requireKeyBias = [
+    "私钥",
+    "密钥",
+    "ssh",
+    "key",
+    "pem",
+    "ppk",
+    "id_ed25519",
+    "id_rsa",
+    "authorized_keys",
+    "known_hosts",
+  ].some((token) => normalized.includes(token));
+
+  return {
+    active: (hasAttachmentRef && hasHistoricalRef)
+      || (requireKeyBias && (hasHistoricalRef || exactTokens.some(isStrongAttachmentLookupToken)))
+      || exactTokens.some(isStrongAttachmentLookupToken),
+    requireKeyBias,
+    exactTokens,
+  };
+}
+
+function extractFeishuAttachmentLookupTokens(text: string): string[] {
+  const matches = text.match(/[a-z0-9][a-z0-9._-]{2,}/g) ?? [];
+  const tokens = matches
+    .map((token) => token.trim().toLowerCase())
+    .filter((token) => token.length >= 3)
+    .filter((token) => !["themis", "feishu", "message", "session", "chat"].includes(token));
+
+  return [...new Set(tokens)];
+}
+
+function isStrongAttachmentLookupToken(token: string): boolean {
+  return token.includes(".") || token.includes("_") || /\d/.test(token) || token.startsWith("id_");
+}
+
+function mapStoredFeishuAttachmentCandidate(asset: StoredChannelInputAssetRecord): RecoveredFeishuAttachmentCandidate {
+  return {
+    source: "history",
+    ...(asset.sessionId ? { sessionId: asset.sessionId } : {}),
+    ...(asset.name ? { name: asset.name } : {}),
+    localPath: asset.localPath,
+    ...(asset.sourceMessageId ? { sourceMessageId: asset.sourceMessageId } : {}),
+    createdAt: asset.createdAt,
+    exists: existsSync(asset.localPath),
+  };
+}
+
+function selectRecoveredFeishuAttachmentCandidates(
+  intent: FeishuAttachmentLookupIntent,
+  candidates: RecoveredFeishuAttachmentCandidate[],
+): RecoveredFeishuAttachmentCandidate[] {
+  const deduped = new Map<string, RecoveredFeishuAttachmentCandidate>();
+
+  for (const candidate of candidates) {
+    const key = candidate.localPath;
+    const previous = deduped.get(key);
+
+    if (!previous) {
+      deduped.set(key, candidate);
+      continue;
+    }
+
+    const previousScore = scoreRecoveredFeishuAttachmentCandidate(previous, intent);
+    const nextScore = scoreRecoveredFeishuAttachmentCandidate(candidate, intent);
+    if (nextScore > previousScore || (
+      nextScore === previousScore
+      && Date.parse(candidate.createdAt) > Date.parse(previous.createdAt)
+    )) {
+      deduped.set(key, candidate);
+    }
+  }
+
+  return [...deduped.values()]
+    .map((candidate) => ({
+      candidate,
+      score: scoreRecoveredFeishuAttachmentCandidate(candidate, intent),
+    }))
+    .filter(({ score }) => score > 0)
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+
+      return Date.parse(right.candidate.createdAt) - Date.parse(left.candidate.createdAt);
+    })
+    .slice(0, FEISHU_ATTACHMENT_LOOKUP_PROMPT_LIMIT)
+    .map(({ candidate }) => candidate);
+}
+
+function scoreRecoveredFeishuAttachmentCandidate(
+  candidate: RecoveredFeishuAttachmentCandidate,
+  intent: FeishuAttachmentLookupIntent,
+): number {
+  const haystack = [
+    candidate.name ?? "",
+    candidate.localPath,
+    candidate.sourceMessageId ?? "",
+  ].join("\n").toLowerCase();
+
+  let score = intent.requireKeyBias || intent.exactTokens.length > 0 ? 0 : 1;
+
+  if (intent.requireKeyBias) {
+    if (!looksLikeSshKeyCandidate(candidate)) {
+      return 0;
+    }
+
+    score += 120;
+  }
+
+  for (const token of intent.exactTokens) {
+    if (haystack.includes(token)) {
+      score += 80 + Math.min(token.length, 20);
+    }
+  }
+
+  if (candidate.exists) {
+    score += 10;
+  }
+
+  if (candidate.source === "draft") {
+    score += 2;
+  }
+
+  return score;
+}
+
+function looksLikeSshKeyCandidate(candidate: RecoveredFeishuAttachmentCandidate): boolean {
+  const haystack = `${candidate.name ?? ""}\n${candidate.localPath}`.toLowerCase();
+  return [
+    "id_ed25519",
+    "id_rsa",
+    "id_ecdsa",
+    "id_dsa",
+    "authorized_keys",
+    "known_hosts",
+    ".pem",
+    ".ppk",
+    ".key",
+    "private",
+  ].some((token) => haystack.includes(token));
+}
+
+function formatRecoveredFeishuAttachmentPromptSection(
+  candidates: RecoveredFeishuAttachmentCandidate[],
+): string {
+  const lines = [
+    "Recovered prior Feishu attachment facts:",
+    "- Query scope: same Feishu user across all local Feishu history plus still-active attachment drafts.",
+    "- These facts come from deterministic local lookup. Do not guess or contradict them.",
+  ];
+
+  if (candidates.length === 0) {
+    lines.push("- No matching prior Feishu attachments were found in local stores.");
+    lines.push("- If you answer about missing files, say they were not found in local stores rather than claiming they never existed.");
+    return lines.join("\n");
+  }
+
+  lines.push("- If a row below says exists=yes, treat that file as still present on disk even if it is not in ~/.ssh or memories/.");
+
+  for (const [index, candidate] of candidates.entries()) {
+    lines.push(
+      `${index + 1}. source=${candidate.source}; exists=${candidate.exists ? "yes" : "no"}; createdAt=${candidate.createdAt};`
+      + `${candidate.sessionId ? ` sessionId=${candidate.sessionId};` : ""}`
+      + ` name=${formatRecoveredFeishuAttachmentName(candidate)}; path=${candidate.localPath}`
+      + `${candidate.sourceMessageId ? `; sourceMessageId=${candidate.sourceMessageId}` : ""}`,
+    );
+  }
+
+  return lines.join("\n");
+}
+
+function formatRecoveredFeishuAttachmentName(candidate: RecoveredFeishuAttachmentCandidate): string {
+  if (candidate.name) {
+    return candidate.name;
+  }
+
+  const parts = candidate.localPath.split(/[\\/]+/u);
+  return parts.at(-1) ?? candidate.localPath;
 }
 
 function parseSandboxModeArgument(args: string[]): SandboxMode | null {

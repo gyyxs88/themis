@@ -129,6 +129,64 @@ test("FeishuAttachmentDraftStore 按 chatId + userId + sessionId 隔离不同会
   }
 });
 
+test("FeishuAttachmentDraftStore 可按用户列出最近草稿", () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-feishu-attachment-draft-list-user-"));
+  let now = "2026-04-01T08:00:00.000Z";
+  const store = new FeishuAttachmentDraftStore({
+    filePath: join(root, "infra/local/feishu-attachment-drafts.json"),
+    now: () => now,
+    ttlMs: 30 * 60 * 1000,
+  });
+
+  try {
+    store.append({
+      chatId: "chat-1",
+      userId: "user-1",
+      sessionId: "session-1",
+    }, [{
+      id: "file-1",
+      type: "file",
+      name: "id_ed25519",
+      value: "/workspace/temp/feishu-attachments/session-1/message-1/id_ed25519",
+      sourceMessageId: "message-1",
+      createdAt: now,
+    }]);
+
+    now = "2026-04-01T08:05:00.000Z";
+    store.append({
+      chatId: "chat-2",
+      userId: "user-1",
+      sessionId: "session-2",
+    }, [{
+      id: "file-2",
+      type: "file",
+      name: "report.pdf",
+      value: "/workspace/temp/feishu-attachments/session-2/message-2/report.pdf",
+      sourceMessageId: "message-2",
+      createdAt: now,
+    }]);
+
+    now = "2026-04-01T08:06:00.000Z";
+    store.append({
+      chatId: "chat-3",
+      userId: "user-2",
+      sessionId: "session-3",
+    }, [{
+      id: "file-3",
+      type: "file",
+      name: "other-user.txt",
+      value: "/workspace/temp/feishu-attachments/session-3/message-3/other-user.txt",
+      sourceMessageId: "message-3",
+      createdAt: now,
+    }]);
+
+    const drafts = store.listRecentByUser("user-1", 10);
+    assert.deepEqual(drafts.map((draft) => draft.key.sessionId), ["session-2", "session-1"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("FeishuAttachmentDraftStore 会在读取时清理过期草稿", () => {
   const root = mkdtempSync(join(tmpdir(), "themis-feishu-attachment-draft-expired-"));
   let now = "2026-04-01T08:00:00.000Z";

@@ -34,6 +34,7 @@
 - 飞书正文桥接已经不再使用缓存 flush 定时和“同一气泡持续长大”的节拍更新；当前只保留飞书单条文本长度限制带来的硬性安全拆分。
 - 飞书公开任务的 `THEMIS_TASK_TIMEOUT_MS` 现在按“进度间静默超时”理解：只要持续有新事件进入飞书桥接链，就会自动续期；只有静默超过窗口才会取消。
 - 飞书现在支持最小显式结果附件回传：只有当 Themis 在最终输出末尾附带隐藏的 `themis-feishu-attachments` 指令块时，桥接层才会尝试用飞书 IM `image/file` 把这些结果直接发回聊天；普通本地文件链接和 `touchedFiles` 不再自动触发附件发送，源码文件、工作区外路径、超限或上传失败都会只补 `[附件回传]` 文本说明。
+- 飞书现在支持“历史附件找回”辅助：当用户明确在问之前发过的附件 / 私钥 / key 是否还在、在哪时，Themis 会先查本地附件草稿和 SQLite 历史 `input assets`，再把少量命中的路径事实带进 prompt；这一步不会把整库历史塞进上下文。
 - 飞书移动端第一轮产品化表达已落地：`task.action_required` 会转成可直接执行的 waiting action 文本面，状态类 `task.progress` 会额外输出任务状态摘要，`/sessions`、`/use`、`/current` 会回显当前 native thread 摘要。
 - 飞书审批卡第一轮已经落地：仅覆盖 `task.action_required(approval)`，机器人会把审批等待面升级成 interactive 卡片；点击后通过 `POST /api/feishu/card-action` 回调复用现有审批提交流程，同时保留 `/approve` / `/deny` 文本降级链。
 - 飞书第二阶段第一刀已落地：群聊默认 `smart` 路由、可切换 `always` 路由、`personal / shared` 会话策略、`/group` 最小管理员控制，以及 shared 群会话下 `/new`、`/use`、`/workspace` 的管理员限制都已经接进主链路。

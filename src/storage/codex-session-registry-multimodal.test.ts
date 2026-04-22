@@ -224,6 +224,115 @@ test("SqliteCodexSessionRegistry 在 compile summary 缺失时不会伪造默认
   }
 });
 
+test("SqliteCodexSessionRegistry 可按渠道用户反查最近输入附件", () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-registry-multimodal-"));
+  const registry = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+
+  try {
+    registry.upsertTurnFromRequest({
+      requestId: "req-feishu-asset-1",
+      sourceChannel: "feishu",
+      channelContext: {
+        sessionId: "session-feishu-history-a",
+      },
+      user: {
+        userId: "user-feishu-history",
+      },
+      goal: "历史附件 A",
+      createdAt: "2026-04-20T10:00:00.000Z",
+    }, "task-feishu-asset-1");
+    registry.saveTurnInput({
+      requestId: "req-feishu-asset-1",
+      envelope: {
+        envelopeId: "env-feishu-asset-1",
+        sourceChannel: "feishu",
+        parts: [
+          {
+            partId: "part-feishu-asset-1",
+            type: "document",
+            role: "user",
+            order: 1,
+            assetId: "asset-feishu-asset-1",
+          },
+        ],
+        assets: [
+          {
+            assetId: "asset-feishu-asset-1",
+            kind: "document",
+            name: "id_ed25519_admin1",
+            mimeType: "application/octet-stream",
+            localPath: "/workspace/temp/feishu-attachments/session-a/message-a/id_ed25519_admin1",
+            sourceChannel: "feishu",
+            sourceMessageId: "message-a",
+            ingestionStatus: "ready",
+          },
+        ],
+        createdAt: "2026-04-20T10:00:00.000Z",
+      },
+      createdAt: "2026-04-20T10:00:00.000Z",
+    });
+
+    registry.upsertTurnFromRequest({
+      requestId: "req-feishu-asset-2",
+      sourceChannel: "feishu",
+      channelContext: {
+        sessionId: "session-feishu-history-b",
+      },
+      user: {
+        userId: "user-feishu-history",
+      },
+      goal: "历史附件 B",
+      createdAt: "2026-04-21T10:00:00.000Z",
+    }, "task-feishu-asset-2");
+    registry.saveTurnInput({
+      requestId: "req-feishu-asset-2",
+      envelope: {
+        envelopeId: "env-feishu-asset-2",
+        sourceChannel: "feishu",
+        parts: [
+          {
+            partId: "part-feishu-asset-2",
+            type: "document",
+            role: "user",
+            order: 1,
+            assetId: "asset-feishu-asset-2",
+          },
+        ],
+        assets: [
+          {
+            assetId: "asset-feishu-asset-2",
+            kind: "document",
+            name: "report.pdf",
+            mimeType: "application/pdf",
+            localPath: "/workspace/temp/feishu-attachments/session-b/message-b/report.pdf",
+            sourceChannel: "feishu",
+            sourceMessageId: "message-b",
+            ingestionStatus: "ready",
+          },
+        ],
+        createdAt: "2026-04-21T10:00:00.000Z",
+      },
+      createdAt: "2026-04-21T10:00:00.000Z",
+    });
+
+    const records = registry.listRecentInputAssetsByChannelUser({
+      sourceChannel: "feishu",
+      userId: "user-feishu-history",
+      limit: 10,
+    });
+
+    assert.equal(records.length, 2);
+    assert.equal(records[0]?.name, "report.pdf");
+    assert.equal(records[0]?.sessionId, "session-feishu-history-b");
+    assert.equal(records[1]?.name, "id_ed25519_admin1");
+    assert.equal(records[1]?.sourceMessageId, "message-a");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function upsertParentTurn(registry: SqliteCodexSessionRegistry, requestId: string): void {
   registry.upsertTurnFromRequest({
     requestId,

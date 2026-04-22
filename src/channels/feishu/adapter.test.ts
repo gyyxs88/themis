@@ -27,6 +27,31 @@ test("FeishuAdapter.normalizeRequest 会透传 inputEnvelope", () => {
   assert.equal(request.inputEnvelope, inputEnvelope);
 });
 
+test("FeishuAdapter.normalizeRequest 会透传 additionalPromptSections", () => {
+  const adapter = new FeishuAdapter();
+
+  const request = adapter.normalizeRequest({
+    source: "feishu",
+    requestId: "req-feishu-extra-prompt",
+    goal: "帮我找之前的私钥文件",
+    sender: {
+      userId: "ou_feishu_user",
+    },
+    message: {
+      messageId: "om_message_2",
+      chatId: "oc_chat_2",
+      text: "帮我找之前的私钥文件",
+    },
+    additionalPromptSections: [
+      "Recovered prior Feishu attachment facts:\n- source=history; exists=yes; path=/workspace/temp/feishu-attachments/id_ed25519",
+    ],
+  });
+
+  assert.deepEqual(request.additionalPromptSections, [
+    "Recovered prior Feishu attachment facts:\n- source=history; exists=yes; path=/workspace/temp/feishu-attachments/id_ed25519",
+  ]);
+});
+
 function createInputEnvelope(): TaskInputEnvelope {
   return {
     envelopeId: "env-feishu-1",

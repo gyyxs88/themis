@@ -39,6 +39,10 @@ export function buildTaskPrompt(request: TaskRequest, options: BuildTaskPromptOp
     );
   }
 
+  if (request.additionalPromptSections?.length) {
+    sections.push(...request.additionalPromptSections.map((section) => normalizePromptSection(section)).filter((section): section is string => Boolean(section)));
+  }
+
   if (request.attachments?.length) {
     sections.push(`Attachments:\n${formatAttachments(request.attachments)}`);
   }
@@ -167,6 +171,10 @@ export function buildBootstrapPrompt(
         "- Offer examples only if they help the user answer faster.",
       ].join("\n"),
     );
+  }
+
+  if (request.additionalPromptSections?.length) {
+    sections.push(...request.additionalPromptSections.map((section) => normalizePromptSection(section)).filter((section): section is string => Boolean(section)));
   }
 
   if (currentQuestionPrompt) {

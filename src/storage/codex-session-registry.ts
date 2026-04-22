@@ -279,6 +279,22 @@ export interface StoredTurnInputRecord {
   createdAt: string;
 }
 
+export interface StoredChannelInputAssetRecord {
+  requestId: string;
+  assetId: string;
+  sessionId?: string;
+  sourceChannel: string;
+  userId: string;
+  kind: "image" | "document";
+  name?: string;
+  mimeType: string;
+  localPath: string;
+  sizeBytes?: number;
+  sourceMessageId?: string;
+  ingestionStatus: string;
+  createdAt: string;
+}
+
 export interface StoredSessionHistorySummary {
   sessionId: string;
   createdAt: string;
@@ -1070,6 +1086,12 @@ interface InputAssetRow {
   text_extraction_json: string | null;
   metadata_json: string | null;
   created_at: string;
+}
+
+interface ChannelInputAssetRow extends InputAssetRow {
+  session_id: string | null;
+  turn_source_channel: string;
+  user_id: string;
 }
 
 interface SessionSummaryRow {
@@ -9416,6 +9438,52 @@ export class SqliteCodexSessionRegistry {
     };
   }
 
+  listRecentInputAssetsByChannelUser(input: {
+    sourceChannel: string;
+    userId: string;
+    limit?: number;
+  }): StoredChannelInputAssetRecord[] {
+    const sourceChannel = input.sourceChannel.trim();
+    const userId = input.userId.trim();
+
+    if (!sourceChannel || !userId) {
+      return [];
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            a.request_id,
+            a.asset_id,
+            a.kind,
+            a.name,
+            a.mime_type,
+            a.local_path,
+            a.size_bytes,
+            a.source_channel,
+            a.source_message_id,
+            a.ingestion_status,
+            a.text_extraction_json,
+            a.metadata_json,
+            a.created_at,
+            t.session_id,
+            t.source_channel AS turn_source_channel,
+            t.user_id
+          FROM themis_input_assets a
+          INNER JOIN themis_turns t
+            ON t.request_id = a.request_id
+          WHERE t.source_channel = ?
+            AND t.user_id = ?
+          ORDER BY a.created_at DESC, a.request_id DESC, a.asset_id DESC
+          LIMIT ?
+        `,
+      )
+      .all(sourceChannel, userId, normalizeLimit(input.limit, 20)) as ChannelInputAssetRow[];
+
+    return rows.map(mapChannelInputAssetRow);
+  }
+
   listTurnEvents(requestId: string): StoredTaskEventRecord[] {
     const normalized = requestId.trim();
 
@@ -12412,6 +12480,24 @@ function mapInputAssetRow(row: InputAssetRow): TaskInputAsset {
   }
 
   return asset;
+}
+
+function mapChannelInputAssetRow(row: ChannelInputAssetRow): StoredChannelInputAssetRecord {
+  return {
+    requestId: row.request_id,
+    assetId: row.asset_id,
+    ...(row.session_id ? { sessionId: row.session_id } : {}),
+    sourceChannel: row.turn_source_channel,
+    userId: row.user_id,
+    kind: row.kind === "document" ? "document" : "image",
+    ...(row.name ? { name: row.name } : {}),
+    mimeType: row.mime_type,
+    localPath: row.local_path,
+    ...(typeof row.size_bytes === "number" ? { sizeBytes: row.size_bytes } : {}),
+    ...(row.source_message_id ? { sourceMessageId: row.source_message_id } : {}),
+    ingestionStatus: row.ingestion_status,
+    createdAt: row.created_at,
+  };
 }
 
 function normalizeTaskInputEnvelope(value: unknown): TaskInputEnvelope {

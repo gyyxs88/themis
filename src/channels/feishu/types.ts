@@ -22,6 +22,7 @@ export interface FeishuTaskPayload {
   sessionId?: string;
   goal?: string;
   inputText?: string;
+  additionalPromptSections?: string[];
   inputEnvelope?: TaskInputEnvelope;
   sender?: FeishuSender;
   message?: FeishuMessageContext;

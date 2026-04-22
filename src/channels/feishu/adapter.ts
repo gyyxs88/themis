@@ -69,6 +69,7 @@ export class FeishuAdapter implements ChannelAdapter<FeishuTaskPayload> {
       },
       goal,
       ...(inputText ? { inputText } : {}),
+      ...(input.additionalPromptSections?.length ? { additionalPromptSections: [...input.additionalPromptSections] } : {}),
       ...(input.inputEnvelope ? { inputEnvelope: input.inputEnvelope } : {}),
       ...(input.attachments?.length ? { attachments: input.attachments } : {}),
       ...(input.options ? { options: input.options } : {}),

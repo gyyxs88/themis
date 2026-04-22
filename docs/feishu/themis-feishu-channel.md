@@ -11,6 +11,7 @@ Themis 已接入飞书长连接渠道，特点如下：
 - 飞书入站 `post` 富文本当前会提取其中的文本和图片节点；如果同一条 `post` 里同时有正文和图片，会直接把正文与图片一起作为本次任务输入
 - 飞书真实入站 `post` 已验证会出现顶层 `{"title":"","content":[...]}` 结构，而不一定带 `zh_cn` 这类 locale 包裹；当前解析已兼容这两种形态
 - 飞书 `image` / `file` 消息会先下载到当前会话实际执行工作目录下的 `temp/feishu-attachments/<sessionId>/<messageId>/`
+- Themis 现在支持“旧附件回查”这类自然语言问题：如果用户明确在问之前发过的附件 / 私钥 / key 是否还在、在哪，飞书入口会先查本地附件草稿，再查 SQLite 里的历史 `input assets`，把命中的少量结果摘要带进 prompt；查询范围按同一飞书用户跨所有历史 session，不限制当前会话
 - 下载到本地的 PDF 现在会继续走共享 PDF 资产加工：统一回填 `TaskInputAsset.textExtraction`、`metadata.pageCount` 与持久 sidecar 文本路径，供 runtime / 历史 / diagnostics 复用
 - 飞书附件不会立刻起任务，而是先按 `chatId + scopedConversationUserId + activeSessionId` 写入本地附件草稿；默认 `scopedConversationUserId = userId`，群聊切到 `shared` 会话策略后会改成整群共享作用域。草稿当前以 `parts + assets` 作为 canonical 结构，等下一条真正进入普通任务路径的文本时会构造 `inputEnvelope`，同时保留 legacy `attachments[]` 兼容
 - 命令和 waiting action 恢复优先级高于附件草稿消费；只有普通任务文本才会自动拼接附件

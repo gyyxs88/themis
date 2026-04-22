@@ -147,6 +147,7 @@ export interface TaskRequest {
   goal: string;
   inputText?: string;
   historyContext?: string;
+  additionalPromptSections?: string[];
   inputEnvelope?: TaskInputEnvelope;
   attachments?: TaskAttachment[];
   options?: TaskOptions;
