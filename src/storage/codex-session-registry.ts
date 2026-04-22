@@ -10928,9 +10928,6 @@ export class SqliteCodexSessionRegistry {
       CREATE INDEX IF NOT EXISTS themis_scheduled_tasks_due_idx
       ON themis_scheduled_tasks(status, scheduled_at ASC, scheduled_task_id ASC);
 
-      CREATE INDEX IF NOT EXISTS themis_scheduled_tasks_watch_idx
-      ON themis_scheduled_tasks(status, watch_work_item_id, scheduled_at ASC, scheduled_task_id ASC);
-
       CREATE TABLE IF NOT EXISTS themis_scheduled_task_runs (
         run_id TEXT PRIMARY KEY,
         scheduled_task_id TEXT NOT NULL,

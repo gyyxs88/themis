@@ -1,13 +1,74 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import Database from "better-sqlite3";
 import { AppServerTaskRuntime } from "./app-server-task-runtime.js";
 import { ScheduledTaskExecutionService } from "./scheduled-task-execution-service.js";
 import { ScheduledTasksService } from "./scheduled-tasks-service.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import type { TaskRequest, TaskResult } from "../types/index.js";
+
+test("schema 32 迁移会为定时任务补 watch_work_item_id 列和索引", () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-scheduled-task-schema-migration-"));
+  const databaseFile = join(root, "infra/local/themis.db");
+
+  try {
+    mkdirSync(join(root, "infra/local"), { recursive: true });
+    const bootstrap = new Database(databaseFile);
+    bootstrap.exec(`
+      CREATE TABLE themis_principals (
+        principal_id TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL,
+        principal_kind TEXT NOT NULL DEFAULT 'human_user',
+        organization_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE themis_scheduled_tasks (
+        scheduled_task_id TEXT PRIMARY KEY,
+        principal_id TEXT NOT NULL,
+        source_channel TEXT NOT NULL,
+        channel_user_id TEXT NOT NULL,
+        display_name TEXT,
+        session_id TEXT,
+        channel_session_key TEXT,
+        goal TEXT NOT NULL,
+        input_text TEXT,
+        options_json TEXT,
+        automation_json TEXT,
+        timezone TEXT NOT NULL,
+        scheduled_at TEXT NOT NULL,
+        status TEXT NOT NULL,
+        last_run_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        cancelled_at TEXT,
+        completed_at TEXT,
+        last_error TEXT
+      );
+
+      PRAGMA user_version = 32;
+    `);
+    bootstrap.close();
+
+    new SqliteCodexSessionRegistry({ databaseFile });
+
+    const verify = new Database(databaseFile, { readonly: true });
+    const columns = verify.prepare(`PRAGMA table_info(themis_scheduled_tasks)`).all() as Array<{ name: string }>;
+    const indexes = verify.prepare(`PRAGMA index_list(themis_scheduled_tasks)`).all() as Array<{ name: string }>;
+    const userVersion = verify.pragma("user_version", { simple: true }) as number;
+
+    assert.equal(columns.some((column) => column.name === "watch_work_item_id"), true);
+    assert.equal(indexes.some((index) => index.name === "themis_scheduled_tasks_watch_idx"), true);
+    assert.equal(userVersion, 33);
+    verify.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("ScheduledTaskExecutionService 会 claim 到期任务并按 principal 执行", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-scheduled-task-execution-"));
