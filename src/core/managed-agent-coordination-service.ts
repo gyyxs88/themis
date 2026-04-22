@@ -1458,6 +1458,8 @@ export class ManagedAgentCoordinationService {
 
     return {
       displayName: "默认运行配置",
+      model: THEMIS_GLOBAL_TASK_DEFAULTS.model,
+      reasoning: THEMIS_GLOBAL_TASK_DEFAULTS.reasoning,
       sandboxMode: THEMIS_GLOBAL_TASK_DEFAULTS.sandboxMode,
       webSearchMode: THEMIS_GLOBAL_TASK_DEFAULTS.webSearchMode,
       networkAccessEnabled: THEMIS_GLOBAL_TASK_DEFAULTS.networkAccessEnabled,

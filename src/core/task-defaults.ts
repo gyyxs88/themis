@@ -2,11 +2,13 @@ import type { CodexRuntimeCatalog } from "./codex-app-server.js";
 import type { SessionTaskSettings, TaskOptions } from "../types/index.js";
 
 export const THEMIS_GLOBAL_TASK_DEFAULTS = {
+  model: "gpt-5.4",
+  reasoning: "xhigh",
   sandboxMode: "workspace-write",
   webSearchMode: "live",
   networkAccessEnabled: true,
   approvalPolicy: "never",
-} as const satisfies Pick<TaskOptions, "sandboxMode" | "webSearchMode" | "networkAccessEnabled" | "approvalPolicy">;
+} as const satisfies Pick<TaskOptions, "model" | "reasoning" | "sandboxMode" | "webSearchMode" | "networkAccessEnabled" | "approvalPolicy">;
 
 export function applyThemisGlobalDefaultsToTaskOptions(options: TaskOptions | null | undefined): TaskOptions {
   return {
@@ -29,6 +31,8 @@ export function applyThemisGlobalDefaultsToRuntimeCatalog(runtimeCatalog: CodexR
     ...runtimeCatalog,
     defaults: {
       ...runtimeCatalog.defaults,
+      model: runtimeCatalog.defaults.model ?? THEMIS_GLOBAL_TASK_DEFAULTS.model,
+      reasoning: runtimeCatalog.defaults.reasoning ?? THEMIS_GLOBAL_TASK_DEFAULTS.reasoning,
       approvalPolicy: runtimeCatalog.defaults.approvalPolicy ?? THEMIS_GLOBAL_TASK_DEFAULTS.approvalPolicy,
       sandboxMode: runtimeCatalog.defaults.sandboxMode ?? THEMIS_GLOBAL_TASK_DEFAULTS.sandboxMode,
       webSearchMode: runtimeCatalog.defaults.webSearchMode ?? THEMIS_GLOBAL_TASK_DEFAULTS.webSearchMode,

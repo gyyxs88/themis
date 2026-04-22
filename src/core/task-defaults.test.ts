@@ -23,6 +23,8 @@ test("显式 TaskOptions 会覆盖 Themis 全局默认配置", () => {
       approvalPolicy: "on-request",
     }),
     {
+      model: "gpt-5.4",
+      reasoning: "xhigh",
       sandboxMode: "danger-full-access",
       webSearchMode: "disabled",
       networkAccessEnabled: false,
@@ -36,8 +38,8 @@ test("运行时目录会补齐 Themis 全局默认配置", () => {
     models: [],
     defaults: {
       profile: null,
-      model: "gpt-5.4",
-      reasoning: "high",
+      model: null,
+      reasoning: null,
       approvalPolicy: null,
       sandboxMode: null,
       webSearchMode: null,
@@ -54,7 +56,7 @@ test("运行时目录会补齐 Themis 全局默认配置", () => {
     {
       profile: null,
       model: "gpt-5.4",
-      reasoning: "high",
+      reasoning: "xhigh",
       approvalPolicy: "never",
       sandboxMode: "workspace-write",
       webSearchMode: "live",

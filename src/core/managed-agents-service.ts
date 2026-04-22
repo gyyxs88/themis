@@ -1975,8 +1975,14 @@ export class ManagedAgentsService {
       throw new Error("Auth account does not exist.");
     }
 
-    const model = normalizeOptionalText(profileInput.model) ?? input.currentProfile?.model ?? undefined;
-    const reasoning = normalizeReasoningLevel(profileInput.reasoning ?? input.currentProfile?.reasoning);
+    const model = normalizeOptionalText(profileInput.model)
+      ?? input.currentProfile?.model
+      ?? THEMIS_GLOBAL_TASK_DEFAULTS.model;
+    const reasoning = normalizeReasoningLevel(
+      profileInput.reasoning
+      ?? input.currentProfile?.reasoning
+      ?? THEMIS_GLOBAL_TASK_DEFAULTS.reasoning,
+    );
     const memoryMode = normalizeMemoryMode(profileInput.memoryMode ?? input.currentProfile?.memoryMode);
     const sandboxMode = normalizeSandboxMode(profileInput.sandboxMode ?? input.currentProfile?.sandboxMode);
     const webSearchMode = normalizeWebSearchMode(profileInput.webSearchMode ?? input.currentProfile?.webSearchMode);

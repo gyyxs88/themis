@@ -2,6 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from 
 import { homedir } from "node:os";
 import { resolve, sep } from "node:path";
 import type { SqliteCodexSessionRegistry, StoredAuthAccountRecord } from "../storage/index.js";
+import { THEMIS_GLOBAL_TASK_DEFAULTS } from "./task-defaults.js";
 
 export interface CodexAuthAccountSummary {
   accountId: string;
@@ -27,11 +28,15 @@ const CODEX_AUTH_CREDENTIALS_STORE_FILE = "file";
 const THEMIS_MANAGED_CODEX_CONFIG = [
   "# Managed by Themis for multi-account Codex auth isolation.",
   `${CODEX_AUTH_CREDENTIALS_STORE_KEY} = ${JSON.stringify(CODEX_AUTH_CREDENTIALS_STORE_FILE)}`,
+  `model = ${JSON.stringify(THEMIS_GLOBAL_TASK_DEFAULTS.model)}`,
+  `model_reasoning_effort = ${JSON.stringify(THEMIS_GLOBAL_TASK_DEFAULTS.reasoning)}`,
   "",
 ].join("\n");
 const THEMIS_MANAGED_AGENT_RUNTIME_CODEX_CONFIG = [
   "# Managed by Themis for managed-agent runtime isolation.",
   `${CODEX_AUTH_CREDENTIALS_STORE_KEY} = ${JSON.stringify(CODEX_AUTH_CREDENTIALS_STORE_FILE)}`,
+  `model = ${JSON.stringify(THEMIS_GLOBAL_TASK_DEFAULTS.model)}`,
+  `model_reasoning_effort = ${JSON.stringify(THEMIS_GLOBAL_TASK_DEFAULTS.reasoning)}`,
   "",
 ].join("\n");
 
@@ -141,6 +146,10 @@ export function resolveCodexAuthFilePath(codexHome: string): string {
   return resolve(codexHome, "auth.json");
 }
 
+export function resolveCodexConfigFilePath(codexHome: string): string {
+  return resolve(codexHome, "config.toml");
+}
+
 export function ensureCodexHomeDirectory(codexHome: string): void {
   mkdirSync(codexHome, { recursive: true });
 }
@@ -152,7 +161,7 @@ export function ensureAuthAccountCodexHome(workingDirectory: string, codexHome: 
     return;
   }
 
-  const configPath = resolve(codexHome, "config.toml");
+  const configPath = resolveCodexConfigFilePath(codexHome);
 
   if (existsSync(configPath)) {
     return;
@@ -171,7 +180,7 @@ export function ensureManagedAgentExecutionCodexHome(
   const codexHome = resolveManagedAgentExecutionCodexHome(workingDirectory, agentId);
   ensureCodexHomeDirectory(codexHome);
 
-  const configPath = resolve(codexHome, "config.toml");
+  const configPath = resolveCodexConfigFilePath(codexHome);
 
   if (!existsSync(configPath)) {
     writeFileSync(configPath, THEMIS_MANAGED_AGENT_RUNTIME_CODEX_CONFIG, "utf8");
@@ -184,6 +193,7 @@ export function ensureManagedAgentExecutionCodexHome(
   }
 
   copyCodexAuthFile(sourceCodexHome, codexHome);
+  copyCodexConfigFile(sourceCodexHome, codexHome);
   const sourceSkillsDirectory = resolveAuthAccountSkillsDirectory(sourceCodexHome);
   const targetSkillsDirectory = resolveAuthAccountSkillsDirectory(codexHome);
 
@@ -222,6 +232,23 @@ export function copyCodexAuthFile(sourceCodexHome: string, targetCodexHome: stri
 
   ensureCodexHomeDirectory(targetCodexHome);
   copyFileSync(sourceAuthPath, targetAuthPath);
+  return true;
+}
+
+export function copyCodexConfigFile(sourceCodexHome: string, targetCodexHome: string): boolean {
+  const sourceConfigPath = resolveCodexConfigFilePath(sourceCodexHome);
+  const targetConfigPath = resolveCodexConfigFilePath(targetCodexHome);
+
+  if (!existsSync(sourceConfigPath)) {
+    return false;
+  }
+
+  if (resolve(sourceConfigPath) === resolve(targetConfigPath)) {
+    return true;
+  }
+
+  ensureCodexHomeDirectory(targetCodexHome);
+  copyFileSync(sourceConfigPath, targetConfigPath);
   return true;
 }
 

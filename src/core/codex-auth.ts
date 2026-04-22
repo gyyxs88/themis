@@ -4,6 +4,7 @@ import {
   buildCodexCliConfigArgs,
   buildCodexProcessEnv,
   copyCodexAuthFile,
+  copyCodexConfigFile,
   createCodexAuthStorageConfigOverrides,
   createManagedAuthAccountRecord,
   ensureAuthAccountBootstrap,
@@ -419,6 +420,7 @@ export class CodexAuthRuntime {
   ): Promise<StoredAuthAccountRecord> {
     ensureAuthAccountCodexHome(this.workingDirectory, account.codexHome);
     copyCodexAuthFile(sourceCodexHome, account.codexHome);
+    copyCodexConfigFile(sourceCodexHome, account.codexHome);
     const shouldNotify = !account.isActive
       || normalizeAccountEmail(account.accountEmail) !== accountEmail
       || account.label !== accountLabel;
@@ -453,6 +455,7 @@ export class CodexAuthRuntime {
     });
     ensureAuthAccountCodexHome(this.workingDirectory, record.codexHome);
     copyCodexAuthFile(sourceCodexHome, record.codexHome);
+    copyCodexConfigFile(sourceCodexHome, record.codexHome);
     this.registry.saveAuthAccount(record);
     const hydrated = this.registry.getAuthAccount(record.accountId) ?? record;
     await this.notifyManagedAccountReady(hydrated);

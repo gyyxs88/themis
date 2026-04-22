@@ -23,6 +23,7 @@ Themis 是一个围绕 `codex app-server` 构建的自托管协作壳。
 
 - 当前主要面向自托管、同机或局域网部署场景。
 - 当前主执行链路是 `codex app-server`；仓库已不再依赖 `@openai/codex-sdk`。
+- 当前全局默认运行模型是 `gpt-5.4`，默认思维强度是 `xhigh`；如需偏离，改会话设置、运行边界或底层 `config.toml` 即可。
 - 公开 GitHub 仓是正式版本源；`themis status` 会检查 GitHub 最新提交并给出升级建议。
 - 当前不是通用云服务，也不是以 npm 包发布为目标的项目。
 
