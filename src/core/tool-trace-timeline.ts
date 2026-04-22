@@ -152,12 +152,12 @@ export class ToolTraceTimeline {
   }
 
   private renderBucket(bucket: ToolTraceBucket): string {
-    return [
-      "工具轨迹",
-      ...bucket.entries.map((entry, index) => `${index + 1}. ${formatToolTraceLine(entry)}`),
-    ].join("\n");
+    const lines = bucket.entries.map((entry, index) => `${index + 1}. ${formatToolTraceLine(entry)}`);
+    return `工具轨迹\n${lines.join("\n\n")}`;
   }
 }
+
+const TOOL_TRACE_MAX_DETAIL_CHARS = 50;
 
 function isTerminalPhase(phase: ToolTraceEntryPhase): boolean {
   return phase === "completed" || phase === "failed" || phase === "interrupted";
@@ -184,17 +184,39 @@ function formatToolTraceLine(entry: ToolTraceEntry): string {
 
   switch (entry.phase) {
     case "completed":
-      return entry.toolKind === "mcp" ? `已调用 MCP ${label}` : `已运行 ${label}`;
+      return entry.toolKind === "mcp"
+        ? `已调用 MCP ${truncateToolTraceDetail(label)}`
+        : `已运行 ${truncateToolTraceDetail(label)}`;
     case "failed":
-      return entry.summary ? `执行失败 ${label}：${entry.summary}` : `执行失败 ${label}`;
+      return entry.summary
+        ? `执行失败 ${truncateToolTraceDetail(`${label}：${entry.summary}`)}`
+        : `执行失败 ${truncateToolTraceDetail(label)}`;
     case "waiting_approval":
-      return `等待审批 ${label}`;
+      return `等待审批 ${truncateToolTraceDetail(label)}`;
     case "waiting_input":
-      return `等待输入 ${label}`;
+      return `等待输入 ${truncateToolTraceDetail(label)}`;
     case "interrupted":
-      return `中断 ${label}`;
+      return `中断 ${truncateToolTraceDetail(label)}`;
     case "started":
     default:
-      return entry.toolKind === "mcp" ? `正在调用 MCP ${label}` : `正在运行 ${label}`;
+      return entry.toolKind === "mcp"
+        ? `正在调用 MCP ${truncateToolTraceDetail(label)}`
+        : `正在运行 ${truncateToolTraceDetail(label)}`;
   }
+}
+
+function truncateToolTraceDetail(detail: string): string {
+  const normalized = detail.trim();
+
+  if (!normalized) {
+    return normalized;
+  }
+
+  const chars = Array.from(normalized);
+
+  if (chars.length <= TOOL_TRACE_MAX_DETAIL_CHARS) {
+    return normalized;
+  }
+
+  return `${chars.slice(0, TOOL_TRACE_MAX_DETAIL_CHARS).join("")}...`;
 }
