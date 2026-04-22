@@ -16,6 +16,7 @@ import type {
   StoredManagedAgentNodeRecord,
   StoredOrganizationRecord,
 } from "../types/index.js";
+import type { ManagedAgentCompletionDetailLevel } from "./managed-agent-completion-insight.js";
 import { THEMIS_GLOBAL_TASK_DEFAULTS } from "./task-defaults.js";
 
 const DEFAULT_MAILBOX_LEASE_TTL_MS = 5 * 60 * 1000;
@@ -143,6 +144,8 @@ export interface ManagedAgentWorkItemDetailView {
     touchedFiles?: TaskResult["touchedFiles"];
     structuredOutput?: Record<string, unknown> | null;
     completedAt?: string;
+    detailLevel?: ManagedAgentCompletionDetailLevel;
+    interpretationHint?: string;
   } | null;
 }
 

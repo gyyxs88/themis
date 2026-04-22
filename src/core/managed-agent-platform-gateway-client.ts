@@ -79,6 +79,7 @@ import type {
   ManagedAgentPlatformProjectWorkspaceBindingUpsertInput,
   ManagedAgentPlatformProjectWorkspaceBindingUpsertResult,
 } from "../contracts/managed-agent-platform-projects.js";
+import { deriveManagedAgentCompletionInsight } from "./managed-agent-completion-insight.js";
 import type {
   ManagedAgentPlatformWorkItemCancelResult,
   ManagedAgentPlatformWorkItemDetailResult,
@@ -1099,16 +1100,20 @@ function normalizePlatformWorkerCompletionResult(
   }
 
   const completedAt = normalizeOptionalText(typeof value.completedAt === "string" ? value.completedAt : null);
+  const structuredOutput = isRecord(value.structuredOutput) || value.structuredOutput === null
+    ? value.structuredOutput as Record<string, unknown> | null
+    : undefined;
+  const insight = deriveManagedAgentCompletionInsight(structuredOutput);
   return {
     summary,
     ...(Object.prototype.hasOwnProperty.call(value, "output") ? { output: value.output } : {}),
     ...(Array.isArray(value.touchedFiles)
       ? { touchedFiles: value.touchedFiles.filter((entry): entry is string => typeof entry === "string") }
       : {}),
-    ...(isRecord(value.structuredOutput) || value.structuredOutput === null
-      ? { structuredOutput: value.structuredOutput as Record<string, unknown> | null }
-      : {}),
+    ...(structuredOutput !== undefined ? { structuredOutput } : {}),
     ...(completedAt ? { completedAt } : {}),
+    detailLevel: insight.detailLevel,
+    interpretationHint: insight.interpretationHint,
   };
 }
 

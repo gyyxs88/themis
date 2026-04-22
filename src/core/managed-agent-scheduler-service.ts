@@ -4,6 +4,7 @@ import {
   resolveWorkItemStatusAfterInterruptedRun,
   type ManagedAgentReclaimedLeaseContext,
 } from "./managed-agent-lease-recovery.js";
+import type { ManagedAgentCompletionDetailLevel } from "./managed-agent-completion-insight.js";
 import { isManagedAgentNodeHeartbeatExpired } from "./managed-agent-node-service.js";
 import type {
   StoredAgentExecutionLeaseRecord,
@@ -73,6 +74,8 @@ export interface ManagedAgentRunDetailView {
     touchedFiles?: TaskResult["touchedFiles"];
     structuredOutput?: Record<string, unknown> | null;
     completedAt?: string;
+    detailLevel?: ManagedAgentCompletionDetailLevel;
+    interpretationHint?: string;
   } | null;
 }
 

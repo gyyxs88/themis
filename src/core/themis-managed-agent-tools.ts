@@ -26,6 +26,8 @@ export function buildThemisManagedAgentPromptSection(request: TaskRequest): stri
     "Use list_managed_agents to inspect the current managed workforce.",
     "Use get_managed_agent_detail before changing an existing managed agent when you need to inspect its current dossier, workspace, or runtime boundary.",
     "After changing a managed agent or dispatching work, confirm the exact agent and boundary or work item you used.",
+    "When inspecting managed-agent completion data, treat detailLevel=metadata_only as a legacy or limited-format result boundary unless newer evidence proves a current regression.",
+    "If you inspect raw platform JSON instead of gateway-normalized detailLevel, apply the same rule when a completion only shows execution metadata such as reportFile/workspacePath/runtimeContext and lacks deliverable plus artifactContents.",
     `Current managed-agent context: sourceChannel=${request.sourceChannel}, channelUserId=${request.user.userId}, displayName=${displayName}, sessionId=${sessionId}, channelSessionKey=${channelSessionKey}.`,
   ].join("\n");
 }
