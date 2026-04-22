@@ -186,7 +186,15 @@ export class FeishuTaskMessageBridge {
       return;
     }
 
-    const created = await this.sendStandaloneMessage(text);
+    let created: { messageId: string | null; updatable: boolean };
+
+    if (this.shouldReuseCurrentPlaceholderForFirstToolTrace()) {
+      created = await this.commitCurrentPlaceholder(text);
+      await this.ensureFollowupPlaceholderAfterProgress();
+    } else {
+      created = await this.sendStandaloneMessage(text);
+    }
+
     this.toolTraceMessageIds.set(bucketId, created.messageId);
     this.toolTraceUpdatable.set(bucketId, created.updatable);
   }
@@ -377,6 +385,13 @@ export class FeishuTaskMessageBridge {
 
   private clearVisibleProgress(): void {
     this.lastVisibleProgressText = null;
+  }
+
+  private shouldReuseCurrentPlaceholderForFirstToolTrace(): boolean {
+    return !this.lastVisibleProgressText
+      && this.toolTraceMessageIds.size === 0
+      && this.currentPlaceholderUpdatable
+      && Boolean(this.currentPlaceholderMessageId);
   }
 }
 
