@@ -773,9 +773,10 @@ export class AppServerTaskRuntime {
       }));
       unsubscribeServerRequest = toUnsubscribe(activeSession.onServerRequest((serverRequest) => {
         touch();
+        const autoApprovalResponse = resolveAutoApprovalServerRequestResponse(serverRequest);
         const toolSignal = translateAppServerToolSignal(serverRequest);
 
-        if (toolSignal) {
+        if (toolSignal && !(autoApprovalResponse !== undefined && toolSignal.phase === "waiting_approval")) {
           recordToolTrace(toolSignal);
         }
 

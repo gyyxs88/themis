@@ -3022,7 +3022,7 @@ test("AppServerTaskRuntime 会把 MCP 工具审批 reverse request 转成等待�
   }
 });
 
-test("AppServerTaskRuntime 会自动批准 Themis managed-agent MCP 工具审批，且不会发 action_required", async () => {
+test("AppServerTaskRuntime 会自动批准 Themis managed-agent MCP 工具审批，且不会发 action_required，也不会留下等待审批的 tool trace", async () => {
   const { state, sessionFactory } = createSessionFactory({
     startTurn: async (sessionState) => {
       sessionState.serverRequestHandler?.({
@@ -3042,14 +3042,36 @@ test("AppServerTaskRuntime 会自动批准 Themis managed-agent MCP 工具审批
           },
         },
       });
-      scheduleCompletedTurn(sessionState, "turn-app-managed-tool-approval-1", {
-        threadId: "thread-app-managed-tool-approval-1",
-      });
+      setTimeout(() => {
+        sessionState.notificationHandler?.({
+          method: "item/completed",
+          params: {
+            threadId: "thread-app-managed-tool-approval-1",
+            turnId: "turn-app-managed-tool-approval-1",
+            item: {
+              type: "mcpToolCall",
+              id: "item-managed-tool-call-1",
+              server: "themis_scheduled_tasks",
+              tool: "list_managed_agents",
+              status: "completed",
+            },
+          },
+        });
+      }, 20);
+      setTimeout(() => {
+        scheduleCompletedTurn(sessionState, "turn-app-managed-tool-approval-1", {
+          threadId: "thread-app-managed-tool-approval-1",
+        });
+      }, 40);
       return { turnId: "turn-app-managed-tool-approval-1" };
     },
   });
-  const fixture = createRuntimeFixture({ sessionFactory });
+  const fixture = createRuntimeFixture({
+    sessionFactory,
+    toolTraceDebounceMs: 5,
+  });
   let sawActionRequired = false;
+  const toolProgresses: string[] = [];
 
   try {
     seedCompletedPrincipalPersona(fixture.runtime, {
@@ -3070,11 +3092,19 @@ test("AppServerTaskRuntime 会自动批准 Themis managed-agent MCP 工具审批
       onEvent: async (event) => {
         if (event.type === "task.action_required") {
           sawActionRequired = true;
+          return;
+        }
+
+        if (event.type === "task.progress" && event.payload?.traceKind === "tool" && typeof event.message === "string") {
+          toolProgresses.push(event.message);
         }
       },
     });
 
     assert.equal(sawActionRequired, false);
+    assert.deepEqual(toolProgresses, [
+      "工具轨迹\n1. 已调用 MCP themis_scheduled_tasks.list_managed_agents",
+    ]);
     assert.deepEqual(state.respondedServerRequests, [{
       id: "server-managed-tool-approval-1",
       result: {
