@@ -44,6 +44,10 @@ export interface ScheduledTaskAutomationOptions {
   onSchemaMismatch?: ScheduledTaskAutomationFailureMode;
 }
 
+export interface ScheduledTaskWatchOptions {
+  workItemId: string;
+}
+
 export interface ScheduledTaskRuntimeOptions extends Omit<
   TaskOptions,
   "reasoning" | "memoryMode" | "sandboxMode" | "webSearchMode" | "approvalPolicy" | "accessMode"
@@ -68,6 +72,7 @@ export interface StoredScheduledTaskRecord {
   inputText?: string;
   options?: ScheduledTaskRuntimeOptions;
   automation?: ScheduledTaskAutomationOptions;
+  watch?: ScheduledTaskWatchOptions;
   timezone: string;
   scheduledAt: string;
   status: ScheduledTaskStatus;

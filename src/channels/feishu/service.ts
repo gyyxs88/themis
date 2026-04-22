@@ -25,6 +25,8 @@ import {
   APPROVAL_POLICIES,
   type PrincipalTaskSettings,
   type SessionTaskSettings,
+  type StoredAgentWorkItemRecord,
+  type StoredManagedAgentRecord,
   type StoredScheduledTaskRecord,
   type StoredScheduledTaskRunRecord,
   type TaskActionDescriptor,
@@ -359,6 +361,36 @@ export class FeishuChannelService {
     }
 
     await this.safeSendTaggedText(conversation.chatId, text, "定时任务回执");
+    return true;
+  }
+
+  async notifyManagedAgentScheduledFollowupResolved(input: {
+    task: StoredScheduledTaskRecord;
+    workItem: StoredAgentWorkItemRecord;
+    targetAgent?: StoredManagedAgentRecord | null;
+    outcome: "completed" | "failed" | "cancelled";
+    latestCompletion?: {
+      summary: string;
+      output?: unknown;
+      completedAt?: string;
+    } | null;
+  }): Promise<boolean> {
+    const conversation = this.resolveScheduledTaskConversation(input.task);
+
+    if (!conversation) {
+      this.logger.warn(
+        `[themis/feishu] 派工提前回执丢失会话映射：task=${input.task.scheduledTaskId} session=${input.task.sessionId ?? input.task.channelSessionKey ?? "-"}`,
+      );
+      return false;
+    }
+
+    const text = buildManagedAgentScheduledFollowupResolvedText(input);
+
+    if (!text) {
+      return false;
+    }
+
+    await this.safeSendTaggedText(conversation.chatId, text, "派工提前回执");
     return true;
   }
 
@@ -5713,12 +5745,54 @@ function buildScheduledTaskResultText(input: {
   return lines.join("\n");
 }
 
+function buildManagedAgentScheduledFollowupResolvedText(input: {
+  task: StoredScheduledTaskRecord;
+  workItem: StoredAgentWorkItemRecord;
+  targetAgent?: StoredManagedAgentRecord | null;
+  outcome: "completed" | "failed" | "cancelled";
+  latestCompletion?: {
+    summary: string;
+    output?: unknown;
+    completedAt?: string;
+  } | null;
+}): string {
+  const summary = normalizeText(input.latestCompletion?.summary);
+  const targetAgentLabel = normalizeText(input.targetAgent?.displayName) ?? input.workItem.targetAgentId;
+  const lines = [
+    `状态：关联 work item ${describeManagedAgentScheduledFollowupOutcome(input.outcome)}`,
+    `已取消回看：${input.task.goal}`,
+    `原计划时间：${input.task.scheduledAt} (${input.task.timezone})`,
+    `员工：${targetAgentLabel}`,
+    `工作项：${input.workItem.goal}`,
+    `工作项 ID：${input.workItem.workItemId}`,
+  ];
+
+  if (summary) {
+    lines.push(`结果摘要：${summary}`);
+  }
+
+  return lines.join("\n");
+}
+
 function describeScheduledTaskOutcome(outcome: "completed" | "failed" | "cancelled"): string {
   switch (outcome) {
     case "completed":
       return "已完成";
     case "failed":
       return "执行失败";
+    case "cancelled":
+      return "已取消";
+    default:
+      return outcome;
+  }
+}
+
+function describeManagedAgentScheduledFollowupOutcome(outcome: "completed" | "failed" | "cancelled"): string {
+  switch (outcome) {
+    case "completed":
+      return "已完成";
+    case "failed":
+      return "已失败";
     case "cancelled":
       return "已取消";
     default:

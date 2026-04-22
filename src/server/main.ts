@@ -5,6 +5,7 @@ import { AppServerTaskRuntime } from "../core/app-server-task-runtime.js";
 import { CodexAuthRuntime } from "../core/codex-auth.js";
 import { createManagedAgentControlPlaneStoreFromEnv } from "../core/managed-agent-control-plane-bootstrap.js";
 import { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
+import { ManagedAgentScheduledFollowupService } from "../core/managed-agent-scheduled-followup-service.js";
 import { ScheduledTaskExecutionService } from "../core/scheduled-task-execution-service.js";
 import { ThemisUpdateService } from "../diagnostics/update-service.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
@@ -34,6 +35,7 @@ const appServerRuntime = new AppServerTaskRuntime({
   actionBridge,
   managedAgentControlPlaneStore,
 });
+const platformControlPlaneFacade = resolveMainPlatformGatewayFacade();
 const managedAgentExecutionService = new ManagedAgentExecutionService({
   registry: appServerRuntime.getManagedAgentControlPlaneStore().executionStateStore,
   runtime: appServerRuntime,
@@ -54,6 +56,23 @@ const scheduledTaskExecutionService = new ScheduledTaskExecutionService({
       run: notification.run,
       outcome: notification.outcome.result,
       ...(notification.outcome.failureMessage ? { failureMessage: notification.outcome.failureMessage } : {}),
+    });
+  },
+});
+const managedAgentScheduledFollowupService = new ManagedAgentScheduledFollowupService({
+  scheduledTasksService: appServerRuntime.getScheduledTasksService(),
+  controlPlaneFacade: platformControlPlaneFacade ?? appServerRuntime.getManagedAgentControlPlaneFacadeAsync(),
+  onFollowupResolved: async (notification) => {
+    if (notification.task.sourceChannel !== "feishu" || !feishuService) {
+      return;
+    }
+
+    await feishuService.notifyManagedAgentScheduledFollowupResolved({
+      task: notification.task,
+      workItem: notification.workItemDetail.workItem,
+      targetAgent: notification.workItemDetail.targetAgent,
+      outcome: notification.outcome,
+      latestCompletion: notification.workItemDetail.latestCompletion ?? null,
     });
   },
 });
@@ -87,7 +106,6 @@ const authRuntime = new CodexAuthRuntime({
 const updateService = new ThemisUpdateService({
   workingDirectory: appServerRuntime.getWorkingDirectory(),
 });
-const platformControlPlaneFacade = resolveMainPlatformGatewayFacade();
 const platformMeetingRoomGateway = resolvePlatformMeetingRoomGateway();
 feishuService = new FeishuChannelService({
   runtime: appServerRuntime,
@@ -150,6 +168,8 @@ const runScheduledTaskSchedulerTick = async (): Promise<void> => {
   scheduledTaskSchedulerTickRunning = true;
 
   try {
+    await managedAgentScheduledFollowupService.scan();
+
     const tick = await scheduledTaskExecutionService.runNext({
       schedulerId: "scheduler-scheduled-main",
     });

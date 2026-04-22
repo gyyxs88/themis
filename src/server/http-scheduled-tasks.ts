@@ -3,6 +3,7 @@ import type { RuntimeServiceHost } from "../core/runtime-service-host.js";
 import type {
   ScheduledTaskAutomationOptions,
   ScheduledTaskRuntimeOptions,
+  ScheduledTaskWatchOptions,
 } from "../types/index.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
@@ -65,6 +66,7 @@ function normalizeScheduledTaskCreatePayload(value: unknown): {
   inputText?: string;
   options?: ScheduledTaskRuntimeOptions;
   automation?: ScheduledTaskAutomationOptions;
+  watch?: ScheduledTaskWatchOptions;
   timezone: string;
   scheduledAt: string;
 } {
@@ -77,6 +79,7 @@ function normalizeScheduledTaskCreatePayload(value: unknown): {
   const channelSessionKey = normalizeText(value.channelSessionKey);
   const options = isRecord(value.options) ? value.options as ScheduledTaskRuntimeOptions : undefined;
   const automation = isRecord(value.automation) ? value.automation as ScheduledTaskAutomationOptions : undefined;
+  const watch = normalizeScheduledTaskWatchPayload(value.watch);
 
   return {
     ...identity,
@@ -86,6 +89,7 @@ function normalizeScheduledTaskCreatePayload(value: unknown): {
     ...(normalizeText(value.inputText) ? { inputText: normalizeText(value.inputText) as string } : {}),
     ...(options ? { options } : {}),
     ...(automation ? { automation } : {}),
+    ...(watch ? { watch } : {}),
     timezone: normalizeRequiredText(value.timezone, "时区不能为空。"),
     scheduledAt: normalizeRequiredText(value.scheduledAt, "执行时间不能为空。"),
   };
@@ -130,6 +134,20 @@ function writeRuntimeError(response: ServerResponse, error: unknown): void {
   });
 }
 
+function normalizeScheduledTaskWatchPayload(value: unknown): ScheduledTaskWatchOptions | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!isRecord(value)) {
+    throw new Error("watch 配置不合法。");
+  }
+
+  return {
+    workItemId: normalizeRequiredText(value.workItemId, "watch.workItemId 不能为空。"),
+  };
+}
+
 export async function handleScheduledTaskCreate(
   request: IncomingMessage,
   response: ServerResponse,
@@ -154,6 +172,7 @@ export async function handleScheduledTaskCreate(
       ...(payload.inputText ? { inputText: payload.inputText } : {}),
       ...(payload.options ? { options: payload.options } : {}),
       ...(payload.automation ? { automation: payload.automation } : {}),
+      ...(payload.watch ? { watch: payload.watch } : {}),
       timezone: payload.timezone,
       scheduledAt: payload.scheduledAt,
     });

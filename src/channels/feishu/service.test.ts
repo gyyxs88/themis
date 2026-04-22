@@ -12,6 +12,8 @@ import { SESSION_WORKSPACE_LOCKED_ERROR } from "../../core/session-settings-serv
 import type {
   PrincipalTaskSettings,
   SessionTaskSettings,
+  StoredAgentWorkItemRecord,
+  StoredManagedAgentRecord,
   StoredScheduledTaskRecord,
   StoredScheduledTaskRunRecord,
   TaskPendingActionSubmitRequest,
@@ -519,6 +521,81 @@ test("定时任务回执会在飞书切换会话后仍发回原 chat", async () 
     assert.match(message, /任务：检查生产告警/);
     assert.match(message, /结果摘要：检查完成，没有发现新的高优先级告警。/);
     assert.match(message, /\[定时任务回执\]/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("被 watch 的派工提前完成后，飞书会主动回原 chat 并取消回看", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.setCurrentSession("session-feishu-followup-old-1");
+    harness.setCurrentSession("session-feishu-followup-new-1");
+
+    const delivered = await harness.notifyManagedAgentScheduledFollowupResolved({
+      task: {
+        scheduledTaskId: "scheduled-task-followup-1",
+        principalId: harness.getCurrentPrincipalId(),
+        sourceChannel: "feishu",
+        channelUserId: "user-1",
+        sessionId: "session-feishu-followup-old-1",
+        channelSessionKey: "session-feishu-followup-old-1",
+        goal: "16:40 回来看 Cloudflare 只读派工结果",
+        timezone: "Asia/Shanghai",
+        scheduledAt: "2026-04-22T08:40:00.000Z",
+        status: "cancelled",
+        createdAt: "2026-04-22T08:10:00.000Z",
+        updatedAt: "2026-04-22T08:15:10.000Z",
+        cancelledAt: "2026-04-22T08:15:10.000Z",
+        watch: {
+          workItemId: "work-item-followup-1",
+        },
+      } satisfies StoredScheduledTaskRecord,
+      workItem: {
+        workItemId: "work-item-followup-1",
+        organizationId: "org-1",
+        targetAgentId: "agent-cloudflare-1",
+        sourceType: "human",
+        sourcePrincipalId: harness.getCurrentPrincipalId(),
+        dispatchReason: "Cloudflare 只读核查",
+        goal: "只读确认 209.145.54.12 对应的 zone 和 DNS 记录",
+        priority: "normal",
+        status: "completed",
+        createdAt: "2026-04-22T08:10:00.000Z",
+        completedAt: "2026-04-22T08:15:00.000Z",
+        updatedAt: "2026-04-22T08:15:00.000Z",
+      } satisfies StoredAgentWorkItemRecord,
+      targetAgent: {
+        agentId: "agent-cloudflare-1",
+        principalId: harness.getCurrentPrincipalId(),
+        organizationId: "org-1",
+        createdByPrincipalId: harness.getCurrentPrincipalId(),
+        displayName: "顾潮",
+        slug: "guchao",
+        departmentRole: "网络运维",
+        mission: "负责 Cloudflare 只读核查。",
+        status: "active",
+        autonomyLevel: "bounded",
+        creationMode: "manual",
+        exposurePolicy: "gateway_only",
+        createdAt: "2026-04-22T08:00:00.000Z",
+        updatedAt: "2026-04-22T08:15:00.000Z",
+      } satisfies StoredManagedAgentRecord,
+      outcome: "completed",
+      latestCompletion: {
+        summary: "Cloudflare 只读核查已完成，已定位到具体 zone 和记录。",
+        completedAt: "2026-04-22T08:15:00.000Z",
+      },
+    });
+
+    assert.equal(delivered, true);
+    const message = harness.takeSingleMessage();
+    assert.match(message, /状态：关联 work item 已完成/);
+    assert.match(message, /已取消回看：16:40 回来看 Cloudflare 只读派工结果/);
+    assert.match(message, /员工：顾潮/);
+    assert.match(message, /结果摘要：Cloudflare 只读核查已完成/);
+    assert.match(message, /\[派工提前回执\]/);
   } finally {
     harness.cleanup();
   }
@@ -8790,6 +8867,19 @@ function createHarness(
       failureMessage?: string;
     }) {
       return await service.notifyScheduledTaskResult(input);
+    },
+    async notifyManagedAgentScheduledFollowupResolved(input: {
+      task: StoredScheduledTaskRecord;
+      workItem: StoredAgentWorkItemRecord;
+      targetAgent?: StoredManagedAgentRecord | null;
+      outcome: "completed" | "failed" | "cancelled";
+      latestCompletion?: {
+        summary: string;
+        output?: unknown;
+        completedAt?: string;
+      } | null;
+    }) {
+      return await service.notifyManagedAgentScheduledFollowupResolved(input);
     },
     setClient(client: unknown) {
       (service as unknown as { client: unknown }).client = client;

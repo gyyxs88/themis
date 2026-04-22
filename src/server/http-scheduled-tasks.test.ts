@@ -134,6 +134,9 @@ test("POST /api/scheduled-tasks/create、list、cancel 会形成最小闭环", a
           type: "object",
         },
       },
+      watch: {
+        workItemId: "work-item-watch-http-1",
+      },
     }, authHeaders);
 
     assert.equal(createResponse.status, 200);
@@ -151,6 +154,7 @@ test("POST /api/scheduled-tasks/create、list、cancel 会形成最小闭环", a
     assert.equal(createPayload.task?.sessionId, "web-session-scheduled-1");
     assert.equal(createPayload.task?.goal, "明早检查 staging 健康状态");
     assert.equal(createPayload.task?.timezone, "Asia/Shanghai");
+    assert.equal((createPayload.task as { watch?: { workItemId?: string } } | undefined)?.watch?.workItemId, "work-item-watch-http-1");
     assert.ok(createPayload.task?.scheduledTaskId);
 
     const listResponse = await postJson(baseUrl, "/api/scheduled-tasks/list", buildIdentityPayload(), authHeaders);
@@ -166,6 +170,10 @@ test("POST /api/scheduled-tasks/create、list、cancel 会形成最小闭环", a
     assert.equal(listPayload.tasks?.length, 1);
     assert.equal(listPayload.tasks?.[0]?.scheduledTaskId, createPayload.task?.scheduledTaskId);
     assert.equal(listPayload.tasks?.[0]?.scheduledAt, scheduledAt);
+    assert.equal(
+      (listPayload.tasks?.[0] as { watch?: { workItemId?: string } } | undefined)?.watch?.workItemId,
+      "work-item-watch-http-1",
+    );
 
     const cancelResponse = await postJson(baseUrl, "/api/scheduled-tasks/cancel", {
       ...buildIdentityPayload(),

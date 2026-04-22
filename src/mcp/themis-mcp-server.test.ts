@@ -114,6 +114,9 @@ test("Themis MCP server 支持 create/list/cancel 定时任务闭环", async () 
           scheduledAt,
           timezone: "Asia/Shanghai",
           inputText: "重点看 error 和 timeout",
+          watch: {
+            workItemId: "work-item-watch-1",
+          },
         },
       },
     }));
@@ -124,6 +127,7 @@ test("Themis MCP server 支持 create/list/cancel 定时任务闭环", async () 
     const createdTaskId = createPayload.result?.structuredContent?.task?.scheduledTaskId;
     assert.equal(typeof createdTaskId, "string");
     assert.equal(createPayload.result?.structuredContent?.task?.goal, "五分钟后检查 staging 日志");
+    assert.equal(createPayload.result?.structuredContent?.task?.watch?.workItemId, "work-item-watch-1");
 
     const listResponse = await server.handleMessage(JSON.stringify({
       jsonrpc: "2.0",
@@ -142,6 +146,7 @@ test("Themis MCP server 支持 create/list/cancel 定时任务闭环", async () 
     assert.equal(listPayload.result?.isError, false);
     assert.equal(listPayload.result?.structuredContent?.tasks?.length, 1);
     assert.equal(listPayload.result?.structuredContent?.tasks?.[0]?.scheduledTaskId, createdTaskId);
+    assert.equal(listPayload.result?.structuredContent?.tasks?.[0]?.watch?.workItemId, "work-item-watch-1");
 
     const cancelResponse = await server.handleMessage(JSON.stringify({
       jsonrpc: "2.0",

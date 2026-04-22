@@ -49,6 +49,7 @@ import {
   WEB_SEARCH_MODES,
   type ScheduledTaskAutomationOptions,
   type ScheduledTaskRuntimeOptions,
+  type ScheduledTaskWatchOptions,
   type StoredScheduledTaskRecord,
 } from "../types/index.js";
 
@@ -121,6 +122,7 @@ interface CreateScheduledTaskToolArgs {
   channelSessionKey?: string;
   options?: ScheduledTaskRuntimeOptions;
   automation?: ScheduledTaskAutomationOptions;
+  watch?: ScheduledTaskWatchOptions;
 }
 
 interface ListScheduledTasksToolArgs {
@@ -399,6 +401,7 @@ export class ThemisMcpServer {
       ...(args.inputText ? { inputText: args.inputText } : {}),
       ...(args.options ? { options: args.options } : {}),
       ...(args.automation ? { automation: args.automation } : {}),
+      ...(args.watch ? { watch: args.watch } : {}),
       timezone: args.timezone,
       scheduledAt: args.scheduledAt,
     });
@@ -811,6 +814,16 @@ function buildToolDefinitions(): McpToolDefinition[] {
           },
           options: buildRuntimeOptionsSchema(),
           automation: buildAutomationOptionsSchema(),
+          watch: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              workItemId: {
+                type: "string",
+                description: "可选。关联的 managed-agent work item id；如果该任务提前收口，Themis 会自动取消这条回看。",
+              },
+            },
+          },
         },
         required: ["goal", "scheduledAt", "timezone"],
       },
@@ -1250,6 +1263,9 @@ function normalizeCreateScheduledTaskToolArgs(value: Record<string, unknown>): C
   const automation = value.automation === undefined
     ? undefined
     : expectRecord(value.automation, "automation must be an object.") as ScheduledTaskAutomationOptions;
+  const watch = value.watch === undefined
+    ? undefined
+    : expectRecord(value.watch, "watch must be an object.");
 
   return {
     goal: expectRequiredText(value.goal, "goal is required."),
@@ -1260,6 +1276,7 @@ function normalizeCreateScheduledTaskToolArgs(value: Record<string, unknown>): C
     ...(normalizeText(value.channelSessionKey) ? { channelSessionKey: normalizeText(value.channelSessionKey) as string } : {}),
     ...(options ? { options } : {}),
     ...(automation ? { automation } : {}),
+    ...(watch ? { watch: { workItemId: expectRequiredText(watch.workItemId, "watch.workItemId is required.") } } : {}),
   };
 }
 
@@ -1609,7 +1626,10 @@ function buildListSummary(tasks: StoredScheduledTaskRecord[]): string {
 
   return [
     `共找到 ${tasks.length} 条定时任务。`,
-    ...tasks.map((task, index) => `${index + 1}. [${task.status}] ${task.scheduledTaskId} @ ${task.scheduledAt} - ${task.goal}`),
+    ...tasks.map((task, index) =>
+      `${index + 1}. [${task.status}] ${task.scheduledTaskId} @ ${task.scheduledAt} - ${task.goal}`
+      + (task.watch?.workItemId ? ` (watch ${task.watch.workItemId})` : "")
+    ),
   ].join("\n");
 }
 

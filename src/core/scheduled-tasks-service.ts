@@ -2,6 +2,8 @@ import type { SqliteCodexSessionRegistry, StoredPrincipalRecord } from "../stora
 import type {
   ScheduledTaskAutomationOptions,
   ScheduledTaskRuntimeOptions,
+  ScheduledTaskStatus,
+  ScheduledTaskWatchOptions,
   StoredScheduledTaskRecord,
 } from "../types/index.js";
 
@@ -20,6 +22,7 @@ export interface CreateScheduledTaskInput {
   inputText?: string;
   options?: ScheduledTaskRuntimeOptions;
   automation?: ScheduledTaskAutomationOptions;
+  watch?: ScheduledTaskWatchOptions;
   timezone: string;
   scheduledAt: string;
   scheduledTaskId?: string;
@@ -50,6 +53,7 @@ export class ScheduledTasksService {
     const scheduledTaskId = normalizeOptionalText(input.scheduledTaskId) ?? createId("scheduled-task");
     const options = normalizeRecord(input.options);
     const automation = normalizeRecord(input.automation);
+    const watch = normalizeScheduledTaskWatch(input.watch);
     const displayName = normalizeOptionalText(input.displayName);
     const sessionId = normalizeOptionalText(input.sessionId);
     const channelSessionKey = normalizeOptionalText(input.channelSessionKey);
@@ -66,6 +70,7 @@ export class ScheduledTasksService {
       ...(inputText ? { inputText } : {}),
       ...(options ? { options: options as ScheduledTaskRuntimeOptions } : {}),
       ...(automation ? { automation: automation as ScheduledTaskAutomationOptions } : {}),
+      ...(watch ? { watch } : {}),
       timezone,
       scheduledAt,
       status: "scheduled",
@@ -80,6 +85,10 @@ export class ScheduledTasksService {
   listTasks(ownerPrincipalId: string): StoredScheduledTaskRecord[] {
     const owner = this.requirePrincipal(ownerPrincipalId);
     return this.registry.listScheduledTasksByPrincipal(owner.principalId);
+  }
+
+  listWatchedTasks(status: ScheduledTaskStatus = "scheduled"): StoredScheduledTaskRecord[] {
+    return this.registry.listWatchedScheduledTasks(status);
   }
 
   getTask(ownerPrincipalId: string, scheduledTaskId: string): StoredScheduledTaskRecord | null {
@@ -190,6 +199,15 @@ function normalizeOptionalMultilineText(value: string | undefined): string | und
 
 function normalizeRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null ? value as Record<string, unknown> : undefined;
+}
+
+function normalizeScheduledTaskWatch(value: ScheduledTaskWatchOptions | undefined): ScheduledTaskWatchOptions | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const workItemId = normalizeOptionalText(value.workItemId);
+  return workItemId ? { workItemId } : undefined;
 }
 
 function createId(prefix: string): string {

@@ -1,6 +1,6 @@
 # 飞书 Bot 调研与接入建议
 
-更新日期：2026-04-21
+更新日期：2026-04-22
 
 相关实现文档：
 
@@ -13,6 +13,7 @@
 - [飞书与 Web 跨端 waiting action 恢复边界](../memory/2026/03/feishu-cross-channel-action-recovery-boundary.md)
 - [飞书消息入口去重与顺序保护](../memory/2026/03/feishu-message-ingress-ordering.md)
 - [飞书 waiting user-input 直接文本接管约束](../memory/2026/03/feishu-direct-text-user-input-takeover.md)
+- [managed-agent watched 回看任务的提前收口通知](../memory/2026/04/themis-managed-agent-watched-scheduled-followups.md)
 
 手工验收入口：
 
@@ -27,6 +28,8 @@
 - Codex 在飞书里现在走“正文主消息 + 状态消息”桥接：用户发消息后会先立刻收到 `处理中...`；只有 `item/completed(agentMessage, commentary)` 这种已经完整的中间消息，才会被立刻落成正文气泡，然后再补一条新的 `处理中...`。`delta` 只保留为内部累计快照，不再直接驱动飞书正文展示。
 - 工具调用现在走独立的“工具轨迹”气泡，不再混进正文或状态摘要：runtime 会把命令执行、文件变更、MCP / 动态工具调用以及审批 / 补输入这类稳定信号统一归一成 `traceKind=tool` 的 `task.progress`；如果任务还没出现正文，首条工具轨迹会先接手当前 `处理中...` 占位，然后飞书桥立刻补一个新的尾部占位；之后同一 bucket 继续原地更新，bucket 滚动时再新起下一条工具轨迹气泡，不会打断正文尾部的 `处理中...`。
 - 工具轨迹的每一行默认只保留前 `50` 个字符的细节内容，超出会补 `...`；条目之间会额外空一行，优先保证移动端可读性，不再尝试完整展开长命令、长文件名或长工具参数。
+- 如果一条定时任务是给某个 managed-agent `work item` 做“到点回看”，现在可以在创建时显式带 `watch.workItemId`；主 Themis 进程会在每轮定时扫描里先检查这些 watched 回看，只要关联 `work item` 已经提前进入 `completed / failed / cancelled`，就会立刻取消这条回看，不再傻等到原计划时间。
+- watched 回看在飞书里还会主动回推一条 `[派工提前回执]` 到原 chat，说明“哪条回看被取消了、关联 work item 已经是什么状态、当前结果摘要是什么”；当前这条主动可见通知只覆盖飞书，Web 这轮先只做自动取消，不额外补前端推送面。
 - 最终结果如果和上一条正文一致（忽略额度尾注这类 Themis 自己补的内容），飞书不会重复再发正文；尾部运行中占位会直接收口成 `已完成`。如果最终结果不同，则会先发最终正文，再收口终态。
 - 飞书正文桥接已经不再使用缓存 flush 定时和“同一气泡持续长大”的节拍更新；当前只保留飞书单条文本长度限制带来的硬性安全拆分。
 - 飞书公开任务的 `THEMIS_TASK_TIMEOUT_MS` 现在按“进度间静默超时”理解：只要持续有新事件进入飞书桥接链，就会自动续期；只有静默超过窗口才会取消。

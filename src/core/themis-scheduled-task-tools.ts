@@ -65,6 +65,7 @@ export function buildThemisScheduledTaskPromptSection(request: TaskRequest): str
     "If the requested time or timezone is ambiguous, ask one concise follow-up question before creating the task.",
     "Use list_scheduled_tasks when the user asks what is already scheduled.",
     "Use cancel_scheduled_task when the user asks to cancel a previously scheduled task and you know which task it refers to.",
+    "If you dispatch a managed-agent work item and then create a timed follow-up to check back on it, pass watch.workItemId so Themis can cancel the follow-up early and proactively report back when that work item closes before the scheduled time.",
     "After creating a task, confirm the exact scheduledAt timestamp and timezone you used.",
     `Current scheduling context: sourceChannel=${request.sourceChannel}, channelUserId=${request.user.userId}, displayName=${displayName}, sessionId=${sessionId}, channelSessionKey=${channelSessionKey}.`,
     "The MCP server already defaults to this context, so you usually do not need to pass sessionId or channelSessionKey unless you intentionally want a different target session.",

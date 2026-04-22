@@ -144,7 +144,7 @@ import type {
   StoredScheduledTaskRunRecord,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 32;
+const DATABASE_SCHEMA_VERSION = 33;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -893,6 +893,7 @@ interface ScheduledTaskRow {
   input_text: string | null;
   options_json: string | null;
   automation_json: string | null;
+  watch_work_item_id: string | null;
   timezone: string;
   scheduled_at: string;
   status: string;
@@ -4601,6 +4602,7 @@ export class SqliteCodexSessionRegistry {
             input_text,
             options_json,
             automation_json,
+            watch_work_item_id,
             timezone,
             scheduled_at,
             status,
@@ -4641,6 +4643,7 @@ export class SqliteCodexSessionRegistry {
             input_text,
             options_json,
             automation_json,
+            watch_work_item_id,
             timezone,
             scheduled_at,
             status,
@@ -4683,6 +4686,7 @@ export class SqliteCodexSessionRegistry {
     const sessionId = normalizeOptionalText(record.sessionId);
     const channelSessionKey = normalizeOptionalText(record.channelSessionKey);
     const inputText = normalizeOptionalMultilineText(record.inputText);
+    const watchWorkItemId = normalizeOptionalText(record.watch?.workItemId);
     const lastRunId = normalizeOptionalText(record.lastRunId);
     const cancelledAt = normalizeOptionalText(record.cancelledAt);
     const completedAt = normalizeOptionalText(record.completedAt);
@@ -4731,6 +4735,7 @@ export class SqliteCodexSessionRegistry {
             input_text,
             options_json,
             automation_json,
+            watch_work_item_id,
             timezone,
             scheduled_at,
             status,
@@ -4752,6 +4757,7 @@ export class SqliteCodexSessionRegistry {
             @input_text,
             @options_json,
             @automation_json,
+            @watch_work_item_id,
             @timezone,
             @scheduled_at,
             @status,
@@ -4772,6 +4778,7 @@ export class SqliteCodexSessionRegistry {
             input_text = excluded.input_text,
             options_json = excluded.options_json,
             automation_json = excluded.automation_json,
+            watch_work_item_id = excluded.watch_work_item_id,
             timezone = excluded.timezone,
             scheduled_at = excluded.scheduled_at,
             status = excluded.status,
@@ -4795,6 +4802,7 @@ export class SqliteCodexSessionRegistry {
         input_text: inputText ?? null,
         options_json: stringifyJson(record.options),
         automation_json: stringifyJson(record.automation),
+        watch_work_item_id: watchWorkItemId ?? null,
         timezone,
         scheduled_at: scheduledAt,
         status,
@@ -4809,6 +4817,49 @@ export class SqliteCodexSessionRegistry {
     if (writeResult.changes === 0) {
       throw new Error("Scheduled task write did not apply.");
     }
+  }
+
+  listWatchedScheduledTasks(status: ScheduledTaskStatus = "scheduled"): StoredScheduledTaskRecord[] {
+    const normalizedStatus = normalizeOptionalText(status);
+
+    if (!normalizedStatus || !SCHEDULED_TASK_STATUSES.includes(normalizedStatus as ScheduledTaskStatus)) {
+      throw new Error("Scheduled task status is invalid.");
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            scheduled_task_id,
+            principal_id,
+            source_channel,
+            channel_user_id,
+            display_name,
+            session_id,
+            channel_session_key,
+            goal,
+            input_text,
+            options_json,
+            automation_json,
+            watch_work_item_id,
+            timezone,
+            scheduled_at,
+            status,
+            last_run_id,
+            created_at,
+            updated_at,
+            cancelled_at,
+            completed_at,
+            last_error
+          FROM themis_scheduled_tasks
+          WHERE status = ?
+            AND watch_work_item_id IS NOT NULL
+          ORDER BY scheduled_at ASC, created_at ASC, scheduled_task_id ASC
+        `,
+      )
+      .all(normalizedStatus) as ScheduledTaskRow[];
+
+    return rows.map(mapScheduledTaskRow);
   }
 
   getScheduledTaskRun(runId: string): StoredScheduledTaskRunRecord | null {
@@ -10858,6 +10909,7 @@ export class SqliteCodexSessionRegistry {
         input_text TEXT,
         options_json TEXT,
         automation_json TEXT,
+        watch_work_item_id TEXT,
         timezone TEXT NOT NULL,
         scheduled_at TEXT NOT NULL,
         status TEXT NOT NULL,
@@ -10875,6 +10927,9 @@ export class SqliteCodexSessionRegistry {
 
       CREATE INDEX IF NOT EXISTS themis_scheduled_tasks_due_idx
       ON themis_scheduled_tasks(status, scheduled_at ASC, scheduled_task_id ASC);
+
+      CREATE INDEX IF NOT EXISTS themis_scheduled_tasks_watch_idx
+      ON themis_scheduled_tasks(status, watch_work_item_id, scheduled_at ASC, scheduled_task_id ASC);
 
       CREATE TABLE IF NOT EXISTS themis_scheduled_task_runs (
         run_id TEXT PRIMARY KEY,
@@ -11140,6 +11195,23 @@ export class SqliteCodexSessionRegistry {
     this.createTurnInputTables(database);
     this.createManagedAgentTables(database);
     this.createScheduledTaskTables(database);
+
+    const scheduledTaskColumns = database
+      .prepare(`PRAGMA table_info(themis_scheduled_tasks)`)
+      .all() as Array<{ name: string }>;
+    const scheduledTaskColumnNames = new Set(scheduledTaskColumns.map((column) => column.name));
+
+    if (!scheduledTaskColumnNames.has("watch_work_item_id")) {
+      database.exec(`
+        ALTER TABLE themis_scheduled_tasks
+        ADD COLUMN watch_work_item_id TEXT;
+      `);
+    }
+
+    database.exec(`
+      CREATE INDEX IF NOT EXISTS themis_scheduled_tasks_watch_idx
+      ON themis_scheduled_tasks(status, watch_work_item_id, scheduled_at ASC, scheduled_task_id ASC);
+    `);
 
     const agentWorkItemColumns = database
       .prepare(`PRAGMA table_info(themis_agent_work_items)`)
@@ -11900,6 +11972,7 @@ function mapScheduledTaskRow(row: ScheduledTaskRow): StoredScheduledTaskRecord {
     ...(automation && typeof automation === "object"
       ? { automation: automation as NonNullable<StoredScheduledTaskRecord["automation"]> }
       : {}),
+    ...(row.watch_work_item_id ? { watch: { workItemId: row.watch_work_item_id } } : {}),
     timezone: row.timezone,
     scheduledAt: row.scheduled_at,
     status: row.status as ScheduledTaskStatus,
