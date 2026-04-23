@@ -8,3 +8,4 @@ export * from "./task-input.js";
 export * from "./task.js";
 export * from "./managed-agents.js";
 export * from "./scheduled-tasks.js";
+export * from "./operations.js";

@@ -22,6 +22,38 @@ import {
   handleActorTimeline,
 } from "./http-actors.js";
 import {
+  handlePrincipalAssetCreate,
+  handlePrincipalAssetList,
+  handlePrincipalAssetUpdate,
+} from "./http-operations-assets.js";
+import {
+  handlePrincipalCadenceCreate,
+  handlePrincipalCadenceList,
+  handlePrincipalCadenceUpdate,
+} from "./http-operations-cadences.js";
+import {
+  handlePrincipalCommitmentCreate,
+  handlePrincipalCommitmentList,
+  handlePrincipalCommitmentUpdate,
+} from "./http-operations-commitments.js";
+import { handlePrincipalOperationsBossView } from "./http-operations-boss-view.js";
+import {
+  handlePrincipalDecisionCreate,
+  handlePrincipalDecisionList,
+  handlePrincipalDecisionUpdate,
+} from "./http-operations-decisions.js";
+import {
+  handlePrincipalOperationEdgeCreate,
+  handlePrincipalOperationGraphQuery,
+  handlePrincipalOperationEdgeList,
+  handlePrincipalOperationEdgeUpdate,
+} from "./http-operations-edges.js";
+import {
+  handlePrincipalRiskCreate,
+  handlePrincipalRiskList,
+  handlePrincipalRiskUpdate,
+} from "./http-operations-risks.js";
+import {
   handleAuthAccountCreate,
   handleAuthAccountSelect,
   handleAuthLogin,
@@ -632,6 +664,86 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/actors/memory-candidates/review") {
         return handleMainMemoryCandidateReview(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/assets/list") {
+        return handlePrincipalAssetList(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/boss-view") {
+        return handlePrincipalOperationsBossView(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/assets/create") {
+        return handlePrincipalAssetCreate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/assets/update") {
+        return handlePrincipalAssetUpdate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/decisions/list") {
+        return handlePrincipalDecisionList(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/decisions/create") {
+        return handlePrincipalDecisionCreate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/decisions/update") {
+        return handlePrincipalDecisionUpdate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/cadences/list") {
+        return handlePrincipalCadenceList(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/cadences/create") {
+        return handlePrincipalCadenceCreate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/cadences/update") {
+        return handlePrincipalCadenceUpdate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/commitments/list") {
+        return handlePrincipalCommitmentList(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/commitments/create") {
+        return handlePrincipalCommitmentCreate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/commitments/update") {
+        return handlePrincipalCommitmentUpdate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/edges/list") {
+        return handlePrincipalOperationEdgeList(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/graph/query") {
+        return handlePrincipalOperationGraphQuery(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/edges/create") {
+        return handlePrincipalOperationEdgeCreate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/edges/update") {
+        return handlePrincipalOperationEdgeUpdate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/risks/list") {
+        return handlePrincipalRiskList(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/risks/create") {
+        return handlePrincipalRiskCreate(request, response, runtime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/operations/risks/update") {
+        return handlePrincipalRiskUpdate(request, response, runtime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/skills/list") {

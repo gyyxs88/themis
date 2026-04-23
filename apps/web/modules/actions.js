@@ -78,6 +78,20 @@ export function createActions(app) {
       }
     }
 
+    async function refreshOperationsCenterPanel() {
+      await Promise.allSettled([
+        app.meetingRooms?.loadStatus?.(),
+        app.memoryCandidates?.load?.(),
+        app.operationsBossView?.load?.(),
+        app.operationsAssets?.load?.(),
+        app.operationsCadences?.load?.(),
+        app.operationsCommitments?.load?.(),
+        app.operationsDecisions?.load?.(),
+        app.operationsEdges?.load?.(),
+        app.operationsRisks?.load?.(),
+      ]);
+    }
+
     async function persistWorkspaceSettings() {
       const thread = store.getActiveThread();
 
@@ -189,7 +203,9 @@ export function createActions(app) {
       const nextSection = sectionButton.dataset.settingsSection;
       app.renderer.setToolsPanelSection(nextSection);
 
-      if (nextSection === "auth") {
+      if (nextSection === "operations-center") {
+        void refreshOperationsCenterPanel();
+      } else if (nextSection === "auth") {
         void app.auth.load({ force: true, quiet: true });
       } else if (nextSection === "meeting-rooms") {
         void refreshMeetingRoomsPanel();
@@ -204,7 +220,9 @@ export function createActions(app) {
       const nextOpen = !app.runtime.workspaceToolsOpen;
       app.renderer.setToolsPanelOpen(nextOpen);
 
-      if (nextOpen && app.runtime.workspaceToolsSection === "auth") {
+      if (nextOpen && app.runtime.workspaceToolsSection === "operations-center") {
+        void refreshOperationsCenterPanel();
+      } else if (nextOpen && app.runtime.workspaceToolsSection === "auth") {
         void app.auth.load({ force: true, quiet: true });
       } else if (nextOpen && app.runtime.workspaceToolsSection === "meeting-rooms") {
         void refreshMeetingRoomsPanel();

@@ -257,9 +257,21 @@
 
           <div class="settings-modal-body">
             <aside class="settings-modal-sidebar" aria-label="设置分类">
-              <p class="settings-sidebar-kicker">Themis 中间层</p>
+              <p class="settings-sidebar-kicker">Themis 控制面</p>
 
               <div class="settings-modal-nav" role="tablist" aria-label="设置分类">
+                <button
+                  id="settings-operations-center-tab"
+                  type="button"
+                  class="settings-nav-button"
+                  data-settings-section="operations-center"
+                  role="tab"
+                  aria-controls="settings-operations-center-section"
+                  aria-selected="false"
+                >
+                  <span class="settings-nav-title">运营中枢</span>
+                </button>
+
                 <button
                   id="settings-runtime-tab"
                   type="button"
@@ -372,6 +384,1186 @@
             </aside>
 
             <div class="settings-modal-content">
+              <section
+                id="settings-operations-center-section"
+                class="settings-panel hidden"
+                role="tabpanel"
+                aria-labelledby="settings-operations-center-tab"
+              >
+                <section class="workspace-tool-group settings-hero-card operations-center-hero">
+                  <div class="tool-group-head">
+                    <h3>运营中枢</h3>
+                    <span class="meta-label">当前阶段：数字公司控制面，不是完整操作系统</span>
+                  </div>
+
+                  <p class="settings-section-copy">
+                    这一页不假装 Themis 已经是“数字公司操作系统”。
+                    当前更诚实的定位，是先把执行、协作、治理和知识沉淀收成同一块控制面，再逐步把资产、决策、风险、节奏和承诺补成一等对象。
+                  </p>
+
+                  <p
+                    id="operations-center-status-note"
+                    class="settings-section-copy settings-probe-note hidden"
+                    aria-live="polite"
+                  ></p>
+
+                  <div class="operations-center-stage-grid">
+                    <article class="operations-center-stage-card" data-state="current">
+                      <p class="operations-center-stage-label">当前定位</p>
+                      <h4>数字公司控制面</h4>
+                      <p class="operations-center-stage-copy">先把“谁在做、做到了哪、证据在哪”收成统一真相链。</p>
+                    </article>
+
+                    <article class="operations-center-stage-card" data-state="focus">
+                      <p class="operations-center-stage-label">当前重点</p>
+                      <h4>执行、协作、知识、治理</h4>
+                      <p class="operations-center-stage-copy">优先把现有 work item、run、artifact、会议结论和长期记忆入口做扎实。</p>
+                    </article>
+
+                    <article class="operations-center-stage-card" data-state="north-star">
+                      <p class="operations-center-stage-label">最终形态</p>
+                      <h4>数字公司操作系统</h4>
+                      <p class="operations-center-stage-copy">等资产、决策、风险、节奏和承诺都变成一等对象后，再往上升成更大的系统。</p>
+                    </article>
+                  </div>
+
+                  <div class="settings-inline-actions">
+                    <button type="button" class="toolbar-button subtle" data-settings-section="meeting-rooms">进入内部会议室</button>
+                    <button type="button" class="toolbar-button subtle" data-settings-section="memory-candidates">查看记忆候选</button>
+                    <button type="button" class="toolbar-button subtle" data-settings-section="runtime">调整运行参数</button>
+                    <button type="button" class="toolbar-button subtle" data-settings-section="mode-switch">设置工作区与接入方式</button>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>已接通的事实底座</h3>
+                    <span class="meta-label">只放 repo 里已经有真实入口的层</span>
+                  </div>
+
+                  <p class="settings-section-copy">
+                    这些层今天已经在 Themis 里有真实入口、真实持久化或真实执行链路，不是愿景词。
+                  </p>
+
+                  <div id="operations-center-foundation-grid" class="operations-center-card-grid"></div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>第一批对象模型</h3>
+                    <span class="meta-label">下一步先补这些，不把范围做空</span>
+                  </div>
+
+                  <p class="settings-section-copy">
+                    这批对象的目标不是再造一个“任务面板”，而是让老板视角真正能看到资产、决策、风险、节奏和承诺。
+                  </p>
+
+                  <div id="operations-center-next-grid" class="operations-center-card-grid"></div>
+                </section>
+
+                <section class="workspace-tool-group operations-boss-view-shell">
+                  <div class="tool-group-head">
+                    <h3>老板视图</h3>
+                    <span class="meta-label">Boss View 首版：只读经营晨报</span>
+                  </div>
+
+                  <p class="settings-section-copy">
+                    这一块不再让老板自己翻资产、风险、节奏和关系边，而是直接给出“今天先看什么”：红黄绿状态、关键指标、焦点事项、阻塞关系和近期拍板。
+                  </p>
+
+                  <div class="settings-inline-actions operations-boss-view-toolbar">
+                    <button id="operations-boss-view-refresh-button" type="button" class="toolbar-button subtle">刷新老板视图</button>
+                    <p
+                      id="operations-boss-view-status-note"
+                      class="settings-section-copy settings-probe-note hidden"
+                      aria-live="polite"
+                    ></p>
+                  </div>
+
+                  <article id="operations-boss-view-headline" class="operations-boss-view-headline"></article>
+
+                  <div id="operations-boss-view-metrics" class="operations-boss-view-metrics"></div>
+
+                  <div class="operations-boss-view-grid">
+                    <section class="operations-boss-view-panel">
+                      <div class="tool-group-head">
+                        <h4>今日焦点</h4>
+                        <span class="meta-label">高风险 / 阻塞 / 逾期优先</span>
+                      </div>
+                      <div id="operations-boss-view-focus-list" class="operations-boss-view-list"></div>
+                    </section>
+
+                    <section class="operations-boss-view-panel">
+                      <div class="tool-group-head">
+                        <h4>关键关系</h4>
+                        <span class="meta-label">active OperationEdge</span>
+                      </div>
+                      <div id="operations-boss-view-relations-list" class="operations-boss-view-list"></div>
+                    </section>
+
+                    <section class="operations-boss-view-panel">
+                      <div class="tool-group-head">
+                        <h4>近期拍板</h4>
+                        <span class="meta-label">Decision 最近记录</span>
+                      </div>
+                      <div id="operations-boss-view-decisions-list" class="operations-boss-view-list"></div>
+                    </section>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>资产台账</h3>
+                    <span class="meta-label">Asset 最小对象首版</span>
+                  </div>
+
+                  <p class="settings-section-copy">
+                    先把域名、站点、服务器、数据库、账号和工作区收成一份最小资产台账，让任务、决策和证据开始能挂回真实世界。
+                  </p>
+
+                  <p
+                    id="operations-assets-status-note"
+                    class="settings-section-copy settings-probe-note hidden"
+                    aria-live="polite"
+                  ></p>
+
+                  <div class="operations-assets-layout">
+                    <section class="operations-assets-list-shell">
+                      <div class="settings-inline-actions operations-assets-toolbar">
+                        <button id="operations-assets-refresh-button" type="button" class="ghost-button">刷新台账</button>
+                        <button id="operations-assets-new-button" type="button" class="toolbar-button subtle">新建资产</button>
+
+                        <label class="settings-field operations-assets-filter-field">
+                          <span>状态筛选</span>
+                          <select id="operations-assets-filter-select">
+                            <option value="active">active</option>
+                            <option value="watch">watch</option>
+                            <option value="archived">archived</option>
+                            <option value="all">all</option>
+                          </select>
+                        </label>
+                      </div>
+
+                      <p id="operations-assets-list-empty" class="settings-section-copy">当前筛选下还没有资产记录。</p>
+                      <div id="operations-assets-list" class="operations-assets-list"></div>
+                    </section>
+
+                    <section class="operations-assets-editor-shell">
+                      <div class="tool-group-head">
+                        <h4 id="operations-assets-form-title">新建资产</h4>
+                        <span class="meta-label">最小字段：kind / name / status / refs</span>
+                      </div>
+
+                      <div class="settings-stack">
+                        <div class="settings-grid">
+                          <label class="settings-field">
+                            <span>资产类型</span>
+                            <select id="operations-assets-kind-select">
+                              <option value="site">site</option>
+                              <option value="domain">domain</option>
+                              <option value="server">server</option>
+                              <option value="service">service</option>
+                              <option value="database">database</option>
+                              <option value="account">account</option>
+                              <option value="storage">storage</option>
+                              <option value="workspace">workspace</option>
+                              <option value="document">document</option>
+                              <option value="other">other</option>
+                            </select>
+                          </label>
+
+                          <label class="settings-field">
+                            <span>状态</span>
+                            <select id="operations-assets-status-select">
+                              <option value="active">active</option>
+                              <option value="watch">watch</option>
+                              <option value="archived">archived</option>
+                            </select>
+                          </label>
+                        </div>
+
+                        <label class="settings-field">
+                          <span>资产名称</span>
+                          <input
+                            id="operations-assets-name-input"
+                            type="text"
+                            placeholder="比如：Themis 官网、prod-web-1、Cloudflare 主账号"
+                            autocomplete="off"
+                            spellcheck="false"
+                          />
+                        </label>
+
+                        <label class="settings-field">
+                          <span>负责人 principalId（可选）</span>
+                          <input
+                            id="operations-assets-owner-input"
+                            type="text"
+                            placeholder="比如：principal-local-owner"
+                            autocomplete="off"
+                            spellcheck="false"
+                          />
+                        </label>
+
+                        <label class="settings-field">
+                          <span>标签（逗号分隔）</span>
+                          <input
+                            id="operations-assets-tags-input"
+                            type="text"
+                            placeholder="比如：生产、官网、待迁移"
+                            autocomplete="off"
+                            spellcheck="false"
+                          />
+                        </label>
+
+                        <label class="settings-field">
+                          <span>引用 refs（每行一条）</span>
+                          <textarea
+                            id="operations-assets-refs-input"
+                            rows="4"
+                            placeholder="domain:themis.example.com&#10;repo|github.com/demo/themis|主仓库&#10;doc:docs/product/themis-operations-center-first-cut.md"
+                          ></textarea>
+                        </label>
+
+                        <label class="settings-field">
+                          <span>摘要（可选）</span>
+                          <textarea
+                            id="operations-assets-summary-input"
+                            rows="4"
+                            placeholder="这项资产当前承担什么职责、有什么边界、为什么值得进台账。"
+                          ></textarea>
+                        </label>
+
+                        <div class="settings-inline-actions">
+                          <button id="operations-assets-save-button" type="button" class="toolbar-button subtle">保存资产</button>
+                          <button id="operations-assets-reset-button" type="button" class="ghost-button">清空草稿</button>
+                          <p class="settings-inline-copy">
+                            `kind:value` 或 `kind|value|label` 都可以；先记真实世界映射，不在这里做复杂关系图。
+                          </p>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>决策记录</h3>
+                    <span class="meta-label">Decision 最小对象首版</span>
+                  </div>
+
+                  <p class="settings-section-copy">
+                    先把老板拍板、取舍原因和影响范围收成结构化记录，并且先挂回 `asset / work item`，避免关键结论继续只散在聊天里。
+                  </p>
+
+                  <p
+                    id="operations-decisions-status-note"
+                    class="settings-section-copy settings-probe-note hidden"
+                    aria-live="polite"
+                  ></p>
+
+                  <div class="operations-decisions-layout">
+                    <section class="operations-decisions-list-shell">
+                      <div class="settings-inline-actions operations-decisions-toolbar">
+                        <button id="operations-decisions-refresh-button" type="button" class="ghost-button">刷新决策</button>
+                        <button id="operations-decisions-new-button" type="button" class="toolbar-button subtle">新建决策</button>
+
+                        <label class="settings-field operations-decisions-filter-field">
+                          <span>状态筛选</span>
+                          <select id="operations-decisions-filter-select">
+                            <option value="active">active</option>
+                            <option value="superseded">superseded</option>
+                            <option value="archived">archived</option>
+                            <option value="all">all</option>
+                          </select>
+                        </label>
+                      </div>
+
+                      <p id="operations-decisions-list-empty" class="settings-section-copy">当前筛选下还没有决策记录。</p>
+                      <div id="operations-decisions-list" class="operations-decisions-list"></div>
+                    </section>
+
+                    <section class="operations-decisions-editor-shell">
+                      <div class="tool-group-head">
+                        <h4 id="operations-decisions-form-title">新建决策</h4>
+                        <span class="meta-label">最小字段：title / status / decidedAt / related ids</span>
+                      </div>
+
+                      <div class="settings-stack">
+                        <div class="settings-grid">
+                          <label class="settings-field">
+                            <span>决策标题</span>
+                            <input
+                              id="operations-decisions-title-input"
+                              type="text"
+                              placeholder="比如：当前阶段先叫运营中枢"
+                              autocomplete="off"
+                              spellcheck="false"
+                            />
+                          </label>
+
+                          <label class="settings-field">
+                            <span>状态</span>
+                            <select id="operations-decisions-status-select">
+                              <option value="active">active</option>
+                              <option value="superseded">superseded</option>
+                              <option value="archived">archived</option>
+                            </select>
+                          </label>
+                        </div>
+
+                        <div class="settings-grid">
+                          <label class="settings-field">
+                            <span>决定人 principalId（可选）</span>
+                            <input
+                              id="operations-decisions-decided-by-input"
+                              type="text"
+                              placeholder="比如：principal-local-owner"
+                              autocomplete="off"
+                              spellcheck="false"
+                            />
+                          </label>
+
+                          <label class="settings-field">
+                            <span>决定时间（可选）</span>
+                            <input
+                              id="operations-decisions-decided-at-input"
+                              type="text"
+                              placeholder="比如：2026-04-23T14:15:00.000Z"
+                              autocomplete="off"
+                              spellcheck="false"
+                            />
+                          </label>
+                        </div>
+
+                        <label class="settings-field">
+                          <span>关联资产 ids（每行一条）</span>
+                          <textarea
+                            id="operations-decisions-related-assets-input"
+                            rows="4"
+                            placeholder="asset-ledger-1&#10;asset-ledger-2"
+                          ></textarea>
+                        </label>
+
+                        <label class="settings-field">
+                          <span>关联 work item ids（每行一条）</span>
+                          <textarea
+                            id="operations-decisions-related-work-items-input"
+                            rows="4"
+                            placeholder="work-item-1&#10;work-item-2"
+                          ></textarea>
+                        </label>
+
+                        <label class="settings-field">
+                          <span>摘要（可选）</span>
+                          <textarea
+                            id="operations-decisions-summary-input"
+                            rows="4"
+                            placeholder="这次拍板解决了什么取舍，影响到了哪些对象。"
+                          ></textarea>
+                        </label>
+
+                        <div class="settings-inline-actions">
+                          <button id="operations-decisions-save-button" type="button" class="toolbar-button subtle">保存决策</button>
+                          <button id="operations-decisions-reset-button" type="button" class="ghost-button">清空草稿</button>
+                          <p class="settings-inline-copy">
+                            这一版先直接记 ids，不在这里做复杂关系图；先把老板拍板从聊天里拔出来。
+                          </p>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>风险 / 事故</h3>
+                    <span class="meta-label">Risk / Incident 最小对象首版</span>
+                  </div>
+
+                  <p class="settings-section-copy">
+                    先把异常、故障、权限风险和合规风险升级成可跟踪对象，并先挂回 `asset / decision / work item`，避免高风险事项继续只留在任务描述里。
+                  </p>
+
+                  <p
+                    id="operations-risks-status-note"
+                    class="settings-section-copy settings-probe-note hidden"
+                    aria-live="polite"
+                  ></p>
+
+                  <div class="operations-risks-layout">
+                    <section class="operations-risks-list-shell">
+                      <div class="settings-inline-actions operations-risks-toolbar">
+                        <button id="operations-risks-refresh-button" type="button" class="ghost-button">刷新风险</button>
+                        <button id="operations-risks-new-button" type="button" class="toolbar-button subtle">新建风险</button>
+
+                        <label class="settings-field operations-risks-filter-field">
+                          <span>状态筛选</span>
+                          <select id="operations-risks-filter-select">
+                            <option value="open">open</option>
+                            <option value="watch">watch</option>
+                            <option value="resolved">resolved</option>
+                            <option value="archived">archived</option>
+                            <option value="all">all</option>
+                          </select>
+                        </label>
+                      </div>
+
+                      <p id="operations-risks-list-empty" class="settings-section-copy">当前筛选下还没有风险记录。</p>
+                      <div id="operations-risks-list" class="operations-risks-list"></div>
+                    </section>
+
+                    <section class="operations-risks-editor-shell">
+                      <div class="tool-group-head">
+                        <h4 id="operations-risks-form-title">新建风险</h4>
+                        <span class="meta-label">最小字段：type / severity / status / related ids</span>
+                      </div>
+
+                      <div class="settings-stack">
+                        <div class="settings-grid">
+                          <label class="settings-field">
+                            <span>类型</span>
+                            <select id="operations-risks-type-select">
+                              <option value="risk">risk</option>
+                              <option value="incident">incident</option>
+                            </select>
+                          </label>
+
+                          <label class="settings-field">
+                            <span>严重度</span>
+                            <select id="operations-risks-severity-select">
+                              <option value="low">low</option>
+                              <option value="medium">medium</option>
+                              <option value="high">high</option>
+                              <option value="critical">critical</option>
+                            </select>
+                          </label>
+
+                          <label class="settings-field">
+                            <span>状态</span>
+                            <select id="operations-risks-status-select">
+                              <option value="open">open</option>
+                              <option value="watch">watch</option>
+                              <option value="resolved">resolved</option>
+                              <option value="archived">archived</option>
+                            </select>
+                          </label>
+                        </div>
+
+                        <label class="settings-field">
+                          <span>标题</span>
+                          <input
+                            id="operations-risks-title-input"
+                            type="text"
+                            placeholder="比如：prod-web CPU 突增、Cloudflare 账号权限过大"
+                            autocomplete="off"
+                            spellcheck="false"
+                          />
+                        </label>
+
+                        <div class="settings-grid">
+                          <label class="settings-field">
+                            <span>负责人 principalId（可选）</span>
+                            <input
+                              id="operations-risks-owner-input"
+                              type="text"
+                              placeholder="比如：principal-local-owner"
+                              autocomplete="off"
+                              spellcheck="false"
+                            />
+                          </label>
+
+                          <label class="settings-field">
+                            <span>发现时间（可选）</span>
+                            <input
+                              id="operations-risks-detected-at-input"
+                              type="text"
+                              placeholder="比如：2026-04-23T16:15:00.000Z"
+                              autocomplete="off"
+                              spellcheck="false"
+                            />
+                          </label>
+                        </div>
+
+                        <label class="settings-field">
+                          <span>关联资产 ids（每行一条）</span>
+                          <textarea
+                            id="operations-risks-related-assets-input"
+                            rows="4"
+                            placeholder="asset-ledger-1&#10;asset-ledger-2"
+                          ></textarea>
+                        </label>
+
+                        <label class="settings-field">
+                          <span>关联决策 ids（每行一条）</span>
+                          <textarea
+                            id="operations-risks-linked-decisions-input"
+                            rows="4"
+                            placeholder="decision-ledger-1&#10;decision-ledger-2"
+                          ></textarea>
+                        </label>
+
+                        <label class="settings-field">
+                          <span>关联 work item ids（每行一条）</span>
+                          <textarea
+                            id="operations-risks-related-work-items-input"
+                            rows="4"
+                            placeholder="work-item-1&#10;work-item-2"
+                          ></textarea>
+                        </label>
+
+                        <label class="settings-field">
+                          <span>摘要（可选）</span>
+                          <textarea
+                            id="operations-risks-summary-input"
+                            rows="4"
+                            placeholder="这项风险为什么重要、当前影响范围和处置状态是什么。"
+                          ></textarea>
+                        </label>
+
+                        <div class="settings-inline-actions">
+                          <button id="operations-risks-save-button" type="button" class="toolbar-button subtle">保存风险</button>
+                          <button id="operations-risks-reset-button" type="button" class="ghost-button">清空草稿</button>
+                          <p class="settings-inline-copy">
+                            这一版先直接记 `risk | incident`、严重度和关联 ids，先把高风险事项从聊天里单独拔出来。
+                          </p>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>节奏记录</h3>
+                    <span class="meta-label">Cadence 最小对象首版</span>
+                  </div>
+
+                  <p class="settings-section-copy">
+                    先把周检、续费、备份抽查和账单复盘这类固定动作收成长期节奏，并先挂回 `asset / playbook`，避免它们继续只靠单次 scheduled task 勉强表达。
+                  </p>
+
+                  <p
+                    id="operations-cadences-status-note"
+                    class="settings-section-copy settings-probe-note hidden"
+                    aria-live="polite"
+                  ></p>
+
+                  <div class="operations-cadences-layout">
+                    <section class="operations-cadences-list-shell">
+                      <div class="settings-inline-actions operations-cadences-toolbar">
+                        <button id="operations-cadences-refresh-button" type="button" class="ghost-button">刷新节奏</button>
+                        <button id="operations-cadences-new-button" type="button" class="toolbar-button subtle">新建节奏</button>
+
+                        <label class="settings-field operations-cadences-filter-field">
+                          <span>状态筛选</span>
+                          <select id="operations-cadences-filter-select">
+                            <option value="active">active</option>
+                            <option value="paused">paused</option>
+                            <option value="archived">archived</option>
+                            <option value="all">all</option>
+                          </select>
+                        </label>
+                      </div>
+
+                      <p id="operations-cadences-list-empty" class="settings-section-copy">当前筛选下还没有节奏记录。</p>
+                      <div id="operations-cadences-list" class="operations-cadences-list"></div>
+                    </section>
+
+                    <section class="operations-cadences-editor-shell">
+                      <div class="tool-group-head">
+                        <h4 id="operations-cadences-form-title">新建节奏</h4>
+                        <span class="meta-label">最小字段：title / frequency / status / nextRunAt</span>
+                      </div>
+
+                      <div class="settings-stack">
+                        <div class="settings-grid">
+                          <label class="settings-field">
+                            <span>节奏标题</span>
+                            <input
+                              id="operations-cadences-title-input"
+                              type="text"
+                              placeholder="比如：prod-web 周检、Cloudflare 续费复核"
+                              autocomplete="off"
+                              spellcheck="false"
+                            />
+                          </label>
+
+                          <label class="settings-field">
+                            <span>频率</span>
+                            <select id="operations-cadences-frequency-select">
+                              <option value="daily">daily</option>
+                              <option value="weekly">weekly</option>
+                              <option value="monthly">monthly</option>
+                              <option value="quarterly">quarterly</option>
+                              <option value="yearly">yearly</option>
+                              <option value="custom">custom</option>
+                            </select>
+                          </label>
+
+                          <label class="settings-field">
+                            <span>状态</span>
+                            <select id="operations-cadences-status-select">
+                              <option value="active">active</option>
+                              <option value="paused">paused</option>
+                              <option value="archived">archived</option>
+                            </select>
+                          </label>
+                        </div>
+
+                        <div class="settings-grid">
+                          <label class="settings-field">
+                            <span>下一次执行时间</span>
+                            <input
+                              id="operations-cadences-next-run-at-input"
+                              type="text"
+                              placeholder="比如：2026-05-01T01:00:00.000Z"
+                              autocomplete="off"
+                              spellcheck="false"
+                            />
+                          </label>
+
+                          <label class="settings-field">
+                            <span>负责人 principalId（可选）</span>
+                            <input
+                              id="operations-cadences-owner-input"
+                              type="text"
+                              placeholder="比如：principal-local-owner"
+                              autocomplete="off"
+                              spellcheck="false"
+                            />
+                          </label>
+                        </div>
+
+                        <label class="settings-field">
+                          <span>Playbook 引用（可选）</span>
+                          <input
+                            id="operations-cadences-playbook-ref-input"
+                            type="text"
+                            placeholder="比如：docs/runbooks/prod-web-weekly-check.md"
+                            autocomplete="off"
+                            spellcheck="false"
+                          />
+                        </label>
+
+                        <label class="settings-field">
+                          <span>关联资产 ids（每行一条）</span>
+                          <textarea
+                            id="operations-cadences-related-assets-input"
+                            rows="4"
+                            placeholder="asset-ledger-1&#10;asset-ledger-2"
+                          ></textarea>
+                        </label>
+
+                        <label class="settings-field">
+                          <span>摘要（可选）</span>
+                          <textarea
+                            id="operations-cadences-summary-input"
+                            rows="4"
+                            placeholder="这项节奏为什么存在、覆盖哪些资产、执行时看哪份 playbook。"
+                          ></textarea>
+                        </label>
+
+                        <div class="settings-inline-actions">
+                          <button id="operations-cadences-save-button" type="button" class="toolbar-button subtle">保存节奏</button>
+                          <button id="operations-cadences-reset-button" type="button" class="ghost-button">清空草稿</button>
+                          <p class="settings-inline-copy">
+                            这一版先把重复动作收成一等对象，不急着在这里做自动触发编排；先把节奏台账立住。
+                          </p>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>承诺目标</h3>
+                    <span class="meta-label">Commitment 公司层对象首版</span>
+                  </div>
+
+                  <p class="settings-section-copy">
+                    先把季度主线、阶段承诺和必须完成的公司级目标收成对象，并挂回 `asset / decision / risk / cadence / work item`，让老板视图能看到“哪些承诺正在冒烟”，也能继续追它兑现到了哪一步。
+                  </p>
+
+                  <p
+                    id="operations-commitments-status-note"
+                    class="settings-section-copy settings-probe-note hidden"
+                    aria-live="polite"
+                  ></p>
+
+                  <div class="operations-commitments-layout">
+                    <section class="operations-commitments-list-shell">
+                      <div class="settings-inline-actions operations-commitments-toolbar">
+                        <button id="operations-commitments-refresh-button" type="button" class="ghost-button">刷新承诺</button>
+                        <button id="operations-commitments-new-button" type="button" class="toolbar-button subtle">新建承诺</button>
+
+                        <label class="settings-field operations-commitments-filter-field">
+                          <span>状态筛选</span>
+                          <select id="operations-commitments-filter-select">
+                            <option value="planned">planned</option>
+                            <option value="active">active</option>
+                            <option value="at_risk">at_risk</option>
+                            <option value="done">done</option>
+                            <option value="archived">archived</option>
+                            <option value="all">all</option>
+                          </select>
+                        </label>
+                      </div>
+
+                      <p id="operations-commitments-list-empty" class="settings-section-copy">当前筛选下还没有承诺目标。</p>
+                      <div id="operations-commitments-list" class="operations-commitments-list"></div>
+                    </section>
+
+                    <section class="operations-commitments-editor-shell">
+                      <div class="tool-group-head">
+                        <h4 id="operations-commitments-form-title">新建承诺</h4>
+                        <span class="meta-label">字段：title / status / progress / milestone / evidence / related ids</span>
+                      </div>
+
+                      <div class="settings-stack">
+                        <div class="settings-grid">
+                          <label class="settings-field">
+                            <span>承诺标题</span>
+                            <input
+                              id="operations-commitments-title-input"
+                              type="text"
+                              placeholder="比如：Q2 发布主线必须收口"
+                              autocomplete="off"
+                              spellcheck="false"
+                            />
+                          </label>
+
+                          <label class="settings-field">
+                            <span>状态</span>
+                            <select id="operations-commitments-status-select">
+                              <option value="planned">planned</option>
+                              <option value="active">active</option>
+                              <option value="at_risk">at_risk</option>
+                              <option value="done">done</option>
+                              <option value="archived">archived</option>
+                            </select>
+                          </label>
+                        </div>
+
+                        <label class="settings-field">
+                          <span>进度百分比</span>
+                          <input
+                            id="operations-commitments-progress-input"
+                            type="number"
+                            min="0"
+                            max="100"
+                            step="1"
+                            placeholder="比如：35"
+                            autocomplete="off"
+                            spellcheck="false"
+                          />
+                        </label>
+
+                        <div class="settings-grid">
+                          <label class="settings-field">
+                            <span>负责人 principalId（可选）</span>
+                            <input
+                              id="operations-commitments-owner-input"
+                              type="text"
+                              placeholder="比如：principal-local-owner"
+                              autocomplete="off"
+                              spellcheck="false"
+                            />
+                          </label>
+
+                          <label class="settings-field">
+                            <span>开始时间（可选）</span>
+                            <input
+                              id="operations-commitments-starts-at-input"
+                              type="text"
+                              placeholder="比如：2026-04-01T00:00:00.000Z"
+                              autocomplete="off"
+                              spellcheck="false"
+                            />
+                          </label>
+                        </div>
+
+                        <label class="settings-field">
+                          <span>截止时间</span>
+                          <input
+                            id="operations-commitments-due-at-input"
+                            type="text"
+                            placeholder="比如：2026-06-30T23:59:00.000Z"
+                            autocomplete="off"
+                            spellcheck="false"
+                          />
+                        </label>
+
+                        <div class="settings-grid">
+                          <label class="settings-field">
+                            <span>关联资产 ids（每行一条）</span>
+                            <textarea
+                              id="operations-commitments-related-assets-input"
+                              rows="4"
+                              placeholder="asset-ledger-1&#10;asset-ledger-2"
+                            ></textarea>
+                          </label>
+
+                          <label class="settings-field">
+                            <span>关联决策 ids（每行一条）</span>
+                            <textarea
+                              id="operations-commitments-linked-decisions-input"
+                              rows="4"
+                              placeholder="decision-ledger-1&#10;decision-ledger-2"
+                            ></textarea>
+                          </label>
+                        </div>
+
+                        <div class="settings-grid">
+                          <label class="settings-field">
+                            <span>关联风险 ids（每行一条）</span>
+                            <textarea
+                              id="operations-commitments-linked-risks-input"
+                              rows="4"
+                              placeholder="risk-ledger-1&#10;risk-ledger-2"
+                            ></textarea>
+                          </label>
+
+                          <label class="settings-field">
+                            <span>关联节奏 ids（每行一条）</span>
+                            <textarea
+                              id="operations-commitments-related-cadences-input"
+                              rows="4"
+                              placeholder="cadence-ledger-1&#10;cadence-ledger-2"
+                            ></textarea>
+                          </label>
+                        </div>
+
+                        <label class="settings-field">
+                          <span>关联 work item ids（每行一条）</span>
+                          <textarea
+                            id="operations-commitments-related-work-items-input"
+                            rows="4"
+                            placeholder="work-item-1&#10;work-item-2"
+                          ></textarea>
+                        </label>
+
+                        <label class="settings-field">
+                          <span>里程碑（每行：status | title | dueAt | completedAt | summary）</span>
+                          <textarea
+                            id="operations-commitments-milestones-input"
+                            rows="4"
+                            placeholder="active | 内测链路收口 | 2026-05-15T23:59:00.000Z | | 正在补回归&#10;planned | 正式发布 | 2026-06-30T23:59:00.000Z"
+                          ></textarea>
+                        </label>
+
+                        <label class="settings-field">
+                          <span>证据引用（每行：kind | value | label | capturedAt）</span>
+                          <textarea
+                            id="operations-commitments-evidence-refs-input"
+                            rows="4"
+                            placeholder="work_item | work-item-123 | 发布验收执行项 | 2026-05-01T10:00:00.000Z&#10;url | https://example.com/report | 发布报告"
+                          ></textarea>
+                        </label>
+
+                        <label class="settings-field">
+                          <span>摘要（可选）</span>
+                          <textarea
+                            id="operations-commitments-summary-input"
+                            rows="4"
+                            placeholder="这项承诺为什么重要、截止前必须达成什么、当前最大风险是什么。"
+                          ></textarea>
+                        </label>
+
+                        <div class="settings-inline-actions">
+                          <button id="operations-commitments-save-button" type="button" class="toolbar-button subtle">保存承诺</button>
+                          <button id="operations-commitments-reset-button" type="button" class="ghost-button">清空草稿</button>
+                          <p class="settings-inline-copy">
+                            这一版仍不做完整 OKR；先让承诺能看到进度、关键里程碑、证据，以及来自关系边的入/出反链。
+                          </p>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>关系边</h3>
+                    <span class="meta-label">OperationEdge 最小对象首版</span>
+                  </div>
+
+                  <p class="settings-section-copy">
+                    先把 `asset / commitment / decision / risk / cadence / work item` 之间的关系收成可查询边；当前 `Decision / Risk / Cadence / Commitment` 保存时会自动补基础关系边，手工边仍可在这里维护。
+                  </p>
+
+                  <p
+                    id="operations-edges-status-note"
+                    class="settings-section-copy settings-probe-note hidden"
+                    aria-live="polite"
+                  ></p>
+
+                  <div class="operations-edges-layout">
+                    <section class="operations-edges-list-shell">
+                      <div class="settings-inline-actions operations-edges-toolbar">
+                        <button id="operations-edges-refresh-button" type="button" class="ghost-button">刷新关系</button>
+                        <button id="operations-edges-new-button" type="button" class="toolbar-button subtle">新建关系</button>
+
+                        <label class="settings-field operations-edges-filter-field">
+                          <span>状态筛选</span>
+                          <select id="operations-edges-filter-select">
+                            <option value="active">active</option>
+                            <option value="archived">archived</option>
+                            <option value="all">all</option>
+                          </select>
+                        </label>
+                      </div>
+
+                      <p id="operations-edges-list-empty" class="settings-section-copy">当前筛选下还没有关系边。</p>
+                      <div id="operations-edges-list" class="operations-edges-list"></div>
+                    </section>
+
+                    <section class="operations-edges-editor-shell">
+                      <div class="tool-group-head">
+                        <h4 id="operations-edges-form-title">新建关系边</h4>
+                        <span class="meta-label">最小字段：from -> relation -> to</span>
+                      </div>
+
+                      <div class="settings-stack">
+                        <div class="settings-grid">
+                          <label class="settings-field">
+                            <span>起点类型</span>
+                            <select id="operations-edges-from-type-select">
+                              <option value="asset">asset</option>
+                              <option value="commitment">commitment</option>
+                              <option value="decision">decision</option>
+                              <option value="risk">risk</option>
+                              <option value="cadence">cadence</option>
+                              <option value="work_item">work_item</option>
+                            </select>
+                          </label>
+
+                          <label class="settings-field">
+                            <span>起点 id</span>
+                            <input
+                              id="operations-edges-from-id-input"
+                              type="text"
+                              placeholder="比如：decision-ledger-1"
+                              autocomplete="off"
+                              spellcheck="false"
+                            />
+                          </label>
+                        </div>
+
+                        <div class="settings-grid">
+                          <label class="settings-field">
+                            <span>关系类型</span>
+                            <select id="operations-edges-relation-select">
+                              <option value="relates_to">relates_to</option>
+                              <option value="depends_on">depends_on</option>
+                              <option value="mitigates">mitigates</option>
+                              <option value="tracks">tracks</option>
+                              <option value="blocks">blocks</option>
+                              <option value="supersedes">supersedes</option>
+                              <option value="evidence_for">evidence_for</option>
+                            </select>
+                          </label>
+
+                          <label class="settings-field">
+                            <span>状态</span>
+                            <select id="operations-edges-status-select">
+                              <option value="active">active</option>
+                              <option value="archived">archived</option>
+                            </select>
+                          </label>
+                        </div>
+
+                        <div class="settings-grid">
+                          <label class="settings-field">
+                            <span>终点类型</span>
+                            <select id="operations-edges-to-type-select">
+                              <option value="asset">asset</option>
+                              <option value="commitment">commitment</option>
+                              <option value="decision">decision</option>
+                              <option value="risk">risk</option>
+                              <option value="cadence">cadence</option>
+                              <option value="work_item">work_item</option>
+                            </select>
+                          </label>
+
+                          <label class="settings-field">
+                            <span>终点 id</span>
+                            <input
+                              id="operations-edges-to-id-input"
+                              type="text"
+                              placeholder="比如：risk-ledger-1"
+                              autocomplete="off"
+                              spellcheck="false"
+                            />
+                          </label>
+                        </div>
+
+                        <label class="settings-field">
+                          <span>标签（可选）</span>
+                          <input
+                            id="operations-edges-label-input"
+                            type="text"
+                            placeholder="比如：该决策缓解支付风险"
+                            autocomplete="off"
+                            spellcheck="false"
+                          />
+                        </label>
+
+                        <label class="settings-field">
+                          <span>摘要（可选）</span>
+                          <textarea
+                            id="operations-edges-summary-input"
+                            rows="4"
+                            placeholder="这条边说明了什么事实，为什么值得被老板视图看到。"
+                          ></textarea>
+                        </label>
+
+                        <div class="settings-inline-actions">
+                          <button id="operations-edges-save-button" type="button" class="toolbar-button subtle">保存关系</button>
+                          <button id="operations-edges-reset-button" type="button" class="ghost-button">清空草稿</button>
+                          <p class="settings-inline-copy">
+                            自动边来自对象字段，过期后会归档；这里仍保留手工关系维护入口，用来补充自动规则覆盖不到的事实。
+                          </p>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>对象详情 / 图查询</h3>
+                    <span class="meta-label">Graph Query 首版</span>
+                  </div>
+
+                  <p class="settings-section-copy">
+                    基于当前 principal 的 active `OperationEdge` 查询一个对象的关系子图；这里是后端图查询入口，不写回数据库，也不制造第二套关系事实。
+                  </p>
+
+                  <p
+                    id="operations-graph-status-note"
+                    class="settings-section-copy settings-probe-note hidden"
+                    aria-live="polite"
+                  ></p>
+
+                  <div class="operations-graph-shell">
+                    <section class="operations-graph-query-panel">
+                      <div class="settings-grid">
+                        <label class="settings-field">
+                          <span>根对象类型</span>
+                          <select id="operations-graph-root-type-select">
+                            <option value="asset">asset</option>
+                            <option value="commitment">commitment</option>
+                            <option value="decision">decision</option>
+                            <option value="risk">risk</option>
+                            <option value="cadence">cadence</option>
+                            <option value="work_item">work_item</option>
+                          </select>
+                        </label>
+
+                        <label class="settings-field">
+                          <span>根对象 id</span>
+                          <input
+                            id="operations-graph-root-id-input"
+                            type="text"
+                            placeholder="比如：commitment-ledger-1"
+                            autocomplete="off"
+                            spellcheck="false"
+                          />
+                        </label>
+                      </div>
+
+                      <div class="settings-grid">
+                        <label class="settings-field">
+                          <span>目标对象类型（可选）</span>
+                          <select id="operations-graph-target-type-select">
+                            <option value="asset">asset</option>
+                            <option value="commitment">commitment</option>
+                            <option value="decision">decision</option>
+                            <option value="risk">risk</option>
+                            <option value="cadence">cadence</option>
+                            <option value="work_item">work_item</option>
+                          </select>
+                        </label>
+
+                        <label class="settings-field">
+                          <span>目标对象 id（可选）</span>
+                          <input
+                            id="operations-graph-target-id-input"
+                            type="text"
+                            placeholder="比如：asset-ledger-1"
+                            autocomplete="off"
+                            spellcheck="false"
+                          />
+                        </label>
+                      </div>
+
+                      <div class="settings-inline-actions">
+                        <label class="settings-field operations-graph-depth-field">
+                          <span>最大深度</span>
+                          <select id="operations-graph-depth-select">
+                            <option value="1">1</option>
+                            <option value="2" selected>2</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                          </select>
+                        </label>
+                        <button id="operations-graph-refresh-button" type="button" class="toolbar-button subtle">查询对象图</button>
+                        <p class="settings-inline-copy">
+                          第一版只做小深度 BFS 子图和可选最短路径，复杂路径搜索后面再单独做。
+                        </p>
+                      </div>
+                    </section>
+
+                    <section class="operations-graph-result-panel">
+                      <div id="operations-graph-summary" class="operations-graph-summary"></div>
+                      <div class="operations-graph-result-grid">
+                        <div>
+                          <h4>节点</h4>
+                          <div id="operations-graph-nodes" class="operations-graph-list"></div>
+                        </div>
+                        <div>
+                          <h4>关系边</h4>
+                          <div id="operations-graph-edges" class="operations-graph-list"></div>
+                        </div>
+                      </div>
+                      <div>
+                        <h4>最短路径</h4>
+                        <div id="operations-graph-path" class="operations-graph-path"></div>
+                      </div>
+                    </section>
+                  </div>
+                </section>
+
+                <section class="workspace-tool-group">
+                  <div class="tool-group-head">
+                    <h3>当前实例快照</h3>
+                    <span class="meta-label">从当前 Web 会话和已加载状态里取真相</span>
+                  </div>
+
+                  <p class="settings-section-copy">
+                    这里先展示当前会话、执行边界、内部协作入口、知识候选、资产、节奏、承诺、决策、风险和关系边的即时快照，避免“方向很大，但眼前看不到东西”。
+                  </p>
+
+                  <div id="operations-center-live-grid" class="operations-center-card-grid operations-center-live-grid"></div>
+
+                  <div class="settings-inline-actions">
+                    <a
+                      id="operations-center-platform-link"
+                      class="toolbar-button toolbar-link-button disabled"
+                      href="#"
+                      target="_blank"
+                      rel="noreferrer noopener"
+                    >
+                      打开独立 Platform 页
+                    </a>
+                    <p id="operations-center-platform-note" class="settings-inline-copy">
+                      平台入口状态会在这里汇总；接通后可以直接跳到独立 Platform 页面。
+                    </p>
+                  </div>
+                </section>
+              </section>
+
               <section
                 id="settings-runtime-section"
                 class="settings-panel"

@@ -26,6 +26,75 @@ const COMPOSER_SUBMIT_LABELS = {
   steer: "发送 Steer",
 };
 
+const OPERATIONS_CENTER_FOUNDATION_CARDS = [
+  {
+    title: "执行闭环",
+    state: "ready",
+    label: "已接通",
+    summary: "当前已经有真实的派工、执行、交付和收口链路。",
+    detail: "work item / run / artifact / scheduled task / resolution",
+  },
+  {
+    title: "协作治理",
+    state: "ready",
+    label: "已接通",
+    summary: "长期数字员工、运行边界、等待项和治理动作已经进入控制面。",
+    detail: "managed agent / execution boundary / waiting / mailbox / handoff",
+  },
+  {
+    title: "内部协作",
+    state: "ready",
+    label: "已接通",
+    summary: "内部会议室已经能主持多员工讨论，并把结论提升成正式执行项。",
+    detail: "meeting room / discussion mode / resolution / promote / close",
+  },
+  {
+    title: "知识沉淀",
+    state: "partial",
+    label: "部分接通",
+    summary: "会话历史、长期记忆候选和本地中文文档已经形成第一版知识层。",
+    detail: "conversation history / memory candidates / docs / memory workspace",
+  },
+];
+
+const OPERATIONS_CENTER_NEXT_OBJECTS = [
+  {
+    title: "Asset",
+    state: "partial",
+    label: "首版已接通",
+    summary: "最小资产台账已经接上，并且开始作为决策记录挂回真实世界的锚点。",
+    detail: "当前先支持 kind / name / status / refs / owner / tags 的一等对象。",
+  },
+  {
+    title: "Decision",
+    state: "partial",
+    label: "首版已接通",
+    summary: "最小决策记录已经接上，老板拍板和影响范围不再只留在聊天里。",
+    detail: "当前先补 title / status / decidedAt / related asset / related work item。",
+  },
+  {
+    title: "Risk / Incident",
+    state: "partial",
+    label: "首版已接通",
+    summary: "最小风险卡已经接上，异常、故障和权限风险开始有独立对象。",
+    detail: "当前先补 type / severity / status / related asset / linked decision。",
+  },
+  {
+    title: "Cadence",
+    state: "partial",
+    label: "首版已接通",
+    summary: "最小节奏记录已经接上，固定动作不再只靠单次 scheduled task 勉强表达。",
+    detail: "当前先补 title / frequency / status / nextRunAt / playbookRef。",
+  },
+  {
+    title: "Commitment",
+    state: "partial",
+    label: "首版已接通",
+    summary: "公司层承诺和阶段主线已经开始结构化，能挂回资产、决策、风险、节奏和执行项。",
+    detail: "当前先补 title / status / owner / dueAt / related ids。",
+  },
+];
+
 export function createRenderer(app) {
   const { dom, store, utils } = app;
 
@@ -135,6 +204,15 @@ export function createRenderer(app) {
     renderIdentityState();
     renderMemoryCandidatesState();
     renderMeetingRoomsState();
+    renderOperationsCenterState(thread, effectiveSettings);
+    renderOperationsBossViewState();
+    renderOperationsAssetsState();
+    renderOperationsCadencesState();
+    renderOperationsCommitmentsState();
+    renderOperationsDecisionsState();
+    renderOperationsEdgesState();
+    renderOperationsGraphState();
+    renderOperationsRisksState();
     renderSkillsState();
     renderMcpState();
     renderPluginsState();
@@ -278,6 +356,8 @@ export function createRenderer(app) {
       button.tabIndex = active ? 0 : -1;
     });
 
+    dom.settingsOperationsCenterSection?.classList.toggle("hidden", activeSection !== "operations-center");
+    dom.settingsOperationsCenterSection?.setAttribute("aria-hidden", String(activeSection !== "operations-center"));
     dom.settingsRuntimeSection.classList.toggle("hidden", activeSection !== "runtime");
     dom.settingsRuntimeSection.setAttribute("aria-hidden", String(activeSection !== "runtime"));
     dom.settingsAuthSection.classList.toggle("hidden", activeSection !== "auth");
@@ -298,6 +378,1014 @@ export function createRenderer(app) {
     dom.settingsThirdPartySection.setAttribute("aria-hidden", String(activeSection !== "third-party"));
     dom.settingsModeSwitchSection.classList.toggle("hidden", activeSection !== "mode-switch");
     dom.settingsModeSwitchSection.setAttribute("aria-hidden", String(activeSection !== "mode-switch"));
+  }
+
+  function renderOperationsCenterState(
+    thread = store.getActiveThread(),
+    effectiveSettings = store.resolveEffectiveSettings(thread?.settings ?? store.createDefaultThreadSettings()),
+  ) {
+    if (!dom.operationsCenterFoundationGrid || !dom.operationsCenterNextGrid || !dom.operationsCenterLiveGrid) {
+      return;
+    }
+
+    const threads = Array.isArray(store.state?.threads) ? store.state.threads.filter(Boolean) : (thread ? [thread] : []);
+    const archivedCount = threads.filter((item) => Boolean(item?.historyArchivedAt)).length;
+    const activeThread = thread ?? store.getActiveThread();
+    const activeTurnCount = activeThread ? app.history.getDisplayTurnCount(activeThread) : 0;
+    const accessMode = typeof store.resolveAccessMode === "function"
+      ? store.resolveAccessMode(effectiveSettings)
+      : "auth";
+    const meetingRoomsState = normalizeMeetingRoomsState(app.runtime.meetingRooms);
+    const memoryCandidatesState = normalizeOperationsCenterMemoryCandidatesState(app.runtime.memoryCandidates);
+    const operationsBossViewState = normalizeOperationsBossViewState(app.runtime.operationsBossView);
+    const operationsAssetsState = normalizeOperationsAssetsState(app.runtime.operationsAssets);
+    const operationsCadencesState = normalizeOperationsCadencesState(app.runtime.operationsCadences);
+    const operationsCommitmentsState = normalizeOperationsCommitmentsState(app.runtime.operationsCommitments);
+    const operationsDecisionsState = normalizeOperationsDecisionsState(app.runtime.operationsDecisions);
+    const operationsEdgesState = normalizeOperationsEdgesState(app.runtime.operationsEdges);
+    const operationsGraphState = normalizeOperationsGraphState(app.runtime.operationsGraph);
+    const operationsRisksState = normalizeOperationsRisksState(app.runtime.operationsRisks);
+    const statusNote = resolveOperationsCenterStatusNote(
+      meetingRoomsState,
+      memoryCandidatesState,
+      operationsBossViewState,
+      operationsAssetsState,
+      operationsCadencesState,
+      operationsCommitmentsState,
+      operationsDecisionsState,
+      operationsEdgesState,
+      operationsGraphState,
+      operationsRisksState,
+    );
+    const workspaceLabel = normalizeWorkspacePath(activeThread?.settings?.workspacePath) || "跟随 Themis 启动目录";
+    const workspaceLocked = activeThread ? isWorkspaceLocked(activeThread) : false;
+    const platformLink = resolveOperationsCenterPlatformLink(meetingRoomsState);
+    const platformNote = resolveOperationsCenterPlatformNote(meetingRoomsState, platformLink);
+
+    dom.operationsCenterFoundationGrid.innerHTML = OPERATIONS_CENTER_FOUNDATION_CARDS
+      .map((card) => renderOperationsCenterCard(card, utils.escapeHtml))
+      .join("");
+    dom.operationsCenterNextGrid.innerHTML = OPERATIONS_CENTER_NEXT_OBJECTS
+      .map((card) => renderOperationsCenterCard(card, utils.escapeHtml))
+      .join("");
+    dom.operationsCenterLiveGrid.innerHTML = [
+      {
+        title: "当前会话",
+        state: activeThread?.serverThreadId ? "ready" : "partial",
+        label: activeThread?.serverThreadId ? "已接通后端 thread" : "本地会话",
+        summary: activeThread
+          ? `${activeThread.title || "未命名会话"}`
+          : "当前还没有可展示的活跃会话。",
+        detail: activeThread
+          ? `${activeTurnCount} 条任务｜${activeThread.serverThreadId ? `serverThreadId=${activeThread.serverThreadId}` : "首次发送后会创建新的 Codex 会话"}`
+          : "发送第一条任务后，这里会显示当前会话快照。",
+      },
+      {
+        title: "本机会话池",
+        state: threads.length > 0 ? "ready" : "partial",
+        label: threads.length > 0 ? "已持久化" : "待积累",
+        summary: `当前本地保留 ${threads.length} 条会话，已归档 ${archivedCount} 条。`,
+        detail: activeThread?.historyNeedsRehydrate
+          ? "当前活跃会话还需要从本机 SQLite 补载完整历史。"
+          : "侧边栏里的会话和归档状态都来自本地持久化记录。",
+      },
+      {
+        title: "执行边界",
+        state: workspaceLocked ? "partial" : "ready",
+        label: accessMode === "third-party" ? "第三方模式" : "认证模式",
+        summary: `${accessMode === "third-party" ? "当前会话走第三方兼容 provider" : "当前会话走 Codex 认证链路"}｜工作区：${workspaceLabel}`,
+        detail: workspaceLocked
+          ? "这个会话已经执行过任务，如需换工作区请先新建会话。"
+          : "当前会话还能继续调整工作区与接入方式。",
+      },
+      {
+        title: "内部协作入口",
+        state: resolveOperationsCenterMeetingRoomCardState(meetingRoomsState),
+        label: resolveOperationsCenterMeetingRoomLabel(meetingRoomsState),
+        summary: resolveOperationsCenterMeetingRoomSummary(meetingRoomsState),
+        detail: resolveOperationsCenterMeetingRoomDetail(meetingRoomsState),
+      },
+      {
+        title: "长期知识候选",
+        state: resolveOperationsCenterMemoryCardState(memoryCandidatesState),
+        label: resolveOperationsCenterMemoryLabel(memoryCandidatesState),
+        summary: resolveOperationsCenterMemorySummary(memoryCandidatesState),
+        detail: resolveOperationsCenterMemoryDetail(memoryCandidatesState),
+      },
+      {
+        title: "老板视图",
+        state: resolveOperationsCenterBossViewCardState(operationsBossViewState),
+        label: resolveOperationsCenterBossViewLabel(operationsBossViewState),
+        summary: resolveOperationsCenterBossViewSummary(operationsBossViewState),
+        detail: resolveOperationsCenterBossViewDetail(operationsBossViewState),
+      },
+      {
+        title: "资产台账",
+        state: resolveOperationsCenterAssetCardState(operationsAssetsState),
+        label: resolveOperationsCenterAssetLabel(operationsAssetsState),
+        summary: resolveOperationsCenterAssetSummary(operationsAssetsState),
+        detail: resolveOperationsCenterAssetDetail(operationsAssetsState),
+      },
+      {
+        title: "节奏记录",
+        state: resolveOperationsCenterCadenceCardState(operationsCadencesState),
+        label: resolveOperationsCenterCadenceLabel(operationsCadencesState),
+        summary: resolveOperationsCenterCadenceSummary(operationsCadencesState),
+        detail: resolveOperationsCenterCadenceDetail(operationsCadencesState),
+      },
+      {
+        title: "承诺目标",
+        state: resolveOperationsCenterCommitmentCardState(operationsCommitmentsState),
+        label: resolveOperationsCenterCommitmentLabel(operationsCommitmentsState),
+        summary: resolveOperationsCenterCommitmentSummary(operationsCommitmentsState),
+        detail: resolveOperationsCenterCommitmentDetail(operationsCommitmentsState),
+      },
+      {
+        title: "决策记录",
+        state: resolveOperationsCenterDecisionCardState(operationsDecisionsState),
+        label: resolveOperationsCenterDecisionLabel(operationsDecisionsState),
+        summary: resolveOperationsCenterDecisionSummary(operationsDecisionsState),
+        detail: resolveOperationsCenterDecisionDetail(operationsDecisionsState),
+      },
+      {
+        title: "关系边",
+        state: resolveOperationsCenterEdgeCardState(operationsEdgesState),
+        label: resolveOperationsCenterEdgeLabel(operationsEdgesState),
+        summary: resolveOperationsCenterEdgeSummary(operationsEdgesState),
+        detail: resolveOperationsCenterEdgeDetail(operationsEdgesState),
+      },
+      {
+        title: "对象图查询",
+        state: resolveOperationsCenterGraphCardState(operationsGraphState),
+        label: resolveOperationsCenterGraphLabel(operationsGraphState),
+        summary: resolveOperationsCenterGraphSummary(operationsGraphState),
+        detail: resolveOperationsCenterGraphDetail(operationsGraphState),
+      },
+      {
+        title: "风险 / 事故",
+        state: resolveOperationsCenterRiskCardState(operationsRisksState),
+        label: resolveOperationsCenterRiskLabel(operationsRisksState),
+        summary: resolveOperationsCenterRiskSummary(operationsRisksState),
+        detail: resolveOperationsCenterRiskDetail(operationsRisksState),
+      },
+    ].map((card) => renderOperationsCenterCard(card, utils.escapeHtml)).join("");
+
+    dom.operationsCenterStatusNote.classList.toggle("hidden", !statusNote);
+    dom.operationsCenterStatusNote.textContent = statusNote;
+    if (statusNote) {
+      dom.operationsCenterStatusNote.dataset.state =
+        memoryCandidatesState.errorMessage
+          || meetingRoomsState.errorMessage
+          || operationsBossViewState.errorMessage
+          || operationsAssetsState.errorMessage
+          || operationsCadencesState.errorMessage
+          || operationsCommitmentsState.errorMessage
+          || operationsDecisionsState.errorMessage
+          || operationsEdgesState.errorMessage
+          || operationsGraphState.errorMessage
+          || operationsRisksState.errorMessage
+        ? "error"
+        : meetingRoomsState.loadingStatus
+            || memoryCandidatesState.loading
+            || operationsBossViewState.loading
+            || operationsAssetsState.loading
+            || operationsCadencesState.loading
+            || operationsCommitmentsState.loading
+            || operationsDecisionsState.loading
+            || operationsEdgesState.loading
+            || operationsGraphState.loading
+            || operationsRisksState.loading
+          ? "loading"
+          : "supported";
+    } else {
+      delete dom.operationsCenterStatusNote.dataset.state;
+    }
+
+    if (dom.operationsCenterPlatformLink) {
+      const directLinkAvailable = Boolean(platformLink);
+      dom.operationsCenterPlatformLink.href = directLinkAvailable ? platformLink : "#";
+      dom.operationsCenterPlatformLink.classList.toggle("disabled", !directLinkAvailable);
+      dom.operationsCenterPlatformLink.setAttribute("aria-disabled", directLinkAvailable ? "false" : "true");
+      dom.operationsCenterPlatformLink.tabIndex = directLinkAvailable ? 0 : -1;
+    }
+
+    if (dom.operationsCenterPlatformNote) {
+      dom.operationsCenterPlatformNote.textContent = platformNote;
+    }
+  }
+
+  function renderOperationsBossViewState() {
+    const bossViewState = normalizeOperationsBossViewState(app.runtime.operationsBossView);
+    const bossView = bossViewState.bossView;
+    const busy = Boolean(bossViewState.loading);
+    const statusMessage = resolveOperationsBossViewStatusMessage(bossViewState);
+
+    if (!dom.operationsBossViewStatusNote) {
+      return;
+    }
+
+    dom.operationsBossViewStatusNote.classList.toggle("hidden", !statusMessage);
+    dom.operationsBossViewStatusNote.textContent = statusMessage;
+    if (statusMessage) {
+      dom.operationsBossViewStatusNote.dataset.state = bossViewState.errorMessage
+        ? "error"
+        : busy
+          ? "loading"
+          : bossViewState.status === "ready"
+            ? "supported"
+            : "inconclusive";
+    } else {
+      delete dom.operationsBossViewStatusNote.dataset.state;
+    }
+
+    if (dom.operationsBossViewRefreshButton) {
+      dom.operationsBossViewRefreshButton.disabled = busy;
+      dom.operationsBossViewRefreshButton.textContent = busy ? "刷新中..." : "刷新老板视图";
+    }
+
+    if (dom.operationsBossViewHeadline) {
+      dom.operationsBossViewHeadline.innerHTML = bossView
+        ? renderOperationsBossViewHeadline(bossView, utils.escapeHtml)
+        : renderOperationsBossViewEmptyHeadline(utils.escapeHtml);
+      dom.operationsBossViewHeadline.dataset.tone = bossView?.headline?.tone || "neutral";
+    }
+
+    if (dom.operationsBossViewMetrics) {
+      dom.operationsBossViewMetrics.innerHTML = bossView?.metrics?.length
+        ? bossView.metrics.map((metric) => renderOperationsBossViewMetric(metric, utils.escapeHtml)).join("")
+        : renderOperationsBossViewEmptyCard("关键指标会在刷新后出现。", utils.escapeHtml);
+    }
+
+    if (dom.operationsBossViewFocusList) {
+      dom.operationsBossViewFocusList.innerHTML = bossView?.focusItems?.length
+        ? bossView.focusItems.map((item) => renderOperationsBossViewFocusCard(item, utils.escapeHtml)).join("")
+        : renderOperationsBossViewEmptyCard("当前没有明显红灯；继续补对象事实后，这里会自动浮出焦点事项。", utils.escapeHtml);
+    }
+
+    if (dom.operationsBossViewRelationsList) {
+      dom.operationsBossViewRelationsList.innerHTML = bossView?.relationItems?.length
+        ? bossView.relationItems.map((item) => renderOperationsBossViewRelationCard(item, utils.escapeHtml)).join("")
+        : renderOperationsBossViewEmptyCard("当前没有 active 关系边。", utils.escapeHtml);
+    }
+
+    if (dom.operationsBossViewDecisionsList) {
+      dom.operationsBossViewDecisionsList.innerHTML = bossView?.recentDecisions?.length
+        ? bossView.recentDecisions.map((item) => renderOperationsBossViewDecisionCard(item, utils.escapeHtml)).join("")
+        : renderOperationsBossViewEmptyCard("当前没有可展示的近期决策。", utils.escapeHtml);
+    }
+  }
+
+  function renderOperationsAssetsState() {
+    const assetsState = normalizeOperationsAssetsState(app.runtime.operationsAssets);
+    const edgesState = normalizeOperationsEdgesState(app.runtime.operationsEdges);
+    const assets = assetsState.assets;
+    const busy = Boolean(assetsState.loading || assetsState.submitting);
+    const statusMessage = resolveOperationsAssetsStatusMessage(assetsState);
+
+    if (!dom.operationsAssetsStatusNote) {
+      return;
+    }
+
+    dom.operationsAssetsStatusNote.classList.toggle("hidden", !statusMessage);
+    dom.operationsAssetsStatusNote.textContent = statusMessage;
+    if (statusMessage) {
+      dom.operationsAssetsStatusNote.dataset.state = assetsState.errorMessage
+        ? "error"
+        : busy
+          ? "loading"
+          : assetsState.noticeMessage
+            ? "supported"
+            : assetsState.status === "ready"
+              ? "supported"
+              : "inconclusive";
+    } else {
+      delete dom.operationsAssetsStatusNote.dataset.state;
+    }
+
+    if (dom.operationsAssetsFilterSelect) {
+      dom.operationsAssetsFilterSelect.value = assetsState.filterStatus;
+      dom.operationsAssetsFilterSelect.disabled = busy;
+    }
+
+    if (dom.operationsAssetsRefreshButton) {
+      dom.operationsAssetsRefreshButton.disabled = busy;
+      dom.operationsAssetsRefreshButton.textContent = assetsState.loading ? "刷新中..." : "刷新台账";
+    }
+
+    if (dom.operationsAssetsNewButton) {
+      dom.operationsAssetsNewButton.disabled = busy;
+    }
+
+    if (dom.operationsAssetsFormTitle) {
+      dom.operationsAssetsFormTitle.textContent = assetsState.selectedAssetId
+        ? `编辑资产：${assetsState.draft.name || assetsState.selectedAssetId}`
+        : "新建资产";
+    }
+
+    if (dom.operationsAssetsKindSelect) {
+      dom.operationsAssetsKindSelect.value = assetsState.draft.kind;
+      dom.operationsAssetsKindSelect.disabled = busy;
+    }
+    if (dom.operationsAssetsNameInput) {
+      dom.operationsAssetsNameInput.value = assetsState.draft.name;
+      dom.operationsAssetsNameInput.disabled = busy;
+    }
+    if (dom.operationsAssetsStatusSelect) {
+      dom.operationsAssetsStatusSelect.value = assetsState.draft.status;
+      dom.operationsAssetsStatusSelect.disabled = busy;
+    }
+    if (dom.operationsAssetsOwnerInput) {
+      dom.operationsAssetsOwnerInput.value = assetsState.draft.ownerPrincipalId;
+      dom.operationsAssetsOwnerInput.disabled = busy;
+    }
+    if (dom.operationsAssetsTagsInput) {
+      dom.operationsAssetsTagsInput.value = assetsState.draft.tagsText;
+      dom.operationsAssetsTagsInput.disabled = busy;
+    }
+    if (dom.operationsAssetsRefsInput) {
+      dom.operationsAssetsRefsInput.value = assetsState.draft.refsText;
+      dom.operationsAssetsRefsInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsAssetsRefsInput);
+    }
+    if (dom.operationsAssetsSummaryInput) {
+      dom.operationsAssetsSummaryInput.value = assetsState.draft.summary;
+      dom.operationsAssetsSummaryInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsAssetsSummaryInput);
+    }
+    if (dom.operationsAssetsSaveButton) {
+      dom.operationsAssetsSaveButton.disabled = busy;
+      dom.operationsAssetsSaveButton.textContent = assetsState.submitting
+        ? "保存中..."
+        : assetsState.selectedAssetId
+          ? "更新资产"
+          : "保存资产";
+    }
+    if (dom.operationsAssetsResetButton) {
+      dom.operationsAssetsResetButton.disabled = busy;
+    }
+
+    if (dom.operationsAssetsListEmpty) {
+      dom.operationsAssetsListEmpty.classList.toggle("hidden", assets.length > 0);
+      dom.operationsAssetsListEmpty.textContent = resolveEmptyOperationsAssetsLabel(assetsState);
+    }
+
+    if (dom.operationsAssetsList) {
+      dom.operationsAssetsList.innerHTML = assets
+        .map((asset) => renderOperationsAssetCard(asset, {
+          active: asset.assetId === assetsState.selectedAssetId,
+          relatedEdges: resolveOperationEdgesForObject(edgesState.edges, "asset", asset.assetId),
+          impact: resolveOperationImpactForObject(edgesState.edges, "asset", asset.assetId),
+          escapeHtml: utils.escapeHtml,
+        }))
+        .join("");
+    }
+  }
+
+  function renderOperationsCadencesState() {
+    const cadencesState = normalizeOperationsCadencesState(app.runtime.operationsCadences);
+    const edgesState = normalizeOperationsEdgesState(app.runtime.operationsEdges);
+    const cadences = cadencesState.cadences;
+    const busy = Boolean(cadencesState.loading || cadencesState.submitting);
+    const statusMessage = resolveOperationsCadencesStatusMessage(cadencesState);
+
+    if (!dom.operationsCadencesStatusNote) {
+      return;
+    }
+
+    dom.operationsCadencesStatusNote.classList.toggle("hidden", !statusMessage);
+    dom.operationsCadencesStatusNote.textContent = statusMessage;
+    if (statusMessage) {
+      dom.operationsCadencesStatusNote.dataset.state = cadencesState.errorMessage
+        ? "error"
+        : busy
+          ? "loading"
+          : cadencesState.noticeMessage
+            ? "supported"
+            : cadencesState.status === "ready"
+              ? "supported"
+              : "inconclusive";
+    } else {
+      delete dom.operationsCadencesStatusNote.dataset.state;
+    }
+
+    if (dom.operationsCadencesFilterSelect) {
+      dom.operationsCadencesFilterSelect.value = cadencesState.filterStatus;
+      dom.operationsCadencesFilterSelect.disabled = busy;
+    }
+
+    if (dom.operationsCadencesRefreshButton) {
+      dom.operationsCadencesRefreshButton.disabled = busy;
+      dom.operationsCadencesRefreshButton.textContent = cadencesState.loading ? "刷新中..." : "刷新节奏";
+    }
+
+    if (dom.operationsCadencesNewButton) {
+      dom.operationsCadencesNewButton.disabled = busy;
+    }
+
+    if (dom.operationsCadencesFormTitle) {
+      dom.operationsCadencesFormTitle.textContent = cadencesState.selectedCadenceId
+        ? `编辑节奏：${cadencesState.draft.title || cadencesState.selectedCadenceId}`
+        : "新建节奏";
+    }
+
+    if (dom.operationsCadencesTitleInput) {
+      dom.operationsCadencesTitleInput.value = cadencesState.draft.title;
+      dom.operationsCadencesTitleInput.disabled = busy;
+    }
+    if (dom.operationsCadencesFrequencySelect) {
+      dom.operationsCadencesFrequencySelect.value = cadencesState.draft.frequency;
+      dom.operationsCadencesFrequencySelect.disabled = busy;
+    }
+    if (dom.operationsCadencesStatusSelect) {
+      dom.operationsCadencesStatusSelect.value = cadencesState.draft.status;
+      dom.operationsCadencesStatusSelect.disabled = busy;
+    }
+    if (dom.operationsCadencesNextRunAtInput) {
+      dom.operationsCadencesNextRunAtInput.value = cadencesState.draft.nextRunAt;
+      dom.operationsCadencesNextRunAtInput.disabled = busy;
+    }
+    if (dom.operationsCadencesOwnerInput) {
+      dom.operationsCadencesOwnerInput.value = cadencesState.draft.ownerPrincipalId;
+      dom.operationsCadencesOwnerInput.disabled = busy;
+    }
+    if (dom.operationsCadencesPlaybookRefInput) {
+      dom.operationsCadencesPlaybookRefInput.value = cadencesState.draft.playbookRef;
+      dom.operationsCadencesPlaybookRefInput.disabled = busy;
+    }
+    if (dom.operationsCadencesRelatedAssetsInput) {
+      dom.operationsCadencesRelatedAssetsInput.value = cadencesState.draft.relatedAssetIdsText;
+      dom.operationsCadencesRelatedAssetsInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsCadencesRelatedAssetsInput);
+    }
+    if (dom.operationsCadencesSummaryInput) {
+      dom.operationsCadencesSummaryInput.value = cadencesState.draft.summary;
+      dom.operationsCadencesSummaryInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsCadencesSummaryInput);
+    }
+    if (dom.operationsCadencesSaveButton) {
+      dom.operationsCadencesSaveButton.disabled = busy;
+      dom.operationsCadencesSaveButton.textContent = cadencesState.submitting
+        ? "保存中..."
+        : cadencesState.selectedCadenceId
+          ? "更新节奏"
+          : "保存节奏";
+    }
+    if (dom.operationsCadencesResetButton) {
+      dom.operationsCadencesResetButton.disabled = busy;
+    }
+
+    if (dom.operationsCadencesListEmpty) {
+      dom.operationsCadencesListEmpty.classList.toggle("hidden", cadences.length > 0);
+      dom.operationsCadencesListEmpty.textContent = resolveEmptyOperationsCadencesLabel(cadencesState);
+    }
+
+    if (dom.operationsCadencesList) {
+      dom.operationsCadencesList.innerHTML = cadences
+        .map((cadence) => renderOperationsCadenceCard(cadence, {
+          active: cadence.cadenceId === cadencesState.selectedCadenceId,
+          relatedEdges: resolveOperationEdgesForObject(edgesState.edges, "cadence", cadence.cadenceId),
+          impact: resolveOperationImpactForObject(edgesState.edges, "cadence", cadence.cadenceId),
+          escapeHtml: utils.escapeHtml,
+        }))
+        .join("");
+    }
+  }
+
+  function renderOperationsCommitmentsState() {
+    const commitmentsState = normalizeOperationsCommitmentsState(app.runtime.operationsCommitments);
+    const edgesState = normalizeOperationsEdgesState(app.runtime.operationsEdges);
+    const commitments = commitmentsState.commitments;
+    const busy = Boolean(commitmentsState.loading || commitmentsState.submitting);
+    const statusMessage = resolveOperationsCommitmentsStatusMessage(commitmentsState);
+
+    if (!dom.operationsCommitmentsStatusNote) {
+      return;
+    }
+
+    dom.operationsCommitmentsStatusNote.classList.toggle("hidden", !statusMessage);
+    dom.operationsCommitmentsStatusNote.textContent = statusMessage;
+    if (statusMessage) {
+      dom.operationsCommitmentsStatusNote.dataset.state = commitmentsState.errorMessage
+        ? "error"
+        : busy
+          ? "loading"
+          : commitmentsState.noticeMessage
+            ? "supported"
+            : commitmentsState.status === "ready"
+              ? "supported"
+              : "inconclusive";
+    } else {
+      delete dom.operationsCommitmentsStatusNote.dataset.state;
+    }
+
+    if (dom.operationsCommitmentsFilterSelect) {
+      dom.operationsCommitmentsFilterSelect.value = commitmentsState.filterStatus;
+      dom.operationsCommitmentsFilterSelect.disabled = busy;
+    }
+
+    if (dom.operationsCommitmentsRefreshButton) {
+      dom.operationsCommitmentsRefreshButton.disabled = busy;
+      dom.operationsCommitmentsRefreshButton.textContent = commitmentsState.loading ? "刷新中..." : "刷新承诺";
+    }
+
+    if (dom.operationsCommitmentsNewButton) {
+      dom.operationsCommitmentsNewButton.disabled = busy;
+    }
+
+    if (dom.operationsCommitmentsFormTitle) {
+      dom.operationsCommitmentsFormTitle.textContent = commitmentsState.selectedCommitmentId
+        ? `编辑承诺：${commitmentsState.draft.title || commitmentsState.selectedCommitmentId}`
+        : "新建承诺";
+    }
+
+    if (dom.operationsCommitmentsTitleInput) {
+      dom.operationsCommitmentsTitleInput.value = commitmentsState.draft.title;
+      dom.operationsCommitmentsTitleInput.disabled = busy;
+    }
+    if (dom.operationsCommitmentsStatusSelect) {
+      dom.operationsCommitmentsStatusSelect.value = commitmentsState.draft.status;
+      dom.operationsCommitmentsStatusSelect.disabled = busy;
+    }
+    if (dom.operationsCommitmentsProgressInput) {
+      dom.operationsCommitmentsProgressInput.value = commitmentsState.draft.progressPercentText;
+      dom.operationsCommitmentsProgressInput.disabled = busy;
+    }
+    if (dom.operationsCommitmentsOwnerInput) {
+      dom.operationsCommitmentsOwnerInput.value = commitmentsState.draft.ownerPrincipalId;
+      dom.operationsCommitmentsOwnerInput.disabled = busy;
+    }
+    if (dom.operationsCommitmentsStartsAtInput) {
+      dom.operationsCommitmentsStartsAtInput.value = commitmentsState.draft.startsAt;
+      dom.operationsCommitmentsStartsAtInput.disabled = busy;
+    }
+    if (dom.operationsCommitmentsDueAtInput) {
+      dom.operationsCommitmentsDueAtInput.value = commitmentsState.draft.dueAt;
+      dom.operationsCommitmentsDueAtInput.disabled = busy;
+    }
+    if (dom.operationsCommitmentsRelatedAssetsInput) {
+      dom.operationsCommitmentsRelatedAssetsInput.value = commitmentsState.draft.relatedAssetIdsText;
+      dom.operationsCommitmentsRelatedAssetsInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsCommitmentsRelatedAssetsInput);
+    }
+    if (dom.operationsCommitmentsLinkedDecisionsInput) {
+      dom.operationsCommitmentsLinkedDecisionsInput.value = commitmentsState.draft.linkedDecisionIdsText;
+      dom.operationsCommitmentsLinkedDecisionsInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsCommitmentsLinkedDecisionsInput);
+    }
+    if (dom.operationsCommitmentsLinkedRisksInput) {
+      dom.operationsCommitmentsLinkedRisksInput.value = commitmentsState.draft.linkedRiskIdsText;
+      dom.operationsCommitmentsLinkedRisksInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsCommitmentsLinkedRisksInput);
+    }
+    if (dom.operationsCommitmentsRelatedCadencesInput) {
+      dom.operationsCommitmentsRelatedCadencesInput.value = commitmentsState.draft.relatedCadenceIdsText;
+      dom.operationsCommitmentsRelatedCadencesInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsCommitmentsRelatedCadencesInput);
+    }
+    if (dom.operationsCommitmentsRelatedWorkItemsInput) {
+      dom.operationsCommitmentsRelatedWorkItemsInput.value = commitmentsState.draft.relatedWorkItemIdsText;
+      dom.operationsCommitmentsRelatedWorkItemsInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsCommitmentsRelatedWorkItemsInput);
+    }
+    if (dom.operationsCommitmentsMilestonesInput) {
+      dom.operationsCommitmentsMilestonesInput.value = commitmentsState.draft.milestonesText;
+      dom.operationsCommitmentsMilestonesInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsCommitmentsMilestonesInput);
+    }
+    if (dom.operationsCommitmentsEvidenceRefsInput) {
+      dom.operationsCommitmentsEvidenceRefsInput.value = commitmentsState.draft.evidenceRefsText;
+      dom.operationsCommitmentsEvidenceRefsInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsCommitmentsEvidenceRefsInput);
+    }
+    if (dom.operationsCommitmentsSummaryInput) {
+      dom.operationsCommitmentsSummaryInput.value = commitmentsState.draft.summary;
+      dom.operationsCommitmentsSummaryInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsCommitmentsSummaryInput);
+    }
+    if (dom.operationsCommitmentsSaveButton) {
+      dom.operationsCommitmentsSaveButton.disabled = busy;
+      dom.operationsCommitmentsSaveButton.textContent = commitmentsState.submitting
+        ? "保存中..."
+        : commitmentsState.selectedCommitmentId
+          ? "更新承诺"
+          : "保存承诺";
+    }
+    if (dom.operationsCommitmentsResetButton) {
+      dom.operationsCommitmentsResetButton.disabled = busy;
+    }
+
+    if (dom.operationsCommitmentsListEmpty) {
+      dom.operationsCommitmentsListEmpty.classList.toggle("hidden", commitments.length > 0);
+      dom.operationsCommitmentsListEmpty.textContent = resolveEmptyOperationsCommitmentsLabel(commitmentsState);
+    }
+
+    if (dom.operationsCommitmentsList) {
+      dom.operationsCommitmentsList.innerHTML = commitments
+        .map((commitment) => renderOperationsCommitmentCard(commitment, {
+          active: commitment.commitmentId === commitmentsState.selectedCommitmentId,
+          relatedEdges: resolveOperationEdgesForObject(edgesState.edges, "commitment", commitment.commitmentId),
+          impact: resolveOperationImpactForObject(edgesState.edges, "commitment", commitment.commitmentId),
+          escapeHtml: utils.escapeHtml,
+        }))
+        .join("");
+    }
+  }
+
+  function renderOperationsDecisionsState() {
+    const decisionsState = normalizeOperationsDecisionsState(app.runtime.operationsDecisions);
+    const edgesState = normalizeOperationsEdgesState(app.runtime.operationsEdges);
+    const decisions = decisionsState.decisions;
+    const busy = Boolean(decisionsState.loading || decisionsState.submitting);
+    const statusMessage = resolveOperationsDecisionsStatusMessage(decisionsState);
+
+    if (!dom.operationsDecisionsStatusNote) {
+      return;
+    }
+
+    dom.operationsDecisionsStatusNote.classList.toggle("hidden", !statusMessage);
+    dom.operationsDecisionsStatusNote.textContent = statusMessage;
+    if (statusMessage) {
+      dom.operationsDecisionsStatusNote.dataset.state = decisionsState.errorMessage
+        ? "error"
+        : busy
+          ? "loading"
+          : decisionsState.noticeMessage
+            ? "supported"
+            : decisionsState.status === "ready"
+              ? "supported"
+              : "inconclusive";
+    } else {
+      delete dom.operationsDecisionsStatusNote.dataset.state;
+    }
+
+    if (dom.operationsDecisionsFilterSelect) {
+      dom.operationsDecisionsFilterSelect.value = decisionsState.filterStatus;
+      dom.operationsDecisionsFilterSelect.disabled = busy;
+    }
+
+    if (dom.operationsDecisionsRefreshButton) {
+      dom.operationsDecisionsRefreshButton.disabled = busy;
+      dom.operationsDecisionsRefreshButton.textContent = decisionsState.loading ? "刷新中..." : "刷新决策";
+    }
+
+    if (dom.operationsDecisionsNewButton) {
+      dom.operationsDecisionsNewButton.disabled = busy;
+    }
+
+    if (dom.operationsDecisionsFormTitle) {
+      dom.operationsDecisionsFormTitle.textContent = decisionsState.selectedDecisionId
+        ? `编辑决策：${decisionsState.draft.title || decisionsState.selectedDecisionId}`
+        : "新建决策";
+    }
+
+    if (dom.operationsDecisionsTitleInput) {
+      dom.operationsDecisionsTitleInput.value = decisionsState.draft.title;
+      dom.operationsDecisionsTitleInput.disabled = busy;
+    }
+    if (dom.operationsDecisionsStatusSelect) {
+      dom.operationsDecisionsStatusSelect.value = decisionsState.draft.status;
+      dom.operationsDecisionsStatusSelect.disabled = busy;
+    }
+    if (dom.operationsDecisionsDecidedByInput) {
+      dom.operationsDecisionsDecidedByInput.value = decisionsState.draft.decidedByPrincipalId;
+      dom.operationsDecisionsDecidedByInput.disabled = busy;
+    }
+    if (dom.operationsDecisionsDecidedAtInput) {
+      dom.operationsDecisionsDecidedAtInput.value = decisionsState.draft.decidedAt;
+      dom.operationsDecisionsDecidedAtInput.disabled = busy;
+    }
+    if (dom.operationsDecisionsRelatedAssetsInput) {
+      dom.operationsDecisionsRelatedAssetsInput.value = decisionsState.draft.relatedAssetIdsText;
+      dom.operationsDecisionsRelatedAssetsInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsDecisionsRelatedAssetsInput);
+    }
+    if (dom.operationsDecisionsRelatedWorkItemsInput) {
+      dom.operationsDecisionsRelatedWorkItemsInput.value = decisionsState.draft.relatedWorkItemIdsText;
+      dom.operationsDecisionsRelatedWorkItemsInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsDecisionsRelatedWorkItemsInput);
+    }
+    if (dom.operationsDecisionsSummaryInput) {
+      dom.operationsDecisionsSummaryInput.value = decisionsState.draft.summary;
+      dom.operationsDecisionsSummaryInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsDecisionsSummaryInput);
+    }
+    if (dom.operationsDecisionsSaveButton) {
+      dom.operationsDecisionsSaveButton.disabled = busy;
+      dom.operationsDecisionsSaveButton.textContent = decisionsState.submitting
+        ? "保存中..."
+        : decisionsState.selectedDecisionId
+          ? "更新决策"
+          : "保存决策";
+    }
+    if (dom.operationsDecisionsResetButton) {
+      dom.operationsDecisionsResetButton.disabled = busy;
+    }
+
+    if (dom.operationsDecisionsListEmpty) {
+      dom.operationsDecisionsListEmpty.classList.toggle("hidden", decisions.length > 0);
+      dom.operationsDecisionsListEmpty.textContent = resolveEmptyOperationsDecisionsLabel(decisionsState);
+    }
+
+    if (dom.operationsDecisionsList) {
+      dom.operationsDecisionsList.innerHTML = decisions
+        .map((decision) => renderOperationsDecisionCard(decision, {
+          active: decision.decisionId === decisionsState.selectedDecisionId,
+          relatedEdges: resolveOperationEdgesForObject(edgesState.edges, "decision", decision.decisionId),
+          impact: resolveOperationImpactForObject(edgesState.edges, "decision", decision.decisionId),
+          escapeHtml: utils.escapeHtml,
+        }))
+        .join("");
+    }
+  }
+
+  function renderOperationsEdgesState() {
+    const edgesState = normalizeOperationsEdgesState(app.runtime.operationsEdges);
+    const edges = edgesState.edges;
+    const busy = Boolean(edgesState.loading || edgesState.submitting);
+    const statusMessage = resolveOperationsEdgesStatusMessage(edgesState);
+
+    if (!dom.operationsEdgesStatusNote) {
+      return;
+    }
+
+    dom.operationsEdgesStatusNote.classList.toggle("hidden", !statusMessage);
+    dom.operationsEdgesStatusNote.textContent = statusMessage;
+    if (statusMessage) {
+      dom.operationsEdgesStatusNote.dataset.state = edgesState.errorMessage
+        ? "error"
+        : busy
+          ? "loading"
+          : edgesState.noticeMessage
+            ? "supported"
+            : edgesState.status === "ready"
+              ? "supported"
+              : "inconclusive";
+    } else {
+      delete dom.operationsEdgesStatusNote.dataset.state;
+    }
+
+    if (dom.operationsEdgesFilterSelect) {
+      dom.operationsEdgesFilterSelect.value = edgesState.filterStatus;
+      dom.operationsEdgesFilterSelect.disabled = busy;
+    }
+
+    if (dom.operationsEdgesRefreshButton) {
+      dom.operationsEdgesRefreshButton.disabled = busy;
+      dom.operationsEdgesRefreshButton.textContent = edgesState.loading ? "刷新中..." : "刷新关系";
+    }
+
+    if (dom.operationsEdgesNewButton) {
+      dom.operationsEdgesNewButton.disabled = busy;
+    }
+
+    if (dom.operationsEdgesFormTitle) {
+      dom.operationsEdgesFormTitle.textContent = edgesState.selectedEdgeId
+        ? `编辑关系：${edgesState.draft.label || edgesState.selectedEdgeId}`
+        : "新建关系边";
+    }
+
+    if (dom.operationsEdgesFromTypeSelect) {
+      dom.operationsEdgesFromTypeSelect.value = edgesState.draft.fromObjectType;
+      dom.operationsEdgesFromTypeSelect.disabled = busy;
+    }
+    if (dom.operationsEdgesFromIdInput) {
+      dom.operationsEdgesFromIdInput.value = edgesState.draft.fromObjectId;
+      dom.operationsEdgesFromIdInput.disabled = busy;
+    }
+    if (dom.operationsEdgesToTypeSelect) {
+      dom.operationsEdgesToTypeSelect.value = edgesState.draft.toObjectType;
+      dom.operationsEdgesToTypeSelect.disabled = busy;
+    }
+    if (dom.operationsEdgesToIdInput) {
+      dom.operationsEdgesToIdInput.value = edgesState.draft.toObjectId;
+      dom.operationsEdgesToIdInput.disabled = busy;
+    }
+    if (dom.operationsEdgesRelationSelect) {
+      dom.operationsEdgesRelationSelect.value = edgesState.draft.relationType;
+      dom.operationsEdgesRelationSelect.disabled = busy;
+    }
+    if (dom.operationsEdgesStatusSelect) {
+      dom.operationsEdgesStatusSelect.value = edgesState.draft.status;
+      dom.operationsEdgesStatusSelect.disabled = busy;
+    }
+    if (dom.operationsEdgesLabelInput) {
+      dom.operationsEdgesLabelInput.value = edgesState.draft.label;
+      dom.operationsEdgesLabelInput.disabled = busy;
+    }
+    if (dom.operationsEdgesSummaryInput) {
+      dom.operationsEdgesSummaryInput.value = edgesState.draft.summary;
+      dom.operationsEdgesSummaryInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsEdgesSummaryInput);
+    }
+    if (dom.operationsEdgesSaveButton) {
+      dom.operationsEdgesSaveButton.disabled = busy;
+      dom.operationsEdgesSaveButton.textContent = edgesState.submitting
+        ? "保存中..."
+        : edgesState.selectedEdgeId
+          ? "更新关系"
+          : "保存关系";
+    }
+    if (dom.operationsEdgesResetButton) {
+      dom.operationsEdgesResetButton.disabled = busy;
+    }
+
+    if (dom.operationsEdgesListEmpty) {
+      dom.operationsEdgesListEmpty.classList.toggle("hidden", edges.length > 0);
+      dom.operationsEdgesListEmpty.textContent = resolveEmptyOperationsEdgesLabel(edgesState);
+    }
+
+    if (dom.operationsEdgesList) {
+      dom.operationsEdgesList.innerHTML = edges
+        .map((edge) => renderOperationsEdgeCard(edge, {
+          active: edge.edgeId === edgesState.selectedEdgeId,
+          escapeHtml: utils.escapeHtml,
+        }))
+        .join("");
+    }
+  }
+
+  function renderOperationsGraphState() {
+    const graphState = normalizeOperationsGraphState(app.runtime.operationsGraph);
+    const busy = Boolean(graphState.loading);
+    const statusMessage = resolveOperationsGraphStatusMessage(graphState);
+
+    if (!dom.operationsGraphStatusNote) {
+      return;
+    }
+
+    dom.operationsGraphStatusNote.classList.toggle("hidden", !statusMessage);
+    dom.operationsGraphStatusNote.textContent = statusMessage;
+    if (statusMessage) {
+      dom.operationsGraphStatusNote.dataset.state = graphState.errorMessage
+        ? "error"
+        : busy
+          ? "loading"
+          : graphState.noticeMessage
+            ? "supported"
+            : graphState.status === "ready"
+              ? "supported"
+              : "inconclusive";
+    } else {
+      delete dom.operationsGraphStatusNote.dataset.state;
+    }
+
+    if (dom.operationsGraphRootTypeSelect) {
+      dom.operationsGraphRootTypeSelect.value = graphState.rootObjectType;
+      dom.operationsGraphRootTypeSelect.disabled = busy;
+    }
+    if (dom.operationsGraphRootIdInput) {
+      dom.operationsGraphRootIdInput.value = graphState.rootObjectId;
+      dom.operationsGraphRootIdInput.disabled = busy;
+    }
+    if (dom.operationsGraphTargetTypeSelect) {
+      dom.operationsGraphTargetTypeSelect.value = graphState.targetObjectType;
+      dom.operationsGraphTargetTypeSelect.disabled = busy;
+    }
+    if (dom.operationsGraphTargetIdInput) {
+      dom.operationsGraphTargetIdInput.value = graphState.targetObjectId;
+      dom.operationsGraphTargetIdInput.disabled = busy;
+    }
+    if (dom.operationsGraphDepthSelect) {
+      dom.operationsGraphDepthSelect.value = graphState.maxDepth;
+      dom.operationsGraphDepthSelect.disabled = busy;
+    }
+    if (dom.operationsGraphRefreshButton) {
+      dom.operationsGraphRefreshButton.disabled = busy;
+      dom.operationsGraphRefreshButton.textContent = busy ? "查询中..." : "查询对象图";
+    }
+
+    if (dom.operationsGraphSummary) {
+      dom.operationsGraphSummary.innerHTML = renderOperationsGraphSummary(graphState.graph, utils.escapeHtml);
+    }
+    if (dom.operationsGraphNodes) {
+      dom.operationsGraphNodes.innerHTML = renderOperationsGraphNodes(graphState.graph?.nodes, utils.escapeHtml);
+    }
+    if (dom.operationsGraphEdges) {
+      dom.operationsGraphEdges.innerHTML = renderOperationsGraphEdges(graphState.graph?.edges, utils.escapeHtml);
+    }
+    if (dom.operationsGraphPath) {
+      dom.operationsGraphPath.innerHTML = renderOperationsGraphPath(graphState.graph, utils.escapeHtml);
+    }
+  }
+
+  function renderOperationsRisksState() {
+    const risksState = normalizeOperationsRisksState(app.runtime.operationsRisks);
+    const edgesState = normalizeOperationsEdgesState(app.runtime.operationsEdges);
+    const risks = risksState.risks;
+    const busy = Boolean(risksState.loading || risksState.submitting);
+    const statusMessage = resolveOperationsRisksStatusMessage(risksState);
+
+    if (!dom.operationsRisksStatusNote) {
+      return;
+    }
+
+    dom.operationsRisksStatusNote.classList.toggle("hidden", !statusMessage);
+    dom.operationsRisksStatusNote.textContent = statusMessage;
+    if (statusMessage) {
+      dom.operationsRisksStatusNote.dataset.state = risksState.errorMessage
+        ? "error"
+        : busy
+          ? "loading"
+          : risksState.noticeMessage
+            ? "supported"
+            : risksState.status === "ready"
+              ? "supported"
+              : "inconclusive";
+    } else {
+      delete dom.operationsRisksStatusNote.dataset.state;
+    }
+
+    if (dom.operationsRisksFilterSelect) {
+      dom.operationsRisksFilterSelect.value = risksState.filterStatus;
+      dom.operationsRisksFilterSelect.disabled = busy;
+    }
+
+    if (dom.operationsRisksRefreshButton) {
+      dom.operationsRisksRefreshButton.disabled = busy;
+      dom.operationsRisksRefreshButton.textContent = risksState.loading ? "刷新中..." : "刷新风险";
+    }
+
+    if (dom.operationsRisksNewButton) {
+      dom.operationsRisksNewButton.disabled = busy;
+    }
+
+    if (dom.operationsRisksFormTitle) {
+      dom.operationsRisksFormTitle.textContent = risksState.selectedRiskId
+        ? `编辑风险：${risksState.draft.title || risksState.selectedRiskId}`
+        : "新建风险";
+    }
+
+    if (dom.operationsRisksTypeSelect) {
+      dom.operationsRisksTypeSelect.value = risksState.draft.type;
+      dom.operationsRisksTypeSelect.disabled = busy;
+    }
+    if (dom.operationsRisksSeveritySelect) {
+      dom.operationsRisksSeveritySelect.value = risksState.draft.severity;
+      dom.operationsRisksSeveritySelect.disabled = busy;
+    }
+    if (dom.operationsRisksStatusSelect) {
+      dom.operationsRisksStatusSelect.value = risksState.draft.status;
+      dom.operationsRisksStatusSelect.disabled = busy;
+    }
+    if (dom.operationsRisksTitleInput) {
+      dom.operationsRisksTitleInput.value = risksState.draft.title;
+      dom.operationsRisksTitleInput.disabled = busy;
+    }
+    if (dom.operationsRisksOwnerInput) {
+      dom.operationsRisksOwnerInput.value = risksState.draft.ownerPrincipalId;
+      dom.operationsRisksOwnerInput.disabled = busy;
+    }
+    if (dom.operationsRisksDetectedAtInput) {
+      dom.operationsRisksDetectedAtInput.value = risksState.draft.detectedAt;
+      dom.operationsRisksDetectedAtInput.disabled = busy;
+    }
+    if (dom.operationsRisksRelatedAssetsInput) {
+      dom.operationsRisksRelatedAssetsInput.value = risksState.draft.relatedAssetIdsText;
+      dom.operationsRisksRelatedAssetsInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsRisksRelatedAssetsInput);
+    }
+    if (dom.operationsRisksLinkedDecisionsInput) {
+      dom.operationsRisksLinkedDecisionsInput.value = risksState.draft.linkedDecisionIdsText;
+      dom.operationsRisksLinkedDecisionsInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsRisksLinkedDecisionsInput);
+    }
+    if (dom.operationsRisksRelatedWorkItemsInput) {
+      dom.operationsRisksRelatedWorkItemsInput.value = risksState.draft.relatedWorkItemIdsText;
+      dom.operationsRisksRelatedWorkItemsInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsRisksRelatedWorkItemsInput);
+    }
+    if (dom.operationsRisksSummaryInput) {
+      dom.operationsRisksSummaryInput.value = risksState.draft.summary;
+      dom.operationsRisksSummaryInput.disabled = busy;
+      utils.autoResizeTextarea?.(dom.operationsRisksSummaryInput);
+    }
+    if (dom.operationsRisksSaveButton) {
+      dom.operationsRisksSaveButton.disabled = busy;
+      dom.operationsRisksSaveButton.textContent = risksState.submitting
+        ? "保存中..."
+        : risksState.selectedRiskId
+          ? "更新风险"
+          : "保存风险";
+    }
+    if (dom.operationsRisksResetButton) {
+      dom.operationsRisksResetButton.disabled = busy;
+    }
+
+    if (dom.operationsRisksListEmpty) {
+      dom.operationsRisksListEmpty.classList.toggle("hidden", risks.length > 0);
+      dom.operationsRisksListEmpty.textContent = resolveEmptyOperationsRisksLabel(risksState);
+    }
+
+    if (dom.operationsRisksList) {
+      dom.operationsRisksList.innerHTML = risks
+        .map((risk) => renderOperationsRiskCard(risk, {
+          active: risk.riskId === risksState.selectedRiskId,
+          relatedEdges: resolveOperationEdgesForObject(edgesState.edges, "risk", risk.riskId),
+          impact: resolveOperationImpactForObject(edgesState.edges, "risk", risk.riskId),
+          escapeHtml: utils.escapeHtml,
+        }))
+        .join("");
+    }
   }
 
   function renderMemoryCandidatesState() {
@@ -1806,6 +2894,15 @@ export function createRenderer(app) {
     renderThreadControlPanel,
     renderWorkspaceTools,
     renderAgentsState,
+    renderOperationsCenterState,
+    renderOperationsBossViewState,
+    renderOperationsAssetsState,
+    renderOperationsCadencesState,
+    renderOperationsCommitmentsState,
+    renderOperationsDecisionsState,
+    renderOperationsEdgesState,
+    renderOperationsGraphState,
+    renderOperationsRisksState,
     renderMeetingRoomsState,
     setToolsPanelOpen,
     setToolsPanelSection,
@@ -2545,8 +3642,2216 @@ function resolveModelFallbackLabel(runtimeConfig) {
   return "正在读取 Codex 模型...";
 }
 
+function renderOperationsCenterCard(card, escapeHtml) {
+  const title = escapeHtml(card.title || "");
+  const label = escapeHtml(card.label || "");
+  const summary = escapeHtml(card.summary || "");
+  const detail = escapeHtml(card.detail || "");
+  const state = escapeHtml(card.state || "partial");
+
+  return `
+    <article class="operations-center-card" data-state="${state}">
+      <div class="operations-center-card-head">
+        <span class="operations-center-card-label">${label}</span>
+        <h4>${title}</h4>
+      </div>
+      <p class="operations-center-card-copy">${summary}</p>
+      <p class="operations-center-card-meta">${detail}</p>
+    </article>
+  `;
+}
+
+function renderOperationsBossViewHeadline(bossView, escapeHtml) {
+  const headline = bossView.headline || {};
+
+  return `
+    <p class="operations-boss-view-kicker">经营晨报｜${escapeHtml(bossView.generatedAt || "未记录生成时间")}</p>
+    <h4>${escapeHtml(headline.title || "老板视图待刷新")}</h4>
+    <p class="operations-boss-view-copy">${escapeHtml(headline.summary || "刷新后会展示当前运营面判断。")}</p>
+  `;
+}
+
+function renderOperationsBossViewEmptyHeadline(escapeHtml) {
+  return `
+    <p class="operations-boss-view-kicker">经营晨报｜待刷新</p>
+    <h4>${escapeHtml("老板视图还没有读取")}</h4>
+    <p class="operations-boss-view-copy">${escapeHtml("点击刷新后，Themis 会基于资产、决策、风险、节奏和关系边生成只读摘要。")}</p>
+  `;
+}
+
+function renderOperationsBossViewMetric(metric, escapeHtml) {
+  const tone = escapeHtml(metric.tone || "neutral");
+
+  return `
+    <article class="operations-boss-view-metric operations-boss-view-card" data-tone="${tone}">
+      <p class="operations-boss-view-card-meta">${escapeHtml(metric.label || "")}</p>
+      <strong>${escapeHtml(String(metric.value ?? 0))}</strong>
+      <p class="operations-boss-view-card-copy">${escapeHtml(metric.detail || "")}</p>
+    </article>
+  `;
+}
+
+function renderOperationsBossViewFocusCard(item, escapeHtml) {
+  const tone = escapeHtml(item.tone || "neutral");
+
+  return `
+    <article class="operations-boss-view-card" data-tone="${tone}">
+      <p class="operations-boss-view-card-meta">${escapeHtml(item.label || "")}｜${escapeHtml(item.objectType || "")}:${escapeHtml(item.objectId || "")}</p>
+      <h5>${escapeHtml(item.title || "")}</h5>
+      <p class="operations-boss-view-card-copy">${escapeHtml(item.summary || "")}</p>
+      <p class="operations-boss-view-card-meta">建议动作：${escapeHtml(item.actionLabel || "补充下一步动作")}</p>
+    </article>
+  `;
+}
+
+function renderOperationsBossViewRelationCard(item, escapeHtml) {
+  const tone = escapeHtml(item.tone || "neutral");
+
+  return `
+    <article class="operations-boss-view-card" data-tone="${tone}">
+      <p class="operations-boss-view-card-meta">${escapeHtml(item.relationType || "")}</p>
+      <h5>${escapeHtml(item.label || "")}</h5>
+      <p class="operations-boss-view-card-copy">${escapeHtml(item.fromLabel || "")} -> ${escapeHtml(item.toLabel || "")}</p>
+      <p class="operations-boss-view-card-meta">${escapeHtml(item.summary || "")}</p>
+    </article>
+  `;
+}
+
+function renderOperationsBossViewDecisionCard(item, escapeHtml) {
+  return `
+    <article class="operations-boss-view-card" data-tone="neutral">
+      <p class="operations-boss-view-card-meta">${escapeHtml(item.status || "")}｜${escapeHtml(item.decidedAt || "")}</p>
+      <h5>${escapeHtml(item.title || "")}</h5>
+      <p class="operations-boss-view-card-copy">${escapeHtml(item.summary || "")}</p>
+    </article>
+  `;
+}
+
+function renderOperationsBossViewEmptyCard(copy, escapeHtml) {
+  return `
+    <article class="operations-boss-view-card" data-tone="neutral">
+      <p class="operations-boss-view-card-copy">${escapeHtml(copy || "")}</p>
+    </article>
+  `;
+}
+
+function renderOperationsAssetCard(asset, options) {
+  const refs = Array.isArray(asset.refs) ? asset.refs : [];
+  const tags = Array.isArray(asset.tags) ? asset.tags : [];
+  const kind = options.escapeHtml(asset.kind || "other");
+  const name = options.escapeHtml(asset.name || "");
+  const summary = options.escapeHtml(asset.summary || "当前还没有补充资产摘要。");
+  const owner = options.escapeHtml(asset.ownerPrincipalId || "未指定 owner");
+  const meta = options.escapeHtml([
+    owner,
+    `${tags.length} 个标签`,
+    `${refs.length} 条 refs`,
+  ].join("｜"));
+  const refsText = refs.length > 0
+    ? refs.map((ref) => {
+      const kindText = ref.kind || "other";
+      const valueText = ref.value || "";
+      const labelText = ref.label || "";
+      return labelText ? `${kindText}:${valueText} (${labelText})` : `${kindText}:${valueText}`;
+    }).join(" / ")
+    : "还没有挂 refs；先把真实世界映射补进来。";
+  const backlinkMarkup = renderOperationsObjectBacklinks(options.relatedEdges, options.escapeHtml, "asset", asset.assetId);
+  const impactMarkup = renderOperationsObjectImpactMap(options.impact, options.escapeHtml);
+
+  return `
+    <button
+      type="button"
+      class="operations-asset-card ${options.active ? "active" : ""}"
+      data-operations-asset-id="${options.escapeHtml(asset.assetId || "")}"
+    >
+      <div class="operations-asset-card-head">
+        <div>
+          <p class="operations-asset-card-kicker">${kind}</p>
+          <h4>${name}</h4>
+        </div>
+        <span class="operations-asset-badge" data-state="${options.escapeHtml(asset.status || "active")}">
+          ${options.escapeHtml(asset.status || "active")}
+        </span>
+      </div>
+      <p class="operations-asset-card-summary">${summary}</p>
+      <p class="operations-asset-card-meta">${meta}</p>
+      <p class="operations-asset-ref-list">${options.escapeHtml(refsText)}</p>
+      ${backlinkMarkup}
+      ${impactMarkup}
+    </button>
+  `;
+}
+
+function renderOperationsDecisionCard(decision, options) {
+  const relatedAssetIds = Array.isArray(decision.relatedAssetIds) ? decision.relatedAssetIds : [];
+  const relatedWorkItemIds = Array.isArray(decision.relatedWorkItemIds) ? decision.relatedWorkItemIds : [];
+  const title = options.escapeHtml(decision.title || "");
+  const summary = options.escapeHtml(decision.summary || "当前还没有补充决策摘要。");
+  const decidedBy = options.escapeHtml(decision.decidedByPrincipalId || "未指定决定人");
+  const decidedAt = options.escapeHtml(decision.decidedAt || "未记录 decidedAt");
+  const meta = options.escapeHtml([
+    decidedBy,
+    decidedAt,
+    `${relatedAssetIds.length} 个资产`,
+    `${relatedWorkItemIds.length} 个 work item`,
+  ].join("｜"));
+  const linksText = [
+    relatedAssetIds.length > 0
+      ? `Asset: ${relatedAssetIds.join(", ")}`
+      : "Asset: 暂未挂接",
+    relatedWorkItemIds.length > 0
+      ? `Work item: ${relatedWorkItemIds.join(", ")}`
+      : "Work item: 暂未挂接",
+  ].join(" / ");
+  const backlinkMarkup = renderOperationsObjectBacklinks(
+    options.relatedEdges,
+    options.escapeHtml,
+    "decision",
+    decision.decisionId,
+  );
+  const impactMarkup = renderOperationsObjectImpactMap(options.impact, options.escapeHtml);
+
+  return `
+    <button
+      type="button"
+      class="operations-decision-card ${options.active ? "active" : ""}"
+      data-operations-decision-id="${options.escapeHtml(decision.decisionId || "")}"
+    >
+      <div class="operations-decision-card-head">
+        <div>
+          <p class="operations-decision-card-kicker">Decision</p>
+          <h4>${title}</h4>
+        </div>
+        <span class="operations-decision-badge" data-state="${options.escapeHtml(decision.status || "active")}">
+          ${options.escapeHtml(decision.status || "active")}
+        </span>
+      </div>
+      <p class="operations-decision-card-summary">${summary}</p>
+      <p class="operations-decision-card-meta">${meta}</p>
+      <p class="operations-decision-link-list">${options.escapeHtml(linksText)}</p>
+      ${backlinkMarkup}
+      ${impactMarkup}
+    </button>
+  `;
+}
+
+function renderOperationsRiskCard(risk, options) {
+  const relatedAssetIds = Array.isArray(risk.relatedAssetIds) ? risk.relatedAssetIds : [];
+  const linkedDecisionIds = Array.isArray(risk.linkedDecisionIds) ? risk.linkedDecisionIds : [];
+  const relatedWorkItemIds = Array.isArray(risk.relatedWorkItemIds) ? risk.relatedWorkItemIds : [];
+  const title = options.escapeHtml(risk.title || "");
+  const summary = options.escapeHtml(risk.summary || "当前还没有补充风险摘要。");
+  const owner = options.escapeHtml(risk.ownerPrincipalId || "未指定 owner");
+  const detectedAt = options.escapeHtml(risk.detectedAt || "未记录 detectedAt");
+  const meta = options.escapeHtml([
+    owner,
+    detectedAt,
+    `${relatedAssetIds.length} 个资产`,
+    `${linkedDecisionIds.length} 个决策`,
+    `${relatedWorkItemIds.length} 个 work item`,
+  ].join("｜"));
+  const linksText = [
+    relatedAssetIds.length > 0 ? `Asset: ${relatedAssetIds.join(", ")}` : "Asset: 暂未挂接",
+    linkedDecisionIds.length > 0 ? `Decision: ${linkedDecisionIds.join(", ")}` : "Decision: 暂未挂接",
+    relatedWorkItemIds.length > 0 ? `Work item: ${relatedWorkItemIds.join(", ")}` : "Work item: 暂未挂接",
+  ].join(" / ");
+  const backlinkMarkup = renderOperationsObjectBacklinks(options.relatedEdges, options.escapeHtml, "risk", risk.riskId);
+  const impactMarkup = renderOperationsObjectImpactMap(options.impact, options.escapeHtml);
+
+  return `
+    <button
+      type="button"
+      class="operations-risk-card ${options.active ? "active" : ""}"
+      data-operations-risk-id="${options.escapeHtml(risk.riskId || "")}"
+    >
+      <div class="operations-risk-card-head">
+        <div>
+          <p class="operations-risk-card-kicker">${options.escapeHtml(risk.type || "risk")}｜${options.escapeHtml(risk.severity || "medium")}</p>
+          <h4>${title}</h4>
+        </div>
+        <span class="operations-risk-badge" data-state="${options.escapeHtml(risk.status || "open")}">
+          ${options.escapeHtml(risk.status || "open")}
+        </span>
+      </div>
+      <p class="operations-risk-card-summary">${summary}</p>
+      <p class="operations-risk-card-meta">${meta}</p>
+      <p class="operations-risk-link-list">${options.escapeHtml(linksText)}</p>
+      ${backlinkMarkup}
+      ${impactMarkup}
+    </button>
+  `;
+}
+
+function renderOperationsCadenceCard(cadence, options) {
+  const relatedAssetIds = Array.isArray(cadence.relatedAssetIds) ? cadence.relatedAssetIds : [];
+  const title = options.escapeHtml(cadence.title || "");
+  const summary = options.escapeHtml(cadence.summary || "当前还没有补充节奏摘要。");
+  const owner = options.escapeHtml(cadence.ownerPrincipalId || "未指定 owner");
+  const nextRunAt = options.escapeHtml(cadence.nextRunAt || "未记录 nextRunAt");
+  const playbookRef = options.escapeHtml(cadence.playbookRef || "未绑定 playbook");
+  const meta = options.escapeHtml([
+    owner,
+    nextRunAt,
+    `${relatedAssetIds.length} 个资产`,
+    playbookRef,
+  ].join("｜"));
+  const linksText = [
+    relatedAssetIds.length > 0 ? `Asset: ${relatedAssetIds.join(", ")}` : "Asset: 暂未挂接",
+    cadence.playbookRef ? `Playbook: ${cadence.playbookRef}` : "Playbook: 暂未挂接",
+  ].join(" / ");
+  const backlinkMarkup = renderOperationsObjectBacklinks(
+    options.relatedEdges,
+    options.escapeHtml,
+    "cadence",
+    cadence.cadenceId,
+  );
+  const impactMarkup = renderOperationsObjectImpactMap(options.impact, options.escapeHtml);
+
+  return `
+    <button
+      type="button"
+      class="operations-cadence-card ${options.active ? "active" : ""}"
+      data-operations-cadence-id="${options.escapeHtml(cadence.cadenceId || "")}"
+    >
+      <div class="operations-cadence-card-head">
+        <div>
+          <p class="operations-cadence-card-kicker">Cadence｜${options.escapeHtml(cadence.frequency || "weekly")}</p>
+          <h4>${title}</h4>
+        </div>
+        <span class="operations-cadence-badge" data-state="${options.escapeHtml(cadence.status || "active")}">
+          ${options.escapeHtml(cadence.status || "active")}
+        </span>
+      </div>
+      <p class="operations-cadence-card-summary">${summary}</p>
+      <p class="operations-cadence-card-meta">${meta}</p>
+      <p class="operations-cadence-link-list">${options.escapeHtml(linksText)}</p>
+      ${backlinkMarkup}
+      ${impactMarkup}
+    </button>
+  `;
+}
+
+function renderOperationsCommitmentCard(commitment, options) {
+  const relatedAssetIds = Array.isArray(commitment.relatedAssetIds) ? commitment.relatedAssetIds : [];
+  const linkedDecisionIds = Array.isArray(commitment.linkedDecisionIds) ? commitment.linkedDecisionIds : [];
+  const linkedRiskIds = Array.isArray(commitment.linkedRiskIds) ? commitment.linkedRiskIds : [];
+  const relatedCadenceIds = Array.isArray(commitment.relatedCadenceIds) ? commitment.relatedCadenceIds : [];
+  const relatedWorkItemIds = Array.isArray(commitment.relatedWorkItemIds) ? commitment.relatedWorkItemIds : [];
+  const milestones = normalizeCommitmentMilestonesForRender(commitment.milestones);
+  const evidenceRefs = normalizeCommitmentEvidenceRefsForRender(commitment.evidenceRefs);
+  const progressPercent = normalizeProgressPercentForRender(commitment.progressPercent);
+  const title = options.escapeHtml(commitment.title || "");
+  const summary = options.escapeHtml(commitment.summary || "当前还没有补充承诺摘要。");
+  const owner = options.escapeHtml(commitment.ownerPrincipalId || "未指定 owner");
+  const startsAt = options.escapeHtml(commitment.startsAt || "未记录 startsAt");
+  const dueAt = options.escapeHtml(commitment.dueAt || "未记录 dueAt");
+  const milestoneDoneCount = milestones.filter((milestone) => milestone.status === "done").length;
+  const milestoneBlockedCount = milestones.filter((milestone) => milestone.status === "blocked").length;
+  const meta = options.escapeHtml([
+    owner,
+    `进度：${progressPercent}%`,
+    `开始：${startsAt}`,
+    `截止：${dueAt}`,
+    `${milestoneDoneCount}/${milestones.length} 个里程碑完成`,
+    `${milestoneBlockedCount} 个阻塞里程碑`,
+    `${evidenceRefs.length} 条证据`,
+    `${linkedRiskIds.length} 个风险`,
+    `${relatedWorkItemIds.length} 个 work item`,
+  ].join("｜"));
+  const linksText = [
+    relatedAssetIds.length > 0 ? `Asset: ${relatedAssetIds.join(", ")}` : "Asset: 暂未挂接",
+    linkedDecisionIds.length > 0 ? `Decision: ${linkedDecisionIds.join(", ")}` : "Decision: 暂未挂接",
+    linkedRiskIds.length > 0 ? `Risk: ${linkedRiskIds.join(", ")}` : "Risk: 暂未挂接",
+    relatedCadenceIds.length > 0 ? `Cadence: ${relatedCadenceIds.join(", ")}` : "Cadence: 暂未挂接",
+    relatedWorkItemIds.length > 0 ? `Work item: ${relatedWorkItemIds.join(", ")}` : "Work item: 暂未挂接",
+  ].join(" / ");
+  const backlinkMarkup = renderOperationsObjectBacklinks(
+    options.relatedEdges,
+    options.escapeHtml,
+    "commitment",
+    commitment.commitmentId,
+  );
+  const impactMarkup = renderOperationsObjectImpactMap(options.impact, options.escapeHtml);
+  const milestoneMarkup = renderCommitmentMilestoneSummary(milestones, options.escapeHtml);
+  const evidenceMarkup = renderCommitmentEvidenceSummary(evidenceRefs, options.escapeHtml);
+
+  return `
+    <button
+      type="button"
+      class="operations-commitment-card ${options.active ? "active" : ""}"
+      data-operations-commitment-id="${options.escapeHtml(commitment.commitmentId || "")}"
+    >
+      <div class="operations-commitment-card-head">
+        <div>
+          <p class="operations-commitment-card-kicker">Commitment｜due ${dueAt}</p>
+          <h4>${title}</h4>
+        </div>
+        <span class="operations-commitment-badge" data-state="${options.escapeHtml(commitment.status || "active")}">
+          ${options.escapeHtml(commitment.status || "active")}
+        </span>
+      </div>
+      <div class="operations-commitment-progress" aria-label="承诺进度 ${progressPercent}%">
+        <span style="width: ${progressPercent}%"></span>
+      </div>
+      <p class="operations-commitment-card-summary">${summary}</p>
+      <p class="operations-commitment-card-meta">${meta}</p>
+      <p class="operations-commitment-link-list">${options.escapeHtml(linksText)}</p>
+      ${milestoneMarkup}
+      ${evidenceMarkup}
+      ${backlinkMarkup}
+      ${impactMarkup}
+    </button>
+  `;
+}
+
+function normalizeProgressPercentForRender(value) {
+  const numericValue = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim()
+      ? Number(value.trim())
+      : 0;
+
+  if (!Number.isFinite(numericValue)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(100, Math.round(numericValue)));
+}
+
+function normalizeCommitmentMilestonesForRender(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((item) => item && typeof item === "object")
+    .map((item) => ({
+      title: typeof item.title === "string" ? item.title.trim() : "",
+      status: typeof item.status === "string" ? item.status.trim() : "planned",
+      dueAt: typeof item.dueAt === "string" ? item.dueAt.trim() : "",
+      completedAt: typeof item.completedAt === "string" ? item.completedAt.trim() : "",
+      summary: typeof item.summary === "string" ? item.summary.trim() : "",
+    }))
+    .filter((item) => item.title);
+}
+
+function normalizeCommitmentEvidenceRefsForRender(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((item) => item && typeof item === "object")
+    .map((item) => ({
+      kind: typeof item.kind === "string" ? item.kind.trim() : "other",
+      value: typeof item.value === "string" ? item.value.trim() : "",
+      label: typeof item.label === "string" ? item.label.trim() : "",
+      capturedAt: typeof item.capturedAt === "string" ? item.capturedAt.trim() : "",
+    }))
+    .filter((item) => item.value);
+}
+
+function renderCommitmentMilestoneSummary(milestones, escapeHtml) {
+  if (milestones.length === 0) {
+    return '<p class="operations-commitment-detail-list" data-empty="true">里程碑：暂无</p>';
+  }
+
+  return `
+    <div class="operations-commitment-detail-list">
+      <span>里程碑</span>
+      ${milestones.slice(0, 3).map((milestone) => {
+        const dueAt = milestone.dueAt ? `｜due ${milestone.dueAt}` : "";
+        const completedAt = milestone.completedAt ? `｜done ${milestone.completedAt}` : "";
+        const summary = milestone.summary ? `：${milestone.summary}` : "";
+
+        return `<b>${escapeHtml(milestone.status)}｜${escapeHtml(milestone.title)}${escapeHtml(dueAt)}${escapeHtml(completedAt)}${escapeHtml(summary)}</b>`;
+      }).join("")}
+      ${milestones.length > 3 ? `<em>还有 ${milestones.length - 3} 个里程碑未展开</em>` : ""}
+    </div>
+  `;
+}
+
+function renderCommitmentEvidenceSummary(evidenceRefs, escapeHtml) {
+  if (evidenceRefs.length === 0) {
+    return '<p class="operations-commitment-detail-list" data-empty="true">证据：暂无</p>';
+  }
+
+  return `
+    <div class="operations-commitment-detail-list">
+      <span>证据</span>
+      ${evidenceRefs.slice(0, 3).map((ref) => {
+        const label = ref.label ? `｜${ref.label}` : "";
+        const capturedAt = ref.capturedAt ? `｜${ref.capturedAt}` : "";
+
+        return `<b>${escapeHtml(ref.kind)}｜${escapeHtml(ref.value)}${escapeHtml(label)}${escapeHtml(capturedAt)}</b>`;
+      }).join("")}
+      ${evidenceRefs.length > 3 ? `<em>还有 ${evidenceRefs.length - 3} 条证据未展开</em>` : ""}
+    </div>
+  `;
+}
+
+function renderOperationsEdgeCard(edge, options) {
+  const title = options.escapeHtml(edge.label || `${edge.fromObjectId} -> ${edge.toObjectId}`);
+  const summary = options.escapeHtml(edge.summary || "当前还没有补充关系说明。");
+  const fromLabel = `${edge.fromObjectType || "asset"}:${edge.fromObjectId || ""}`;
+  const toLabel = `${edge.toObjectType || "asset"}:${edge.toObjectId || ""}`;
+  const meta = options.escapeHtml([
+    fromLabel,
+    edge.relationType || "relates_to",
+    toLabel,
+  ].join(" -> "));
+
+  return `
+    <button
+      type="button"
+      class="operations-edge-card ${options.active ? "active" : ""}"
+      data-operations-edge-id="${options.escapeHtml(edge.edgeId || "")}"
+    >
+      <div class="operations-edge-card-head">
+        <div>
+          <p class="operations-edge-card-kicker">Edge｜${options.escapeHtml(edge.relationType || "relates_to")}</p>
+          <h4>${title}</h4>
+        </div>
+        <span class="operations-edge-badge" data-state="${options.escapeHtml(edge.status || "active")}">
+          ${options.escapeHtml(edge.status || "active")}
+        </span>
+      </div>
+      <p class="operations-edge-card-summary">${summary}</p>
+      <p class="operations-edge-card-meta">${meta}</p>
+    </button>
+  `;
+}
+
+function renderOperationsGraphSummary(graph, escapeHtml) {
+  if (!graph) {
+    return `
+      <article class="operations-graph-summary-card" data-empty="true">
+        <span>对象图</span>
+        <strong>尚未查询</strong>
+        <p>填写根对象后，这里会展示后端返回的子图规模和目标可达性。</p>
+      </article>
+    `;
+  }
+
+  const rootLabel = `${graph.root?.objectType || "asset"}:${graph.root?.objectId || ""}`;
+  const targetLabel = graph.target?.objectId
+    ? `${graph.target.objectType}:${graph.target.objectId}`
+    : "未指定目标";
+  const reachableLabel = graph.target?.objectId
+    ? graph.target.reachable ? "目标可达" : "目标不可达"
+    : "未计算路径";
+
+  return `
+    <article class="operations-graph-summary-card">
+      <span>对象图</span>
+      <strong>${escapeHtml(rootLabel)} · depth ${escapeHtml(String(graph.maxDepth ?? 2))}</strong>
+      <p>${escapeHtml(`节点 ${graph.nodes?.length ?? 0} 个 / 边 ${graph.edges?.length ?? 0} 条 / ${targetLabel} / ${reachableLabel}`)}</p>
+    </article>
+  `;
+}
+
+function renderOperationsGraphNodes(nodes, escapeHtml) {
+  const graphNodes = Array.isArray(nodes) ? nodes : [];
+
+  if (graphNodes.length === 0) {
+    return '<p class="operations-graph-empty">暂无节点。</p>';
+  }
+
+  return graphNodes.map((node) => {
+    const via = node.viaObjectId
+      ? `经 ${node.viaObjectType}:${node.viaObjectId}`
+      : "根对象";
+
+    return `
+      <article class="operations-graph-item" data-depth="${escapeHtml(String(node.depth ?? 0))}">
+        <span>depth ${escapeHtml(String(node.depth ?? 0))}</span>
+        <strong>${escapeHtml(node.objectType || "asset")}:${escapeHtml(node.objectId || "")}</strong>
+        <p>${escapeHtml(via)}</p>
+      </article>
+    `;
+  }).join("");
+}
+
+function renderOperationsGraphEdges(edges, escapeHtml) {
+  const graphEdges = Array.isArray(edges) ? edges : [];
+
+  if (graphEdges.length === 0) {
+    return '<p class="operations-graph-empty">暂无关系边。</p>';
+  }
+
+  return graphEdges.map((edge) => {
+    const title = edge.label || edge.relationType || "relates_to";
+    const fromLabel = `${edge.fromObjectType || "asset"}:${edge.fromObjectId || ""}`;
+    const toLabel = `${edge.toObjectType || "asset"}:${edge.toObjectId || ""}`;
+
+    return `
+      <article class="operations-graph-item">
+        <span>${escapeHtml(edge.relationType || "relates_to")}</span>
+        <strong>${escapeHtml(title)}</strong>
+        <p>${escapeHtml(`${fromLabel} -> ${toLabel}`)}</p>
+      </article>
+    `;
+  }).join("");
+}
+
+function renderOperationsGraphPath(graph, escapeHtml) {
+  if (!graph) {
+    return '<p class="operations-graph-empty">指定根对象和目标对象后，这里会展示最短路径。</p>';
+  }
+
+  if (!graph.target?.objectId) {
+    return '<p class="operations-graph-empty">未指定目标对象，当前只展示关系子图。</p>';
+  }
+
+  if (!graph.target.reachable) {
+    return '<p class="operations-graph-empty">目标对象在当前深度内不可达。</p>';
+  }
+
+  const pathEdges = Array.isArray(graph.shortestPath) ? graph.shortestPath : [];
+
+  if (pathEdges.length === 0) {
+    return '<p class="operations-graph-empty">目标就是根对象，不需要经过关系边。</p>';
+  }
+
+  return pathEdges.map((edge, index) => {
+    const fromLabel = `${edge.fromObjectType || "asset"}:${edge.fromObjectId || ""}`;
+    const toLabel = `${edge.toObjectType || "asset"}:${edge.toObjectId || ""}`;
+
+    return `
+      <article class="operations-graph-path-step">
+        <span>${escapeHtml(String(index + 1))}</span>
+        <strong>${escapeHtml(edge.label || edge.relationType || "relates_to")}</strong>
+        <p>${escapeHtml(`${fromLabel} -> ${toLabel}`)}</p>
+      </article>
+    `;
+  }).join("");
+}
+
+function resolveOperationEdgesForObject(edges, objectType, objectId) {
+  if (!objectId) {
+    return [];
+  }
+
+  return (Array.isArray(edges) ? edges : [])
+    .filter((edge) => edge?.status === "active")
+    .filter((edge) => (
+      (edge.fromObjectType === objectType && edge.fromObjectId === objectId)
+      || (edge.toObjectType === objectType && edge.toObjectId === objectId)
+    ))
+    .slice(0, 6);
+}
+
+function resolveOperationImpactForObject(edges, objectType, objectId) {
+  const rootKey = buildOperationObjectKey(objectType, objectId);
+
+  if (!rootKey) {
+    return {
+      directNodes: [],
+      secondHopNodes: [],
+      truncatedDirectCount: 0,
+      truncatedSecondHopCount: 0,
+    };
+  }
+
+  const activeEdges = normalizeActiveOperationEdges(edges);
+  const directNodes = new Map();
+  const secondHopNodes = new Map();
+
+  for (const edge of activeEdges) {
+    const directNode = resolveOtherEndpointForEdge(edge, objectType, objectId);
+
+    if (!directNode) {
+      continue;
+    }
+
+    const directKey = buildOperationObjectKey(directNode.objectType, directNode.objectId);
+    if (!directKey || directKey === rootKey || directNodes.has(directKey)) {
+      continue;
+    }
+
+    directNodes.set(directKey, {
+      ...directNode,
+      viaLabel: edge.label || edge.relationType || "relates_to",
+      viaRelationType: edge.relationType || "relates_to",
+    });
+  }
+
+  for (const [directKey, directNode] of directNodes.entries()) {
+    for (const edge of activeEdges) {
+      const secondNode = resolveOtherEndpointForEdge(edge, directNode.objectType, directNode.objectId);
+
+      if (!secondNode) {
+        continue;
+      }
+
+      const secondKey = buildOperationObjectKey(secondNode.objectType, secondNode.objectId);
+      if (!secondKey || secondKey === rootKey || secondKey === directKey || directNodes.has(secondKey)) {
+        continue;
+      }
+
+      if (secondHopNodes.has(secondKey)) {
+        continue;
+      }
+
+      secondHopNodes.set(secondKey, {
+        ...secondNode,
+        viaObjectType: directNode.objectType,
+        viaObjectId: directNode.objectId,
+        viaLabel: edge.label || edge.relationType || "relates_to",
+        viaRelationType: edge.relationType || "relates_to",
+      });
+    }
+  }
+
+  const directNodeList = [...directNodes.values()];
+  const secondHopNodeList = [...secondHopNodes.values()];
+
+  return {
+    directNodes: directNodeList.slice(0, 6),
+    secondHopNodes: secondHopNodeList.slice(0, 8),
+    truncatedDirectCount: Math.max(0, directNodeList.length - 6),
+    truncatedSecondHopCount: Math.max(0, secondHopNodeList.length - 8),
+  };
+}
+
+function renderOperationsObjectBacklinks(edges, escapeHtml, objectType, objectId) {
+  const relatedEdges = Array.isArray(edges) ? edges : [];
+
+  if (relatedEdges.length === 0) {
+    return '<div class="operations-object-backlink-list" data-empty="true"><span>对象反链</span><p>暂无 active 关系边</p></div>';
+  }
+
+  const parts = relatedEdges.map((edge) => {
+    const outgoing = edge.fromObjectType === objectType && edge.fromObjectId === objectId;
+    const otherType = outgoing ? edge.toObjectType : edge.fromObjectType;
+    const otherId = outgoing ? edge.toObjectId : edge.fromObjectId;
+    const direction = outgoing ? "出" : "入";
+    const label = edge.label || edge.relationType || "relates_to";
+    const summary = edge.summary ? `｜${edge.summary}` : "";
+
+    return `
+      <b>
+        ${escapeHtml(direction)}：${escapeHtml(label)}
+        <small>${escapeHtml(edge.relationType || "relates_to")}｜${escapeHtml(otherType)}:${escapeHtml(otherId)}${escapeHtml(summary)}</small>
+      </b>
+    `;
+  });
+
+  return `
+    <div class="operations-object-backlink-list">
+      <span>对象反链</span>
+      ${parts.join("")}
+    </div>
+  `;
+}
+
+function renderOperationsObjectImpactMap(impact, escapeHtml) {
+  const directNodes = Array.isArray(impact?.directNodes) ? impact.directNodes : [];
+  const secondHopNodes = Array.isArray(impact?.secondHopNodes) ? impact.secondHopNodes : [];
+  const truncatedDirectCount = Number.isFinite(impact?.truncatedDirectCount) ? impact.truncatedDirectCount : 0;
+  const truncatedSecondHopCount = Number.isFinite(impact?.truncatedSecondHopCount) ? impact.truncatedSecondHopCount : 0;
+
+  if (directNodes.length === 0) {
+    return '<div class="operations-object-impact-map" data-empty="true"><span>影响范围</span><p>暂无可展开的一跳 / 二跳影响面</p></div>';
+  }
+
+  const directMarkup = directNodes.map((node) => {
+    const direction = node.direction === "out" ? "出" : "入";
+
+    return `
+      <b>
+        ${escapeHtml(direction)}：${escapeHtml(node.objectType)}:${escapeHtml(node.objectId)}
+        <small>${escapeHtml(node.viaRelationType)}｜${escapeHtml(node.viaLabel)}</small>
+      </b>
+    `;
+  }).join("");
+  const secondHopMarkup = secondHopNodes.length > 0
+    ? secondHopNodes.map((node) => `
+      <b>
+        ${escapeHtml(node.objectType)}:${escapeHtml(node.objectId)}
+        <small>经 ${escapeHtml(node.viaObjectType)}:${escapeHtml(node.viaObjectId)}｜${escapeHtml(node.viaRelationType)}｜${escapeHtml(node.viaLabel)}</small>
+      </b>
+    `).join("")
+    : '<em>二跳暂无更多 active 关系。</em>';
+
+  return `
+    <div class="operations-object-impact-map">
+      <span>影响范围</span>
+      <p>${escapeHtml(`一跳 ${directNodes.length + truncatedDirectCount} 个 / 二跳 ${secondHopNodes.length + truncatedSecondHopCount} 个`)}</p>
+      <div class="operations-object-impact-columns">
+        <section>
+          <strong>一跳</strong>
+          ${directMarkup}
+          ${truncatedDirectCount > 0 ? `<em>还有 ${truncatedDirectCount} 个一跳对象未展开</em>` : ""}
+        </section>
+        <section>
+          <strong>二跳</strong>
+          ${secondHopMarkup}
+          ${truncatedSecondHopCount > 0 ? `<em>还有 ${truncatedSecondHopCount} 个二跳对象未展开</em>` : ""}
+        </section>
+      </div>
+    </div>
+  `;
+}
+
+function normalizeActiveOperationEdges(edges) {
+  return (Array.isArray(edges) ? edges : [])
+    .filter((edge) => edge?.status === "active")
+    .filter((edge) => (
+      typeof edge.fromObjectType === "string"
+      && typeof edge.fromObjectId === "string"
+      && typeof edge.toObjectType === "string"
+      && typeof edge.toObjectId === "string"
+      && edge.fromObjectId.trim()
+      && edge.toObjectId.trim()
+    ));
+}
+
+function resolveOtherEndpointForEdge(edge, objectType, objectId) {
+  if (edge.fromObjectType === objectType && edge.fromObjectId === objectId) {
+    return {
+      objectType: edge.toObjectType,
+      objectId: edge.toObjectId,
+      direction: "out",
+    };
+  }
+
+  if (edge.toObjectType === objectType && edge.toObjectId === objectId) {
+    return {
+      objectType: edge.fromObjectType,
+      objectId: edge.fromObjectId,
+      direction: "in",
+    };
+  }
+
+  return null;
+}
+
+function buildOperationObjectKey(objectType, objectId) {
+  const normalizedObjectType = typeof objectType === "string" ? objectType.trim() : "";
+  const normalizedObjectId = typeof objectId === "string" ? objectId.trim() : "";
+
+  return normalizedObjectType && normalizedObjectId ? `${normalizedObjectType}\u0000${normalizedObjectId}` : "";
+}
+
+function normalizeOperationsBossViewState(value) {
+  const safeValue = value && typeof value === "object" ? value : {};
+
+  return {
+    status: typeof safeValue.status === "string" ? safeValue.status : "idle",
+    loading: Boolean(safeValue.loading),
+    errorMessage: typeof safeValue.errorMessage === "string" ? safeValue.errorMessage : "",
+    noticeMessage: typeof safeValue.noticeMessage === "string" ? safeValue.noticeMessage : "",
+    bossView: normalizeOperationsBossViewRecord(safeValue.bossView),
+  };
+}
+
+function normalizeOperationsBossViewRecord(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const headline = value.headline && typeof value.headline === "object" ? value.headline : {};
+
+  return {
+    principalId: typeof value.principalId === "string" ? value.principalId : "",
+    generatedAt: typeof value.generatedAt === "string" ? value.generatedAt : "",
+    headline: {
+      tone: normalizeOperationsBossViewTone(headline.tone),
+      title: typeof headline.title === "string" ? headline.title : "",
+      summary: typeof headline.summary === "string" ? headline.summary : "",
+    },
+    metrics: Array.isArray(value.metrics) ? value.metrics.map(normalizeOperationsBossViewMetric) : [],
+    focusItems: Array.isArray(value.focusItems) ? value.focusItems.map(normalizeOperationsBossViewFocusItem) : [],
+    relationItems: Array.isArray(value.relationItems) ? value.relationItems.map(normalizeOperationsBossViewRelationItem) : [],
+    recentDecisions: Array.isArray(value.recentDecisions)
+      ? value.recentDecisions.map(normalizeOperationsBossViewDecisionItem)
+      : [],
+    inventory: value.inventory && typeof value.inventory === "object" ? value.inventory : {},
+  };
+}
+
+function normalizeOperationsBossViewMetric(value) {
+  const metric = value && typeof value === "object" ? value : {};
+
+  return {
+    key: typeof metric.key === "string" ? metric.key : "",
+    label: typeof metric.label === "string" ? metric.label : "",
+    value: typeof metric.value === "number" && Number.isFinite(metric.value) ? metric.value : 0,
+    tone: normalizeOperationsBossViewTone(metric.tone),
+    detail: typeof metric.detail === "string" ? metric.detail : "",
+  };
+}
+
+function normalizeOperationsBossViewFocusItem(value) {
+  const item = value && typeof value === "object" ? value : {};
+
+  return {
+    objectType: typeof item.objectType === "string" ? item.objectType : "",
+    objectId: typeof item.objectId === "string" ? item.objectId : "",
+    title: typeof item.title === "string" ? item.title : "",
+    label: typeof item.label === "string" ? item.label : "",
+    tone: normalizeOperationsBossViewTone(item.tone),
+    summary: typeof item.summary === "string" ? item.summary : "",
+    actionLabel: typeof item.actionLabel === "string" ? item.actionLabel : "",
+  };
+}
+
+function normalizeOperationsBossViewRelationItem(value) {
+  const item = value && typeof value === "object" ? value : {};
+
+  return {
+    edgeId: typeof item.edgeId === "string" ? item.edgeId : "",
+    relationType: typeof item.relationType === "string" ? item.relationType : "",
+    tone: normalizeOperationsBossViewTone(item.tone),
+    label: typeof item.label === "string" ? item.label : "",
+    fromLabel: typeof item.fromLabel === "string" ? item.fromLabel : "",
+    toLabel: typeof item.toLabel === "string" ? item.toLabel : "",
+    summary: typeof item.summary === "string" ? item.summary : "",
+  };
+}
+
+function normalizeOperationsBossViewDecisionItem(value) {
+  const item = value && typeof value === "object" ? value : {};
+
+  return {
+    decisionId: typeof item.decisionId === "string" ? item.decisionId : "",
+    title: typeof item.title === "string" ? item.title : "",
+    status: typeof item.status === "string" ? item.status : "",
+    decidedAt: typeof item.decidedAt === "string" ? item.decidedAt : "",
+    summary: typeof item.summary === "string" ? item.summary : "",
+  };
+}
+
+function normalizeOperationsBossViewTone(value) {
+  return ["green", "amber", "red", "neutral"].includes(value) ? value : "neutral";
+}
+
+function normalizeOperationsAssetsState(value) {
+  const safeValue = value && typeof value === "object" ? value : {};
+  const draft = safeValue.draft && typeof safeValue.draft === "object" ? safeValue.draft : {};
+
+  return {
+    status: typeof safeValue.status === "string" ? safeValue.status : "idle",
+    loading: Boolean(safeValue.loading),
+    submitting: Boolean(safeValue.submitting),
+    errorMessage: typeof safeValue.errorMessage === "string" ? safeValue.errorMessage : "",
+    noticeMessage: typeof safeValue.noticeMessage === "string" ? safeValue.noticeMessage : "",
+    filterStatus: typeof safeValue.filterStatus === "string" ? safeValue.filterStatus : "active",
+    selectedAssetId: typeof safeValue.selectedAssetId === "string" ? safeValue.selectedAssetId : "",
+    assets: Array.isArray(safeValue.assets) ? safeValue.assets.filter((item) => typeof item?.assetId === "string") : [],
+    draft: {
+      kind: typeof draft.kind === "string" ? draft.kind : "site",
+      name: typeof draft.name === "string" ? draft.name : "",
+      status: typeof draft.status === "string" ? draft.status : "active",
+      ownerPrincipalId: typeof draft.ownerPrincipalId === "string" ? draft.ownerPrincipalId : "",
+      summary: typeof draft.summary === "string" ? draft.summary : "",
+      tagsText: typeof draft.tagsText === "string" ? draft.tagsText : "",
+      refsText: typeof draft.refsText === "string" ? draft.refsText : "",
+    },
+  };
+}
+
+function normalizeOperationsDecisionsState(value) {
+  const safeValue = value && typeof value === "object" ? value : {};
+  const draft = safeValue.draft && typeof safeValue.draft === "object" ? safeValue.draft : {};
+
+  return {
+    status: typeof safeValue.status === "string" ? safeValue.status : "idle",
+    loading: Boolean(safeValue.loading),
+    submitting: Boolean(safeValue.submitting),
+    errorMessage: typeof safeValue.errorMessage === "string" ? safeValue.errorMessage : "",
+    noticeMessage: typeof safeValue.noticeMessage === "string" ? safeValue.noticeMessage : "",
+    filterStatus: typeof safeValue.filterStatus === "string" ? safeValue.filterStatus : "active",
+    selectedDecisionId: typeof safeValue.selectedDecisionId === "string" ? safeValue.selectedDecisionId : "",
+    decisions: Array.isArray(safeValue.decisions)
+      ? safeValue.decisions.filter((item) => typeof item?.decisionId === "string")
+      : [],
+    draft: {
+      title: typeof draft.title === "string" ? draft.title : "",
+      status: typeof draft.status === "string" ? draft.status : "active",
+      decidedByPrincipalId: typeof draft.decidedByPrincipalId === "string" ? draft.decidedByPrincipalId : "",
+      decidedAt: typeof draft.decidedAt === "string" ? draft.decidedAt : "",
+      relatedAssetIdsText: typeof draft.relatedAssetIdsText === "string" ? draft.relatedAssetIdsText : "",
+      relatedWorkItemIdsText: typeof draft.relatedWorkItemIdsText === "string" ? draft.relatedWorkItemIdsText : "",
+      summary: typeof draft.summary === "string" ? draft.summary : "",
+    },
+  };
+}
+
+function normalizeOperationsRisksState(value) {
+  const safeValue = value && typeof value === "object" ? value : {};
+  const draft = safeValue.draft && typeof safeValue.draft === "object" ? safeValue.draft : {};
+
+  return {
+    status: typeof safeValue.status === "string" ? safeValue.status : "idle",
+    loading: Boolean(safeValue.loading),
+    submitting: Boolean(safeValue.submitting),
+    errorMessage: typeof safeValue.errorMessage === "string" ? safeValue.errorMessage : "",
+    noticeMessage: typeof safeValue.noticeMessage === "string" ? safeValue.noticeMessage : "",
+    filterStatus: typeof safeValue.filterStatus === "string" ? safeValue.filterStatus : "open",
+    selectedRiskId: typeof safeValue.selectedRiskId === "string" ? safeValue.selectedRiskId : "",
+    risks: Array.isArray(safeValue.risks)
+      ? safeValue.risks.filter((item) => typeof item?.riskId === "string")
+      : [],
+    draft: {
+      type: typeof draft.type === "string" ? draft.type : "risk",
+      title: typeof draft.title === "string" ? draft.title : "",
+      severity: typeof draft.severity === "string" ? draft.severity : "medium",
+      status: typeof draft.status === "string" ? draft.status : "open",
+      ownerPrincipalId: typeof draft.ownerPrincipalId === "string" ? draft.ownerPrincipalId : "",
+      detectedAt: typeof draft.detectedAt === "string" ? draft.detectedAt : "",
+      relatedAssetIdsText: typeof draft.relatedAssetIdsText === "string" ? draft.relatedAssetIdsText : "",
+      linkedDecisionIdsText: typeof draft.linkedDecisionIdsText === "string" ? draft.linkedDecisionIdsText : "",
+      relatedWorkItemIdsText: typeof draft.relatedWorkItemIdsText === "string" ? draft.relatedWorkItemIdsText : "",
+      summary: typeof draft.summary === "string" ? draft.summary : "",
+    },
+  };
+}
+
+function normalizeOperationsCadencesState(value) {
+  const safeValue = value && typeof value === "object" ? value : {};
+  const draft = safeValue.draft && typeof safeValue.draft === "object" ? safeValue.draft : {};
+
+  return {
+    status: typeof safeValue.status === "string" ? safeValue.status : "idle",
+    loading: Boolean(safeValue.loading),
+    submitting: Boolean(safeValue.submitting),
+    errorMessage: typeof safeValue.errorMessage === "string" ? safeValue.errorMessage : "",
+    noticeMessage: typeof safeValue.noticeMessage === "string" ? safeValue.noticeMessage : "",
+    filterStatus: typeof safeValue.filterStatus === "string" ? safeValue.filterStatus : "active",
+    selectedCadenceId: typeof safeValue.selectedCadenceId === "string" ? safeValue.selectedCadenceId : "",
+    cadences: Array.isArray(safeValue.cadences)
+      ? safeValue.cadences.filter((item) => typeof item?.cadenceId === "string")
+      : [],
+    draft: {
+      title: typeof draft.title === "string" ? draft.title : "",
+      frequency: typeof draft.frequency === "string" ? draft.frequency : "weekly",
+      status: typeof draft.status === "string" ? draft.status : "active",
+      nextRunAt: typeof draft.nextRunAt === "string" ? draft.nextRunAt : "",
+      ownerPrincipalId: typeof draft.ownerPrincipalId === "string" ? draft.ownerPrincipalId : "",
+      playbookRef: typeof draft.playbookRef === "string" ? draft.playbookRef : "",
+      relatedAssetIdsText: typeof draft.relatedAssetIdsText === "string" ? draft.relatedAssetIdsText : "",
+      summary: typeof draft.summary === "string" ? draft.summary : "",
+    },
+  };
+}
+
+function normalizeOperationsCommitmentsState(value) {
+  const safeValue = value && typeof value === "object" ? value : {};
+  const draft = safeValue.draft && typeof safeValue.draft === "object" ? safeValue.draft : {};
+
+  return {
+    status: typeof safeValue.status === "string" ? safeValue.status : "idle",
+    loading: Boolean(safeValue.loading),
+    submitting: Boolean(safeValue.submitting),
+    errorMessage: typeof safeValue.errorMessage === "string" ? safeValue.errorMessage : "",
+    noticeMessage: typeof safeValue.noticeMessage === "string" ? safeValue.noticeMessage : "",
+    filterStatus: typeof safeValue.filterStatus === "string" ? safeValue.filterStatus : "active",
+    selectedCommitmentId: typeof safeValue.selectedCommitmentId === "string" ? safeValue.selectedCommitmentId : "",
+    commitments: Array.isArray(safeValue.commitments)
+      ? safeValue.commitments.filter((item) => typeof item?.commitmentId === "string")
+      : [],
+    draft: {
+      title: typeof draft.title === "string" ? draft.title : "",
+      status: typeof draft.status === "string" ? draft.status : "active",
+      progressPercentText: typeof draft.progressPercentText === "string" ? draft.progressPercentText : "0",
+      ownerPrincipalId: typeof draft.ownerPrincipalId === "string" ? draft.ownerPrincipalId : "",
+      startsAt: typeof draft.startsAt === "string" ? draft.startsAt : "",
+      dueAt: typeof draft.dueAt === "string" ? draft.dueAt : "",
+      relatedAssetIdsText: typeof draft.relatedAssetIdsText === "string" ? draft.relatedAssetIdsText : "",
+      linkedDecisionIdsText: typeof draft.linkedDecisionIdsText === "string" ? draft.linkedDecisionIdsText : "",
+      linkedRiskIdsText: typeof draft.linkedRiskIdsText === "string" ? draft.linkedRiskIdsText : "",
+      relatedCadenceIdsText: typeof draft.relatedCadenceIdsText === "string" ? draft.relatedCadenceIdsText : "",
+      relatedWorkItemIdsText: typeof draft.relatedWorkItemIdsText === "string" ? draft.relatedWorkItemIdsText : "",
+      milestonesText: typeof draft.milestonesText === "string" ? draft.milestonesText : "",
+      evidenceRefsText: typeof draft.evidenceRefsText === "string" ? draft.evidenceRefsText : "",
+      summary: typeof draft.summary === "string" ? draft.summary : "",
+    },
+  };
+}
+
+function normalizeOperationsEdgesState(value) {
+  const safeValue = value && typeof value === "object" ? value : {};
+  const draft = safeValue.draft && typeof safeValue.draft === "object" ? safeValue.draft : {};
+
+  return {
+    status: typeof safeValue.status === "string" ? safeValue.status : "idle",
+    loading: Boolean(safeValue.loading),
+    submitting: Boolean(safeValue.submitting),
+    errorMessage: typeof safeValue.errorMessage === "string" ? safeValue.errorMessage : "",
+    noticeMessage: typeof safeValue.noticeMessage === "string" ? safeValue.noticeMessage : "",
+    filterStatus: typeof safeValue.filterStatus === "string" ? safeValue.filterStatus : "active",
+    selectedEdgeId: typeof safeValue.selectedEdgeId === "string" ? safeValue.selectedEdgeId : "",
+    edges: Array.isArray(safeValue.edges)
+      ? safeValue.edges.filter((item) => typeof item?.edgeId === "string")
+      : [],
+    draft: {
+      fromObjectType: typeof draft.fromObjectType === "string" ? draft.fromObjectType : "decision",
+      fromObjectId: typeof draft.fromObjectId === "string" ? draft.fromObjectId : "",
+      toObjectType: typeof draft.toObjectType === "string" ? draft.toObjectType : "risk",
+      toObjectId: typeof draft.toObjectId === "string" ? draft.toObjectId : "",
+      relationType: typeof draft.relationType === "string" ? draft.relationType : "relates_to",
+      status: typeof draft.status === "string" ? draft.status : "active",
+      label: typeof draft.label === "string" ? draft.label : "",
+      summary: typeof draft.summary === "string" ? draft.summary : "",
+    },
+  };
+}
+
+function normalizeOperationsGraphState(value) {
+  const safeValue = value && typeof value === "object" ? value : {};
+
+  return {
+    status: typeof safeValue.status === "string" ? safeValue.status : "idle",
+    loading: Boolean(safeValue.loading),
+    errorMessage: typeof safeValue.errorMessage === "string" ? safeValue.errorMessage : "",
+    noticeMessage: typeof safeValue.noticeMessage === "string" ? safeValue.noticeMessage : "",
+    rootObjectType: typeof safeValue.rootObjectType === "string" ? safeValue.rootObjectType : "commitment",
+    rootObjectId: typeof safeValue.rootObjectId === "string" ? safeValue.rootObjectId : "",
+    targetObjectType: typeof safeValue.targetObjectType === "string" ? safeValue.targetObjectType : "asset",
+    targetObjectId: typeof safeValue.targetObjectId === "string" ? safeValue.targetObjectId : "",
+    maxDepth: typeof safeValue.maxDepth === "string" ? safeValue.maxDepth : "2",
+    graph: normalizeOperationsGraphRecord(safeValue.graph),
+  };
+}
+
+function normalizeOperationsGraphRecord(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  return {
+    principalId: typeof value.principalId === "string" ? value.principalId : "",
+    generatedAt: typeof value.generatedAt === "string" ? value.generatedAt : "",
+    maxDepth: typeof value.maxDepth === "number" ? value.maxDepth : 2,
+    root: normalizeOperationsGraphEndpoint(value.root),
+    target: value.target && typeof value.target === "object"
+      ? {
+        ...normalizeOperationsGraphEndpoint(value.target),
+        reachable: value.target.reachable === true,
+      }
+      : null,
+    nodes: Array.isArray(value.nodes)
+      ? value.nodes.filter((item) => typeof item?.objectType === "string" && typeof item?.objectId === "string")
+      : [],
+    edges: Array.isArray(value.edges)
+      ? value.edges.filter((item) => typeof item?.edgeId === "string")
+      : [],
+    shortestPath: Array.isArray(value.shortestPath)
+      ? value.shortestPath.filter((item) => typeof item?.edgeId === "string")
+      : [],
+  };
+}
+
+function normalizeOperationsGraphEndpoint(value) {
+  const safeValue = value && typeof value === "object" ? value : {};
+
+  return {
+    objectType: typeof safeValue.objectType === "string" ? safeValue.objectType : "asset",
+    objectId: typeof safeValue.objectId === "string" ? safeValue.objectId : "",
+  };
+}
+
+function normalizeOperationsCenterMemoryCandidatesState(value) {
+  const safeValue = value && typeof value === "object" ? value : {};
+
+  return {
+    status: typeof safeValue.status === "string" ? safeValue.status : "idle",
+    loading: Boolean(safeValue.loading),
+    extracting: Boolean(safeValue.extracting),
+    reviewingCandidateId: typeof safeValue.reviewingCandidateId === "string" ? safeValue.reviewingCandidateId : "",
+    errorMessage: typeof safeValue.errorMessage === "string" ? safeValue.errorMessage : "",
+    noticeMessage: typeof safeValue.noticeMessage === "string" ? safeValue.noticeMessage : "",
+    filterStatus: typeof safeValue.filterStatus === "string" ? safeValue.filterStatus : "suggested",
+    candidates: Array.isArray(safeValue.candidates) ? safeValue.candidates.filter((item) => item && typeof item === "object") : [],
+  };
+}
+
+function resolveOperationsCenterStatusNote(
+  meetingRoomsState,
+  memoryCandidatesState,
+  operationsBossViewState,
+  operationsAssetsState,
+  operationsCadencesState,
+  operationsCommitmentsState,
+  operationsDecisionsState,
+  operationsEdgesState,
+  operationsGraphState,
+  operationsRisksState,
+) {
+  if (
+    meetingRoomsState.loadingStatus
+    || memoryCandidatesState.loading
+    || operationsBossViewState.loading
+    || operationsAssetsState.loading
+    || operationsCadencesState.loading
+    || operationsCommitmentsState.loading
+    || operationsDecisionsState.loading
+    || operationsEdgesState.loading
+    || operationsGraphState.loading
+    || operationsRisksState.loading
+  ) {
+    return "正在刷新运营中枢快照。";
+  }
+
+  const failures = [];
+  if (meetingRoomsState.errorMessage) {
+    failures.push(`会议室入口读取失败（${meetingRoomsState.errorMessage}）`);
+  }
+  if (memoryCandidatesState.errorMessage) {
+    failures.push(`记忆候选读取失败（${memoryCandidatesState.errorMessage}）`);
+  }
+  if (operationsBossViewState.errorMessage) {
+    failures.push(`老板视图读取失败（${operationsBossViewState.errorMessage}）`);
+  }
+  if (operationsAssetsState.errorMessage) {
+    failures.push(`资产台账读取失败（${operationsAssetsState.errorMessage}）`);
+  }
+  if (operationsCadencesState.errorMessage) {
+    failures.push(`节奏记录读取失败（${operationsCadencesState.errorMessage}）`);
+  }
+  if (operationsCommitmentsState.errorMessage) {
+    failures.push(`承诺目标读取失败（${operationsCommitmentsState.errorMessage}）`);
+  }
+  if (operationsDecisionsState.errorMessage) {
+    failures.push(`决策记录读取失败（${operationsDecisionsState.errorMessage}）`);
+  }
+  if (operationsEdgesState.errorMessage) {
+    failures.push(`关系边读取失败（${operationsEdgesState.errorMessage}）`);
+  }
+  if (operationsGraphState.errorMessage) {
+    failures.push(`对象图查询失败（${operationsGraphState.errorMessage}）`);
+  }
+  if (operationsRisksState.errorMessage) {
+    failures.push(`风险记录读取失败（${operationsRisksState.errorMessage}）`);
+  }
+
+  if (failures.length > 0) {
+    return `运营中枢只拿到部分事实：${failures.join("；")}。`;
+  }
+
+  if (
+    meetingRoomsState.accessMode === "platform_gateway"
+    || memoryCandidatesState.status === "ready"
+    || operationsBossViewState.status === "ready"
+    || operationsAssetsState.status === "ready"
+    || operationsCadencesState.status === "ready"
+    || operationsCommitmentsState.status === "ready"
+    || operationsDecisionsState.status === "ready"
+    || operationsEdgesState.status === "ready"
+    || operationsGraphState.status === "ready"
+    || operationsRisksState.status === "ready"
+  ) {
+    return "运营中枢现在已经不只是一页说明：老板视图、最小资产台账、节奏记录、承诺目标、决策记录、风险卡、关系边和对象图查询都已接上，开始把执行链路往真实公司对象上挂。";
+  }
+
+  return "";
+}
+
+function resolveOperationsCenterPlatformLink(meetingRoomsState) {
+  if (!meetingRoomsState?.platformBaseUrl) {
+    return "";
+  }
+
+  try {
+    const platformUrl = new URL(meetingRoomsState.platformBaseUrl);
+    if (meetingRoomsState.ownerPrincipalId) {
+      platformUrl.searchParams.set("ownerPrincipalId", meetingRoomsState.ownerPrincipalId);
+    }
+    return platformUrl.toString();
+  } catch {
+    return meetingRoomsState.platformBaseUrl;
+  }
+}
+
+function resolveOperationsCenterPlatformNote(meetingRoomsState, platformLink) {
+  if (platformLink) {
+    return `当前已探测到平台入口：${platformLink}。更重的平台治理仍应放在独立 Platform 页面完成。`;
+  }
+
+  if (meetingRoomsState.loadingStatus) {
+    return "正在读取平台入口状态。";
+  }
+
+  if (meetingRoomsState.accessMode === "platform_gateway") {
+    return "平台 gateway 已接通，但当前还没有可直接展示的独立 Platform 页面地址。";
+  }
+
+  return "当前还没拿到平台入口地址；接通 gateway 后，这里会给出独立 Platform 页直达链接。";
+}
+
+function resolveOperationsCenterMeetingRoomCardState(meetingRoomsState) {
+  if (meetingRoomsState.loadingStatus || meetingRoomsState.loadingRooms) {
+    return "partial";
+  }
+
+  if (meetingRoomsState.errorMessage) {
+    return "warning";
+  }
+
+  if (meetingRoomsState.accessMode === "platform_gateway") {
+    return "ready";
+  }
+
+  if (meetingRoomsState.platformBaseUrl || meetingRoomsState.noticeMessage) {
+    return "partial";
+  }
+
+  return "later";
+}
+
+function resolveOperationsCenterMeetingRoomLabel(meetingRoomsState) {
+  if (meetingRoomsState.loadingStatus || meetingRoomsState.loadingRooms) {
+    return "正在探测";
+  }
+
+  if (meetingRoomsState.errorMessage) {
+    return "读取失败";
+  }
+
+  if (meetingRoomsState.accessMode === "platform_gateway") {
+    return "已接通平台 gateway";
+  }
+
+  if (meetingRoomsState.platformBaseUrl || meetingRoomsState.noticeMessage) {
+    return "待确认";
+  }
+
+  return "尚未探测";
+}
+
+function resolveOperationsCenterMeetingRoomSummary(meetingRoomsState) {
+  if (meetingRoomsState.loadingStatus || meetingRoomsState.loadingRooms) {
+    return "正在读取内部会议室入口状态。";
+  }
+
+  if (meetingRoomsState.errorMessage) {
+    return `内部会议室入口读取失败：${meetingRoomsState.errorMessage}`;
+  }
+
+  if (meetingRoomsState.accessMode === "platform_gateway") {
+    return `内部会议室已接通平台 gateway，当前已加载 ${meetingRoomsState.rooms.length} 个房间摘要。`;
+  }
+
+  if (meetingRoomsState.platformBaseUrl) {
+    return "已经知道平台地址，但当前入口状态还没完全确认。";
+  }
+
+  return "当前还没探测内部会议室入口；点上方按钮后会读取平台状态。";
+}
+
+function resolveOperationsCenterMeetingRoomDetail(meetingRoomsState) {
+  if (meetingRoomsState.accessMode === "platform_gateway") {
+    return meetingRoomsState.ownerPrincipalId
+      ? `ownerPrincipalId=${meetingRoomsState.ownerPrincipalId}`
+      : "当前可以继续进入主持台、创建房间和沉淀会议结论。";
+  }
+
+  if (meetingRoomsState.noticeMessage) {
+    return meetingRoomsState.noticeMessage;
+  }
+
+  return "内部会议室是当前最接近“多员工协作控制面”的现成入口。";
+}
+
+function resolveOperationsCenterMemoryCardState(memoryCandidatesState) {
+  if (memoryCandidatesState.loading || memoryCandidatesState.extracting) {
+    return "partial";
+  }
+
+  if (memoryCandidatesState.errorMessage) {
+    return "warning";
+  }
+
+  if (memoryCandidatesState.status === "ready" && memoryCandidatesState.candidates.length > 0) {
+    return "ready";
+  }
+
+  if (memoryCandidatesState.status === "ready") {
+    return "partial";
+  }
+
+  return "later";
+}
+
+function resolveOperationsCenterMemoryLabel(memoryCandidatesState) {
+  if (memoryCandidatesState.loading || memoryCandidatesState.extracting) {
+    return "正在读取";
+  }
+
+  if (memoryCandidatesState.errorMessage) {
+    return "读取失败";
+  }
+
+  if (memoryCandidatesState.status === "ready") {
+    return memoryCandidatesState.filterStatus === "suggested"
+      ? "待审核候选"
+      : "已加载候选池";
+  }
+
+  return "尚未读取";
+}
+
+function resolveOperationsCenterMemorySummary(memoryCandidatesState) {
+  if (memoryCandidatesState.loading || memoryCandidatesState.extracting) {
+    return "正在读取长期记忆候选池。";
+  }
+
+  if (memoryCandidatesState.errorMessage) {
+    return `长期记忆候选读取失败：${memoryCandidatesState.errorMessage}`;
+  }
+
+  if (memoryCandidatesState.status === "ready") {
+    return memoryCandidatesState.candidates.length > 0
+      ? `当前已加载 ${memoryCandidatesState.candidates.length} 条长期记忆候选。`
+      : "当前没有命中筛选条件的长期记忆候选。";
+  }
+
+  return "当前还没读取候选池；打开这里时会按默认筛选加载。";
+}
+
+function resolveOperationsCenterMemoryDetail(memoryCandidatesState) {
+  if (memoryCandidatesState.status === "ready") {
+    return memoryCandidatesState.filterStatus === "suggested"
+      ? "默认优先看待审核候选，避免长期知识继续散在聊天里。"
+      : `当前筛选：${memoryCandidatesState.filterStatus}`;
+  }
+
+  return "这层现在承接的是“知识候选”和“人工确认流”，还不是完整知识库对象模型。";
+}
+
+function resolveOperationsCenterBossViewCardState(operationsBossViewState) {
+  if (operationsBossViewState.loading) {
+    return "partial";
+  }
+
+  if (operationsBossViewState.errorMessage) {
+    return "warning";
+  }
+
+  if (operationsBossViewState.status === "ready" && operationsBossViewState.bossView?.headline?.tone === "red") {
+    return "warning";
+  }
+
+  if (operationsBossViewState.status === "ready" && operationsBossViewState.bossView) {
+    return operationsBossViewState.bossView.headline?.tone === "green" ? "ready" : "partial";
+  }
+
+  return "later";
+}
+
+function resolveOperationsCenterBossViewLabel(operationsBossViewState) {
+  if (operationsBossViewState.loading) {
+    return "正在聚合";
+  }
+
+  if (operationsBossViewState.errorMessage) {
+    return "读取失败";
+  }
+
+  if (operationsBossViewState.status === "ready" && operationsBossViewState.bossView?.headline?.title) {
+    return operationsBossViewState.bossView.headline.title;
+  }
+
+  return "尚未刷新";
+}
+
+function resolveOperationsCenterBossViewSummary(operationsBossViewState) {
+  if (operationsBossViewState.loading) {
+    return "正在基于资产、决策、风险、节奏、承诺和关系边生成老板视图。";
+  }
+
+  if (operationsBossViewState.errorMessage) {
+    return `老板视图读取失败：${operationsBossViewState.errorMessage}`;
+  }
+
+  if (operationsBossViewState.status === "ready" && operationsBossViewState.bossView) {
+    return operationsBossViewState.bossView.headline?.summary || "老板视图已刷新。";
+  }
+
+  return "刷新后会把现有运营对象聚合成红黄绿状态、今日焦点和关键关系。";
+}
+
+function resolveOperationsCenterBossViewDetail(operationsBossViewState) {
+  const bossView = operationsBossViewState.bossView;
+
+  if (bossView) {
+    const focusCount = Array.isArray(bossView.focusItems) ? bossView.focusItems.length : 0;
+    const relationCount = Array.isArray(bossView.relationItems) ? bossView.relationItems.length : 0;
+    return `${focusCount} 个焦点事项｜${relationCount} 条关键关系｜generatedAt=${bossView.generatedAt || "unknown"}`;
+  }
+
+  return "这是从对象事实到老板经营摘要的第一层，不单独落表。";
+}
+
+function resolveOperationsBossViewStatusMessage(operationsBossViewState) {
+  if (operationsBossViewState.loading) {
+    return "正在刷新老板视图。";
+  }
+
+  if (operationsBossViewState.errorMessage) {
+    return `老板视图读取失败：${operationsBossViewState.errorMessage}`;
+  }
+
+  if (operationsBossViewState.status === "ready") {
+    return operationsBossViewState.bossView?.generatedAt
+      ? `老板视图已刷新：${operationsBossViewState.bossView.generatedAt}`
+      : "老板视图已刷新。";
+  }
+
+  return "点击刷新后，会从当前 principal 的运营对象里聚合经营晨报。";
+}
+
+function resolveOperationsCenterAssetCardState(operationsAssetsState) {
+  if (operationsAssetsState.loading || operationsAssetsState.submitting) {
+    return "partial";
+  }
+
+  if (operationsAssetsState.errorMessage) {
+    return "warning";
+  }
+
+  if (operationsAssetsState.status === "ready" && operationsAssetsState.assets.length > 0) {
+    return "ready";
+  }
+
+  if (operationsAssetsState.status === "ready") {
+    return "partial";
+  }
+
+  return "later";
+}
+
+function resolveOperationsCenterAssetLabel(operationsAssetsState) {
+  if (operationsAssetsState.loading || operationsAssetsState.submitting) {
+    return "正在读取";
+  }
+
+  if (operationsAssetsState.errorMessage) {
+    return "读取失败";
+  }
+
+  if (operationsAssetsState.status === "ready") {
+    return operationsAssetsState.selectedAssetId
+      ? "已选中资产"
+      : "已加载台账";
+  }
+
+  return "尚未读取";
+}
+
+function resolveOperationsCenterAssetSummary(operationsAssetsState) {
+  if (operationsAssetsState.loading || operationsAssetsState.submitting) {
+    return "正在读取资产台账。";
+  }
+
+  if (operationsAssetsState.errorMessage) {
+    return `资产台账读取失败：${operationsAssetsState.errorMessage}`;
+  }
+
+  if (operationsAssetsState.status === "ready") {
+    return operationsAssetsState.assets.length > 0
+      ? `当前筛选下已加载 ${operationsAssetsState.assets.length} 条资产记录。`
+      : "当前筛选下还没有资产记录。";
+  }
+
+  return "打开运营中枢时会读取最小资产台账。";
+}
+
+function resolveOperationsCenterAssetDetail(operationsAssetsState) {
+  if (operationsAssetsState.status === "ready") {
+    return operationsAssetsState.selectedAssetId
+      ? `当前正在编辑 ${operationsAssetsState.selectedAssetId}`
+      : `当前筛选：${operationsAssetsState.filterStatus}`;
+  }
+
+  return "这层先承接域名、站点、服务器、数据库、账号与工作区，后面继续接 Risk / Cadence。";
+}
+
+function resolveOperationsCenterCadenceCardState(operationsCadencesState) {
+  if (operationsCadencesState.loading || operationsCadencesState.submitting) {
+    return "partial";
+  }
+
+  if (operationsCadencesState.errorMessage) {
+    return "warning";
+  }
+
+  if (operationsCadencesState.status === "ready" && operationsCadencesState.cadences.length > 0) {
+    return "ready";
+  }
+
+  if (operationsCadencesState.status === "ready") {
+    return "partial";
+  }
+
+  return "later";
+}
+
+function resolveOperationsCenterCadenceLabel(operationsCadencesState) {
+  if (operationsCadencesState.loading || operationsCadencesState.submitting) {
+    return "正在读取";
+  }
+
+  if (operationsCadencesState.errorMessage) {
+    return "读取失败";
+  }
+
+  if (operationsCadencesState.status === "ready") {
+    return operationsCadencesState.selectedCadenceId
+      ? "已选中节奏"
+      : "已加载记录";
+  }
+
+  return "尚未读取";
+}
+
+function resolveOperationsCenterCadenceSummary(operationsCadencesState) {
+  if (operationsCadencesState.loading || operationsCadencesState.submitting) {
+    return "正在读取节奏记录。";
+  }
+
+  if (operationsCadencesState.errorMessage) {
+    return `节奏记录读取失败：${operationsCadencesState.errorMessage}`;
+  }
+
+  if (operationsCadencesState.status === "ready") {
+    return operationsCadencesState.cadences.length > 0
+      ? `当前筛选下已加载 ${operationsCadencesState.cadences.length} 条节奏记录。`
+      : "当前筛选下还没有节奏记录。";
+  }
+
+  return "打开运营中枢时会读取最小节奏记录。";
+}
+
+function resolveOperationsCenterCadenceDetail(operationsCadencesState) {
+  if (operationsCadencesState.status === "ready") {
+    return operationsCadencesState.selectedCadenceId
+      ? `当前正在编辑 ${operationsCadencesState.selectedCadenceId}`
+      : `当前筛选：${operationsCadencesState.filterStatus}`;
+  }
+
+  return "这层先承接周检、续费、备份抽查和复盘节奏，再继续把老板视图做实。";
+}
+
+function resolveOperationsCenterCommitmentCardState(operationsCommitmentsState) {
+  if (operationsCommitmentsState.loading || operationsCommitmentsState.submitting) {
+    return "partial";
+  }
+
+  if (operationsCommitmentsState.errorMessage) {
+    return "warning";
+  }
+
+  if (operationsCommitmentsState.commitments.some((item) => item.status === "at_risk")) {
+    return "warning";
+  }
+
+  if (operationsCommitmentsState.status === "ready" && operationsCommitmentsState.commitments.length > 0) {
+    return "ready";
+  }
+
+  if (operationsCommitmentsState.status === "ready") {
+    return "partial";
+  }
+
+  return "later";
+}
+
+function resolveOperationsCenterCommitmentLabel(operationsCommitmentsState) {
+  if (operationsCommitmentsState.loading || operationsCommitmentsState.submitting) {
+    return "正在读取";
+  }
+
+  if (operationsCommitmentsState.errorMessage) {
+    return "读取失败";
+  }
+
+  if (operationsCommitmentsState.status === "ready") {
+    return operationsCommitmentsState.selectedCommitmentId
+      ? "已选中承诺"
+      : "已加载目标";
+  }
+
+  return "尚未读取";
+}
+
+function resolveOperationsCenterCommitmentSummary(operationsCommitmentsState) {
+  if (operationsCommitmentsState.loading || operationsCommitmentsState.submitting) {
+    return "正在读取承诺目标。";
+  }
+
+  if (operationsCommitmentsState.errorMessage) {
+    return `承诺目标读取失败：${operationsCommitmentsState.errorMessage}`;
+  }
+
+  if (operationsCommitmentsState.status === "ready") {
+    return operationsCommitmentsState.commitments.length > 0
+      ? `当前筛选下已加载 ${operationsCommitmentsState.commitments.length} 条承诺目标。`
+      : "当前筛选下还没有承诺目标。";
+  }
+
+  return "打开运营中枢时会读取公司层承诺目标。";
+}
+
+function resolveOperationsCenterCommitmentDetail(operationsCommitmentsState) {
+  if (operationsCommitmentsState.status === "ready") {
+    return operationsCommitmentsState.selectedCommitmentId
+      ? `当前正在编辑 ${operationsCommitmentsState.selectedCommitmentId}`
+      : `当前筛选：${operationsCommitmentsState.filterStatus}`;
+  }
+
+  return "这层先承接季度主线、阶段承诺和必须完成的公司级目标。";
+}
+
+function resolveOperationsCenterDecisionCardState(operationsDecisionsState) {
+  if (operationsDecisionsState.loading || operationsDecisionsState.submitting) {
+    return "partial";
+  }
+
+  if (operationsDecisionsState.errorMessage) {
+    return "warning";
+  }
+
+  if (operationsDecisionsState.status === "ready" && operationsDecisionsState.decisions.length > 0) {
+    return "ready";
+  }
+
+  if (operationsDecisionsState.status === "ready") {
+    return "partial";
+  }
+
+  return "later";
+}
+
+function resolveOperationsCenterDecisionLabel(operationsDecisionsState) {
+  if (operationsDecisionsState.loading || operationsDecisionsState.submitting) {
+    return "正在读取";
+  }
+
+  if (operationsDecisionsState.errorMessage) {
+    return "读取失败";
+  }
+
+  if (operationsDecisionsState.status === "ready") {
+    return operationsDecisionsState.selectedDecisionId
+      ? "已选中决策"
+      : "已加载记录";
+  }
+
+  return "尚未读取";
+}
+
+function resolveOperationsCenterDecisionSummary(operationsDecisionsState) {
+  if (operationsDecisionsState.loading || operationsDecisionsState.submitting) {
+    return "正在读取决策记录。";
+  }
+
+  if (operationsDecisionsState.errorMessage) {
+    return `决策记录读取失败：${operationsDecisionsState.errorMessage}`;
+  }
+
+  if (operationsDecisionsState.status === "ready") {
+    return operationsDecisionsState.decisions.length > 0
+      ? `当前筛选下已加载 ${operationsDecisionsState.decisions.length} 条决策记录。`
+      : "当前筛选下还没有决策记录。";
+  }
+
+  return "打开运营中枢时会读取最小决策记录。";
+}
+
+function resolveOperationsCenterDecisionDetail(operationsDecisionsState) {
+  if (operationsDecisionsState.status === "ready") {
+    return operationsDecisionsState.selectedDecisionId
+      ? `当前正在编辑 ${operationsDecisionsState.selectedDecisionId}`
+      : `当前筛选：${operationsDecisionsState.filterStatus}`;
+  }
+
+  return "这层先承接老板拍板、取舍理由和影响范围，再继续接 Risk / Incident。";
+}
+
+function resolveOperationsCenterEdgeCardState(operationsEdgesState) {
+  if (operationsEdgesState.loading || operationsEdgesState.submitting) {
+    return "partial";
+  }
+
+  if (operationsEdgesState.errorMessage) {
+    return "warning";
+  }
+
+  if (operationsEdgesState.status === "ready" && operationsEdgesState.edges.length > 0) {
+    return "ready";
+  }
+
+  if (operationsEdgesState.status === "ready") {
+    return "partial";
+  }
+
+  return "later";
+}
+
+function resolveOperationsCenterEdgeLabel(operationsEdgesState) {
+  if (operationsEdgesState.loading || operationsEdgesState.submitting) {
+    return "正在读取";
+  }
+
+  if (operationsEdgesState.errorMessage) {
+    return "读取失败";
+  }
+
+  if (operationsEdgesState.status === "ready") {
+    return operationsEdgesState.selectedEdgeId
+      ? "已选中关系"
+      : "已加载关系";
+  }
+
+  return "尚未读取";
+}
+
+function resolveOperationsCenterEdgeSummary(operationsEdgesState) {
+  if (operationsEdgesState.loading || operationsEdgesState.submitting) {
+    return "正在读取对象关系边。";
+  }
+
+  if (operationsEdgesState.errorMessage) {
+    return `关系边读取失败：${operationsEdgesState.errorMessage}`;
+  }
+
+  if (operationsEdgesState.status === "ready") {
+    return operationsEdgesState.edges.length > 0
+      ? `当前筛选下已加载 ${operationsEdgesState.edges.length} 条关系边。`
+      : "当前筛选下还没有关系边。";
+  }
+
+  return "打开运营中枢时会读取结构化关系边。";
+}
+
+function resolveOperationsCenterEdgeDetail(operationsEdgesState) {
+  if (operationsEdgesState.status === "ready") {
+    return operationsEdgesState.selectedEdgeId
+      ? `当前正在编辑 ${operationsEdgesState.selectedEdgeId}`
+      : `当前筛选：${operationsEdgesState.filterStatus}`;
+  }
+
+  return "这层先把 asset / commitment / decision / risk / cadence / work item 之间的关系变成事实。";
+}
+
+function resolveOperationsCenterGraphCardState(operationsGraphState) {
+  if (operationsGraphState.loading) {
+    return "partial";
+  }
+
+  if (operationsGraphState.errorMessage) {
+    return "warning";
+  }
+
+  if (operationsGraphState.status === "ready" && operationsGraphState.graph) {
+    return operationsGraphState.graph.nodes.length > 0 ? "ready" : "partial";
+  }
+
+  return "later";
+}
+
+function resolveOperationsCenterGraphLabel(operationsGraphState) {
+  if (operationsGraphState.loading) {
+    return "正在查询";
+  }
+
+  if (operationsGraphState.errorMessage) {
+    return "查询失败";
+  }
+
+  if (operationsGraphState.status === "ready" && operationsGraphState.graph) {
+    return operationsGraphState.graph.target?.objectId
+      ? operationsGraphState.graph.target.reachable ? "路径可达" : "路径不可达"
+      : "子图已返回";
+  }
+
+  return "按需查询";
+}
+
+function resolveOperationsCenterGraphSummary(operationsGraphState) {
+  if (operationsGraphState.loading) {
+    return "正在查询当前对象的关系子图。";
+  }
+
+  if (operationsGraphState.errorMessage) {
+    return `对象图查询失败：${operationsGraphState.errorMessage}`;
+  }
+
+  if (operationsGraphState.status === "ready" && operationsGraphState.graph) {
+    const graph = operationsGraphState.graph;
+    return `最近一次查询返回 ${graph.nodes.length} 个节点、${graph.edges.length} 条边。`;
+  }
+
+  return "输入根对象后，可从后端查询小深度关系子图和可选最短路径。";
+}
+
+function resolveOperationsCenterGraphDetail(operationsGraphState) {
+  if (operationsGraphState.status === "ready" && operationsGraphState.graph) {
+    const graph = operationsGraphState.graph;
+    const rootLabel = `${graph.root?.objectType || "asset"}:${graph.root?.objectId || ""}`;
+    const targetLabel = graph.target?.objectId
+      ? `${graph.target.objectType}:${graph.target.objectId}`
+      : "未指定目标";
+    return `${rootLabel} -> ${targetLabel}｜最大深度 ${graph.maxDepth ?? 2}`;
+  }
+
+  return "这层只读 OperationEdge，不写回数据库，不形成第二套关系事实。";
+}
+
+function resolveOperationsCenterRiskCardState(operationsRisksState) {
+  if (operationsRisksState.loading || operationsRisksState.submitting) {
+    return "partial";
+  }
+
+  if (operationsRisksState.errorMessage) {
+    return "warning";
+  }
+
+  if (operationsRisksState.status === "ready" && operationsRisksState.risks.length > 0) {
+    return "ready";
+  }
+
+  if (operationsRisksState.status === "ready") {
+    return "partial";
+  }
+
+  return "later";
+}
+
+function resolveOperationsCenterRiskLabel(operationsRisksState) {
+  if (operationsRisksState.loading || operationsRisksState.submitting) {
+    return "正在读取";
+  }
+
+  if (operationsRisksState.errorMessage) {
+    return "读取失败";
+  }
+
+  if (operationsRisksState.status === "ready") {
+    return operationsRisksState.selectedRiskId
+      ? "已选中风险"
+      : "已加载记录";
+  }
+
+  return "尚未读取";
+}
+
+function resolveOperationsCenterRiskSummary(operationsRisksState) {
+  if (operationsRisksState.loading || operationsRisksState.submitting) {
+    return "正在读取风险记录。";
+  }
+
+  if (operationsRisksState.errorMessage) {
+    return `风险记录读取失败：${operationsRisksState.errorMessage}`;
+  }
+
+  if (operationsRisksState.status === "ready") {
+    return operationsRisksState.risks.length > 0
+      ? `当前筛选下已加载 ${operationsRisksState.risks.length} 条风险记录。`
+      : "当前筛选下还没有风险记录。";
+  }
+
+  return "打开运营中枢时会读取最小风险记录。";
+}
+
+function resolveOperationsCenterRiskDetail(operationsRisksState) {
+  if (operationsRisksState.status === "ready") {
+    return operationsRisksState.selectedRiskId
+      ? `当前正在编辑 ${operationsRisksState.selectedRiskId}`
+      : `当前筛选：${operationsRisksState.filterStatus}`;
+  }
+
+  return "这层先承接异常、故障、权限风险和合规风险，再继续接 Cadence。";
+}
+
+function resolveOperationsAssetsStatusMessage(assetsState) {
+  if (assetsState.errorMessage) {
+    return assetsState.errorMessage;
+  }
+
+  if (assetsState.loading) {
+    return "正在读取当前 principal 的资产台账。";
+  }
+
+  if (assetsState.submitting) {
+    return assetsState.selectedAssetId ? "正在更新资产台账。" : "正在新建资产台账。";
+  }
+
+  if (assetsState.noticeMessage) {
+    return assetsState.noticeMessage;
+  }
+
+  if (assetsState.status === "ready") {
+    return assetsState.assets.length > 0
+      ? `当前筛选下共有 ${assetsState.assets.length} 条资产记录。`
+      : "当前筛选下还没有资产记录。";
+  }
+
+  return "运营中枢会先把资产台账收成一等对象，再往上接决策和风险。";
+}
+
+function resolveOperationsCadencesStatusMessage(cadencesState) {
+  if (cadencesState.errorMessage) {
+    return cadencesState.errorMessage;
+  }
+
+  if (cadencesState.loading) {
+    return "正在读取当前 principal 的节奏记录。";
+  }
+
+  if (cadencesState.submitting) {
+    return cadencesState.selectedCadenceId ? "正在更新节奏记录。" : "正在新建节奏记录。";
+  }
+
+  if (cadencesState.noticeMessage) {
+    return cadencesState.noticeMessage;
+  }
+
+  if (cadencesState.status === "ready") {
+    return cadencesState.cadences.length > 0
+      ? `当前筛选下共有 ${cadencesState.cadences.length} 条节奏记录。`
+      : "当前筛选下还没有节奏记录。";
+  }
+
+  return "运营中枢会先把固定动作和复盘节奏收成一等对象，再继续接老板视图。";
+}
+
+function resolveOperationsCommitmentsStatusMessage(commitmentsState) {
+  if (commitmentsState.errorMessage) {
+    return commitmentsState.errorMessage;
+  }
+
+  if (commitmentsState.loading) {
+    return "正在读取当前 principal 的承诺目标。";
+  }
+
+  if (commitmentsState.submitting) {
+    return commitmentsState.selectedCommitmentId ? "正在更新承诺目标。" : "正在新建承诺目标。";
+  }
+
+  if (commitmentsState.noticeMessage) {
+    return commitmentsState.noticeMessage;
+  }
+
+  if (commitmentsState.status === "ready") {
+    return commitmentsState.commitments.length > 0
+      ? `当前筛选下共有 ${commitmentsState.commitments.length} 条承诺目标。`
+      : "当前筛选下还没有承诺目标。";
+  }
+
+  return "运营中枢会把季度主线和阶段承诺收成公司层对象，再挂回风险、节奏和执行项。";
+}
+
+function resolveOperationsDecisionsStatusMessage(decisionsState) {
+  if (decisionsState.errorMessage) {
+    return decisionsState.errorMessage;
+  }
+
+  if (decisionsState.loading) {
+    return "正在读取当前 principal 的决策记录。";
+  }
+
+  if (decisionsState.submitting) {
+    return decisionsState.selectedDecisionId ? "正在更新决策记录。" : "正在新建决策记录。";
+  }
+
+  if (decisionsState.noticeMessage) {
+    return decisionsState.noticeMessage;
+  }
+
+  if (decisionsState.status === "ready") {
+    return decisionsState.decisions.length > 0
+      ? `当前筛选下共有 ${decisionsState.decisions.length} 条决策记录。`
+      : "当前筛选下还没有决策记录。";
+  }
+
+  return "运营中枢会先把关键拍板收成一等对象，再继续接风险和节奏。";
+}
+
+function resolveOperationsEdgesStatusMessage(edgesState) {
+  if (edgesState.errorMessage) {
+    return edgesState.errorMessage;
+  }
+
+  if (edgesState.loading) {
+    return "正在读取当前 principal 的对象关系边。";
+  }
+
+  if (edgesState.submitting) {
+    return edgesState.selectedEdgeId ? "正在更新关系边。" : "正在新建关系边。";
+  }
+
+  if (edgesState.noticeMessage) {
+    return edgesState.noticeMessage;
+  }
+
+  if (edgesState.status === "ready") {
+    return edgesState.edges.length > 0
+      ? `当前筛选下共有 ${edgesState.edges.length} 条关系边。`
+      : "当前筛选下还没有关系边。";
+  }
+
+  return "运营中枢会把对象之间的事实关系收成边，再继续接老板视图。";
+}
+
+function resolveOperationsGraphStatusMessage(graphState) {
+  if (graphState.errorMessage) {
+    return graphState.errorMessage;
+  }
+
+  if (graphState.loading) {
+    return "正在查询当前对象的关系子图。";
+  }
+
+  if (graphState.noticeMessage) {
+    return graphState.noticeMessage;
+  }
+
+  if (graphState.status === "ready" && graphState.graph) {
+    return `对象图已返回 ${graphState.graph.nodes.length} 个节点、${graphState.graph.edges.length} 条边。`;
+  }
+
+  return "填写根对象后，可以查询它的一跳 / 多跳关系图和可选最短路径。";
+}
+
+function resolveOperationsRisksStatusMessage(risksState) {
+  if (risksState.errorMessage) {
+    return risksState.errorMessage;
+  }
+
+  if (risksState.loading) {
+    return "正在读取当前 principal 的风险记录。";
+  }
+
+  if (risksState.submitting) {
+    return risksState.selectedRiskId ? "正在更新风险记录。" : "正在新建风险记录。";
+  }
+
+  if (risksState.noticeMessage) {
+    return risksState.noticeMessage;
+  }
+
+  if (risksState.status === "ready") {
+    return risksState.risks.length > 0
+      ? `当前筛选下共有 ${risksState.risks.length} 条风险记录。`
+      : "当前筛选下还没有风险记录。";
+  }
+
+  return "运营中枢会先把风险和事故收成一等对象，再继续接节奏。";
+}
+
+function resolveEmptyOperationsAssetsLabel(assetsState) {
+  if (assetsState.loading) {
+    return "资产台账读取中...";
+  }
+
+  if (assetsState.errorMessage) {
+    return "资产台账读取失败。";
+  }
+
+  if (assetsState.filterStatus === "archived") {
+    return "当前还没有 archived 资产。";
+  }
+
+  return "当前筛选下还没有资产记录。";
+}
+
+function resolveEmptyOperationsCadencesLabel(cadencesState) {
+  if (cadencesState.loading) {
+    return "节奏记录读取中...";
+  }
+
+  if (cadencesState.errorMessage) {
+    return "节奏记录读取失败。";
+  }
+
+  if (cadencesState.filterStatus === "archived") {
+    return "当前还没有 archived 节奏。";
+  }
+
+  return "当前筛选下还没有节奏记录。";
+}
+
+function resolveEmptyOperationsCommitmentsLabel(commitmentsState) {
+  if (commitmentsState.loading) {
+    return "承诺目标读取中...";
+  }
+
+  if (commitmentsState.errorMessage) {
+    return "承诺目标读取失败。";
+  }
+
+  if (commitmentsState.filterStatus === "archived") {
+    return "当前还没有 archived 承诺。";
+  }
+
+  return "当前筛选下还没有承诺目标。";
+}
+
+function resolveEmptyOperationsDecisionsLabel(decisionsState) {
+  if (decisionsState.loading) {
+    return "决策记录读取中...";
+  }
+
+  if (decisionsState.errorMessage) {
+    return "决策记录读取失败。";
+  }
+
+  if (decisionsState.filterStatus === "archived") {
+    return "当前还没有 archived 决策。";
+  }
+
+  return "当前筛选下还没有决策记录。";
+}
+
+function resolveEmptyOperationsEdgesLabel(edgesState) {
+  if (edgesState.loading) {
+    return "关系边读取中...";
+  }
+
+  if (edgesState.errorMessage) {
+    return "关系边读取失败。";
+  }
+
+  if (edgesState.filterStatus === "archived") {
+    return "当前还没有 archived 关系边。";
+  }
+
+  return "当前筛选下还没有关系边。";
+}
+
+function resolveEmptyOperationsRisksLabel(risksState) {
+  if (risksState.loading) {
+    return "风险记录读取中...";
+  }
+
+  if (risksState.errorMessage) {
+    return "风险记录读取失败。";
+  }
+
+  if (risksState.filterStatus === "archived") {
+    return "当前还没有 archived 风险。";
+  }
+
+  return "当前筛选下还没有风险记录。";
+}
+
 function resolveWorkspaceToolsSection(section) {
-  return ["runtime", "auth", "skills", "mcp", "plugins", "memory-candidates", "meeting-rooms", "third-party", "mode-switch"].includes(section)
+  return [
+    "operations-center",
+    "runtime",
+    "auth",
+    "skills",
+    "mcp",
+    "plugins",
+    "memory-candidates",
+    "meeting-rooms",
+    "third-party",
+    "mode-switch",
+  ].includes(section)
     ? section
     : "runtime";
 }

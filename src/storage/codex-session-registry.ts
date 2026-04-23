@@ -62,7 +62,19 @@ import {
   MANAGED_AGENT_WORK_ITEM_STATUSES,
   PROJECT_WORKSPACE_CONTINUITY_MODES,
   PRINCIPAL_ACTOR_STATUSES,
+  PRINCIPAL_ASSET_KINDS,
+  PRINCIPAL_ASSET_STATUSES,
+  PRINCIPAL_CADENCE_FREQUENCIES,
+  PRINCIPAL_CADENCE_STATUSES,
+  PRINCIPAL_COMMITMENT_STATUSES,
+  PRINCIPAL_DECISION_STATUSES,
   PRINCIPAL_KINDS,
+  PRINCIPAL_OPERATION_EDGE_OBJECT_TYPES,
+  PRINCIPAL_OPERATION_EDGE_RELATION_TYPES,
+  PRINCIPAL_OPERATION_EDGE_STATUSES,
+  PRINCIPAL_RISK_SEVERITIES,
+  PRINCIPAL_RISK_STATUSES,
+  PRINCIPAL_RISK_TYPES,
   PRINCIPAL_MAIN_MEMORY_CANDIDATE_STATUSES,
   PRINCIPAL_MAIN_MEMORY_KINDS,
   PRINCIPAL_MAIN_MEMORY_SOURCE_TYPES,
@@ -73,6 +85,15 @@ import {
   SCHEDULED_TASK_STATUSES,
   TASK_ACCESS_MODES,
   WEB_SEARCH_MODES,
+  normalizePrincipalAssetRefs,
+  normalizePrincipalAssetTags,
+  normalizePrincipalCadenceRelatedIds,
+  normalizePrincipalCommitmentEvidenceRefs,
+  normalizePrincipalCommitmentMilestones,
+  normalizePrincipalCommitmentProgressPercent,
+  normalizePrincipalCommitmentRelatedIds,
+  normalizePrincipalDecisionRelatedIds,
+  normalizePrincipalRiskRelatedIds,
 } from "../types/index.js";
 import type {
   AgentRunStatus,
@@ -128,6 +149,7 @@ import type {
   StoredManagedAgentRecord,
   StoredProjectWorkspaceBindingRecord,
   StoredOrganizationRecord,
+  StoredPrincipalOperationEdgeRecord,
   TaskAccessMode,
   TaskEvent,
   TaskInputAsset,
@@ -137,14 +159,19 @@ import type {
   WebSearchMode,
   StoredActorRuntimeMemoryRecord,
   StoredActorTaskScopeRecord,
+  StoredPrincipalAssetRecord,
+  StoredPrincipalCadenceRecord,
+  StoredPrincipalCommitmentRecord,
+  StoredPrincipalDecisionRecord,
   StoredPrincipalActorRecord,
   StoredPrincipalMainMemoryCandidateRecord,
   StoredPrincipalMainMemoryRecord,
+  StoredPrincipalRiskRecord,
   StoredScheduledTaskRecord,
   StoredScheduledTaskRunRecord,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 33;
+const DATABASE_SCHEMA_VERSION = 40;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -407,6 +434,102 @@ interface PrincipalMainMemoryCandidateRow {
   approved_memory_id: string | null;
   reviewed_at: string | null;
   archived_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PrincipalAssetRow {
+  asset_id: string;
+  principal_id: string;
+  kind: string;
+  name: string;
+  status: string;
+  owner_principal_id: string | null;
+  summary: string | null;
+  tags_json: string;
+  refs_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PrincipalDecisionRow {
+  decision_id: string;
+  principal_id: string;
+  title: string;
+  status: string;
+  summary: string | null;
+  decided_by_principal_id: string | null;
+  decided_at: string;
+  related_asset_ids_json: string;
+  related_work_item_ids_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PrincipalRiskRow {
+  risk_id: string;
+  principal_id: string;
+  type: string;
+  title: string;
+  severity: string;
+  status: string;
+  owner_principal_id: string | null;
+  summary: string | null;
+  detected_at: string;
+  related_asset_ids_json: string;
+  linked_decision_ids_json: string;
+  related_work_item_ids_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PrincipalCadenceRow {
+  cadence_id: string;
+  principal_id: string;
+  title: string;
+  frequency: string;
+  status: string;
+  next_run_at: string;
+  owner_principal_id: string | null;
+  playbook_ref: string | null;
+  summary: string | null;
+  related_asset_ids_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PrincipalCommitmentRow {
+  commitment_id: string;
+  principal_id: string;
+  title: string;
+  status: string;
+  owner_principal_id: string | null;
+  starts_at: string | null;
+  due_at: string;
+  progress_percent: number;
+  summary: string | null;
+  milestones_json: string;
+  evidence_refs_json: string;
+  related_asset_ids_json: string;
+  linked_decision_ids_json: string;
+  linked_risk_ids_json: string;
+  related_cadence_ids_json: string;
+  related_work_item_ids_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PrincipalOperationEdgeRow {
+  edge_id: string;
+  principal_id: string;
+  from_object_type: string;
+  from_object_id: string;
+  to_object_type: string;
+  to_object_id: string;
+  relation_type: string;
+  status: string;
+  label: string | null;
+  summary: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -6005,6 +6128,1463 @@ export class SqliteCodexSessionRegistry {
     }
   }
 
+  getPrincipalAsset(principalId: string, assetId: string): StoredPrincipalAssetRecord | null {
+    const normalizedPrincipalId = principalId.trim();
+    const normalizedAssetId = assetId.trim();
+
+    if (!normalizedPrincipalId || !normalizedAssetId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            asset_id,
+            principal_id,
+            kind,
+            name,
+            status,
+            owner_principal_id,
+            summary,
+            tags_json,
+            refs_json,
+            created_at,
+            updated_at
+          FROM themis_principal_assets
+          WHERE principal_id = ?
+            AND asset_id = ?
+        `,
+      )
+      .get(normalizedPrincipalId, normalizedAssetId) as PrincipalAssetRow | undefined;
+
+    return row ? mapPrincipalAssetRow(row) : null;
+  }
+
+  listPrincipalAssets(filters: {
+    principalId: string;
+    status?: StoredPrincipalAssetRecord["status"];
+    kind?: StoredPrincipalAssetRecord["kind"];
+    query?: string;
+    includeArchived?: boolean;
+    limit?: number;
+  }): StoredPrincipalAssetRecord[] {
+    const normalizedPrincipalId = filters.principalId.trim();
+    const normalizedStatus = normalizeText(filters.status);
+    const normalizedKind = normalizeText(filters.kind);
+    const normalizedQuery = normalizeText(filters.query);
+    const includeArchived = filters.includeArchived === true;
+    const normalizedLimit = normalizeLimit(filters.limit, 50);
+
+    if (!normalizedPrincipalId) {
+      return [];
+    }
+
+    const parameters: Array<string | number> = [normalizedPrincipalId];
+    let sql = `
+      SELECT
+        asset_id,
+        principal_id,
+        kind,
+        name,
+        status,
+        owner_principal_id,
+        summary,
+        tags_json,
+        refs_json,
+        created_at,
+        updated_at
+      FROM themis_principal_assets
+      WHERE principal_id = ?
+    `;
+
+    if (!includeArchived) {
+      sql += ` AND status <> 'archived'`;
+    }
+
+    if (
+      normalizedStatus
+      && PRINCIPAL_ASSET_STATUSES.includes(normalizedStatus as StoredPrincipalAssetRecord["status"])
+    ) {
+      sql += ` AND status = ?`;
+      parameters.push(normalizedStatus);
+    }
+
+    if (
+      normalizedKind
+      && PRINCIPAL_ASSET_KINDS.includes(normalizedKind as StoredPrincipalAssetRecord["kind"])
+    ) {
+      sql += ` AND kind = ?`;
+      parameters.push(normalizedKind);
+    }
+
+    if (normalizedQuery) {
+      const likePattern = `%${normalizedQuery}%`;
+      sql += `
+        AND (
+          asset_id LIKE ?
+          OR name LIKE ?
+          OR COALESCE(summary, '') LIKE ?
+          OR COALESCE(owner_principal_id, '') LIKE ?
+          OR tags_json LIKE ?
+          OR refs_json LIKE ?
+        )
+      `;
+      parameters.push(
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+      );
+    }
+
+    sql += `
+      ORDER BY updated_at DESC, asset_id DESC
+      LIMIT ?
+    `;
+    parameters.push(normalizedLimit);
+
+    const rows = this.db.prepare(sql).all(...parameters) as PrincipalAssetRow[];
+
+    return rows.map(mapPrincipalAssetRow);
+  }
+
+  savePrincipalAsset(record: StoredPrincipalAssetRecord): void {
+    const assetId = record.assetId.trim();
+    const principalId = record.principalId.trim();
+    const kind = normalizeText(record.kind);
+    const name = normalizeText(record.name);
+    const status = normalizeText(record.status);
+    const ownerPrincipalId = normalizeText(record.ownerPrincipalId);
+    const summary = normalizeText(record.summary);
+    const tags = normalizePrincipalAssetTags(record.tags);
+    const refs = normalizePrincipalAssetRefs(record.refs);
+
+    if (
+      !assetId
+      || !principalId
+      || !kind
+      || !PRINCIPAL_ASSET_KINDS.includes(kind as StoredPrincipalAssetRecord["kind"])
+      || !name
+      || !status
+      || !PRINCIPAL_ASSET_STATUSES.includes(status as StoredPrincipalAssetRecord["status"])
+    ) {
+      throw new Error("Principal asset record is incomplete.");
+    }
+
+    const existing = this.db
+      .prepare(
+        `
+          SELECT principal_id
+          FROM themis_principal_assets
+          WHERE asset_id = ?
+        `,
+      )
+      .get(assetId) as { principal_id: string } | undefined;
+
+    if (existing && existing.principal_id !== principalId) {
+      throw new Error("Principal asset belongs to another principal.");
+    }
+
+    const assetWriteResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_principal_assets (
+            asset_id,
+            principal_id,
+            kind,
+            name,
+            status,
+            owner_principal_id,
+            summary,
+            tags_json,
+            refs_json,
+            created_at,
+            updated_at
+          ) VALUES (
+            @asset_id,
+            @principal_id,
+            @kind,
+            @name,
+            @status,
+            @owner_principal_id,
+            @summary,
+            @tags_json,
+            @refs_json,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(asset_id) DO UPDATE SET
+            kind = excluded.kind,
+            name = excluded.name,
+            status = excluded.status,
+            owner_principal_id = excluded.owner_principal_id,
+            summary = excluded.summary,
+            tags_json = excluded.tags_json,
+            refs_json = excluded.refs_json,
+            updated_at = excluded.updated_at
+          WHERE themis_principal_assets.principal_id = excluded.principal_id
+        `,
+      )
+      .run({
+        asset_id: assetId,
+        principal_id: principalId,
+        kind,
+        name,
+        status,
+        owner_principal_id: ownerPrincipalId ?? null,
+        summary: summary ?? null,
+        tags_json: JSON.stringify(tags),
+        refs_json: JSON.stringify(refs),
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+
+    if (assetWriteResult.changes === 0) {
+      throw new Error("Principal asset write did not apply.");
+    }
+  }
+
+  getPrincipalDecision(principalId: string, decisionId: string): StoredPrincipalDecisionRecord | null {
+    const normalizedPrincipalId = principalId.trim();
+    const normalizedDecisionId = decisionId.trim();
+
+    if (!normalizedPrincipalId || !normalizedDecisionId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            decision_id,
+            principal_id,
+            title,
+            status,
+            summary,
+            decided_by_principal_id,
+            decided_at,
+            related_asset_ids_json,
+            related_work_item_ids_json,
+            created_at,
+            updated_at
+          FROM themis_principal_decisions
+          WHERE principal_id = ?
+            AND decision_id = ?
+        `,
+      )
+      .get(normalizedPrincipalId, normalizedDecisionId) as PrincipalDecisionRow | undefined;
+
+    return row ? mapPrincipalDecisionRow(row) : null;
+  }
+
+  listPrincipalDecisions(filters: {
+    principalId: string;
+    status?: StoredPrincipalDecisionRecord["status"];
+    query?: string;
+    includeArchived?: boolean;
+    limit?: number;
+  }): StoredPrincipalDecisionRecord[] {
+    const normalizedPrincipalId = filters.principalId.trim();
+    const normalizedStatus = normalizeText(filters.status);
+    const normalizedQuery = normalizeText(filters.query);
+    const includeArchived = filters.includeArchived === true;
+    const normalizedLimit = normalizeLimit(filters.limit, 50);
+
+    if (!normalizedPrincipalId) {
+      return [];
+    }
+
+    const parameters: Array<string | number> = [normalizedPrincipalId];
+    let sql = `
+      SELECT
+        decision_id,
+        principal_id,
+        title,
+        status,
+        summary,
+        decided_by_principal_id,
+        decided_at,
+        related_asset_ids_json,
+        related_work_item_ids_json,
+        created_at,
+        updated_at
+      FROM themis_principal_decisions
+      WHERE principal_id = ?
+    `;
+
+    if (!includeArchived) {
+      sql += ` AND status <> 'archived'`;
+    }
+
+    if (
+      normalizedStatus
+      && PRINCIPAL_DECISION_STATUSES.includes(normalizedStatus as StoredPrincipalDecisionRecord["status"])
+    ) {
+      sql += ` AND status = ?`;
+      parameters.push(normalizedStatus);
+    }
+
+    if (normalizedQuery) {
+      const likePattern = `%${normalizedQuery}%`;
+      sql += `
+        AND (
+          decision_id LIKE ?
+          OR title LIKE ?
+          OR COALESCE(summary, '') LIKE ?
+          OR COALESCE(decided_by_principal_id, '') LIKE ?
+          OR related_asset_ids_json LIKE ?
+          OR related_work_item_ids_json LIKE ?
+        )
+      `;
+      parameters.push(
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+      );
+    }
+
+    sql += `
+      ORDER BY decided_at DESC, updated_at DESC, decision_id DESC
+      LIMIT ?
+    `;
+    parameters.push(normalizedLimit);
+
+    const rows = this.db.prepare(sql).all(...parameters) as PrincipalDecisionRow[];
+
+    return rows.map(mapPrincipalDecisionRow);
+  }
+
+  savePrincipalDecision(record: StoredPrincipalDecisionRecord): void {
+    const decisionId = record.decisionId.trim();
+    const principalId = record.principalId.trim();
+    const title = normalizeText(record.title);
+    const status = normalizeText(record.status);
+    const summary = normalizeText(record.summary);
+    const decidedByPrincipalId = normalizeText(record.decidedByPrincipalId);
+    const decidedAt = normalizeText(record.decidedAt);
+    const relatedAssetIds = normalizePrincipalDecisionRelatedIds(record.relatedAssetIds);
+    const relatedWorkItemIds = normalizePrincipalDecisionRelatedIds(record.relatedWorkItemIds);
+
+    if (
+      !decisionId
+      || !principalId
+      || !title
+      || !status
+      || !PRINCIPAL_DECISION_STATUSES.includes(status as StoredPrincipalDecisionRecord["status"])
+      || !decidedAt
+    ) {
+      throw new Error("Principal decision record is incomplete.");
+    }
+
+    const existing = this.db
+      .prepare(
+        `
+          SELECT principal_id
+          FROM themis_principal_decisions
+          WHERE decision_id = ?
+        `,
+      )
+      .get(decisionId) as { principal_id: string } | undefined;
+
+    if (existing && existing.principal_id !== principalId) {
+      throw new Error("Principal decision belongs to another principal.");
+    }
+
+    const decisionWriteResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_principal_decisions (
+            decision_id,
+            principal_id,
+            title,
+            status,
+            summary,
+            decided_by_principal_id,
+            decided_at,
+            related_asset_ids_json,
+            related_work_item_ids_json,
+            created_at,
+            updated_at
+          ) VALUES (
+            @decision_id,
+            @principal_id,
+            @title,
+            @status,
+            @summary,
+            @decided_by_principal_id,
+            @decided_at,
+            @related_asset_ids_json,
+            @related_work_item_ids_json,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(decision_id) DO UPDATE SET
+            title = excluded.title,
+            status = excluded.status,
+            summary = excluded.summary,
+            decided_by_principal_id = excluded.decided_by_principal_id,
+            decided_at = excluded.decided_at,
+            related_asset_ids_json = excluded.related_asset_ids_json,
+            related_work_item_ids_json = excluded.related_work_item_ids_json,
+            updated_at = excluded.updated_at
+          WHERE themis_principal_decisions.principal_id = excluded.principal_id
+        `,
+      )
+      .run({
+        decision_id: decisionId,
+        principal_id: principalId,
+        title,
+        status,
+        summary: summary ?? null,
+        decided_by_principal_id: decidedByPrincipalId ?? null,
+        decided_at: decidedAt,
+        related_asset_ids_json: JSON.stringify(relatedAssetIds),
+        related_work_item_ids_json: JSON.stringify(relatedWorkItemIds),
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+
+    if (decisionWriteResult.changes === 0) {
+      throw new Error("Principal decision write did not apply.");
+    }
+  }
+
+  getPrincipalRisk(principalId: string, riskId: string): StoredPrincipalRiskRecord | null {
+    const normalizedPrincipalId = principalId.trim();
+    const normalizedRiskId = riskId.trim();
+
+    if (!normalizedPrincipalId || !normalizedRiskId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            risk_id,
+            principal_id,
+            type,
+            title,
+            severity,
+            status,
+            owner_principal_id,
+            summary,
+            detected_at,
+            related_asset_ids_json,
+            linked_decision_ids_json,
+            related_work_item_ids_json,
+            created_at,
+            updated_at
+          FROM themis_principal_risks
+          WHERE principal_id = ?
+            AND risk_id = ?
+        `,
+      )
+      .get(normalizedPrincipalId, normalizedRiskId) as PrincipalRiskRow | undefined;
+
+    return row ? mapPrincipalRiskRow(row) : null;
+  }
+
+  listPrincipalRisks(filters: {
+    principalId: string;
+    status?: StoredPrincipalRiskRecord["status"];
+    type?: StoredPrincipalRiskRecord["type"];
+    severity?: StoredPrincipalRiskRecord["severity"];
+    query?: string;
+    includeArchived?: boolean;
+    limit?: number;
+  }): StoredPrincipalRiskRecord[] {
+    const normalizedPrincipalId = filters.principalId.trim();
+    const normalizedStatus = normalizeText(filters.status);
+    const normalizedType = normalizeText(filters.type);
+    const normalizedSeverity = normalizeText(filters.severity);
+    const normalizedQuery = normalizeText(filters.query);
+    const includeArchived = filters.includeArchived === true;
+    const normalizedLimit = normalizeLimit(filters.limit, 50);
+
+    if (!normalizedPrincipalId) {
+      return [];
+    }
+
+    const parameters: Array<string | number> = [normalizedPrincipalId];
+    let sql = `
+      SELECT
+        risk_id,
+        principal_id,
+        type,
+        title,
+        severity,
+        status,
+        owner_principal_id,
+        summary,
+        detected_at,
+        related_asset_ids_json,
+        linked_decision_ids_json,
+        related_work_item_ids_json,
+        created_at,
+        updated_at
+      FROM themis_principal_risks
+      WHERE principal_id = ?
+    `;
+
+    if (!includeArchived) {
+      sql += ` AND status <> 'archived'`;
+    }
+
+    if (
+      normalizedStatus
+      && PRINCIPAL_RISK_STATUSES.includes(normalizedStatus as StoredPrincipalRiskRecord["status"])
+    ) {
+      sql += ` AND status = ?`;
+      parameters.push(normalizedStatus);
+    }
+
+    if (
+      normalizedType
+      && PRINCIPAL_RISK_TYPES.includes(normalizedType as StoredPrincipalRiskRecord["type"])
+    ) {
+      sql += ` AND type = ?`;
+      parameters.push(normalizedType);
+    }
+
+    if (
+      normalizedSeverity
+      && PRINCIPAL_RISK_SEVERITIES.includes(normalizedSeverity as StoredPrincipalRiskRecord["severity"])
+    ) {
+      sql += ` AND severity = ?`;
+      parameters.push(normalizedSeverity);
+    }
+
+    if (normalizedQuery) {
+      const likePattern = `%${normalizedQuery}%`;
+      sql += `
+        AND (
+          risk_id LIKE ?
+          OR title LIKE ?
+          OR COALESCE(summary, '') LIKE ?
+          OR COALESCE(owner_principal_id, '') LIKE ?
+          OR related_asset_ids_json LIKE ?
+          OR linked_decision_ids_json LIKE ?
+          OR related_work_item_ids_json LIKE ?
+        )
+      `;
+      parameters.push(
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+      );
+    }
+
+    sql += `
+      ORDER BY detected_at DESC, updated_at DESC, risk_id DESC
+      LIMIT ?
+    `;
+    parameters.push(normalizedLimit);
+
+    const rows = this.db.prepare(sql).all(...parameters) as PrincipalRiskRow[];
+
+    return rows.map(mapPrincipalRiskRow);
+  }
+
+  savePrincipalRisk(record: StoredPrincipalRiskRecord): void {
+    const riskId = record.riskId.trim();
+    const principalId = record.principalId.trim();
+    const type = normalizeText(record.type);
+    const title = normalizeText(record.title);
+    const severity = normalizeText(record.severity);
+    const status = normalizeText(record.status);
+    const ownerPrincipalId = normalizeText(record.ownerPrincipalId);
+    const summary = normalizeText(record.summary);
+    const detectedAt = normalizeText(record.detectedAt);
+    const relatedAssetIds = normalizePrincipalRiskRelatedIds(record.relatedAssetIds);
+    const linkedDecisionIds = normalizePrincipalRiskRelatedIds(record.linkedDecisionIds);
+    const relatedWorkItemIds = normalizePrincipalRiskRelatedIds(record.relatedWorkItemIds);
+
+    if (
+      !riskId
+      || !principalId
+      || !type
+      || !PRINCIPAL_RISK_TYPES.includes(type as StoredPrincipalRiskRecord["type"])
+      || !title
+      || !severity
+      || !PRINCIPAL_RISK_SEVERITIES.includes(severity as StoredPrincipalRiskRecord["severity"])
+      || !status
+      || !PRINCIPAL_RISK_STATUSES.includes(status as StoredPrincipalRiskRecord["status"])
+      || !detectedAt
+    ) {
+      throw new Error("Principal risk record is incomplete.");
+    }
+
+    const existing = this.db
+      .prepare(
+        `
+          SELECT principal_id
+          FROM themis_principal_risks
+          WHERE risk_id = ?
+        `,
+      )
+      .get(riskId) as { principal_id: string } | undefined;
+
+    if (existing && existing.principal_id !== principalId) {
+      throw new Error("Principal risk belongs to another principal.");
+    }
+
+    const riskWriteResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_principal_risks (
+            risk_id,
+            principal_id,
+            type,
+            title,
+            severity,
+            status,
+            owner_principal_id,
+            summary,
+            detected_at,
+            related_asset_ids_json,
+            linked_decision_ids_json,
+            related_work_item_ids_json,
+            created_at,
+            updated_at
+          ) VALUES (
+            @risk_id,
+            @principal_id,
+            @type,
+            @title,
+            @severity,
+            @status,
+            @owner_principal_id,
+            @summary,
+            @detected_at,
+            @related_asset_ids_json,
+            @linked_decision_ids_json,
+            @related_work_item_ids_json,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(risk_id) DO UPDATE SET
+            type = excluded.type,
+            title = excluded.title,
+            severity = excluded.severity,
+            status = excluded.status,
+            owner_principal_id = excluded.owner_principal_id,
+            summary = excluded.summary,
+            detected_at = excluded.detected_at,
+            related_asset_ids_json = excluded.related_asset_ids_json,
+            linked_decision_ids_json = excluded.linked_decision_ids_json,
+            related_work_item_ids_json = excluded.related_work_item_ids_json,
+            updated_at = excluded.updated_at
+          WHERE themis_principal_risks.principal_id = excluded.principal_id
+        `,
+      )
+      .run({
+        risk_id: riskId,
+        principal_id: principalId,
+        type,
+        title,
+        severity,
+        status,
+        owner_principal_id: ownerPrincipalId ?? null,
+        summary: summary ?? null,
+        detected_at: detectedAt,
+        related_asset_ids_json: JSON.stringify(relatedAssetIds),
+        linked_decision_ids_json: JSON.stringify(linkedDecisionIds),
+        related_work_item_ids_json: JSON.stringify(relatedWorkItemIds),
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+
+    if (riskWriteResult.changes === 0) {
+      throw new Error("Principal risk write did not apply.");
+    }
+  }
+
+  getPrincipalCadence(principalId: string, cadenceId: string): StoredPrincipalCadenceRecord | null {
+    const normalizedPrincipalId = principalId.trim();
+    const normalizedCadenceId = cadenceId.trim();
+
+    if (!normalizedPrincipalId || !normalizedCadenceId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            cadence_id,
+            principal_id,
+            title,
+            frequency,
+            status,
+            next_run_at,
+            owner_principal_id,
+            playbook_ref,
+            summary,
+            related_asset_ids_json,
+            created_at,
+            updated_at
+          FROM themis_principal_cadences
+          WHERE principal_id = ?
+            AND cadence_id = ?
+        `,
+      )
+      .get(normalizedPrincipalId, normalizedCadenceId) as PrincipalCadenceRow | undefined;
+
+    return row ? mapPrincipalCadenceRow(row) : null;
+  }
+
+  listPrincipalCadences(filters: {
+    principalId: string;
+    status?: StoredPrincipalCadenceRecord["status"];
+    frequency?: StoredPrincipalCadenceRecord["frequency"];
+    query?: string;
+    includeArchived?: boolean;
+    limit?: number;
+  }): StoredPrincipalCadenceRecord[] {
+    const normalizedPrincipalId = filters.principalId.trim();
+    const normalizedStatus = normalizeText(filters.status);
+    const normalizedFrequency = normalizeText(filters.frequency);
+    const normalizedQuery = normalizeText(filters.query);
+    const includeArchived = filters.includeArchived === true;
+    const normalizedLimit = normalizeLimit(filters.limit, 50);
+
+    if (!normalizedPrincipalId) {
+      return [];
+    }
+
+    const parameters: Array<string | number> = [normalizedPrincipalId];
+    let sql = `
+      SELECT
+        cadence_id,
+        principal_id,
+        title,
+        frequency,
+        status,
+        next_run_at,
+        owner_principal_id,
+        playbook_ref,
+        summary,
+        related_asset_ids_json,
+        created_at,
+        updated_at
+      FROM themis_principal_cadences
+      WHERE principal_id = ?
+    `;
+
+    if (!includeArchived) {
+      sql += ` AND status <> 'archived'`;
+    }
+
+    if (
+      normalizedStatus
+      && PRINCIPAL_CADENCE_STATUSES.includes(normalizedStatus as StoredPrincipalCadenceRecord["status"])
+    ) {
+      sql += ` AND status = ?`;
+      parameters.push(normalizedStatus);
+    }
+
+    if (
+      normalizedFrequency
+      && PRINCIPAL_CADENCE_FREQUENCIES.includes(normalizedFrequency as StoredPrincipalCadenceRecord["frequency"])
+    ) {
+      sql += ` AND frequency = ?`;
+      parameters.push(normalizedFrequency);
+    }
+
+    if (normalizedQuery) {
+      const likePattern = `%${normalizedQuery}%`;
+      sql += `
+        AND (
+          cadence_id LIKE ?
+          OR title LIKE ?
+          OR frequency LIKE ?
+          OR COALESCE(owner_principal_id, '') LIKE ?
+          OR COALESCE(playbook_ref, '') LIKE ?
+          OR COALESCE(summary, '') LIKE ?
+          OR related_asset_ids_json LIKE ?
+        )
+      `;
+      parameters.push(
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+      );
+    }
+
+    sql += `
+      ORDER BY next_run_at ASC, updated_at DESC, cadence_id DESC
+      LIMIT ?
+    `;
+    parameters.push(normalizedLimit);
+
+    const rows = this.db.prepare(sql).all(...parameters) as PrincipalCadenceRow[];
+
+    return rows.map(mapPrincipalCadenceRow);
+  }
+
+  savePrincipalCadence(record: StoredPrincipalCadenceRecord): void {
+    const cadenceId = record.cadenceId.trim();
+    const principalId = record.principalId.trim();
+    const title = normalizeText(record.title);
+    const frequency = normalizeText(record.frequency);
+    const status = normalizeText(record.status);
+    const nextRunAt = normalizeText(record.nextRunAt);
+    const ownerPrincipalId = normalizeText(record.ownerPrincipalId);
+    const playbookRef = normalizeText(record.playbookRef);
+    const summary = normalizeText(record.summary);
+    const relatedAssetIds = normalizePrincipalCadenceRelatedIds(record.relatedAssetIds);
+
+    if (
+      !cadenceId
+      || !principalId
+      || !title
+      || !frequency
+      || !PRINCIPAL_CADENCE_FREQUENCIES.includes(frequency as StoredPrincipalCadenceRecord["frequency"])
+      || !status
+      || !PRINCIPAL_CADENCE_STATUSES.includes(status as StoredPrincipalCadenceRecord["status"])
+      || !nextRunAt
+    ) {
+      throw new Error("Principal cadence record is incomplete.");
+    }
+
+    const existing = this.db
+      .prepare(
+        `
+          SELECT principal_id
+          FROM themis_principal_cadences
+          WHERE cadence_id = ?
+        `,
+      )
+      .get(cadenceId) as { principal_id: string } | undefined;
+
+    if (existing && existing.principal_id !== principalId) {
+      throw new Error("Principal cadence belongs to another principal.");
+    }
+
+    const cadenceWriteResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_principal_cadences (
+            cadence_id,
+            principal_id,
+            title,
+            frequency,
+            status,
+            next_run_at,
+            owner_principal_id,
+            playbook_ref,
+            summary,
+            related_asset_ids_json,
+            created_at,
+            updated_at
+          ) VALUES (
+            @cadence_id,
+            @principal_id,
+            @title,
+            @frequency,
+            @status,
+            @next_run_at,
+            @owner_principal_id,
+            @playbook_ref,
+            @summary,
+            @related_asset_ids_json,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(cadence_id) DO UPDATE SET
+            title = excluded.title,
+            frequency = excluded.frequency,
+            status = excluded.status,
+            next_run_at = excluded.next_run_at,
+            owner_principal_id = excluded.owner_principal_id,
+            playbook_ref = excluded.playbook_ref,
+            summary = excluded.summary,
+            related_asset_ids_json = excluded.related_asset_ids_json,
+            updated_at = excluded.updated_at
+          WHERE themis_principal_cadences.principal_id = excluded.principal_id
+        `,
+      )
+      .run({
+        cadence_id: cadenceId,
+        principal_id: principalId,
+        title,
+        frequency,
+        status,
+        next_run_at: nextRunAt,
+        owner_principal_id: ownerPrincipalId ?? null,
+        playbook_ref: playbookRef ?? null,
+        summary: summary ?? null,
+        related_asset_ids_json: JSON.stringify(relatedAssetIds),
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+
+    if (cadenceWriteResult.changes === 0) {
+      throw new Error("Principal cadence write did not apply.");
+    }
+  }
+
+  getPrincipalCommitment(principalId: string, commitmentId: string): StoredPrincipalCommitmentRecord | null {
+    const normalizedPrincipalId = principalId.trim();
+    const normalizedCommitmentId = commitmentId.trim();
+
+    if (!normalizedPrincipalId || !normalizedCommitmentId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            commitment_id,
+            principal_id,
+            title,
+            status,
+            owner_principal_id,
+            starts_at,
+            due_at,
+            progress_percent,
+            summary,
+            milestones_json,
+            evidence_refs_json,
+            related_asset_ids_json,
+            linked_decision_ids_json,
+            linked_risk_ids_json,
+            related_cadence_ids_json,
+            related_work_item_ids_json,
+            created_at,
+            updated_at
+          FROM themis_principal_commitments
+          WHERE principal_id = ?
+            AND commitment_id = ?
+        `,
+      )
+      .get(normalizedPrincipalId, normalizedCommitmentId) as PrincipalCommitmentRow | undefined;
+
+    return row ? mapPrincipalCommitmentRow(row) : null;
+  }
+
+  listPrincipalCommitments(filters: {
+    principalId: string;
+    status?: StoredPrincipalCommitmentRecord["status"];
+    query?: string;
+    includeArchived?: boolean;
+    limit?: number;
+  }): StoredPrincipalCommitmentRecord[] {
+    const normalizedPrincipalId = filters.principalId.trim();
+    const normalizedStatus = normalizeText(filters.status);
+    const normalizedQuery = normalizeText(filters.query);
+    const includeArchived = filters.includeArchived === true;
+    const normalizedLimit = normalizeLimit(filters.limit, 50);
+
+    if (!normalizedPrincipalId) {
+      return [];
+    }
+
+    const parameters: Array<string | number> = [normalizedPrincipalId];
+    let sql = `
+      SELECT
+        commitment_id,
+        principal_id,
+        title,
+        status,
+        owner_principal_id,
+        starts_at,
+        due_at,
+        progress_percent,
+        summary,
+        milestones_json,
+        evidence_refs_json,
+        related_asset_ids_json,
+        linked_decision_ids_json,
+        linked_risk_ids_json,
+        related_cadence_ids_json,
+        related_work_item_ids_json,
+        created_at,
+        updated_at
+      FROM themis_principal_commitments
+      WHERE principal_id = ?
+    `;
+
+    if (!includeArchived) {
+      sql += ` AND status <> 'archived'`;
+    }
+
+    if (
+      normalizedStatus
+      && PRINCIPAL_COMMITMENT_STATUSES.includes(normalizedStatus as StoredPrincipalCommitmentRecord["status"])
+    ) {
+      sql += ` AND status = ?`;
+      parameters.push(normalizedStatus);
+    }
+
+    if (normalizedQuery) {
+      const likePattern = `%${normalizedQuery}%`;
+      sql += `
+        AND (
+          commitment_id LIKE ?
+          OR title LIKE ?
+          OR status LIKE ?
+          OR COALESCE(owner_principal_id, '') LIKE ?
+          OR COALESCE(summary, '') LIKE ?
+          OR milestones_json LIKE ?
+          OR evidence_refs_json LIKE ?
+          OR related_asset_ids_json LIKE ?
+          OR linked_decision_ids_json LIKE ?
+          OR linked_risk_ids_json LIKE ?
+          OR related_cadence_ids_json LIKE ?
+          OR related_work_item_ids_json LIKE ?
+        )
+      `;
+      parameters.push(
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+      );
+    }
+
+    sql += `
+      ORDER BY due_at ASC, updated_at DESC, commitment_id DESC
+      LIMIT ?
+    `;
+    parameters.push(normalizedLimit);
+
+    const rows = this.db.prepare(sql).all(...parameters) as PrincipalCommitmentRow[];
+
+    return rows.map(mapPrincipalCommitmentRow);
+  }
+
+  savePrincipalCommitment(record: StoredPrincipalCommitmentRecord): void {
+    const commitmentId = record.commitmentId.trim();
+    const principalId = record.principalId.trim();
+    const title = normalizeText(record.title);
+    const status = normalizeText(record.status);
+    const ownerPrincipalId = normalizeText(record.ownerPrincipalId);
+    const startsAt = normalizeText(record.startsAt);
+    const dueAt = normalizeText(record.dueAt);
+    const progressPercent = normalizePrincipalCommitmentProgressPercent(record.progressPercent);
+    const summary = normalizeText(record.summary);
+    const milestones = normalizePrincipalCommitmentMilestones(record.milestones);
+    const evidenceRefs = normalizePrincipalCommitmentEvidenceRefs(record.evidenceRefs);
+    const relatedAssetIds = normalizePrincipalCommitmentRelatedIds(record.relatedAssetIds);
+    const linkedDecisionIds = normalizePrincipalCommitmentRelatedIds(record.linkedDecisionIds);
+    const linkedRiskIds = normalizePrincipalCommitmentRelatedIds(record.linkedRiskIds);
+    const relatedCadenceIds = normalizePrincipalCommitmentRelatedIds(record.relatedCadenceIds);
+    const relatedWorkItemIds = normalizePrincipalCommitmentRelatedIds(record.relatedWorkItemIds);
+
+    if (
+      !commitmentId
+      || !principalId
+      || !title
+      || !status
+      || !PRINCIPAL_COMMITMENT_STATUSES.includes(status as StoredPrincipalCommitmentRecord["status"])
+      || !dueAt
+    ) {
+      throw new Error("Principal commitment record is incomplete.");
+    }
+
+    const existing = this.db
+      .prepare(
+        `
+          SELECT principal_id
+          FROM themis_principal_commitments
+          WHERE commitment_id = ?
+        `,
+      )
+      .get(commitmentId) as { principal_id: string } | undefined;
+
+    if (existing && existing.principal_id !== principalId) {
+      throw new Error("Principal commitment belongs to another principal.");
+    }
+
+    const commitmentWriteResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_principal_commitments (
+            commitment_id,
+            principal_id,
+            title,
+            status,
+            owner_principal_id,
+            starts_at,
+            due_at,
+            progress_percent,
+            summary,
+            milestones_json,
+            evidence_refs_json,
+            related_asset_ids_json,
+            linked_decision_ids_json,
+            linked_risk_ids_json,
+            related_cadence_ids_json,
+            related_work_item_ids_json,
+            created_at,
+            updated_at
+          ) VALUES (
+            @commitment_id,
+            @principal_id,
+            @title,
+            @status,
+            @owner_principal_id,
+            @starts_at,
+            @due_at,
+            @progress_percent,
+            @summary,
+            @milestones_json,
+            @evidence_refs_json,
+            @related_asset_ids_json,
+            @linked_decision_ids_json,
+            @linked_risk_ids_json,
+            @related_cadence_ids_json,
+            @related_work_item_ids_json,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(commitment_id) DO UPDATE SET
+            title = excluded.title,
+            status = excluded.status,
+            owner_principal_id = excluded.owner_principal_id,
+            starts_at = excluded.starts_at,
+            due_at = excluded.due_at,
+            progress_percent = excluded.progress_percent,
+            summary = excluded.summary,
+            milestones_json = excluded.milestones_json,
+            evidence_refs_json = excluded.evidence_refs_json,
+            related_asset_ids_json = excluded.related_asset_ids_json,
+            linked_decision_ids_json = excluded.linked_decision_ids_json,
+            linked_risk_ids_json = excluded.linked_risk_ids_json,
+            related_cadence_ids_json = excluded.related_cadence_ids_json,
+            related_work_item_ids_json = excluded.related_work_item_ids_json,
+            updated_at = excluded.updated_at
+          WHERE themis_principal_commitments.principal_id = excluded.principal_id
+        `,
+      )
+      .run({
+        commitment_id: commitmentId,
+        principal_id: principalId,
+        title,
+        status,
+        owner_principal_id: ownerPrincipalId ?? null,
+        starts_at: startsAt ?? null,
+        due_at: dueAt,
+        progress_percent: progressPercent,
+        summary: summary ?? null,
+        milestones_json: JSON.stringify(milestones),
+        evidence_refs_json: JSON.stringify(evidenceRefs),
+        related_asset_ids_json: JSON.stringify(relatedAssetIds),
+        linked_decision_ids_json: JSON.stringify(linkedDecisionIds),
+        linked_risk_ids_json: JSON.stringify(linkedRiskIds),
+        related_cadence_ids_json: JSON.stringify(relatedCadenceIds),
+        related_work_item_ids_json: JSON.stringify(relatedWorkItemIds),
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+
+    if (commitmentWriteResult.changes === 0) {
+      throw new Error("Principal commitment write did not apply.");
+    }
+  }
+
+  getPrincipalOperationEdge(principalId: string, edgeId: string): StoredPrincipalOperationEdgeRecord | null {
+    const normalizedPrincipalId = principalId.trim();
+    const normalizedEdgeId = edgeId.trim();
+
+    if (!normalizedPrincipalId || !normalizedEdgeId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            edge_id,
+            principal_id,
+            from_object_type,
+            from_object_id,
+            to_object_type,
+            to_object_id,
+            relation_type,
+            status,
+            label,
+            summary,
+            created_at,
+            updated_at
+          FROM themis_principal_operation_edges
+          WHERE principal_id = ?
+            AND edge_id = ?
+        `,
+      )
+      .get(normalizedPrincipalId, normalizedEdgeId) as PrincipalOperationEdgeRow | undefined;
+
+    return row ? mapPrincipalOperationEdgeRow(row) : null;
+  }
+
+  listPrincipalOperationEdges(filters: {
+    principalId: string;
+    fromObjectType?: StoredPrincipalOperationEdgeRecord["fromObjectType"];
+    fromObjectId?: string;
+    toObjectType?: StoredPrincipalOperationEdgeRecord["toObjectType"];
+    toObjectId?: string;
+    relationType?: StoredPrincipalOperationEdgeRecord["relationType"];
+    status?: StoredPrincipalOperationEdgeRecord["status"];
+    query?: string;
+    includeArchived?: boolean;
+    limit?: number;
+  }): StoredPrincipalOperationEdgeRecord[] {
+    const normalizedPrincipalId = filters.principalId.trim();
+    const normalizedFromObjectType = normalizeText(filters.fromObjectType);
+    const normalizedFromObjectId = normalizeText(filters.fromObjectId);
+    const normalizedToObjectType = normalizeText(filters.toObjectType);
+    const normalizedToObjectId = normalizeText(filters.toObjectId);
+    const normalizedRelationType = normalizeText(filters.relationType);
+    const normalizedStatus = normalizeText(filters.status);
+    const normalizedQuery = normalizeText(filters.query);
+    const includeArchived = filters.includeArchived === true;
+    const normalizedLimit = normalizeLimit(filters.limit, 50);
+
+    if (!normalizedPrincipalId) {
+      return [];
+    }
+
+    const parameters: Array<string | number> = [normalizedPrincipalId];
+    let sql = `
+      SELECT
+        edge_id,
+        principal_id,
+        from_object_type,
+        from_object_id,
+        to_object_type,
+        to_object_id,
+        relation_type,
+        status,
+        label,
+        summary,
+        created_at,
+        updated_at
+      FROM themis_principal_operation_edges
+      WHERE principal_id = ?
+    `;
+
+    if (!includeArchived) {
+      sql += ` AND status <> 'archived'`;
+    }
+
+    if (
+      normalizedFromObjectType
+      && PRINCIPAL_OPERATION_EDGE_OBJECT_TYPES.includes(
+        normalizedFromObjectType as StoredPrincipalOperationEdgeRecord["fromObjectType"],
+      )
+    ) {
+      sql += ` AND from_object_type = ?`;
+      parameters.push(normalizedFromObjectType);
+    }
+
+    if (normalizedFromObjectId) {
+      sql += ` AND from_object_id = ?`;
+      parameters.push(normalizedFromObjectId);
+    }
+
+    if (
+      normalizedToObjectType
+      && PRINCIPAL_OPERATION_EDGE_OBJECT_TYPES.includes(
+        normalizedToObjectType as StoredPrincipalOperationEdgeRecord["toObjectType"],
+      )
+    ) {
+      sql += ` AND to_object_type = ?`;
+      parameters.push(normalizedToObjectType);
+    }
+
+    if (normalizedToObjectId) {
+      sql += ` AND to_object_id = ?`;
+      parameters.push(normalizedToObjectId);
+    }
+
+    if (
+      normalizedRelationType
+      && PRINCIPAL_OPERATION_EDGE_RELATION_TYPES.includes(
+        normalizedRelationType as StoredPrincipalOperationEdgeRecord["relationType"],
+      )
+    ) {
+      sql += ` AND relation_type = ?`;
+      parameters.push(normalizedRelationType);
+    }
+
+    if (
+      normalizedStatus
+      && PRINCIPAL_OPERATION_EDGE_STATUSES.includes(normalizedStatus as StoredPrincipalOperationEdgeRecord["status"])
+    ) {
+      sql += ` AND status = ?`;
+      parameters.push(normalizedStatus);
+    }
+
+    if (normalizedQuery) {
+      const likePattern = `%${normalizedQuery}%`;
+      sql += `
+        AND (
+          edge_id LIKE ?
+          OR from_object_id LIKE ?
+          OR to_object_id LIKE ?
+          OR relation_type LIKE ?
+          OR COALESCE(label, '') LIKE ?
+          OR COALESCE(summary, '') LIKE ?
+        )
+      `;
+      parameters.push(
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+        likePattern,
+      );
+    }
+
+    sql += `
+      ORDER BY updated_at DESC, edge_id DESC
+      LIMIT ?
+    `;
+    parameters.push(normalizedLimit);
+
+    const rows = this.db.prepare(sql).all(...parameters) as PrincipalOperationEdgeRow[];
+
+    return rows.map(mapPrincipalOperationEdgeRow);
+  }
+
+  savePrincipalOperationEdge(record: StoredPrincipalOperationEdgeRecord): void {
+    const edgeId = record.edgeId.trim();
+    const principalId = record.principalId.trim();
+    const fromObjectType = normalizeText(record.fromObjectType);
+    const fromObjectId = normalizeText(record.fromObjectId);
+    const toObjectType = normalizeText(record.toObjectType);
+    const toObjectId = normalizeText(record.toObjectId);
+    const relationType = normalizeText(record.relationType);
+    const status = normalizeText(record.status);
+    const label = normalizeText(record.label);
+    const summary = normalizeText(record.summary);
+
+    if (
+      !edgeId
+      || !principalId
+      || !fromObjectType
+      || !PRINCIPAL_OPERATION_EDGE_OBJECT_TYPES.includes(
+        fromObjectType as StoredPrincipalOperationEdgeRecord["fromObjectType"],
+      )
+      || !fromObjectId
+      || !toObjectType
+      || !PRINCIPAL_OPERATION_EDGE_OBJECT_TYPES.includes(
+        toObjectType as StoredPrincipalOperationEdgeRecord["toObjectType"],
+      )
+      || !toObjectId
+      || !relationType
+      || !PRINCIPAL_OPERATION_EDGE_RELATION_TYPES.includes(
+        relationType as StoredPrincipalOperationEdgeRecord["relationType"],
+      )
+      || !status
+      || !PRINCIPAL_OPERATION_EDGE_STATUSES.includes(status as StoredPrincipalOperationEdgeRecord["status"])
+    ) {
+      throw new Error("Principal operation edge record is incomplete.");
+    }
+
+    const existing = this.db
+      .prepare(
+        `
+          SELECT principal_id
+          FROM themis_principal_operation_edges
+          WHERE edge_id = ?
+        `,
+      )
+      .get(edgeId) as { principal_id: string } | undefined;
+
+    if (existing && existing.principal_id !== principalId) {
+      throw new Error("Principal operation edge belongs to another principal.");
+    }
+
+    const edgeWriteResult = this.db
+      .prepare(
+        `
+          INSERT INTO themis_principal_operation_edges (
+            edge_id,
+            principal_id,
+            from_object_type,
+            from_object_id,
+            to_object_type,
+            to_object_id,
+            relation_type,
+            status,
+            label,
+            summary,
+            created_at,
+            updated_at
+          ) VALUES (
+            @edge_id,
+            @principal_id,
+            @from_object_type,
+            @from_object_id,
+            @to_object_type,
+            @to_object_id,
+            @relation_type,
+            @status,
+            @label,
+            @summary,
+            @created_at,
+            @updated_at
+          )
+          ON CONFLICT(edge_id) DO UPDATE SET
+            from_object_type = excluded.from_object_type,
+            from_object_id = excluded.from_object_id,
+            to_object_type = excluded.to_object_type,
+            to_object_id = excluded.to_object_id,
+            relation_type = excluded.relation_type,
+            status = excluded.status,
+            label = excluded.label,
+            summary = excluded.summary,
+            updated_at = excluded.updated_at
+          WHERE themis_principal_operation_edges.principal_id = excluded.principal_id
+        `,
+      )
+      .run({
+        edge_id: edgeId,
+        principal_id: principalId,
+        from_object_type: fromObjectType,
+        from_object_id: fromObjectId,
+        to_object_type: toObjectType,
+        to_object_id: toObjectId,
+        relation_type: relationType,
+        status,
+        label: label ?? null,
+        summary: summary ?? null,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+
+    if (edgeWriteResult.changes === 0) {
+      throw new Error("Principal operation edge write did not apply.");
+    }
+  }
+
   savePrincipalMainMemory(record: StoredPrincipalMainMemoryRecord): void {
     const memoryId = record.memoryId.trim();
     const principalId = record.principalId.trim();
@@ -10304,6 +11884,7 @@ export class SqliteCodexSessionRegistry {
 
     this.createTurnInputTables(database);
     this.createActorMemoryTables(database);
+    this.createOperationsCenterTables(database);
     this.createManagedAgentTables(database);
   }
 
@@ -10408,6 +11989,175 @@ export class SqliteCodexSessionRegistry {
           REFERENCES themis_actor_task_scopes(principal_id, scope_id)
           ON DELETE CASCADE
       );
+    `);
+  }
+
+  private createOperationsCenterTables(database: Database.Database): void {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS themis_principal_assets (
+        asset_id TEXT PRIMARY KEY,
+        principal_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        owner_principal_id TEXT,
+        summary TEXT,
+        tags_json TEXT NOT NULL DEFAULT '[]',
+        refs_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_principal_assets_principal_idx
+      ON themis_principal_assets(principal_id, updated_at DESC, asset_id DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_principal_assets_status_idx
+      ON themis_principal_assets(principal_id, status, updated_at DESC, asset_id DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_principal_assets_kind_idx
+      ON themis_principal_assets(principal_id, kind, updated_at DESC, asset_id DESC);
+
+      CREATE TABLE IF NOT EXISTS themis_principal_decisions (
+        decision_id TEXT PRIMARY KEY,
+        principal_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL,
+        summary TEXT,
+        decided_by_principal_id TEXT,
+        decided_at TEXT NOT NULL,
+        related_asset_ids_json TEXT NOT NULL DEFAULT '[]',
+        related_work_item_ids_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_principal_decisions_principal_idx
+      ON themis_principal_decisions(principal_id, updated_at DESC, decision_id DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_principal_decisions_status_idx
+      ON themis_principal_decisions(principal_id, status, updated_at DESC, decision_id DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_principal_decisions_decided_at_idx
+      ON themis_principal_decisions(principal_id, decided_at DESC, decision_id DESC);
+
+      CREATE TABLE IF NOT EXISTS themis_principal_risks (
+        risk_id TEXT PRIMARY KEY,
+        principal_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        title TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        status TEXT NOT NULL,
+        owner_principal_id TEXT,
+        summary TEXT,
+        detected_at TEXT NOT NULL,
+        related_asset_ids_json TEXT NOT NULL DEFAULT '[]',
+        linked_decision_ids_json TEXT NOT NULL DEFAULT '[]',
+        related_work_item_ids_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_principal_risks_principal_idx
+      ON themis_principal_risks(principal_id, updated_at DESC, risk_id DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_principal_risks_status_idx
+      ON themis_principal_risks(principal_id, status, updated_at DESC, risk_id DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_principal_risks_severity_idx
+      ON themis_principal_risks(principal_id, severity, updated_at DESC, risk_id DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_principal_risks_detected_at_idx
+      ON themis_principal_risks(principal_id, detected_at DESC, risk_id DESC);
+
+      CREATE TABLE IF NOT EXISTS themis_principal_cadences (
+        cadence_id TEXT PRIMARY KEY,
+        principal_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        frequency TEXT NOT NULL,
+        status TEXT NOT NULL,
+        next_run_at TEXT NOT NULL,
+        owner_principal_id TEXT,
+        playbook_ref TEXT,
+        summary TEXT,
+        related_asset_ids_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_principal_cadences_principal_idx
+      ON themis_principal_cadences(principal_id, next_run_at ASC, cadence_id DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_principal_cadences_status_idx
+      ON themis_principal_cadences(principal_id, status, next_run_at ASC, cadence_id DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_principal_cadences_frequency_idx
+      ON themis_principal_cadences(principal_id, frequency, next_run_at ASC, cadence_id DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_principal_cadences_next_run_at_idx
+      ON themis_principal_cadences(principal_id, next_run_at ASC, cadence_id DESC);
+
+      CREATE TABLE IF NOT EXISTS themis_principal_commitments (
+        commitment_id TEXT PRIMARY KEY,
+        principal_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL,
+        owner_principal_id TEXT,
+        starts_at TEXT,
+        due_at TEXT NOT NULL,
+        progress_percent INTEGER NOT NULL DEFAULT 0,
+        summary TEXT,
+        milestones_json TEXT NOT NULL DEFAULT '[]',
+        evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+        related_asset_ids_json TEXT NOT NULL DEFAULT '[]',
+        linked_decision_ids_json TEXT NOT NULL DEFAULT '[]',
+        linked_risk_ids_json TEXT NOT NULL DEFAULT '[]',
+        related_cadence_ids_json TEXT NOT NULL DEFAULT '[]',
+        related_work_item_ids_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_principal_commitments_principal_idx
+      ON themis_principal_commitments(principal_id, due_at ASC, commitment_id DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_principal_commitments_status_idx
+      ON themis_principal_commitments(principal_id, status, due_at ASC, commitment_id DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_principal_commitments_due_at_idx
+      ON themis_principal_commitments(principal_id, due_at ASC, commitment_id DESC);
+
+      CREATE TABLE IF NOT EXISTS themis_principal_operation_edges (
+        edge_id TEXT PRIMARY KEY,
+        principal_id TEXT NOT NULL,
+        from_object_type TEXT NOT NULL,
+        from_object_id TEXT NOT NULL,
+        to_object_type TEXT NOT NULL,
+        to_object_id TEXT NOT NULL,
+        relation_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        label TEXT,
+        summary TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (principal_id) REFERENCES themis_principals(principal_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_principal_operation_edges_principal_idx
+      ON themis_principal_operation_edges(principal_id, updated_at DESC, edge_id DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_principal_operation_edges_from_idx
+      ON themis_principal_operation_edges(principal_id, from_object_type, from_object_id, updated_at DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_principal_operation_edges_to_idx
+      ON themis_principal_operation_edges(principal_id, to_object_type, to_object_id, updated_at DESC);
+
+      CREATE INDEX IF NOT EXISTS themis_principal_operation_edges_relation_idx
+      ON themis_principal_operation_edges(principal_id, relation_type, status, updated_at DESC);
     `);
   }
 
@@ -11258,6 +13008,8 @@ export class SqliteCodexSessionRegistry {
 
     this.createSessionHistoryMetadataTables(database);
     this.createTurnInputTables(database);
+    this.createOperationsCenterTables(database);
+    this.migrateOperationsCenterTables(database);
     this.createManagedAgentTables(database);
     this.createScheduledTaskTables(database);
 
@@ -11392,6 +13144,34 @@ export class SqliteCodexSessionRegistry {
       `);
     }
 
+  }
+
+  private migrateOperationsCenterTables(database: Database.Database): void {
+    const commitmentColumns = database
+      .prepare(`PRAGMA table_info(themis_principal_commitments)`)
+      .all() as Array<{ name: string }>;
+    const commitmentColumnNames = new Set(commitmentColumns.map((column) => column.name));
+
+    if (!commitmentColumnNames.has("progress_percent")) {
+      database.exec(`
+        ALTER TABLE themis_principal_commitments
+        ADD COLUMN progress_percent INTEGER NOT NULL DEFAULT 0;
+      `);
+    }
+
+    if (!commitmentColumnNames.has("milestones_json")) {
+      database.exec(`
+        ALTER TABLE themis_principal_commitments
+        ADD COLUMN milestones_json TEXT NOT NULL DEFAULT '[]';
+      `);
+    }
+
+    if (!commitmentColumnNames.has("evidence_refs_json")) {
+      database.exec(`
+        ALTER TABLE themis_principal_commitments
+        ADD COLUMN evidence_refs_json TEXT NOT NULL DEFAULT '[]';
+      `);
+    }
   }
 
   private createSessionHistoryMetadataTables(database: Database.Database): void {
@@ -12153,6 +13933,140 @@ function mapPrincipalActorRow(row: PrincipalActorRow): StoredPrincipalActorRecor
     displayName: row.display_name,
     role: row.role,
     status: row.status as PrincipalActorStatus,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapPrincipalAssetRow(row: PrincipalAssetRow): StoredPrincipalAssetRecord {
+  return {
+    assetId: row.asset_id,
+    principalId: row.principal_id,
+    kind: row.kind as StoredPrincipalAssetRecord["kind"],
+    name: row.name,
+    status: row.status as StoredPrincipalAssetRecord["status"],
+    ...(row.owner_principal_id ? { ownerPrincipalId: row.owner_principal_id } : {}),
+    ...(row.summary ? { summary: row.summary } : {}),
+    tags: normalizePrincipalAssetTags(row.tags_json ? safeParseJson(row.tags_json) : []),
+    refs: normalizePrincipalAssetRefs(row.refs_json ? safeParseJson(row.refs_json) : []),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapPrincipalDecisionRow(row: PrincipalDecisionRow): StoredPrincipalDecisionRecord {
+  return {
+    decisionId: row.decision_id,
+    principalId: row.principal_id,
+    title: row.title,
+    status: row.status as StoredPrincipalDecisionRecord["status"],
+    ...(row.summary ? { summary: row.summary } : {}),
+    ...(row.decided_by_principal_id ? { decidedByPrincipalId: row.decided_by_principal_id } : {}),
+    decidedAt: row.decided_at,
+    relatedAssetIds: normalizePrincipalDecisionRelatedIds(
+      row.related_asset_ids_json ? safeParseJson(row.related_asset_ids_json) : [],
+    ),
+    relatedWorkItemIds: normalizePrincipalDecisionRelatedIds(
+      row.related_work_item_ids_json ? safeParseJson(row.related_work_item_ids_json) : [],
+    ),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapPrincipalRiskRow(row: PrincipalRiskRow): StoredPrincipalRiskRecord {
+  return {
+    riskId: row.risk_id,
+    principalId: row.principal_id,
+    type: row.type as StoredPrincipalRiskRecord["type"],
+    title: row.title,
+    severity: row.severity as StoredPrincipalRiskRecord["severity"],
+    status: row.status as StoredPrincipalRiskRecord["status"],
+    ...(row.owner_principal_id ? { ownerPrincipalId: row.owner_principal_id } : {}),
+    ...(row.summary ? { summary: row.summary } : {}),
+    detectedAt: row.detected_at,
+    relatedAssetIds: normalizePrincipalRiskRelatedIds(
+      row.related_asset_ids_json ? safeParseJson(row.related_asset_ids_json) : [],
+    ),
+    linkedDecisionIds: normalizePrincipalRiskRelatedIds(
+      row.linked_decision_ids_json ? safeParseJson(row.linked_decision_ids_json) : [],
+    ),
+    relatedWorkItemIds: normalizePrincipalRiskRelatedIds(
+      row.related_work_item_ids_json ? safeParseJson(row.related_work_item_ids_json) : [],
+    ),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapPrincipalCadenceRow(row: PrincipalCadenceRow): StoredPrincipalCadenceRecord {
+  return {
+    cadenceId: row.cadence_id,
+    principalId: row.principal_id,
+    title: row.title,
+    frequency: row.frequency as StoredPrincipalCadenceRecord["frequency"],
+    status: row.status as StoredPrincipalCadenceRecord["status"],
+    nextRunAt: row.next_run_at,
+    ...(row.owner_principal_id ? { ownerPrincipalId: row.owner_principal_id } : {}),
+    ...(row.playbook_ref ? { playbookRef: row.playbook_ref } : {}),
+    ...(row.summary ? { summary: row.summary } : {}),
+    relatedAssetIds: normalizePrincipalCadenceRelatedIds(
+      row.related_asset_ids_json ? safeParseJson(row.related_asset_ids_json) : [],
+    ),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapPrincipalCommitmentRow(row: PrincipalCommitmentRow): StoredPrincipalCommitmentRecord {
+  return {
+    commitmentId: row.commitment_id,
+    principalId: row.principal_id,
+    title: row.title,
+    status: row.status as StoredPrincipalCommitmentRecord["status"],
+    ...(row.owner_principal_id ? { ownerPrincipalId: row.owner_principal_id } : {}),
+    ...(row.starts_at ? { startsAt: row.starts_at } : {}),
+    dueAt: row.due_at,
+    progressPercent: normalizePrincipalCommitmentProgressPercent(row.progress_percent),
+    ...(row.summary ? { summary: row.summary } : {}),
+    milestones: normalizePrincipalCommitmentMilestones(
+      row.milestones_json ? safeParseJson(row.milestones_json) : [],
+    ),
+    evidenceRefs: normalizePrincipalCommitmentEvidenceRefs(
+      row.evidence_refs_json ? safeParseJson(row.evidence_refs_json) : [],
+    ),
+    relatedAssetIds: normalizePrincipalCommitmentRelatedIds(
+      row.related_asset_ids_json ? safeParseJson(row.related_asset_ids_json) : [],
+    ),
+    linkedDecisionIds: normalizePrincipalCommitmentRelatedIds(
+      row.linked_decision_ids_json ? safeParseJson(row.linked_decision_ids_json) : [],
+    ),
+    linkedRiskIds: normalizePrincipalCommitmentRelatedIds(
+      row.linked_risk_ids_json ? safeParseJson(row.linked_risk_ids_json) : [],
+    ),
+    relatedCadenceIds: normalizePrincipalCommitmentRelatedIds(
+      row.related_cadence_ids_json ? safeParseJson(row.related_cadence_ids_json) : [],
+    ),
+    relatedWorkItemIds: normalizePrincipalCommitmentRelatedIds(
+      row.related_work_item_ids_json ? safeParseJson(row.related_work_item_ids_json) : [],
+    ),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapPrincipalOperationEdgeRow(row: PrincipalOperationEdgeRow): StoredPrincipalOperationEdgeRecord {
+  return {
+    edgeId: row.edge_id,
+    principalId: row.principal_id,
+    fromObjectType: row.from_object_type as StoredPrincipalOperationEdgeRecord["fromObjectType"],
+    fromObjectId: row.from_object_id,
+    toObjectType: row.to_object_type as StoredPrincipalOperationEdgeRecord["toObjectType"],
+    toObjectId: row.to_object_id,
+    relationType: row.relation_type as StoredPrincipalOperationEdgeRecord["relationType"],
+    status: row.status as StoredPrincipalOperationEdgeRecord["status"],
+    ...(row.label ? { label: row.label } : {}),
+    ...(row.summary ? { summary: row.summary } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

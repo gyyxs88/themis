@@ -112,6 +112,40 @@ test("thread control join toggle 点击会切换展开态，并在展开时 focu
   }
 });
 
+test("运营中枢页签打开时会顺手刷新会议室、记忆候选、老板视图、资产台账、节奏记录、承诺目标、决策记录、关系边和风险记录", async () => {
+  const harness = createActionsHarness();
+
+  try {
+    const { dom, actions, calls } = harness;
+
+    actions.initialize();
+
+    await dom.workspaceToolsPanel.listeners.click[0]({
+      target: {
+        closest() {
+          return {
+            dataset: {
+              settingsSection: "operations-center",
+            },
+          };
+        },
+      },
+    });
+
+    await waitFor(() => calls.meetingRoomsLoadStatus === 1);
+    await waitFor(() => calls.memoryCandidatesLoad === 1);
+    await waitFor(() => calls.operationsBossViewLoad === 1);
+    await waitFor(() => calls.operationsAssetsLoad === 1);
+    await waitFor(() => calls.operationsCadencesLoad === 1);
+    await waitFor(() => calls.operationsCommitmentsLoad === 1);
+    await waitFor(() => calls.operationsDecisionsLoad === 1);
+    await waitFor(() => calls.operationsEdgesLoad === 1);
+    await waitFor(() => calls.operationsRisksLoad === 1);
+  } finally {
+    harness.restore();
+  }
+});
+
 test("activateThread 和 newThreadButton 成功路径都会收起 thread control join panel", async () => {
   const harness = createActionsHarness({
     restoreScenario: "waiting-approval",
@@ -774,7 +808,19 @@ function createActionsHarness(options = {}) {
   const calls = {
     authBindControls: 0,
     authLoad: 0,
+    updateManagerBindControls: 0,
+    updateManagerLoad: 0,
     modeSwitchBindControls: 0,
+    meetingRoomsBindControls: 0,
+    meetingRoomsLoadStatus: 0,
+    memoryCandidatesLoad: 0,
+    operationsBossViewLoad: 0,
+    operationsAssetsLoad: 0,
+    operationsCadencesLoad: 0,
+    operationsCommitmentsLoad: 0,
+    operationsDecisionsLoad: 0,
+    operationsEdgesLoad: 0,
+    operationsRisksLoad: 0,
     thirdPartyEditorBindControls: 0,
     thirdPartyEndpointProbeBindControls: 0,
     thirdPartyProbeBindControls: 0,
@@ -932,6 +978,62 @@ function createActionsHarness(options = {}) {
   app.modeSwitch = {
     bindControls() {
       calls.modeSwitchBindControls += 1;
+    },
+  };
+  app.updateManager = {
+    bindControls() {
+      calls.updateManagerBindControls += 1;
+    },
+    async load() {
+      calls.updateManagerLoad += 1;
+    },
+  };
+  app.meetingRooms = {
+    bindControls() {
+      calls.meetingRoomsBindControls += 1;
+    },
+    async loadStatus() {
+      calls.meetingRoomsLoadStatus += 1;
+    },
+  };
+  app.memoryCandidates = {
+    async load() {
+      calls.memoryCandidatesLoad += 1;
+    },
+  };
+  app.operationsBossView = {
+    async load() {
+      calls.operationsBossViewLoad += 1;
+    },
+  };
+  app.operationsAssets = {
+    async load() {
+      calls.operationsAssetsLoad += 1;
+    },
+  };
+  app.operationsCadences = {
+    async load() {
+      calls.operationsCadencesLoad += 1;
+    },
+  };
+  app.operationsCommitments = {
+    async load() {
+      calls.operationsCommitmentsLoad += 1;
+    },
+  };
+  app.operationsDecisions = {
+    async load() {
+      calls.operationsDecisionsLoad += 1;
+    },
+  };
+  app.operationsEdges = {
+    async load() {
+      calls.operationsEdgesLoad += 1;
+    },
+  };
+  app.operationsRisks = {
+    async load() {
+      calls.operationsRisksLoad += 1;
     },
   };
   app.thirdPartyEditor = {

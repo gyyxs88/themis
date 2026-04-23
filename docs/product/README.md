@@ -18,6 +18,7 @@
 ## 当前文档
 
 - [Themis Product Design Input](./themis-product-design-input.md)
+- [Themis 运营中枢 / 当前阶段产品定义与首刀实施](./themis-operations-center-first-cut.md)
 - [Themis Channel Design](./themis-channel-design.md)
 - [Themis Communication Protocol](./themis-communication-protocol.md)
 - [Themis MVP Technical Architecture](./themis-mvp-technical-architecture.md)

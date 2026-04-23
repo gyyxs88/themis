@@ -1987,6 +1987,939 @@ test("renderAgentsState 会在 loading 时更新入口状态和刷新按钮", ()
   assert.equal(harness.dom.agentsOpenPlatformNote.textContent, "已配置平台上游后，这里会给出独立 Platform 页面的直达入口。");
 });
 
+test("renderWorkspaceTools 会渲染运营中枢首版视图", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    threadOverrides: {
+      title: "发布主线收口",
+      serverThreadId: "thread-server-1",
+      settings: {
+        workspacePath: "/srv/themis",
+      },
+      turns: [{
+        id: "turn-1",
+      }],
+    },
+    runtime: {
+      workspaceToolsOpen: true,
+      workspaceToolsSection: "operations-center",
+      memoryCandidates: {
+        status: "ready",
+        candidates: [{
+          candidateId: "candidate-1",
+        }, {
+          candidateId: "candidate-2",
+        }],
+        loading: false,
+        filterStatus: "suggested",
+        includeArchived: false,
+        noticeMessage: "",
+        errorMessage: "",
+      },
+      meetingRooms: {
+        accessMode: "platform_gateway",
+        platformBaseUrl: "https://platform.example.com",
+        ownerPrincipalId: "principal-owner",
+        loadingStatus: false,
+        loadingRooms: false,
+        errorMessage: "",
+        noticeMessage: "",
+        rooms: [{
+          roomId: "room-1",
+        }],
+      },
+      operationsBossView: {
+        status: "ready",
+        loading: false,
+        errorMessage: "",
+        noticeMessage: "老板视图已刷新。",
+        bossView: {
+          principalId: "principal-owner",
+          generatedAt: "2026-04-23T18:30:00.000Z",
+          headline: {
+            tone: "red",
+            title: "今天先处理红灯",
+            summary: "有 1 个高危未收口风险、1 条阻塞关系，需要先确认 owner。",
+          },
+          metrics: [{
+            key: "open_risks",
+            label: "未收口风险",
+            value: 1,
+            tone: "red",
+            detail: "1 个 high / critical。",
+          }],
+          focusItems: [{
+            objectType: "risk",
+            objectId: "risk-ledger-1",
+            title: "prod-web CPU 突增",
+            label: "critical / open",
+            tone: "red",
+            summary: "关联资产：Themis 官网",
+            actionLabel: "确认 owner / 缓解动作",
+          }],
+          relationItems: [{
+            edgeId: "operation-edge-1",
+            relationType: "blocks",
+            tone: "red",
+            label: "风险阻塞发布",
+            fromLabel: "prod-web CPU 突增",
+            toLabel: "发布窗口",
+            summary: "发布前先处理风险。",
+          }],
+          recentDecisions: [{
+            decisionId: "decision-ledger-1",
+            title: "当前阶段先叫运营中枢",
+            status: "active",
+            decidedAt: "2026-04-23T14:10:00.000Z",
+            summary: "先收口控制面。",
+          }],
+        },
+      },
+      operationsAssets: {
+        status: "ready",
+        loading: false,
+        submitting: false,
+        filterStatus: "active",
+        selectedAssetId: "",
+        noticeMessage: "",
+        errorMessage: "",
+        draft: {
+          kind: "site",
+          name: "",
+          status: "active",
+          ownerPrincipalId: "",
+          summary: "",
+          tagsText: "",
+          refsText: "",
+        },
+        assets: [{
+          assetId: "asset-ledger-1",
+          principalId: "principal-owner",
+          kind: "site",
+          name: "Themis 官网",
+          status: "active",
+          tags: ["官网"],
+          refs: [{
+            kind: "domain",
+            value: "themis.example.com",
+          }],
+        }],
+      },
+      operationsCadences: {
+        status: "ready",
+        loading: false,
+        submitting: false,
+        filterStatus: "active",
+        selectedCadenceId: "",
+        noticeMessage: "",
+        errorMessage: "",
+        draft: {
+          title: "",
+          frequency: "weekly",
+          status: "active",
+          nextRunAt: "",
+          ownerPrincipalId: "",
+          playbookRef: "",
+          relatedAssetIdsText: "",
+          summary: "",
+        },
+        cadences: [{
+          cadenceId: "cadence-ledger-1",
+          principalId: "principal-owner",
+          title: "prod-web 周检",
+          frequency: "weekly",
+          status: "active",
+          nextRunAt: "2026-04-28T01:00:00.000Z",
+          ownerPrincipalId: "principal-owner",
+          playbookRef: "docs/runbooks/prod-web-weekly-check.md",
+          relatedAssetIds: ["asset-ledger-1"],
+        }],
+      },
+      operationsCommitments: {
+        status: "ready",
+        loading: false,
+        submitting: false,
+        filterStatus: "active",
+        selectedCommitmentId: "",
+        noticeMessage: "",
+        errorMessage: "",
+        draft: {
+          title: "",
+          status: "active",
+          progressPercentText: "0",
+          ownerPrincipalId: "",
+          startsAt: "",
+          dueAt: "",
+          relatedAssetIdsText: "",
+          linkedDecisionIdsText: "",
+          linkedRiskIdsText: "",
+          relatedCadenceIdsText: "",
+          relatedWorkItemIdsText: "",
+          milestonesText: "",
+          evidenceRefsText: "",
+          summary: "",
+        },
+        commitments: [{
+          commitmentId: "commitment-ledger-1",
+          principalId: "principal-owner",
+          title: "Q2 发布主线必须收口",
+          status: "active",
+          ownerPrincipalId: "principal-owner",
+          startsAt: "2026-04-01T00:00:00.000Z",
+          dueAt: "2026-06-30T23:59:00.000Z",
+          progressPercent: 42,
+          milestones: [{
+            title: "内测验收",
+            status: "active",
+            dueAt: "2026-05-15T23:59:00.000Z",
+            evidenceRefs: [],
+          }],
+          evidenceRefs: [{ kind: "work_item", value: "work-item-evidence-1", label: "验收任务" }],
+          relatedAssetIds: ["asset-ledger-1"],
+          linkedDecisionIds: ["decision-ledger-1"],
+          linkedRiskIds: ["risk-ledger-1"],
+          relatedCadenceIds: ["cadence-ledger-1"],
+          relatedWorkItemIds: ["work-item-1"],
+        }],
+      },
+      operationsDecisions: {
+        status: "ready",
+        loading: false,
+        submitting: false,
+        filterStatus: "active",
+        selectedDecisionId: "",
+        noticeMessage: "",
+        errorMessage: "",
+        draft: {
+          title: "",
+          status: "active",
+          decidedByPrincipalId: "",
+          decidedAt: "",
+          relatedAssetIdsText: "",
+          relatedWorkItemIdsText: "",
+          summary: "",
+        },
+        decisions: [{
+          decisionId: "decision-ledger-1",
+          principalId: "principal-owner",
+          title: "当前阶段先叫运营中枢",
+          status: "active",
+          decidedAt: "2026-04-23T14:10:00.000Z",
+          relatedAssetIds: ["asset-ledger-1"],
+          relatedWorkItemIds: ["work-item-1"],
+        }],
+      },
+      operationsEdges: {
+        status: "ready",
+        loading: false,
+        submitting: false,
+        filterStatus: "active",
+        selectedEdgeId: "",
+        noticeMessage: "",
+        errorMessage: "",
+        draft: {
+          fromObjectType: "decision",
+          fromObjectId: "",
+          toObjectType: "risk",
+          toObjectId: "",
+          relationType: "relates_to",
+          status: "active",
+          label: "",
+          summary: "",
+        },
+        edges: [{
+          edgeId: "operation-edge-1",
+          principalId: "principal-owner",
+          fromObjectType: "decision",
+          fromObjectId: "decision-ledger-1",
+          toObjectType: "risk",
+          toObjectId: "risk-ledger-1",
+          relationType: "mitigates",
+          status: "active",
+          label: "先降级风险",
+        }],
+      },
+      operationsRisks: {
+        status: "ready",
+        loading: false,
+        submitting: false,
+        filterStatus: "open",
+        selectedRiskId: "",
+        noticeMessage: "",
+        errorMessage: "",
+        draft: {
+          type: "risk",
+          title: "",
+          severity: "medium",
+          status: "open",
+          ownerPrincipalId: "",
+          detectedAt: "",
+          relatedAssetIdsText: "",
+          linkedDecisionIdsText: "",
+          relatedWorkItemIdsText: "",
+          summary: "",
+        },
+        risks: [{
+          riskId: "risk-ledger-1",
+          principalId: "principal-owner",
+          type: "incident",
+          title: "prod-web CPU 突增",
+          severity: "critical",
+          status: "open",
+          detectedAt: "2026-04-23T16:00:00.000Z",
+          relatedAssetIds: ["asset-ledger-1"],
+          linkedDecisionIds: ["decision-ledger-1"],
+          relatedWorkItemIds: ["work-item-1"],
+        }],
+      },
+    },
+  });
+
+  harness.renderer.renderOperationsCenterState();
+
+  assert.match(harness.dom.operationsCenterFoundationGrid.innerHTML, /执行闭环/);
+  assert.match(harness.dom.operationsCenterNextGrid.innerHTML, /Asset/);
+  assert.match(harness.dom.operationsCenterLiveGrid.innerHTML, /发布主线收口/);
+  assert.match(harness.dom.operationsCenterLiveGrid.innerHTML, /平台 gateway/);
+  assert.match(harness.dom.operationsCenterLiveGrid.innerHTML, /老板视图/);
+  assert.match(harness.dom.operationsCenterLiveGrid.innerHTML, /今天先处理红灯/);
+  assert.match(harness.dom.operationsCenterLiveGrid.innerHTML, /资产台账/);
+  assert.match(harness.dom.operationsCenterLiveGrid.innerHTML, /节奏记录/);
+  assert.match(harness.dom.operationsCenterLiveGrid.innerHTML, /承诺目标/);
+  assert.match(harness.dom.operationsCenterLiveGrid.innerHTML, /决策记录/);
+  assert.match(harness.dom.operationsCenterLiveGrid.innerHTML, /关系边/);
+  assert.match(harness.dom.operationsCenterLiveGrid.innerHTML, /对象图查询/);
+  assert.match(harness.dom.operationsCenterLiveGrid.innerHTML, /风险 \/ 事故/);
+  assert.equal(
+    harness.dom.operationsCenterPlatformLink.href,
+    "https://platform.example.com/?ownerPrincipalId=principal-owner",
+  );
+  assert.match(harness.dom.operationsCenterStatusNote.textContent, /老板视图、最小资产台账、节奏记录、承诺目标、决策记录、风险卡、关系边和对象图查询/);
+});
+
+test("renderOperationsBossViewState 会渲染老板视图经营晨报", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      operationsBossView: {
+        status: "ready",
+        loading: false,
+        errorMessage: "",
+        noticeMessage: "老板视图已刷新。",
+        bossView: {
+          principalId: "principal-owner",
+          generatedAt: "2026-04-23T18:30:00.000Z",
+          headline: {
+            tone: "red",
+            title: "今天先处理红灯",
+            summary: "有 1 个高危未收口风险。",
+          },
+          metrics: [{
+            key: "open_risks",
+            label: "未收口风险",
+            value: 1,
+            tone: "red",
+            detail: "1 个 high / critical。",
+          }],
+          focusItems: [{
+            objectType: "risk",
+            objectId: "risk-ledger-1",
+            title: "prod-web CPU 突增",
+            label: "critical / open",
+            tone: "red",
+            summary: "关联资产：prod-web",
+            actionLabel: "确认 owner / 缓解动作",
+          }],
+          relationItems: [{
+            edgeId: "operation-edge-1",
+            relationType: "blocks",
+            tone: "red",
+            label: "风险阻塞发布",
+            fromLabel: "prod-web CPU 突增",
+            toLabel: "发布窗口",
+            summary: "发布前先处理风险。",
+          }],
+          recentDecisions: [{
+            decisionId: "decision-ledger-1",
+            title: "先冻结发布窗口",
+            status: "active",
+            decidedAt: "2026-04-23T14:10:00.000Z",
+            summary: "风险未收口前不继续发布。",
+          }],
+        },
+      },
+    },
+  });
+
+  harness.renderer.renderOperationsBossViewState();
+
+  assert.match(harness.dom.operationsBossViewHeadline.innerHTML, /今天先处理红灯/);
+  assert.match(harness.dom.operationsBossViewMetrics.innerHTML, /未收口风险/);
+  assert.match(harness.dom.operationsBossViewFocusList.innerHTML, /prod-web CPU 突增/);
+  assert.match(harness.dom.operationsBossViewRelationsList.innerHTML, /风险阻塞发布/);
+  assert.match(harness.dom.operationsBossViewDecisionsList.innerHTML, /先冻结发布窗口/);
+  assert.equal(harness.dom.operationsBossViewRefreshButton.textContent, "刷新老板视图");
+  assert.match(harness.dom.operationsBossViewStatusNote.textContent, /老板视图已刷新/);
+});
+
+test("renderOperationsAssetsState 会渲染资产台账列表和编辑草稿", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      operationsAssets: {
+        status: "ready",
+        loading: false,
+        submitting: false,
+        filterStatus: "watch",
+        selectedAssetId: "asset-ledger-1",
+        noticeMessage: "已更新资产台账。",
+        errorMessage: "",
+        draft: {
+          kind: "database",
+          name: "订单库",
+          status: "watch",
+          ownerPrincipalId: "principal-db",
+          summary: "核心订单主库",
+          tagsText: "生产, 核心",
+          refsText: "host:10.0.0.12",
+        },
+        assets: [{
+          assetId: "asset-ledger-1",
+          principalId: "principal-owner",
+          kind: "database",
+          name: "订单库",
+          status: "watch",
+          ownerPrincipalId: "principal-db",
+          summary: "核心订单主库",
+          tags: ["生产", "核心"],
+          refs: [{
+            kind: "host",
+            value: "10.0.0.12",
+          }],
+        }],
+      },
+      operationsEdges: {
+        status: "ready",
+        loading: false,
+        submitting: false,
+        filterStatus: "active",
+        selectedEdgeId: "",
+        noticeMessage: "",
+        errorMessage: "",
+        draft: {
+          fromObjectType: "decision",
+          fromObjectId: "",
+          toObjectType: "risk",
+          toObjectId: "",
+          relationType: "relates_to",
+          status: "active",
+          label: "",
+          summary: "",
+        },
+        edges: [{
+          edgeId: "operation-edge-auto-asset",
+          principalId: "principal-owner",
+          fromObjectType: "cadence",
+          fromObjectId: "cadence-ledger-1",
+          toObjectType: "asset",
+          toObjectId: "asset-ledger-1",
+          relationType: "tracks",
+          status: "active",
+          label: "节奏跟踪资产",
+        }, {
+          edgeId: "operation-edge-impact-asset",
+          principalId: "principal-owner",
+          fromObjectType: "cadence",
+          fromObjectId: "cadence-ledger-1",
+          toObjectType: "commitment",
+          toObjectId: "commitment-ledger-1",
+          relationType: "tracks",
+          status: "active",
+          label: "节奏跟踪承诺",
+        }],
+      },
+    },
+  });
+
+  harness.renderer.renderOperationsAssetsState();
+
+  assert.equal(harness.dom.operationsAssetsFilterSelect.value, "watch");
+  assert.equal(harness.dom.operationsAssetsFormTitle.textContent, "编辑资产：订单库");
+  assert.equal(harness.dom.operationsAssetsKindSelect.value, "database");
+  assert.equal(harness.dom.operationsAssetsNameInput.value, "订单库");
+  assert.equal(harness.dom.operationsAssetsStatusSelect.value, "watch");
+  assert.equal(harness.dom.operationsAssetsSaveButton.textContent, "更新资产");
+  assert.match(harness.dom.operationsAssetsList.innerHTML, /订单库/);
+  assert.match(harness.dom.operationsAssetsList.innerHTML, /对象反链/);
+  assert.match(harness.dom.operationsAssetsList.innerHTML, /节奏跟踪资产/);
+  assert.match(harness.dom.operationsAssetsList.innerHTML, /影响范围/);
+  assert.match(harness.dom.operationsAssetsList.innerHTML, /一跳 1 个 \/ 二跳 1 个/);
+  assert.match(harness.dom.operationsAssetsList.innerHTML, /commitment:commitment-ledger-1/);
+  assert.match(harness.dom.operationsAssetsStatusNote.textContent, /已更新资产台账/);
+});
+
+test("renderOperationsDecisionsState 会渲染决策记录列表和编辑草稿", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      operationsDecisions: {
+        status: "ready",
+        loading: false,
+        submitting: false,
+        filterStatus: "superseded",
+        selectedDecisionId: "decision-ledger-1",
+        noticeMessage: "已更新决策记录。",
+        errorMessage: "",
+        draft: {
+          title: "先做运营中枢，数字公司操作系统作为最终形态",
+          status: "superseded",
+          decidedByPrincipalId: "principal-owner",
+          decidedAt: "2026-04-23T14:20:00.000Z",
+          relatedAssetIdsText: "asset-ledger-1\nasset-ledger-2",
+          relatedWorkItemIdsText: "work-item-1",
+          summary: "当前先收口产品定位和真实对象边界",
+        },
+        decisions: [{
+          decisionId: "decision-ledger-1",
+          principalId: "principal-owner",
+          title: "先做运营中枢，数字公司操作系统作为最终形态",
+          status: "superseded",
+          decidedByPrincipalId: "principal-owner",
+          decidedAt: "2026-04-23T14:20:00.000Z",
+          relatedAssetIds: ["asset-ledger-1", "asset-ledger-2"],
+          relatedWorkItemIds: ["work-item-1"],
+          summary: "当前先收口产品定位和真实对象边界",
+        }],
+      },
+    },
+  });
+
+  harness.renderer.renderOperationsDecisionsState();
+
+  assert.equal(harness.dom.operationsDecisionsFilterSelect.value, "superseded");
+  assert.equal(
+    harness.dom.operationsDecisionsFormTitle.textContent,
+    "编辑决策：先做运营中枢，数字公司操作系统作为最终形态",
+  );
+  assert.equal(
+    harness.dom.operationsDecisionsTitleInput.value,
+    "先做运营中枢，数字公司操作系统作为最终形态",
+  );
+  assert.equal(harness.dom.operationsDecisionsStatusSelect.value, "superseded");
+  assert.equal(harness.dom.operationsDecisionsSaveButton.textContent, "更新决策");
+  assert.match(harness.dom.operationsDecisionsList.innerHTML, /Decision/);
+  assert.match(harness.dom.operationsDecisionsList.innerHTML, /asset-ledger-1/);
+  assert.match(harness.dom.operationsDecisionsStatusNote.textContent, /已更新决策记录/);
+});
+
+test("renderOperationsCadencesState 会渲染节奏记录列表和编辑草稿", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      operationsCadences: {
+        status: "ready",
+        loading: false,
+        submitting: false,
+        filterStatus: "paused",
+        selectedCadenceId: "cadence-ledger-1",
+        noticeMessage: "已更新节奏。",
+        errorMessage: "",
+        draft: {
+          title: "账单月检",
+          frequency: "monthly",
+          status: "paused",
+          nextRunAt: "2026-05-01T01:00:00.000Z",
+          ownerPrincipalId: "principal-finance",
+          playbookRef: "docs/runbooks/monthly-billing-review.md",
+          relatedAssetIdsText: "asset-ledger-1\nasset-ledger-2",
+          summary: "月初复盘云资源账单和续费提醒",
+        },
+        cadences: [{
+          cadenceId: "cadence-ledger-1",
+          principalId: "principal-owner",
+          title: "账单月检",
+          frequency: "monthly",
+          status: "paused",
+          nextRunAt: "2026-05-01T01:00:00.000Z",
+          ownerPrincipalId: "principal-finance",
+          playbookRef: "docs/runbooks/monthly-billing-review.md",
+          relatedAssetIds: ["asset-ledger-1", "asset-ledger-2"],
+          summary: "月初复盘云资源账单和续费提醒",
+        }],
+      },
+    },
+  });
+
+  harness.renderer.renderOperationsCadencesState();
+
+  assert.equal(harness.dom.operationsCadencesFilterSelect.value, "paused");
+  assert.equal(harness.dom.operationsCadencesFormTitle.textContent, "编辑节奏：账单月检");
+  assert.equal(harness.dom.operationsCadencesFrequencySelect.value, "monthly");
+  assert.equal(harness.dom.operationsCadencesStatusSelect.value, "paused");
+  assert.equal(harness.dom.operationsCadencesSaveButton.textContent, "更新节奏");
+  assert.match(harness.dom.operationsCadencesList.innerHTML, /Playbook: docs\/runbooks\/monthly-billing-review.md/);
+  assert.match(harness.dom.operationsCadencesStatusNote.textContent, /已更新节奏/);
+});
+
+test("renderOperationsCommitmentsState 会渲染承诺目标列表和编辑草稿", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      operationsCommitments: {
+        status: "ready",
+        loading: false,
+        submitting: false,
+        filterStatus: "at_risk",
+        selectedCommitmentId: "commitment-ledger-1",
+        noticeMessage: "已更新承诺。",
+        errorMessage: "",
+        draft: {
+          title: "Q2 发布主线进入风险跟踪",
+          status: "at_risk",
+          progressPercentText: "68",
+          ownerPrincipalId: "principal-owner",
+          startsAt: "2026-04-01T00:00:00.000Z",
+          dueAt: "2026-07-15T23:59:00.000Z",
+          relatedAssetIdsText: "asset-ledger-1\nasset-ledger-2",
+          linkedDecisionIdsText: "decision-ledger-1",
+          linkedRiskIdsText: "risk-ledger-1",
+          relatedCadenceIdsText: "cadence-ledger-1",
+          relatedWorkItemIdsText: "work-item-1",
+          milestonesText: "done | 内测验收 | 2026-05-15T23:59:00.000Z | 2026-05-14T10:00:00.000Z | 已完成",
+          evidenceRefsText: "work_item | work-item-evidence-1 | 验收任务",
+          summary: "当前最大风险是发布窗口被事故阻塞",
+        },
+        commitments: [{
+          commitmentId: "commitment-ledger-1",
+          principalId: "principal-owner",
+          title: "Q2 发布主线进入风险跟踪",
+          status: "at_risk",
+          ownerPrincipalId: "principal-owner",
+          startsAt: "2026-04-01T00:00:00.000Z",
+          dueAt: "2026-07-15T23:59:00.000Z",
+          progressPercent: 68,
+          milestones: [{
+            title: "内测验收",
+            status: "done",
+            dueAt: "2026-05-15T23:59:00.000Z",
+            completedAt: "2026-05-14T10:00:00.000Z",
+            summary: "已完成",
+            evidenceRefs: [],
+          }],
+          evidenceRefs: [{ kind: "work_item", value: "work-item-evidence-1", label: "验收任务" }],
+          relatedAssetIds: ["asset-ledger-1", "asset-ledger-2"],
+          linkedDecisionIds: ["decision-ledger-1"],
+          linkedRiskIds: ["risk-ledger-1"],
+          relatedCadenceIds: ["cadence-ledger-1"],
+          relatedWorkItemIds: ["work-item-1"],
+          summary: "当前最大风险是发布窗口被事故阻塞",
+        }],
+      },
+      operationsEdges: {
+        status: "ready",
+        loading: false,
+        submitting: false,
+        filterStatus: "active",
+        selectedEdgeId: "",
+        noticeMessage: "",
+        errorMessage: "",
+        draft: {
+          fromObjectType: "decision",
+          fromObjectId: "",
+          toObjectType: "risk",
+          toObjectId: "",
+          relationType: "relates_to",
+          status: "active",
+          label: "",
+          summary: "",
+        },
+        edges: [{
+          edgeId: "operation-edge-auto-commitment",
+          principalId: "principal-owner",
+          fromObjectType: "risk",
+          fromObjectId: "risk-ledger-1",
+          toObjectType: "commitment",
+          toObjectId: "commitment-ledger-1",
+          relationType: "blocks",
+          status: "active",
+          label: "风险阻塞承诺",
+        }, {
+          edgeId: "operation-edge-impact-commitment",
+          principalId: "principal-owner",
+          fromObjectType: "risk",
+          fromObjectId: "risk-ledger-1",
+          toObjectType: "asset",
+          toObjectId: "asset-ledger-9",
+          relationType: "relates_to",
+          status: "active",
+          label: "风险关联资产",
+        }],
+      },
+    },
+  });
+
+  harness.renderer.renderOperationsCommitmentsState();
+
+  assert.equal(harness.dom.operationsCommitmentsFilterSelect.value, "at_risk");
+  assert.equal(harness.dom.operationsCommitmentsFormTitle.textContent, "编辑承诺：Q2 发布主线进入风险跟踪");
+  assert.equal(harness.dom.operationsCommitmentsTitleInput.value, "Q2 发布主线进入风险跟踪");
+  assert.equal(harness.dom.operationsCommitmentsStatusSelect.value, "at_risk");
+  assert.equal(harness.dom.operationsCommitmentsProgressInput.value, "68");
+  assert.match(harness.dom.operationsCommitmentsMilestonesInput.value, /内测验收/);
+  assert.match(harness.dom.operationsCommitmentsEvidenceRefsInput.value, /work-item-evidence-1/);
+  assert.equal(harness.dom.operationsCommitmentsSaveButton.textContent, "更新承诺");
+  assert.match(harness.dom.operationsCommitmentsList.innerHTML, /Commitment/);
+  assert.match(harness.dom.operationsCommitmentsList.innerHTML, /进度：68%/);
+  assert.match(harness.dom.operationsCommitmentsList.innerHTML, /里程碑/);
+  assert.match(harness.dom.operationsCommitmentsList.innerHTML, /证据/);
+  assert.match(harness.dom.operationsCommitmentsList.innerHTML, /Risk: risk-ledger-1/);
+  assert.match(harness.dom.operationsCommitmentsList.innerHTML, /对象反链/);
+  assert.match(harness.dom.operationsCommitmentsList.innerHTML, /风险阻塞承诺/);
+  assert.match(harness.dom.operationsCommitmentsList.innerHTML, /影响范围/);
+  assert.match(harness.dom.operationsCommitmentsList.innerHTML, /asset:asset-ledger-9/);
+  assert.match(harness.dom.operationsCommitmentsStatusNote.textContent, /已更新承诺/);
+});
+
+test("renderOperationsEdgesState 会渲染关系边列表和编辑草稿", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      operationsEdges: {
+        status: "ready",
+        loading: false,
+        submitting: false,
+        filterStatus: "active",
+        selectedEdgeId: "operation-edge-1",
+        noticeMessage: "已更新关系边。",
+        errorMessage: "",
+        draft: {
+          fromObjectType: "decision",
+          fromObjectId: "decision-ledger-1",
+          toObjectType: "risk",
+          toObjectId: "risk-ledger-1",
+          relationType: "mitigates",
+          status: "active",
+          label: "先降级风险",
+          summary: "该决策用于降低支付风险",
+        },
+        edges: [{
+          edgeId: "operation-edge-1",
+          principalId: "principal-owner",
+          fromObjectType: "decision",
+          fromObjectId: "decision-ledger-1",
+          toObjectType: "risk",
+          toObjectId: "risk-ledger-1",
+          relationType: "mitigates",
+          status: "active",
+          label: "先降级风险",
+          summary: "该决策用于降低支付风险",
+        }],
+      },
+    },
+  });
+
+  harness.renderer.renderOperationsEdgesState();
+
+  assert.equal(harness.dom.operationsEdgesFilterSelect.value, "active");
+  assert.equal(harness.dom.operationsEdgesFormTitle.textContent, "编辑关系：先降级风险");
+  assert.equal(harness.dom.operationsEdgesFromTypeSelect.value, "decision");
+  assert.equal(harness.dom.operationsEdgesToTypeSelect.value, "risk");
+  assert.equal(harness.dom.operationsEdgesRelationSelect.value, "mitigates");
+  assert.equal(harness.dom.operationsEdgesSaveButton.textContent, "更新关系");
+  assert.match(harness.dom.operationsEdgesList.innerHTML, /先降级风险/);
+  assert.match(harness.dom.operationsEdgesList.innerHTML, /mitigates/);
+  assert.match(harness.dom.operationsEdgesStatusNote.textContent, /已更新关系边/);
+});
+
+test("renderOperationsGraphState 会渲染对象图查询结果和草稿", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      operationsGraph: {
+        status: "ready",
+        loading: false,
+        errorMessage: "",
+        noticeMessage: "对象图已刷新。",
+        rootObjectType: "commitment",
+        rootObjectId: "commitment-ledger-1",
+        targetObjectType: "asset",
+        targetObjectId: "asset-ledger-1",
+        maxDepth: "2",
+        graph: {
+          principalId: "principal-owner",
+          generatedAt: "2026-04-23T20:30:00.000Z",
+          maxDepth: 2,
+          root: { objectType: "commitment", objectId: "commitment-ledger-1" },
+          target: { objectType: "asset", objectId: "asset-ledger-1", reachable: true },
+          nodes: [{
+            objectType: "commitment",
+            objectId: "commitment-ledger-1",
+            depth: 0,
+          }, {
+            objectType: "risk",
+            objectId: "risk-ledger-1",
+            depth: 1,
+            viaEdgeId: "operation-edge-1",
+            viaObjectType: "commitment",
+            viaObjectId: "commitment-ledger-1",
+          }, {
+            objectType: "asset",
+            objectId: "asset-ledger-1",
+            depth: 2,
+            viaEdgeId: "operation-edge-2",
+            viaObjectType: "risk",
+            viaObjectId: "risk-ledger-1",
+          }],
+          edges: [{
+            edgeId: "operation-edge-1",
+            fromObjectType: "risk",
+            fromObjectId: "risk-ledger-1",
+            toObjectType: "commitment",
+            toObjectId: "commitment-ledger-1",
+            relationType: "blocks",
+            status: "active",
+            label: "风险阻塞承诺",
+          }, {
+            edgeId: "operation-edge-2",
+            fromObjectType: "risk",
+            fromObjectId: "risk-ledger-1",
+            toObjectType: "asset",
+            toObjectId: "asset-ledger-1",
+            relationType: "relates_to",
+            status: "active",
+            label: "风险关联资产",
+          }],
+          shortestPath: [{
+            edgeId: "operation-edge-1",
+            fromObjectType: "risk",
+            fromObjectId: "risk-ledger-1",
+            toObjectType: "commitment",
+            toObjectId: "commitment-ledger-1",
+            relationType: "blocks",
+            status: "active",
+            label: "风险阻塞承诺",
+          }, {
+            edgeId: "operation-edge-2",
+            fromObjectType: "risk",
+            fromObjectId: "risk-ledger-1",
+            toObjectType: "asset",
+            toObjectId: "asset-ledger-1",
+            relationType: "relates_to",
+            status: "active",
+            label: "风险关联资产",
+          }],
+        },
+      },
+    },
+  });
+
+  harness.renderer.renderOperationsGraphState();
+
+  assert.equal(harness.dom.operationsGraphRootTypeSelect.value, "commitment");
+  assert.equal(harness.dom.operationsGraphRootIdInput.value, "commitment-ledger-1");
+  assert.equal(harness.dom.operationsGraphTargetTypeSelect.value, "asset");
+  assert.equal(harness.dom.operationsGraphTargetIdInput.value, "asset-ledger-1");
+  assert.equal(harness.dom.operationsGraphDepthSelect.value, "2");
+  assert.equal(harness.dom.operationsGraphRefreshButton.textContent, "查询对象图");
+  assert.match(harness.dom.operationsGraphSummary.innerHTML, /节点 3 个 \/ 边 2 条/);
+  assert.match(harness.dom.operationsGraphNodes.innerHTML, /depth 2/);
+  assert.match(harness.dom.operationsGraphNodes.innerHTML, /asset:asset-ledger-1/);
+  assert.match(harness.dom.operationsGraphEdges.innerHTML, /blocks/);
+  assert.match(harness.dom.operationsGraphEdges.innerHTML, /风险关联资产/);
+  assert.match(harness.dom.operationsGraphPath.innerHTML, /风险阻塞承诺/);
+  assert.match(harness.dom.operationsGraphStatusNote.textContent, /对象图已刷新/);
+});
+
+test("renderOperationsRisksState 会渲染风险记录列表和编辑草稿", () => {
+  const harness = createHarness({
+    actionBarState: {
+      mode: "chat",
+      review: { enabled: false, reason: "" },
+      steer: { enabled: false, reason: "" },
+    },
+    runtime: {
+      operationsRisks: {
+        status: "ready",
+        loading: false,
+        submitting: false,
+        filterStatus: "watch",
+        selectedRiskId: "risk-ledger-1",
+        noticeMessage: "已更新风险记录。",
+        errorMessage: "",
+        draft: {
+          type: "incident",
+          title: "支付回调失败",
+          severity: "critical",
+          status: "watch",
+          ownerPrincipalId: "principal-pay",
+          detectedAt: "2026-04-23T16:20:00.000Z",
+          relatedAssetIdsText: "asset-ledger-2",
+          linkedDecisionIdsText: "decision-ledger-3",
+          relatedWorkItemIdsText: "work-item-3",
+          summary: "导致订单未自动确认",
+        },
+        risks: [{
+          riskId: "risk-ledger-1",
+          principalId: "principal-owner",
+          type: "incident",
+          title: "支付回调失败",
+          severity: "critical",
+          status: "watch",
+          ownerPrincipalId: "principal-pay",
+          detectedAt: "2026-04-23T16:20:00.000Z",
+          relatedAssetIds: ["asset-ledger-2"],
+          linkedDecisionIds: ["decision-ledger-3"],
+          relatedWorkItemIds: ["work-item-3"],
+          summary: "导致订单未自动确认",
+        }],
+      },
+    },
+  });
+
+  harness.renderer.renderOperationsRisksState();
+
+  assert.equal(harness.dom.operationsRisksFilterSelect.value, "watch");
+  assert.equal(harness.dom.operationsRisksFormTitle.textContent, "编辑风险：支付回调失败");
+  assert.equal(harness.dom.operationsRisksTypeSelect.value, "incident");
+  assert.equal(harness.dom.operationsRisksSeveritySelect.value, "critical");
+  assert.equal(harness.dom.operationsRisksStatusSelect.value, "watch");
+  assert.equal(harness.dom.operationsRisksSaveButton.textContent, "更新风险");
+  assert.match(harness.dom.operationsRisksList.innerHTML, /Decision: decision-ledger-3/);
+  assert.match(harness.dom.operationsRisksStatusNote.textContent, /已更新风险记录/);
+});
+
 test("renderMeetingRoomsState 会渲染内部会议室列表和当前房间消息流", () => {
   const harness = createHarness({
     actionBarState: {
@@ -2274,14 +3207,149 @@ function createHarness({ actionBarState, threadControlState = null, runtime = {}
     workspaceToolsClose: createButtonStub(),
     workspaceToolsPanel: createPanelStub(true),
     workspaceToolsNavButtons: [],
+    settingsOperationsCenterSection: createPanelStub(true),
     settingsRuntimeSection: createPanelStub(),
     settingsAuthSection: createPanelStub(true),
     settingsSkillsSection: createPanelStub(true),
+    settingsMcpSection: createPanelStub(true),
+    settingsPluginsSection: createPanelStub(true),
     settingsAgentsSection: createPanelStub(true),
     settingsMemoryCandidatesSection: createPanelStub(true),
     settingsMeetingRoomsSection: createPanelStub(true),
     settingsThirdPartySection: createPanelStub(true),
     settingsModeSwitchSection: createPanelStub(true),
+    operationsCenterStatusNote: createTextStub(),
+    operationsCenterFoundationGrid: createTextStub(),
+    operationsCenterNextGrid: createTextStub(),
+    operationsCenterLiveGrid: createTextStub(),
+    operationsCenterPlatformLink: createLinkStub(),
+    operationsCenterPlatformNote: createTextStub(),
+    operationsBossViewStatusNote: createTextStub(),
+    operationsBossViewRefreshButton: createButtonStub(),
+    operationsBossViewHeadline: createTextStub(),
+    operationsBossViewMetrics: createTextStub(),
+    operationsBossViewFocusList: createTextStub(),
+    operationsBossViewRelationsList: createTextStub(),
+    operationsBossViewDecisionsList: createTextStub(),
+    operationsAssetsStatusNote: createTextStub(),
+    operationsAssetsRefreshButton: createButtonStub(),
+    operationsAssetsNewButton: createButtonStub(),
+    operationsAssetsFilterSelect: createDisabledInputStub(),
+    operationsAssetsListEmpty: createTextStub(),
+    operationsAssetsList: createTextStub(),
+    operationsAssetsFormTitle: createTextStub(),
+    operationsAssetsKindSelect: createDisabledInputStub(),
+    operationsAssetsNameInput: createDisabledInputStub(),
+    operationsAssetsStatusSelect: createDisabledInputStub(),
+    operationsAssetsOwnerInput: createDisabledInputStub(),
+    operationsAssetsTagsInput: createDisabledInputStub(),
+    operationsAssetsRefsInput: createDisabledInputStub(),
+    operationsAssetsSummaryInput: createDisabledInputStub(),
+    operationsAssetsSaveButton: createButtonStub(),
+    operationsAssetsResetButton: createButtonStub(),
+    operationsCadencesStatusNote: createTextStub(),
+    operationsCadencesRefreshButton: createButtonStub(),
+    operationsCadencesNewButton: createButtonStub(),
+    operationsCadencesFilterSelect: createDisabledInputStub(),
+    operationsCadencesListEmpty: createTextStub(),
+    operationsCadencesList: createTextStub(),
+    operationsCadencesFormTitle: createTextStub(),
+    operationsCadencesTitleInput: createDisabledInputStub(),
+    operationsCadencesFrequencySelect: createDisabledInputStub(),
+    operationsCadencesStatusSelect: createDisabledInputStub(),
+    operationsCadencesNextRunAtInput: createDisabledInputStub(),
+    operationsCadencesOwnerInput: createDisabledInputStub(),
+    operationsCadencesPlaybookRefInput: createDisabledInputStub(),
+    operationsCadencesRelatedAssetsInput: createDisabledInputStub(),
+    operationsCadencesSummaryInput: createDisabledInputStub(),
+    operationsCadencesSaveButton: createButtonStub(),
+    operationsCadencesResetButton: createButtonStub(),
+    operationsCommitmentsStatusNote: createTextStub(),
+    operationsCommitmentsRefreshButton: createButtonStub(),
+    operationsCommitmentsNewButton: createButtonStub(),
+    operationsCommitmentsFilterSelect: createDisabledInputStub(),
+    operationsCommitmentsListEmpty: createTextStub(),
+    operationsCommitmentsList: createTextStub(),
+    operationsCommitmentsFormTitle: createTextStub(),
+    operationsCommitmentsTitleInput: createDisabledInputStub(),
+    operationsCommitmentsStatusSelect: createDisabledInputStub(),
+    operationsCommitmentsProgressInput: createDisabledInputStub(),
+    operationsCommitmentsOwnerInput: createDisabledInputStub(),
+    operationsCommitmentsStartsAtInput: createDisabledInputStub(),
+    operationsCommitmentsDueAtInput: createDisabledInputStub(),
+    operationsCommitmentsRelatedAssetsInput: createDisabledInputStub(),
+    operationsCommitmentsLinkedDecisionsInput: createDisabledInputStub(),
+    operationsCommitmentsLinkedRisksInput: createDisabledInputStub(),
+    operationsCommitmentsRelatedCadencesInput: createDisabledInputStub(),
+    operationsCommitmentsRelatedWorkItemsInput: createDisabledInputStub(),
+    operationsCommitmentsMilestonesInput: createDisabledInputStub(),
+    operationsCommitmentsEvidenceRefsInput: createDisabledInputStub(),
+    operationsCommitmentsSummaryInput: createDisabledInputStub(),
+    operationsCommitmentsSaveButton: createButtonStub(),
+    operationsCommitmentsResetButton: createButtonStub(),
+    operationsDecisionsStatusNote: createTextStub(),
+    operationsDecisionsRefreshButton: createButtonStub(),
+    operationsDecisionsNewButton: createButtonStub(),
+    operationsDecisionsFilterSelect: createDisabledInputStub(),
+    operationsDecisionsListEmpty: createTextStub(),
+    operationsDecisionsList: createTextStub(),
+    operationsDecisionsFormTitle: createTextStub(),
+    operationsDecisionsTitleInput: createDisabledInputStub(),
+    operationsDecisionsStatusSelect: createDisabledInputStub(),
+    operationsDecisionsDecidedByInput: createDisabledInputStub(),
+    operationsDecisionsDecidedAtInput: createDisabledInputStub(),
+    operationsDecisionsRelatedAssetsInput: createDisabledInputStub(),
+    operationsDecisionsRelatedWorkItemsInput: createDisabledInputStub(),
+    operationsDecisionsSummaryInput: createDisabledInputStub(),
+    operationsDecisionsSaveButton: createButtonStub(),
+    operationsDecisionsResetButton: createButtonStub(),
+    operationsEdgesStatusNote: createTextStub(),
+    operationsEdgesRefreshButton: createButtonStub(),
+    operationsEdgesNewButton: createButtonStub(),
+    operationsEdgesFilterSelect: createDisabledInputStub(),
+    operationsEdgesListEmpty: createTextStub(),
+    operationsEdgesList: createTextStub(),
+    operationsEdgesFormTitle: createTextStub(),
+    operationsEdgesFromTypeSelect: createDisabledInputStub(),
+    operationsEdgesFromIdInput: createDisabledInputStub(),
+    operationsEdgesToTypeSelect: createDisabledInputStub(),
+    operationsEdgesToIdInput: createDisabledInputStub(),
+    operationsEdgesRelationSelect: createDisabledInputStub(),
+    operationsEdgesStatusSelect: createDisabledInputStub(),
+    operationsEdgesLabelInput: createDisabledInputStub(),
+    operationsEdgesSummaryInput: createDisabledInputStub(),
+    operationsEdgesSaveButton: createButtonStub(),
+    operationsEdgesResetButton: createButtonStub(),
+    operationsGraphStatusNote: createTextStub(),
+    operationsGraphRefreshButton: createButtonStub(),
+    operationsGraphRootTypeSelect: createDisabledInputStub(),
+    operationsGraphRootIdInput: createDisabledInputStub(),
+    operationsGraphTargetTypeSelect: createDisabledInputStub(),
+    operationsGraphTargetIdInput: createDisabledInputStub(),
+    operationsGraphDepthSelect: createDisabledInputStub(),
+    operationsGraphSummary: createTextStub(),
+    operationsGraphNodes: createTextStub(),
+    operationsGraphEdges: createTextStub(),
+    operationsGraphPath: createTextStub(),
+    operationsRisksStatusNote: createTextStub(),
+    operationsRisksRefreshButton: createButtonStub(),
+    operationsRisksNewButton: createButtonStub(),
+    operationsRisksFilterSelect: createDisabledInputStub(),
+    operationsRisksListEmpty: createTextStub(),
+    operationsRisksList: createTextStub(),
+    operationsRisksFormTitle: createTextStub(),
+    operationsRisksTypeSelect: createDisabledInputStub(),
+    operationsRisksSeveritySelect: createDisabledInputStub(),
+    operationsRisksStatusSelect: createDisabledInputStub(),
+    operationsRisksTitleInput: createDisabledInputStub(),
+    operationsRisksOwnerInput: createDisabledInputStub(),
+    operationsRisksDetectedAtInput: createDisabledInputStub(),
+    operationsRisksRelatedAssetsInput: createDisabledInputStub(),
+    operationsRisksLinkedDecisionsInput: createDisabledInputStub(),
+    operationsRisksRelatedWorkItemsInput: createDisabledInputStub(),
+    operationsRisksSummaryInput: createDisabledInputStub(),
+    operationsRisksSaveButton: createButtonStub(),
+    operationsRisksResetButton: createButtonStub(),
     threadSearchInput: createDisabledInputStub(),
     assistantLanguageStyleInput: createDisabledInputStub(),
     assistantMbtiInput: createDisabledInputStub(),
@@ -2469,6 +3537,9 @@ function createHarness({ actionBarState, threadControlState = null, runtime = {}
   };
 
   const store = {
+    state: {
+      threads: [thread],
+    },
     ensureActiveThread() {},
     getActiveThread() {
       return thread;
@@ -2508,6 +3579,12 @@ function createHarness({ actionBarState, threadControlState = null, runtime = {}
       };
     },
     getVisibleModels() {
+      return [];
+    },
+    getThirdPartyProviders() {
+      return [];
+    },
+    getThirdPartyModels() {
       return [];
     },
     resolveAssistantDisplayLabel() {
@@ -2601,6 +3678,125 @@ function createHarness({ actionBarState, threadControlState = null, runtime = {}
         includeArchived: false,
         noticeMessage: "",
         errorMessage: "",
+      },
+      operationsBossView: {
+        status: "idle",
+        loading: false,
+        errorMessage: "",
+        noticeMessage: "",
+        bossView: null,
+      },
+      operationsAssets: {
+        status: "idle",
+        loading: false,
+        submitting: false,
+        filterStatus: "active",
+        selectedAssetId: "",
+        noticeMessage: "",
+        errorMessage: "",
+        assets: [],
+        draft: {
+          kind: "site",
+          name: "",
+          status: "active",
+          ownerPrincipalId: "",
+          summary: "",
+          tagsText: "",
+          refsText: "",
+        },
+      },
+      operationsCadences: {
+        status: "idle",
+        loading: false,
+        submitting: false,
+        filterStatus: "active",
+        selectedCadenceId: "",
+        noticeMessage: "",
+        errorMessage: "",
+        cadences: [],
+        draft: {
+          title: "",
+          frequency: "weekly",
+          status: "active",
+          nextRunAt: "",
+          ownerPrincipalId: "",
+          playbookRef: "",
+          relatedAssetIdsText: "",
+          summary: "",
+        },
+      },
+      operationsDecisions: {
+        status: "idle",
+        loading: false,
+        submitting: false,
+        filterStatus: "active",
+        selectedDecisionId: "",
+        noticeMessage: "",
+        errorMessage: "",
+        decisions: [],
+        draft: {
+          title: "",
+          status: "active",
+          decidedByPrincipalId: "",
+          decidedAt: "",
+          relatedAssetIdsText: "",
+          relatedWorkItemIdsText: "",
+          summary: "",
+        },
+      },
+      operationsEdges: {
+        status: "idle",
+        loading: false,
+        submitting: false,
+        filterStatus: "active",
+        selectedEdgeId: "",
+        noticeMessage: "",
+        errorMessage: "",
+        edges: [],
+        draft: {
+          fromObjectType: "decision",
+          fromObjectId: "",
+          toObjectType: "risk",
+          toObjectId: "",
+          relationType: "relates_to",
+          status: "active",
+          label: "",
+          summary: "",
+        },
+      },
+      operationsGraph: {
+        status: "idle",
+        loading: false,
+        errorMessage: "",
+        noticeMessage: "",
+        rootObjectType: "commitment",
+        rootObjectId: "",
+        targetObjectType: "asset",
+        targetObjectId: "",
+        maxDepth: "2",
+        graph: null,
+      },
+      operationsRisks: {
+        status: "idle",
+        loading: false,
+        submitting: false,
+        filterStatus: "open",
+        selectedRiskId: "",
+        noticeMessage: "",
+        errorMessage: "",
+        risks: [],
+        draft: {
+          type: "risk",
+          title: "",
+          severity: "medium",
+          status: "open",
+          ownerPrincipalId: "",
+          detectedAt: "",
+          relatedAssetIdsText: "",
+          linkedDecisionIdsText: "",
+          relatedWorkItemIdsText: "",
+          summary: "",
+        },
       },
       pendingInterruptSubmit: null,
       activeRequestController: null,

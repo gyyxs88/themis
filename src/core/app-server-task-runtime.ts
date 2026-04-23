@@ -68,11 +68,18 @@ import {
 } from "./openai-compatible-provider.js";
 import { PrincipalActorsService } from "./principal-actors-service.js";
 import { PrincipalMcpService } from "./principal-mcp-service.js";
+import { PrincipalOperationEdgesService } from "./principal-operation-edges-service.js";
+import { PrincipalOperationsBossViewService } from "./principal-operations-boss-view-service.js";
 import { PrincipalPluginsService } from "./principal-plugins-service.js";
 import {
   PrincipalPersonaService,
   type PrincipalPersonaOnboardingInterceptResult,
 } from "./principal-persona-service.js";
+import { PrincipalAssetsService } from "./principal-assets-service.js";
+import { PrincipalCadencesService } from "./principal-cadences-service.js";
+import { PrincipalCommitmentsService } from "./principal-commitments-service.js";
+import { PrincipalDecisionsService } from "./principal-decisions-service.js";
+import { PrincipalRisksService } from "./principal-risks-service.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
 import { PluginService } from "./plugin-service.js";
 import { buildBootstrapPrompt, buildTaskPrompt } from "./prompt.js";
@@ -252,6 +259,13 @@ export class AppServerTaskRuntime {
   private readonly managedAgentSchedulerService: ManagedAgentSchedulerService;
   private readonly managedAgentWorkerService: ManagedAgentWorkerService;
   private readonly principalActorsService: PrincipalActorsService;
+  private readonly principalAssetsService: PrincipalAssetsService;
+  private readonly principalCadencesService: PrincipalCadencesService;
+  private readonly principalCommitmentsService: PrincipalCommitmentsService;
+  private readonly principalDecisionsService: PrincipalDecisionsService;
+  private readonly principalRisksService: PrincipalRisksService;
+  private readonly principalOperationEdgesService: PrincipalOperationEdgesService;
+  private readonly principalOperationsBossViewService: PrincipalOperationsBossViewService;
   private readonly principalMcpService: PrincipalMcpService;
   private readonly principalPluginsService: PrincipalPluginsService;
   private readonly principalSkillsService: PrincipalSkillsService;
@@ -304,6 +318,36 @@ export class AppServerTaskRuntime {
     );
     this.principalActorsService = new PrincipalActorsService({
       registry: this.runtimeStore,
+    });
+    this.principalAssetsService = new PrincipalAssetsService({
+      registry: this.runtimeStore,
+    });
+    this.principalOperationEdgesService = new PrincipalOperationEdgesService({
+      registry: this.runtimeStore,
+    });
+    this.principalCadencesService = new PrincipalCadencesService({
+      registry: this.runtimeStore,
+      operationEdgesService: this.principalOperationEdgesService,
+    });
+    this.principalCommitmentsService = new PrincipalCommitmentsService({
+      registry: this.runtimeStore,
+      operationEdgesService: this.principalOperationEdgesService,
+    });
+    this.principalDecisionsService = new PrincipalDecisionsService({
+      registry: this.runtimeStore,
+      operationEdgesService: this.principalOperationEdgesService,
+    });
+    this.principalRisksService = new PrincipalRisksService({
+      registry: this.runtimeStore,
+      operationEdgesService: this.principalOperationEdgesService,
+    });
+    this.principalOperationsBossViewService = new PrincipalOperationsBossViewService({
+      assetsService: this.principalAssetsService,
+      cadencesService: this.principalCadencesService,
+      commitmentsService: this.principalCommitmentsService,
+      decisionsService: this.principalDecisionsService,
+      edgesService: this.principalOperationEdgesService,
+      risksService: this.principalRisksService,
     });
     this.principalMcpService = options.principalMcpService ?? new PrincipalMcpService({
       registry: this.runtimeStore,
@@ -1300,6 +1344,34 @@ export class AppServerTaskRuntime {
 
   getPrincipalActorsService(): PrincipalActorsService {
     return this.principalActorsService;
+  }
+
+  getPrincipalAssetsService(): PrincipalAssetsService {
+    return this.principalAssetsService;
+  }
+
+  getPrincipalCadencesService(): PrincipalCadencesService {
+    return this.principalCadencesService;
+  }
+
+  getPrincipalCommitmentsService(): PrincipalCommitmentsService {
+    return this.principalCommitmentsService;
+  }
+
+  getPrincipalDecisionsService(): PrincipalDecisionsService {
+    return this.principalDecisionsService;
+  }
+
+  getPrincipalRisksService(): PrincipalRisksService {
+    return this.principalRisksService;
+  }
+
+  getPrincipalOperationEdgesService(): PrincipalOperationEdgesService {
+    return this.principalOperationEdgesService;
+  }
+
+  getPrincipalOperationsBossViewService(): PrincipalOperationsBossViewService {
+    return this.principalOperationsBossViewService;
   }
 
   getManagedAgentsService(): ManagedAgentsService {

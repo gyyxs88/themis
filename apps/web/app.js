@@ -10,6 +10,14 @@ import { createDefaultMeetingRoomsState, createMeetingRoomsController } from "./
 import { createDefaultMemoryCandidatesState, createMemoryCandidatesController } from "./modules/memory-candidates.js";
 import { createDefaultMcpState, createMcpController } from "./modules/mcp.js";
 import { createDefaultModeSwitchDraftState, createModeSwitchController } from "./modules/mode-switch.js";
+import { createDefaultOperationsAssetsState, createOperationsAssetsController } from "./modules/operations-assets.js";
+import { createDefaultOperationsBossViewState, createOperationsBossViewController } from "./modules/operations-boss-view.js";
+import { createDefaultOperationsCadencesState, createOperationsCadencesController } from "./modules/operations-cadences.js";
+import { createDefaultOperationsCommitmentsState, createOperationsCommitmentsController } from "./modules/operations-commitments.js";
+import { createDefaultOperationsDecisionsState, createOperationsDecisionsController } from "./modules/operations-decisions.js";
+import { createDefaultOperationsEdgesState, createOperationsEdgesController } from "./modules/operations-edges.js";
+import { createDefaultOperationsGraphState, createOperationsGraphController } from "./modules/operations-graph.js";
+import { createDefaultOperationsRisksState, createOperationsRisksController } from "./modules/operations-risks.js";
 import { createDefaultPluginsState, createPluginsController } from "./modules/plugins.js";
 import { createDefaultRuntimeConfigState, createRuntimeConfigController } from "./modules/runtime-config.js";
 import { createSessionSettingsController } from "./modules/session-settings.js";
@@ -55,6 +63,14 @@ const app = {
     workspaceToolsSection: "runtime",
     memoryCandidates: createDefaultMemoryCandidatesState(),
     meetingRooms: createDefaultMeetingRoomsState(),
+    operationsBossView: createDefaultOperationsBossViewState(),
+    operationsAssets: createDefaultOperationsAssetsState(),
+    operationsCadences: createDefaultOperationsCadencesState(),
+    operationsCommitments: createDefaultOperationsCommitmentsState(),
+    operationsDecisions: createDefaultOperationsDecisionsState(),
+    operationsEdges: createDefaultOperationsEdgesState(),
+    operationsGraph: createDefaultOperationsGraphState(),
+    operationsRisks: createDefaultOperationsRisksState(),
     mcp: createDefaultMcpState(),
     plugins: createDefaultPluginsState(),
     skills: createDefaultSkillsState(),
@@ -76,6 +92,14 @@ app.auth = createAuthController(app);
 app.identity = createIdentityController(app);
 app.memoryCandidates = createMemoryCandidatesController(app);
 app.meetingRooms = createMeetingRoomsController(app);
+app.operationsBossView = createOperationsBossViewController(app);
+app.operationsAssets = createOperationsAssetsController(app);
+app.operationsCadences = createOperationsCadencesController(app);
+app.operationsCommitments = createOperationsCommitmentsController(app);
+app.operationsDecisions = createOperationsDecisionsController(app);
+app.operationsEdges = createOperationsEdgesController(app);
+app.operationsGraph = createOperationsGraphController(app);
+app.operationsRisks = createOperationsRisksController(app);
 app.mcp = createMcpController(app);
 app.plugins = createPluginsController(app);
 app.runtimeConfig = createRuntimeConfigController(app);
@@ -87,6 +111,14 @@ app.plugins.bindControls();
 app.skills.bindControls();
 app.memoryCandidates.bindControls();
 app.meetingRooms.bindControls();
+app.operationsBossView.bindControls();
+app.operationsAssets.bindControls();
+app.operationsCadences.bindControls();
+app.operationsCommitments.bindControls();
+app.operationsDecisions.bindControls();
+app.operationsEdges.bindControls();
+app.operationsGraph.bindControls();
+app.operationsRisks.bindControls();
 app.modeSwitch = createModeSwitchController(app);
 app.thirdPartyEditor = createThirdPartyEditorController(app);
 app.thirdPartyEndpointProbe = createThirdPartyEndpointProbeController(app);
