@@ -1,5 +1,7 @@
 # Themis
 
+[English](./README.en.md)
+
 Themis 是一个围绕 `codex app-server` 构建的自托管协作壳。
 
 当前公开仓 `themis` 主要负责 Web 与飞书入口、人类对话、历史、身份、运行参数等主产品语义，并通过 `/api/platform/*` 消费平台控制面事实。平台控制面、执行节点和共享契约当前由相关仓库分别承载。

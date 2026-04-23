@@ -5,6 +5,7 @@
 + /.gitignore
 + /LICENSE
 + /README.md
++ /README.en.md
 + /package.json
 + /package-lock.json
 + /tsconfig.json
