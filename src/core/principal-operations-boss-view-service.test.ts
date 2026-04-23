@@ -122,3 +122,82 @@ test("getBossView 会把风险、节奏、关系边聚合成老板视图红灯",
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("getBossView 不会把已解决风险和已完成承诺之间的历史阻塞边当成红灯", () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-operations-boss-view-"));
+  const registry = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const assetsService = new PrincipalAssetsService({ registry });
+  const cadencesService = new PrincipalCadencesService({ registry });
+  const commitmentsService = new PrincipalCommitmentsService({ registry });
+  const decisionsService = new PrincipalDecisionsService({ registry });
+  const edgesService = new PrincipalOperationEdgesService({ registry });
+  const risksService = new PrincipalRisksService({ registry });
+  const bossViewService = new PrincipalOperationsBossViewService({
+    assetsService,
+    cadencesService,
+    commitmentsService,
+    decisionsService,
+    edgesService,
+    risksService,
+  });
+  registry.savePrincipal({
+    principalId: "principal-owner",
+    displayName: "Owner",
+    createdAt: "2026-04-23T09:00:00.000Z",
+    updatedAt: "2026-04-23T09:00:00.000Z",
+  });
+
+  try {
+    const principalId = "principal-owner";
+
+    risksService.createRisk({
+      principalId,
+      riskId: "risk-520-resolved",
+      type: "incident",
+      title: "betternovels.com 520 事故已收口",
+      severity: "medium",
+      status: "resolved",
+      detectedAt: "2026-04-22T10:00:00.000Z",
+      now: "2026-04-22T10:00:00.000Z",
+    });
+    commitmentsService.createCommitment({
+      principalId,
+      commitmentId: "commitment-offline-done",
+      title: "betternovels.com 下线收口",
+      status: "done",
+      progressPercent: 100,
+      dueAt: "2026-04-23T09:30:00.000Z",
+      linkedRiskIds: ["risk-520-resolved"],
+      now: "2026-04-23T09:30:00.000Z",
+    });
+    edgesService.createEdge({
+      principalId,
+      edgeId: "edge-historical-risk-blocks-done",
+      fromObjectType: "risk",
+      fromObjectId: "risk-520-resolved",
+      toObjectType: "commitment",
+      toObjectId: "commitment-offline-done",
+      relationType: "blocks",
+      label: "历史风险阻塞承诺",
+      status: "active",
+      now: "2026-04-23T09:31:00.000Z",
+    });
+
+    const bossView = bossViewService.getBossView({
+      principalId,
+      now: "2026-04-23T10:00:00.000Z",
+    });
+
+    assert.equal(bossView.headline.tone, "green");
+    assert.equal(bossView.inventory.risks.highOrCriticalOpen, 0);
+    assert.equal(bossView.inventory.commitments.done, 1);
+    assert.equal(bossView.inventory.edges.active, 1);
+    assert.equal(bossView.inventory.edges.blocking, 0);
+    assert.equal(bossView.focusItems.some((item) => item.objectType === "operation_edge"), false);
+    assert.equal(bossView.relationItems.some((item) => item.edgeId === "edge-historical-risk-blocks-done"), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

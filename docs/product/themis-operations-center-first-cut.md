@@ -27,7 +27,7 @@
 - `Risk / Incident`：现在已补最小风险卡，但还没接 richer lifecycle、告警聚合和跨对象联动
 - `Cadence`：现在已补最小记录，但还没接自动触发、完成回写和跨对象联动
 - `OperationEdge`：现在已补最小关系边，并能从 `Decision / Risk / Cadence / Commitment` 字段自动同步基础边；Web 已能基于 active edges 展开对象的一跳 / 二跳影响范围，后端已能做小深度关系子图查询和可选最短路径；但还没做复杂路径搜索、跨对象筛选和完整对象详情页
-- `BossView`：现在已补只读聚合视图，并已消费 `Commitment` 指标和焦点，但还没做自动推送、可配置权重和跨 principal / 跨组织总览
+- `BossView`：现在已补只读聚合视图，并已消费 `Commitment` 指标和焦点；`blocks` 关系会按对象当前状态过滤，已解决风险 / 已完成承诺不会继续拉红灯，但还没做自动推送、可配置权重和跨 principal / 跨组织总览
 - `Commitment`：现在已补公司层承诺对象，并能记录进度百分比、里程碑和证据引用
 
 所以现在如果直接叫“数字公司操作系统”，会把产品说大，但真相源还不够完整。
@@ -273,6 +273,7 @@
   - 今日焦点
   - 关键关系
   - 近期拍板
+- 有效阻塞口径：只有 active `blocks` 且两端对象仍处于未关闭状态时才算当前红灯；`resolved / archived` 风险与 `done / archived` 承诺不会继续制造 BossView 误报
 
 当前明确还没做的，是：
 
@@ -483,7 +484,7 @@
 - `Cadence -> Asset`：`tracks`
 - `Commitment -> Asset`：`relates_to`
 - `Commitment -> Decision / WorkItem`：`depends_on`
-- `Risk -> Commitment`：`blocks`
+- `Risk -> Commitment`：未收口风险阻塞未完成承诺时用 `blocks`；已解决风险或已完成承诺只保留 `relates_to`
 - `Cadence -> Commitment`：`tracks`
 
 这一步的目标不是做完整图查询，而是先让对象字段不再只是散字段：它们会变成可维护、可聚合、可被老板视图消费的关系事实。
@@ -512,7 +513,7 @@
 
 - `Commitment -> Asset`：`relates_to`
 - `Commitment -> Decision`：`depends_on`
-- `Risk -> Commitment`：`blocks`
+- `Risk -> Commitment`：未收口风险阻塞未完成承诺时用 `blocks`；已解决风险或已完成承诺只保留 `relates_to`
 - `Cadence -> Commitment`：`tracks`
 - `Commitment -> WorkItem`：`depends_on`
 

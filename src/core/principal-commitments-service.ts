@@ -210,15 +210,21 @@ export class PrincipalCommitmentsService {
             label: "承诺依赖决策",
             summary: `承诺「${record.title}」依赖决策 ${decisionId}。`,
           })),
-          ...record.linkedRiskIds.map((riskId) => ({
-            fromObjectType: "risk" as const,
-            fromObjectId: riskId,
-            toObjectType: "commitment" as const,
-            toObjectId: record.commitmentId,
-            relationType: "blocks" as const,
-            label: "风险阻塞承诺",
-            summary: `风险 ${riskId} 阻塞承诺「${record.title}」。`,
-          })),
+          ...record.linkedRiskIds.map((riskId) => {
+            const blocksCommitment = this.shouldLinkedRiskBlockCommitment(record, riskId);
+
+            return {
+              fromObjectType: "risk" as const,
+              fromObjectId: riskId,
+              toObjectType: "commitment" as const,
+              toObjectId: record.commitmentId,
+              relationType: blocksCommitment ? "blocks" as const : "relates_to" as const,
+              label: blocksCommitment ? "风险阻塞承诺" : "承诺关联风险",
+              summary: blocksCommitment
+                ? `风险 ${riskId} 阻塞承诺「${record.title}」。`
+                : `承诺「${record.title}」关联已收口或非阻塞风险 ${riskId}。`,
+            };
+          }),
           ...record.relatedCadenceIds.map((cadenceId) => ({
             fromObjectType: "cadence" as const,
             fromObjectId: cadenceId,
@@ -249,6 +255,20 @@ export class PrincipalCommitmentsService {
         ],
       now,
     });
+  }
+
+  private shouldLinkedRiskBlockCommitment(record: StoredPrincipalCommitmentRecord, riskId: string): boolean {
+    if (record.status === "done" || record.status === "archived") {
+      return false;
+    }
+
+    const risk = this.registry.getPrincipalRisk(record.principalId, riskId);
+
+    if (risk?.status === "resolved" || risk?.status === "archived") {
+      return false;
+    }
+
+    return true;
   }
 }
 

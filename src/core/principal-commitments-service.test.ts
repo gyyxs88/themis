@@ -295,3 +295,51 @@ test("createCommitment 和 updateCommitment 会同步承诺相关自动关系边
     rmSync(context.root, { recursive: true, force: true });
   }
 });
+
+test("createCommitment 遇到已解决风险或已完成承诺时不会生成当前阻塞边", () => {
+  const context = createServiceContext();
+  const operationEdgesService = new PrincipalOperationEdgesService({ registry: context.registry });
+  const service = new PrincipalCommitmentsService({
+    registry: context.registry,
+    operationEdgesService,
+  });
+
+  try {
+    context.registry.savePrincipalRisk({
+      principalId: "principal-owner",
+      riskId: "risk-ledger-resolved",
+      type: "incident",
+      title: "历史 520 事故",
+      severity: "medium",
+      status: "resolved",
+      detectedAt: "2026-04-23T18:56:00.000Z",
+      relatedAssetIds: [],
+      linkedDecisionIds: [],
+      relatedWorkItemIds: [],
+      createdAt: "2026-04-23T18:56:00.000Z",
+      updatedAt: "2026-04-23T18:56:00.000Z",
+    });
+
+    service.createCommitment({
+      principalId: "principal-owner",
+      commitmentId: "commitment-ledger-done",
+      title: "历史事故收口",
+      status: "done",
+      dueAt: "2026-04-23T18:59:00.000Z",
+      linkedRiskIds: ["risk-ledger-resolved"],
+      now: "2026-04-23T19:00:00.000Z",
+    });
+
+    const edges = operationEdgesService.listEdges({
+      principalId: "principal-owner",
+    });
+
+    assert.deepEqual(
+      edges.map((edge) => `${edge.fromObjectType}:${edge.fromObjectId}:${edge.relationType}:${edge.toObjectType}:${edge.toObjectId}`),
+      ["risk:risk-ledger-resolved:relates_to:commitment:commitment-ledger-done"],
+    );
+    assert.equal(edges[0]?.label, "承诺关联风险");
+  } finally {
+    rmSync(context.root, { recursive: true, force: true });
+  }
+});

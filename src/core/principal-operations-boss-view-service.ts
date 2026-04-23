@@ -80,7 +80,11 @@ export class PrincipalOperationsBossViewService {
     const activeDecisions = decisions.filter((item) => item.status === "active");
     const supersededDecisions = decisions.filter((item) => item.status === "superseded");
     const activeEdges = edges.filter((item) => item.status === "active");
-    const blockingEdges = activeEdges.filter((item) => item.relationType === "blocks");
+    const edgeObjectState = buildEdgeObjectState({ risks, commitments });
+    const blockingEdges = activeEdges.filter((item) => isEffectiveBlockingEdge(item, edgeObjectState));
+    const bossViewEdges = activeEdges.filter((item) =>
+      item.relationType !== "blocks" || isEffectiveBlockingEdge(item, edgeObjectState)
+    );
     const inventory = buildInventory({
       activeAssets,
       watchAssets,
@@ -120,7 +124,7 @@ export class PrincipalOperationsBossViewService {
         watchAssets,
         labels,
       }),
-      relationItems: buildRelationItems(activeEdges, labels),
+      relationItems: buildRelationItems(bossViewEdges, labels),
       recentDecisions: buildRecentDecisions(decisions),
       inventory,
     };
@@ -399,6 +403,54 @@ function buildObjectLabelResolver(input: ObjectLabelInput): (type: string, id: s
   }
 
   return (type, id) => labels.get(`${type}:${id}`) ?? `${type}: ${id}`;
+}
+
+function isEffectiveBlockingEdge(
+  edge: StoredPrincipalOperationEdgeRecord,
+  input: EdgeObjectState,
+): boolean {
+  if (edge.relationType !== "blocks" || edge.status !== "active") {
+    return false;
+  }
+
+  return isEndpointNotClosed(edge.fromObjectType, edge.fromObjectId, input)
+    && isEndpointNotClosed(edge.toObjectType, edge.toObjectId, input);
+}
+
+interface EdgeObjectState {
+  risksById: Map<string, StoredPrincipalRiskRecord>;
+  commitmentsById: Map<string, StoredPrincipalCommitmentRecord>;
+}
+
+function buildEdgeObjectState(input: {
+  risks: StoredPrincipalRiskRecord[];
+  commitments: StoredPrincipalCommitmentRecord[];
+}): EdgeObjectState {
+  return {
+    risksById: new Map(input.risks.map((risk) => [risk.riskId, risk])),
+    commitmentsById: new Map(input.commitments.map((commitment) => [commitment.commitmentId, commitment])),
+  };
+}
+
+function isEndpointNotClosed(
+  objectType: string,
+  objectId: string,
+  input: EdgeObjectState,
+): boolean {
+  if (objectType === "risk") {
+    const risk = input.risksById.get(objectId);
+    return !risk || risk.status === "open" || risk.status === "watch";
+  }
+
+  if (objectType === "commitment") {
+    const commitment = input.commitmentsById.get(objectId);
+    return !commitment
+      || commitment.status === "planned"
+      || commitment.status === "active"
+      || commitment.status === "at_risk";
+  }
+
+  return true;
 }
 
 function buildRelatedSummary(
