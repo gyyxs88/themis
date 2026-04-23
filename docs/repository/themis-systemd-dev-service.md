@@ -1,5 +1,11 @@
 # Themis 开发模式 systemd 用户服务说明
 
+## 这篇文档负责什么
+
+- 只负责开发机上的 `npm run dev:web` 常驻方式。
+- 不负责正式实例安装或升级；那部分看 `themis-systemd-prod-service.md`。
+- 不负责当前本地/LAN 环境的现网入口；那部分看本地专用 `docs/local/current-deployment.md`。
+
 ## 目标
 
 把 `npm run dev:web` 挂到 `systemd --user` 下长期运行，让 Themis 后端在开发模式下保持常驻，并继续依赖 `tsx watch` 做代码热更新。

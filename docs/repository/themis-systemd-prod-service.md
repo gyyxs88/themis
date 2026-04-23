@@ -1,5 +1,11 @@
 # Themis 正式版 systemd 用户服务说明
 
+## 这篇文档负责什么
+
+- 只负责主 Themis 正式实例的安装、常驻、验证和受控升级。
+- 不负责描述“当前这台机器现在实际跑在哪里”；现网入口看本地专用 `docs/local/current-deployment.md`。
+- 不重复发布验收矩阵和灰度回退步骤；发布前后流程分别看 `themis-release-acceptance-matrix.md` 与 `themis-release-rollout-and-rollback.md`。
+
 ## 目标
 
 把 Themis 作为长期使用的正式实例挂到 `systemd --user` 下常驻运行。

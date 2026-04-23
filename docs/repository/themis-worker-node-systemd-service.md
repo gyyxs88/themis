@@ -2,6 +2,12 @@
 
 > 拆仓后，当前以 `themis-worker-node` 独立仓里的 `infra/systemd/themis-worker-node.service.example` 和 `docs/worker-node-systemd-service.md` 为准；本文保留为主仓镜像。
 
+## 这篇文档负责什么
+
+- 只负责 Worker Node 的安装、预检、`systemd` 常驻和最小启动验证。
+- 不负责日常巡检、值守策略和多节点治理动作；那部分看 `themis-worker-node-operations-runbook.md`。
+- 不负责说明当前哪台机器正在跑哪个 Worker；现网入口看本地专用 `docs/local/current-deployment.md`。
+
 ## 目标
 
 把 `Worker Node daemon` 作为长期运行的局域网执行节点挂到 `systemd --user` 下常驻运行。

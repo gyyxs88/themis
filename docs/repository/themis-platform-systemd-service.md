@@ -2,6 +2,12 @@
 
 > 拆仓后，当前以 `themis-platform` 独立仓里的 `infra/systemd/themis-platform.service.example` 和 `docs/themis-platform-systemd-service.md` 为准；本文保留为主仓镜像。
 
+## 这篇文档负责什么
+
+- 只负责平台层独立进程的安装、常驻和最小启动验证。
+- 如果你只是要切到 MySQL shared control plane，增量配置和回退看 `themis-platform-mysql-control-plane-cutover.md`。
+- 如果你已经装好平台，只是做监控、告警、备份或恢复，看 `themis-platform-monitoring-and-backup-runbook.md`。
+
 ## 目标
 
 把独立平台层进程挂到 `systemd --user` 下常驻运行，并让它以 `MySQL shared control plane + 本地 shared cache SQLite` 的方式提供平台控制面。
@@ -194,19 +200,7 @@ journalctl --user -u themis-platform.service -f
 
 如果 `worker` 侧接口返回 `Owner principal not found.`，优先检查 shared control plane 里是否已经存在与平台令牌绑定的 `ownerPrincipalId` 及其默认组织。只发平台令牌还不够，空平台还需要先补 owner principal / organization 这层基础事实。
 
-## 7. 回退
+## 7. 进一步阅读
 
-如果平台层切到 MySQL 后出现异常，优先走：
-
-1. `systemctl --user stop themis-platform.service`
-2. 去掉 `THEMIS_PLATFORM_CONTROL_PLANE_DRIVER=mysql`
-3. 去掉 `THEMIS_PLATFORM_MYSQL_*`
-4. 如需保留独立 SQLite 平台控制面，则保留：
-
-```bash
-THEMIS_MANAGED_AGENT_CONTROL_PLANE_DATABASE_FILE=infra/platform/control-plane.db
-```
-
-5. `systemctl --user start themis-platform.service`
-
-这会回到“独立 SQLite 平台控制面 + 本地 execution state”的模式。
+- 切 MySQL shared control plane：`themis-platform-mysql-control-plane-cutover.md`
+- 平台值班、告警、备份恢复：`themis-platform-monitoring-and-backup-runbook.md`

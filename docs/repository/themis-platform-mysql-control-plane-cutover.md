@@ -1,5 +1,11 @@
 # Themis 平台层切换到 MySQL shared control plane 的操作说明
 
+## 这篇文档负责什么
+
+- 只负责“平台已经是独立进程后，怎么切到 MySQL shared control plane”。
+- 不重复平台 `systemd` 安装与目录准备；那部分看 `themis-platform-systemd-service.md`。
+- 不负责日常值班和备份恢复；那部分看 `themis-platform-monitoring-and-backup-runbook.md`。
+
 ## 目标
 
 把平台层从“本地 SQLite shared control plane”切到“本地 shared cache SQLite + MySQL 真相源”的独立进程形态。
@@ -37,7 +43,7 @@ node --test --import tsx \
 npm run build
 ```
 
-## 2. 平台层配置
+## 2. 切换涉及的配置增量
 
 平台独立进程至少配置：
 
@@ -69,7 +75,7 @@ THEMIS_PLATFORM_MYSQL_DATABASE=themis_platform
 - `infra/local/themis.db` 仍继续承载本地 execution state、auth、thread/history
 - `THEMIS_UPDATE_SYSTEMD_SERVICE=themis-platform.service` 用来让受控升级完成后自动重启平台层，而不是默认的 `themis-prod.service`
 
-## 3. 启动方式
+## 3. 切换时怎么启动
 
 开发态：
 

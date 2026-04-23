@@ -88,10 +88,14 @@ http://localhost:3100
 
 ## 部署与联调文档
 
-- [首轮局域网联调清单](./docs/repository/themis-first-lan-joint-test-checklist.md)
-- [单机三角色部署方案](./docs/repository/themis-single-host-three-role-deployment.md)
+- 本地工作区当前部署速查：`docs/local/current-deployment.md`（本地专用，不纳入版本控制）
+- 本地工作区部署文档索引：`docs/local/README.md`（本地专用，不纳入版本控制）
+- [仓库运维文档索引](./docs/repository/README.md)
+- [正式版部署说明](./docs/repository/themis-systemd-prod-service.md)
+- [平台层 systemd 服务说明](./docs/repository/themis-platform-systemd-service.md)
 - [Worker Node 常驻部署说明](./docs/repository/themis-worker-node-systemd-service.md)
-- [平台层切 MySQL 操作说明](./docs/repository/themis-platform-mysql-control-plane-cutover.md)
+- [发布验收矩阵](./docs/repository/themis-release-acceptance-matrix.md)
+- [发布、灰度与回退说明](./docs/repository/themis-release-rollout-and-rollback.md)
 
 ## 常用命令
 
@@ -119,7 +123,7 @@ npm run start:platform
 - Worker Node 本机预检 / 常驻执行：`./themis-worker-node`
 - `themis-platform` 与 `themis-worker-node` 当前都通过 `file:../themis-contracts` 依赖共享契约；真实部署时要把 `themis-contracts` 放到同级目录，再执行 `npm ci`。
 - `THEMIS_PLATFORM_WEB_ACCESS_TOKEN` 当前负责主 Themis 的管理者 gateway：除了 `agents / projects / work-items / runs`，还可访问节点观察/治理接口 `nodes/list|detail|drain|offline|reclaim`；节点运行态 `nodes/register|heartbeat`、`/api/platform/worker/*` 和 `worker-node run` 仍统一使用 `worker` 角色的平台服务令牌。
-- Worker Node、平台值班和三机联调的完整命令顺序，直接看 [首轮局域网联调清单](./docs/repository/themis-first-lan-joint-test-checklist.md)、[Worker Node 常驻部署说明](./docs/repository/themis-worker-node-systemd-service.md) 和 [Worker Node 运维手册](./docs/repository/themis-worker-node-operations-runbook.md)。
+- Worker Node、平台值班和多机场景的完整入口，先看 [仓库运维文档索引](./docs/repository/README.md)；如果要回看首轮三机联调记录，再看 `docs/repository/archive/themis-first-lan-joint-test-checklist.md`。
 
 如果你希望像 `codex` 一样直接输入 `themis`，可以在仓库根目录执行一次：
 
@@ -161,22 +165,18 @@ npm run themis -- config set FEISHU_APP_SECRET xxx
 - 飞书：`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_PROGRESS_FLUSH_TIMEOUT_MS`
 - OpenAI-compatible provider：`THEMIS_OPENAI_COMPAT_BASE_URL`、`THEMIS_OPENAI_COMPAT_API_KEY`、`THEMIS_OPENAI_COMPAT_MODEL`
 - 升级与版本：`THEMIS_BUILD_COMMIT`、`THEMIS_BUILD_BRANCH`、`THEMIS_UPDATE_REPO`、`THEMIS_UPDATE_CHANNEL`、`THEMIS_UPDATE_DEFAULT_BRANCH`、`THEMIS_UPDATE_SYSTEMD_SERVICE`、`THEMIS_GITHUB_TOKEN`
-- 平台层 MySQL、runtime snapshot、execution runtime 这类部署级变量，直接看 [平台层切 MySQL 操作说明](./docs/repository/themis-platform-mysql-control-plane-cutover.md) 与 [首轮局域网联调清单](./docs/repository/themis-first-lan-joint-test-checklist.md)
+- 平台层 MySQL、runtime snapshot、execution runtime 这类部署级变量，直接看 [平台层切 MySQL 操作说明](./docs/repository/themis-platform-mysql-control-plane-cutover.md)；跨机场景和历史联调细节见 [仓库运维文档索引](./docs/repository/README.md)
 
 ## 文档导航
 
+- [文档总索引](./docs/README.md)
+- 本地部署文档目录：`docs/local/`（本地专用，不纳入版本控制）
+- [仓库运维文档索引](./docs/repository/README.md)
 - [飞书接入总览](./docs/feishu/README.md)
 - [飞书通道说明](./docs/feishu/themis-feishu-channel.md)
+- [产品规划文档索引](./docs/product/README.md)
 - [持久化 agent 架构](./docs/product/themis-persistent-agent-architecture.md)
-- [公开发布边界与导出规则](./docs/repository/github-safe-publish.md)
-- [正式版部署说明](./docs/repository/themis-systemd-prod-service.md)
-- [开发模式 systemd 说明](./docs/repository/themis-systemd-dev-service.md)
-- [平台层切 MySQL 操作说明](./docs/repository/themis-platform-mysql-control-plane-cutover.md)
-- [单机三角色部署方案](./docs/repository/themis-single-host-three-role-deployment.md)
-- [首轮局域网联调清单](./docs/repository/themis-first-lan-joint-test-checklist.md)
-- [Worker Node 常驻部署说明](./docs/repository/themis-worker-node-systemd-service.md)
-- [Worker Node 运维手册](./docs/repository/themis-worker-node-operations-runbook.md)
-- [平台层监控、备份与恢复手册](./docs/repository/themis-platform-monitoring-and-backup-runbook.md)
+- 长期专题记忆见 `docs/memory/YYYY/MM/`
 
 ## 许可证
 
