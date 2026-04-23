@@ -29,6 +29,11 @@ import { ManagedAgentSchedulerService } from "../core/managed-agent-scheduler-se
 import { ManagedAgentWorkerService } from "../core/managed-agent-worker-service.js";
 import { IdentityLinkService, type ChannelIdentityInput, type IdentityStatusSnapshot } from "../core/identity-link-service.js";
 import { ScheduledTasksService } from "../core/scheduled-tasks-service.js";
+import { isThemisOperationsToolName } from "../core/themis-operations-tools.js";
+import {
+  buildThemisOperationsToolDefinitions,
+  ThemisOperationsMcpTools,
+} from "./themis-operations-mcp-tools.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import {
   APPROVAL_POLICIES,
@@ -190,6 +195,7 @@ export class ThemisMcpServer {
   private readonly registry: SqliteCodexSessionRegistry;
   private readonly identityLinkService: IdentityLinkService;
   private readonly scheduledTasksService: ScheduledTasksService;
+  private readonly operationsMcpTools: ThemisOperationsMcpTools;
   private readonly managedAgentControlPlaneFacade: ManagedAgentControlPlaneFacadeLike;
   private readonly managedAgentOwnerPrincipalId: string | null;
   private readonly identityInput: ChannelIdentityInput;
@@ -207,6 +213,9 @@ export class ThemisMcpServer {
     });
     this.identityLinkService = new IdentityLinkService(this.registry);
     this.scheduledTasksService = new ScheduledTasksService({
+      registry: this.registry,
+    });
+    this.operationsMcpTools = new ThemisOperationsMcpTools({
       registry: this.registry,
     });
     const managedAgentControlPlane = resolveManagedAgentControlPlane({
@@ -316,9 +325,10 @@ export class ThemisMcpServer {
         version: MCP_SERVER_VERSION,
       },
       instructions: [
-        "This MCP server manages Themis scheduled tasks and managed agents.",
+        "This MCP server manages Themis scheduled tasks, managed agents, and machine-native operations ledger objects.",
         "Use explicit scheduledAt timestamps and a concrete timezone for scheduled tasks.",
         "Use managed agent tools to create and govern digital employees, update employee dossiers, update execution boundaries, and dispatch work.",
+        "Use operations tools to maintain Asset, Decision, Risk, Cadence, Commitment, OperationEdge, graph, and BossView facts for Themis and digital employees; humans primarily observe and emergency-brake.",
       ].join(" "),
     };
   }
@@ -362,6 +372,10 @@ export class ThemisMcpServer {
       case "update_managed_agent_lifecycle":
         return this.runToolSafely(() => this.updateManagedAgentLifecycle(argumentsRecord));
       default:
+        if (isThemisOperationsToolName(name)) {
+          return this.runToolSafely(() => this.callOperationsTool(name, argumentsRecord));
+        }
+
         throw new JsonRpcProtocolError(JSON_RPC_INVALID_PARAMS, `Unknown tool: ${name}`);
     }
   }
@@ -655,6 +669,13 @@ export class ThemisMcpServer {
         agent: ownerView.agent,
       },
     );
+  }
+
+  private callOperationsTool(name: string, argumentsRecord: Record<string, unknown>): Record<string, unknown> {
+    const identity = this.ensureIdentity();
+    const result = this.operationsMcpTools.callTool(name, argumentsRecord, identity);
+
+    return createToolResult(result.summary, result.structuredContent);
   }
 
   private ensureIdentity(): IdentityStatusSnapshot {
@@ -1073,6 +1094,7 @@ function buildToolDefinitions(): McpToolDefinition[] {
         required: ["agentId", "action"],
       },
     },
+    ...buildThemisOperationsToolDefinitions(),
   ];
 }
 

@@ -1,6 +1,6 @@
 # Themis 运营中枢 / 当前阶段产品定义与首刀实施
 
-更新时间：2026-04-23（已包含 Asset / Decision / Risk / Cadence / Commitment / OperationEdge / BossView / GraphQuery 与第十二刀）
+更新时间：2026-04-23（已包含 Asset / Decision / Risk / Cadence / Commitment / OperationEdge / BossView / GraphQuery、机器原生 MCP 协议与第十三刀）
 
 ## 结论
 
@@ -8,6 +8,8 @@
 - `数字公司操作系统` 作为最终形态保留，但不应拿来描述当前实现
 - 当前第一优先级不是再造一个更大的“任务系统”，而是把现有执行、协作、治理、知识沉淀收成同一块诚实的控制面
 - `Asset / Decision / Risk / Cadence / Commitment` 的最小对象、`OperationEdge` 关系边、自动补边、对象详情反链、一跳 / 二跳影响范围、后端对象图查询入口和 `BossView` 只读老板视图现在已经落地：主 Themis 已有 SQLite 台账、HTTP 接口、Web 录入入口、对象图查询面板和基于事实聚合的经营晨报；`Commitment` 已补进度、里程碑和证据引用
+- 运营中枢不是给人类填表使用的任务管理 UI；主使用者是 Themis 与数字员工，人类只需要观测、审计和在异常时紧急刹车
+- `themis mcp-server` 现在已经把运营中枢补成机器原生工具面：Themis 可直接创建 / 更新 / 查询运营对象、维护关系边、查询对象图和读取 BossView
 
 ## 为什么不是“数字公司操作系统”
 
@@ -45,6 +47,16 @@
 1. 完整的公司级对象总表
 2. 全量财务 / 增长 / 合规系统
 3. 所有平台治理都留在主仓页面里的超级大后台
+4. 给人类手工填表、排期和维护状态的传统任务管理系统
+
+### 使用者边界
+
+运营中枢的主入口应该是机器协议，不是人类表单：
+
+1. Themis 在任务推进时自己维护承诺、风险、决策、节奏、资产和关系边
+2. managed agent 在执行和交接时把工作项、证据和阻塞关系挂回运营账本
+3. 人类通过 Web / BossView / 对象图观察状态、审计事实和理解影响面
+4. 真正需要人类动手的，是暂停员工、冻结执行边界、取消调度、终止会议这类紧急刹车动作
 
 ### 当前已接通的四层底座
 
@@ -291,6 +303,38 @@
 - 独立对象详情路由和对象完整资料面板
 - 复杂路径搜索、多条件过滤和跨对象全文搜索
 - 跨 principal / 跨组织关系图
+
+### I. 机器原生 MCP 协议
+
+优先级：已完成首版
+
+原因：
+
+- 运营中枢本身是给 Themis 和数字公司员工使用的执行基建，不应依赖人类在 Web 表单里补事实
+- 如果只有 HTTP / Web，Themis 知道“有这个系统”，但不能可靠地自己维护运营账本
+- 机器协议必须和自动批准白名单一起落地，否则内部工具会被误判成人类审批等待
+
+当前已落地能力：
+
+- MCP 对象工具：
+  - `list_operation_objects`
+  - `create_operation_object`
+  - `update_operation_object`
+- MCP 关系工具：
+  - `list_operation_edges`
+  - `create_operation_edge`
+  - `update_operation_edge`
+- MCP 观测工具：
+  - `query_operation_graph`
+  - `get_operations_boss_view`
+- Runtime prompt 已注入运营中枢使用规则，明确这是 `machine-native operating ledger`
+- AppServerTaskRuntime 已把这些 Themis 内部 operations MCP 工具纳入自动批准白名单，不再生成 `task.action_required`
+
+当前明确还没做的，是：
+
+- 独立 emergency-brake 总开关面板
+- 运营中枢对象变更的更细审计流
+- managed agent 自动执行结束后按规则回写 Commitment / Risk / Evidence 的策略层
 
 ## 首刀 UI 范围
 

@@ -85,7 +85,11 @@ test("themis mcp-server 会通过 stdio 暴露定时任务工具", async () => {
     const toolNames = Array.isArray(toolsResult?.tools)
       ? toolsResult.tools.map((tool) => tool.name)
       : [];
-    assert.deepEqual(toolNames, ["create_scheduled_task", "list_scheduled_tasks", "cancel_scheduled_task"]);
+    assert.ok(toolNames.includes("create_scheduled_task"));
+    assert.ok(toolNames.includes("dispatch_work_item"));
+    assert.ok(toolNames.includes("create_operation_object"));
+    assert.ok(toolNames.includes("query_operation_graph"));
+    assert.ok(toolNames.includes("get_operations_boss_view"));
 
     child.stdin.write(`${JSON.stringify({
       jsonrpc: "2.0",

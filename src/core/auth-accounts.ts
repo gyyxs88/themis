@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve, sep } from "node:path";
 import type { SqliteCodexSessionRegistry, StoredAuthAccountRecord } from "../storage/index.js";
@@ -247,8 +247,13 @@ export function copyCodexConfigFile(sourceCodexHome: string, targetCodexHome: st
     return true;
   }
 
+  const sourceConfig = readFileSync(sourceConfigPath, "utf8");
+  if (sourceConfig === THEMIS_MANAGED_CODEX_CONFIG) {
+    return false;
+  }
+
   ensureCodexHomeDirectory(targetCodexHome);
-  copyFileSync(sourceConfigPath, targetConfigPath);
+  writeFileSync(targetConfigPath, sourceConfig, "utf8");
   return true;
 }
 

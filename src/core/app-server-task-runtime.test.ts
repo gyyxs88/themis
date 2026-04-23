@@ -1495,6 +1495,48 @@ test("AppServerTaskRuntime 会在 prompt 里明确注入员工治理工具使用
   }
 });
 
+test("AppServerTaskRuntime 会在 prompt 里明确注入运营中枢机器协议使用说明", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startThreadId: "thread-app-operations-prompt-1",
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+
+  try {
+    seedCompletedPrincipalPersona(fixture.runtime, {
+      channel: "web",
+      channelUserId: "browser-user-operations-1",
+      displayName: "Owner",
+    });
+
+    await fixture.runtime.runTask({
+      requestId: "req-app-operations-prompt-1",
+      taskId: "task-app-operations-prompt-1",
+      sourceChannel: "web",
+      user: {
+        userId: "browser-user-operations-1",
+        displayName: "Owner",
+      },
+      goal: "把新任务系统作为 Themis 自己使用的运营账本接起来",
+      channelContext: {
+        sessionId: "session-web-operations-prompt-1",
+        channelSessionKey: "session-web-operations-prompt-1",
+      },
+      createdAt: "2026-04-23T10:00:00.000Z",
+    });
+
+    assert.equal(state.turns.length, 1);
+    assert.match(state.turns[0]?.prompt ?? "", /Themis operations center tools are available in this session/);
+    assert.match(state.turns[0]?.prompt ?? "", /machine-native operating ledger/);
+    assert.match(state.turns[0]?.prompt ?? "", /Humans primarily observe, audit, and emergency-brake/);
+    assert.match(state.turns[0]?.prompt ?? "", /create_operation_object, update_operation_object, and create_operation_edge/);
+    assert.match(state.turns[0]?.prompt ?? "", /sourceChannel=web/);
+    assert.match(state.turns[0]?.prompt ?? "", /channelUserId=browser-user-operations-1/);
+    assert.match(state.turns[0]?.prompt ?? "", /sessionId=session-web-operations-prompt-1/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("AppServerTaskRuntime 在 third-party 模式下会把 provider 隔离配置传给 sessionFactory", async () => {
   await withClearedOpenAICompatEnv(async () => {
     const { state, sessionFactory: baseSessionFactory } = createSessionFactory({
@@ -3202,6 +3244,101 @@ test("AppServerTaskRuntime 会自动批准 create_scheduled_task，且不会发 
     ]);
     assert.deepEqual(state.respondedServerRequests, [{
       id: "server-scheduled-tool-approval-1",
+      result: {
+        action: "accept",
+        content: {},
+      },
+    }]);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 会自动批准 Themis operations MCP 工具审批，且不会发 action_required", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    startTurn: async (sessionState) => {
+      sessionState.serverRequestHandler?.({
+        id: "server-operations-tool-approval-1",
+        method: "mcpServer/elicitation/request",
+        params: {
+          serverName: "themis_scheduled_tasks",
+          mode: "form",
+          message: "Allow the themis_scheduled_tasks MCP server to run tool \"create_operation_object\"?",
+          requestedSchema: {
+            type: "object",
+            properties: {},
+          },
+          _meta: {
+            codex_approval_kind: "mcp_tool_call",
+            tool_title: "Create Operation Object",
+          },
+        },
+      });
+      setTimeout(() => {
+        sessionState.notificationHandler?.({
+          method: "item/completed",
+          params: {
+            threadId: "thread-app-operations-tool-approval-1",
+            turnId: "turn-app-operations-tool-approval-1",
+            item: {
+              type: "mcpToolCall",
+              id: "item-operations-tool-call-1",
+              server: "themis_scheduled_tasks",
+              tool: "create_operation_object",
+              status: "completed",
+            },
+          },
+        });
+      }, 20);
+      setTimeout(() => {
+        scheduleCompletedTurn(sessionState, "turn-app-operations-tool-approval-1", {
+          threadId: "thread-app-operations-tool-approval-1",
+        });
+      }, 40);
+      return { turnId: "turn-app-operations-tool-approval-1" };
+    },
+  });
+  const fixture = createRuntimeFixture({
+    sessionFactory,
+    toolTraceDebounceMs: 5,
+  });
+  let sawActionRequired = false;
+  const toolProgresses: string[] = [];
+
+  try {
+    seedCompletedPrincipalPersona(fixture.runtime, {
+      channel: "feishu",
+      channelUserId: "feishu-user-operations-tool-approval",
+      displayName: "数字公司主管",
+    });
+
+    await fixture.runtime.runTask({
+      requestId: "req-app-operations-tool-approval-1",
+      taskId: "task-app-operations-tool-approval-1",
+      sourceChannel: "feishu",
+      user: { userId: "feishu-user-operations-tool-approval" },
+      goal: "please auto-approve operations MCP tool",
+      channelContext: { channelSessionKey: "feishu-session-operations-tool-approval-1" },
+      createdAt: "2026-04-23T10:30:00.000Z",
+    }, {
+      onEvent: async (event) => {
+        if (event.type === "task.action_required") {
+          sawActionRequired = true;
+          return;
+        }
+
+        if (event.type === "task.progress" && event.payload?.traceKind === "tool" && typeof event.message === "string") {
+          toolProgresses.push(event.message);
+        }
+      },
+    });
+
+    assert.equal(sawActionRequired, false);
+    assert.deepEqual(toolProgresses, [
+      "工具轨迹\n1. 已调用 MCP themis_scheduled_tasks.create_operation_object",
+    ]);
+    assert.deepEqual(state.respondedServerRequests, [{
+      id: "server-operations-tool-approval-1",
       result: {
         action: "accept",
         content: {},

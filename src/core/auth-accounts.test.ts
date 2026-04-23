@@ -78,3 +78,28 @@ test("ensureManagedAgentExecutionCodexHome 会复制 source codex home 的 confi
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("ensureManagedAgentExecutionCodexHome 不会用普通受管账号默认 config 覆盖员工运行时隔离 config", () => {
+  const root = join(tmpdir(), `themis-agent-runtime-managed-source-${Date.now()}`);
+  const sourceCodexHome = resolveManagedCodexHome(root, "acct-managed");
+
+  try {
+    ensureAuthAccountCodexHome(root, sourceCodexHome);
+    const targetCodexHome = ensureManagedAgentExecutionCodexHome(root, "agent-gamma", {
+      sourceCodexHome,
+    });
+
+    assert.equal(
+      readFileSync(join(targetCodexHome, "config.toml"), "utf8"),
+      [
+        "# Managed by Themis for managed-agent runtime isolation.",
+        "cli_auth_credentials_store = \"file\"",
+        "model = \"gpt-5.4\"",
+        "model_reasoning_effort = \"xhigh\"",
+        "",
+      ].join("\n"),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

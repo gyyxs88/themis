@@ -79,8 +79,202 @@ test("Themis MCP server 会暴露定时任务和员工治理工具列表", async
         "update_managed_agent_execution_boundary",
         "dispatch_work_item",
         "update_managed_agent_lifecycle",
+        "list_operation_objects",
+        "create_operation_object",
+        "update_operation_object",
+        "list_operation_edges",
+        "create_operation_edge",
+        "update_operation_edge",
+        "query_operation_graph",
+        "get_operations_boss_view",
       ],
     );
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("Themis MCP server 支持机器原生运营对象、关系边、对象图和老板视图闭环", async () => {
+  const workspace = createWorkspace("themis-mcp-operations");
+  const registry = new SqliteCodexSessionRegistry({
+    databaseFile: resolve(workspace, "infra/local/themis.db"),
+  });
+  const server = new ThemisMcpServer({
+    registry,
+    identity: {
+      channel: "web",
+      channelUserId: "operations-owner-1",
+      displayName: "Operations Owner",
+    },
+  });
+
+  try {
+    await initializeServer(server);
+    const createAssetResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 20,
+      method: "tools/call",
+      params: {
+        name: "create_operation_object",
+        arguments: {
+          objectType: "asset",
+          fields: {
+            kind: "service",
+            name: "Themis 运营中枢",
+            status: "active",
+            summary: "数字公司运营对象账本。",
+            tags: ["operations", "machine-native"],
+          },
+        },
+      },
+    }));
+
+    assert.ok(createAssetResponse);
+    const createAssetPayload = JSON.parse(createAssetResponse);
+    assert.equal(createAssetPayload.result?.isError, false);
+    const assetId = createAssetPayload.result?.structuredContent?.object?.assetId;
+    assert.equal(typeof assetId, "string");
+
+    const createDecisionResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 21,
+      method: "tools/call",
+      params: {
+        name: "create_operation_object",
+        arguments: {
+          objectType: "decision",
+          fields: {
+            title: "运营系统机器优先",
+            status: "active",
+            summary: "Themis 和数字员工是主使用者，人类只负责观测和刹车。",
+            relatedAssetIds: [assetId],
+          },
+        },
+      },
+    }));
+
+    assert.ok(createDecisionResponse);
+    const createDecisionPayload = JSON.parse(createDecisionResponse);
+    assert.equal(createDecisionPayload.result?.isError, false);
+    const decisionId = createDecisionPayload.result?.structuredContent?.object?.decisionId;
+    assert.equal(typeof decisionId, "string");
+
+    const createCommitmentResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 22,
+      method: "tools/call",
+      params: {
+        name: "create_operation_object",
+        arguments: {
+          objectType: "commitment",
+          fields: {
+            title: "让 Themis 会用运营中枢",
+            status: "active",
+            dueAt: "2026-04-30T00:00:00.000Z",
+            progressPercent: 10,
+            summary: "补齐机器可调用的运营对象工具面。",
+            relatedAssetIds: [assetId],
+            linkedDecisionIds: [decisionId],
+            relatedWorkItemIds: ["work-item-operations-mcp"],
+            evidenceRefs: [{
+              kind: "work_item",
+              value: "work-item-operations-mcp",
+              label: "MCP 工具实现任务",
+            }],
+          },
+        },
+      },
+    }));
+
+    assert.ok(createCommitmentResponse);
+    const createCommitmentPayload = JSON.parse(createCommitmentResponse);
+    assert.equal(createCommitmentPayload.result?.isError, false);
+    const commitmentId = createCommitmentPayload.result?.structuredContent?.object?.commitmentId;
+    assert.equal(typeof commitmentId, "string");
+
+    const listCommitmentsResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 23,
+      method: "tools/call",
+      params: {
+        name: "list_operation_objects",
+        arguments: {
+          objectType: "commitment",
+          status: "active",
+        },
+      },
+    }));
+
+    assert.ok(listCommitmentsResponse);
+    const listCommitmentsPayload = JSON.parse(listCommitmentsResponse);
+    assert.equal(listCommitmentsPayload.result?.isError, false);
+    assert.equal(listCommitmentsPayload.result?.structuredContent?.objects?.length, 1);
+    assert.equal(listCommitmentsPayload.result?.structuredContent?.objects?.[0]?.commitmentId, commitmentId);
+
+    const listEdgesResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 24,
+      method: "tools/call",
+      params: {
+        name: "list_operation_edges",
+        arguments: {
+          status: "active",
+        },
+      },
+    }));
+
+    assert.ok(listEdgesResponse);
+    const listEdgesPayload = JSON.parse(listEdgesResponse);
+    assert.equal(listEdgesPayload.result?.isError, false);
+    const edgeKeys = listEdgesPayload.result?.structuredContent?.edges?.map((edge: {
+      fromObjectType: string;
+      fromObjectId: string;
+      relationType: string;
+      toObjectType: string;
+      toObjectId: string;
+    }) => `${edge.fromObjectType}:${edge.fromObjectId}:${edge.relationType}:${edge.toObjectType}:${edge.toObjectId}`);
+    assert.ok(edgeKeys.includes(`commitment:${commitmentId}:relates_to:asset:${assetId}`));
+    assert.ok(edgeKeys.includes(`commitment:${commitmentId}:depends_on:decision:${decisionId}`));
+    assert.ok(edgeKeys.includes(`work_item:work-item-operations-mcp:evidence_for:commitment:${commitmentId}`));
+
+    const graphResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 25,
+      method: "tools/call",
+      params: {
+        name: "query_operation_graph",
+        arguments: {
+          rootObjectType: "commitment",
+          rootObjectId: commitmentId,
+          targetObjectType: "asset",
+          targetObjectId: assetId,
+          maxDepth: 2,
+        },
+      },
+    }));
+
+    assert.ok(graphResponse);
+    const graphPayload = JSON.parse(graphResponse);
+    assert.equal(graphPayload.result?.isError, false);
+    assert.equal(graphPayload.result?.structuredContent?.graph?.target?.reachable, true);
+    assert.equal(graphPayload.result?.structuredContent?.graph?.shortestPath?.length, 1);
+
+    const bossViewResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 26,
+      method: "tools/call",
+      params: {
+        name: "get_operations_boss_view",
+        arguments: {},
+      },
+    }));
+
+    assert.ok(bossViewResponse);
+    const bossViewPayload = JSON.parse(bossViewResponse);
+    assert.equal(bossViewPayload.result?.isError, false);
+    assert.equal(bossViewPayload.result?.structuredContent?.bossView?.inventory?.assets?.active, 1);
+    assert.equal(bossViewPayload.result?.structuredContent?.bossView?.inventory?.commitments?.active, 1);
+    assert.equal(bossViewPayload.result?.structuredContent?.bossView?.inventory?.decisions?.active, 1);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }

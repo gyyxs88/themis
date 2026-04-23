@@ -97,6 +97,10 @@ import {
   buildThemisManagedAgentPromptSection,
   isThemisManagedAgentToolName,
 } from "./themis-managed-agent-tools.js";
+import {
+  buildThemisOperationsPromptSection,
+  isThemisOperationsToolName,
+} from "./themis-operations-tools.js";
 import { compileTaskInputForRuntime } from "./runtime-input-compiler.js";
 import { resolveStoredSessionThreadReference } from "./session-thread-reference.js";
 import { validateWorkspacePath } from "./session-workspace.js";
@@ -913,6 +917,7 @@ export class AppServerTaskRuntime {
             ...(compiledInput?.fallbackPromptSections ?? []),
             buildThemisScheduledTaskPromptSection(request),
             buildThemisManagedAgentPromptSection(request),
+            buildThemisOperationsPromptSection(request),
           ],
         })
         : buildTaskPrompt(promptRequest, {
@@ -922,6 +927,7 @@ export class AppServerTaskRuntime {
             ...(compiledInput?.fallbackPromptSections ?? []),
             buildThemisScheduledTaskPromptSection(request),
             buildThemisManagedAgentPromptSection(request),
+            buildThemisOperationsPromptSection(request),
           ],
         });
       const turnInput = compiledInput?.nativeInputParts.length
@@ -1830,7 +1836,11 @@ function resolveServerRequestAction(serverRequest: AppServerReverseRequest): Res
 function resolveAutoApprovalServerRequestResponse(serverRequest: AppServerReverseRequest): unknown | undefined {
   const toolName = resolveManagedAgentApprovalToolName(serverRequest);
 
-  if (!isThemisManagedAgentToolName(toolName) && !isThemisScheduledTaskAutoApprovedToolName(toolName)) {
+  if (
+    !isThemisManagedAgentToolName(toolName)
+    && !isThemisScheduledTaskAutoApprovedToolName(toolName)
+    && !isThemisOperationsToolName(toolName)
+  ) {
     return undefined;
   }
 
