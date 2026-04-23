@@ -1,9 +1,11 @@
 import {
   APPROVAL_POLICIES,
+  REASONING_LEVELS,
   SANDBOX_MODES,
   WEB_SEARCH_MODES,
   type ApprovalPolicy,
   type PrincipalTaskSettings,
+  type ReasoningLevel,
   type SandboxMode,
   type WebSearchMode,
 } from "../types/index.js";
@@ -14,6 +16,8 @@ export function normalizePrincipalTaskSettings(value: unknown): PrincipalTaskSet
   }
 
   const authAccountId = normalizeText(value.authAccountId);
+  const model = normalizeText(value.model);
+  const reasoning = normalizeEnum<ReasoningLevel>(value.reasoning, REASONING_LEVELS);
   const sandboxMode = normalizeEnum<SandboxMode>(value.sandboxMode, SANDBOX_MODES);
   const webSearchMode = normalizeEnum<WebSearchMode>(value.webSearchMode, WEB_SEARCH_MODES);
   const approvalPolicy = normalizeEnum<ApprovalPolicy>(value.approvalPolicy, APPROVAL_POLICIES);
@@ -21,6 +25,8 @@ export function normalizePrincipalTaskSettings(value: unknown): PrincipalTaskSet
 
   return {
     ...(authAccountId ? { authAccountId } : {}),
+    ...(model ? { model } : {}),
+    ...(reasoning ? { reasoning } : {}),
     ...(sandboxMode ? { sandboxMode } : {}),
     ...(webSearchMode ? { webSearchMode } : {}),
     ...(approvalPolicy ? { approvalPolicy } : {}),

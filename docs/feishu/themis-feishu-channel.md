@@ -371,6 +371,8 @@ infra/local/feishu-attachment-drafts.json
 
 当前第一层子项是：
 
+- `/settings model`
+- `/settings reasoning`
 - `/settings sandbox`
 - `/settings search`
 - `/settings network`
@@ -384,6 +386,22 @@ infra/local/feishu-attachment-drafts.json
 - 只影响之后新发起的任务
 - 不会打断已经在运行中的任务
 - Web 和飞书读写同一份默认配置
+
+### `/settings model`
+
+查看当前 principal 默认模型、来源和可选值。
+
+执行 `/settings model <model>` 才会真正修改。
+
+执行 `/settings model default` 会清空当前 principal override，回退跟随 Themis 系统默认模型。
+
+### `/settings reasoning`
+
+查看当前 principal 默认思维强度、来源和可选值。
+
+执行 `/settings reasoning <minimal|low|medium|high|xhigh>` 才会真正修改。
+
+执行 `/settings reasoning default` 会清空当前 principal override，回退跟随 Themis 系统默认思维强度。
 
 ### `/settings sandbox`
 

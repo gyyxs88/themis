@@ -85,6 +85,8 @@ export function createStoreHelpers({ app, getState, saveState }) {
 
     return {
       authAccountId: normalizeText(taskSettings?.authAccountId),
+      model: normalizeText(taskSettings?.model),
+      reasoning: normalizeText(taskSettings?.reasoning),
       sandboxMode: normalizeText(taskSettings?.sandboxMode),
       webSearchMode: normalizeText(taskSettings?.webSearchMode),
       networkAccessEnabled: normalizeBooleanSetting(taskSettings?.networkAccessEnabled),
@@ -160,13 +162,14 @@ export function createStoreHelpers({ app, getState, saveState }) {
   function getReasoningOptions(settings) {
     const accessMode = resolveAccessMode(settings);
     const inherited = resolveInheritedSettings(settings);
+    const principalTaskSettings = resolvePrincipalTaskSettings();
     const model = accessMode === "third-party"
       ? getThirdPartyModelById(inherited.thirdPartyModel, settings)
       : getAuthModelById(inherited.model, settings);
     const resolvedOptions = Array.isArray(model?.supportedReasoningEfforts) && model.supportedReasoningEfforts.length
       ? model.supportedReasoningEfforts
       : DEFAULT_REASONING_OPTIONS;
-    const explicitReasoning = normalizeText(settings?.reasoning);
+    const explicitReasoning = normalizeText(settings?.reasoning) || normalizeText(principalTaskSettings.reasoning);
 
     if (explicitReasoning && !resolvedOptions.some((option) => option.reasoningEffort === explicitReasoning)) {
       return [
@@ -215,6 +218,7 @@ export function createStoreHelpers({ app, getState, saveState }) {
     const visibleModels = getVisibleModelsWithoutFallback(settings);
     const configuredModel = normalizeText(runtimeConfig.defaults.model);
     const inheritedModel = normalizeText(settings?.model)
+      || principalTaskSettings.model
       || configuredModel
       || runtimeConfig.models.find((model) => model.isDefault)?.model
       || visibleModels[0]?.model
@@ -227,19 +231,17 @@ export function createStoreHelpers({ app, getState, saveState }) {
     const reasoningOptions = Array.isArray(activeModel?.supportedReasoningEfforts) && activeModel.supportedReasoningEfforts.length
       ? activeModel.supportedReasoningEfforts
       : DEFAULT_REASONING_OPTIONS;
-    const configuredReasoning = normalizeText(runtimeConfig.defaults.reasoning);
+    const configuredReasoning = principalTaskSettings.reasoning || normalizeText(runtimeConfig.defaults.reasoning);
     const modelDefaultReasoning = normalizeText(activeModel?.defaultReasoningEffort);
-    const inheritedReasoning = accessMode === "third-party"
-      ? (
-        reasoningOptions.some((option) => option.reasoningEffort === modelDefaultReasoning)
-          ? modelDefaultReasoning
-          : configuredReasoning
-      )
-      : (
-        reasoningOptions.some((option) => option.reasoningEffort === configuredReasoning)
-          ? configuredReasoning
-          : modelDefaultReasoning
-      );
+    const inheritedReasoning = configuredReasoning || (
+      accessMode === "third-party"
+        ? (
+          reasoningOptions.some((option) => option.reasoningEffort === modelDefaultReasoning)
+            ? modelDefaultReasoning
+            : ""
+        )
+        : modelDefaultReasoning
+    );
 
     return {
       profile: normalizeText(settings?.profile),
@@ -828,10 +830,16 @@ export function createStoreHelpers({ app, getState, saveState }) {
 
   function getVisibleModelsWithoutFallback(settings) {
     const runtimeConfig = getRuntimeConfig();
+    const principalTaskSettings = resolvePrincipalTaskSettings();
     const configuredModel = normalizeText(runtimeConfig.defaults.model);
 
     return dedupeModels(
-      runtimeConfig.models.filter((model) => !model.hidden || model.model === configuredModel || model.model === settings?.model),
+      runtimeConfig.models.filter((model) =>
+        !model.hidden
+        || model.model === configuredModel
+        || model.model === settings?.model
+        || model.model === principalTaskSettings.model
+      ),
     );
   }
 

@@ -118,6 +118,8 @@ export interface TaskOptions {
 
 export interface PrincipalTaskSettings {
   authAccountId?: string;
+  model?: string;
+  reasoning?: ReasoningLevel;
   sandboxMode?: SandboxMode;
   webSearchMode?: WebSearchMode;
   networkAccessEnabled?: boolean;

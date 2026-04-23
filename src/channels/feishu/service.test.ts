@@ -1220,6 +1220,8 @@ test("/settings 只返回下一层配置项", async () => {
 
     const message = harness.takeSingleMessage();
     assert.match(message, /Themis 设置：/);
+    assert.match(message, /\/settings model/);
+    assert.match(message, /\/settings reasoning/);
     assert.match(message, /\/settings sandbox/);
     assert.match(message, /\/settings search/);
     assert.match(message, /\/settings network/);
@@ -2117,6 +2119,76 @@ test("/settings network 只展示当前值和选项，不会修改 principal 配
   }
 });
 
+test("/settings model 支持查看、设置和恢复 principal 默认模型", async () => {
+  const baseCatalog = createRuntimeCatalog();
+  const harness = createHarness({
+    runtimeCatalog: {
+      ...baseCatalog,
+      models: [
+        createRuntimeModel("gpt-5.4", "medium", true),
+        createRuntimeModel("gpt-5.4-mini", "high", false),
+      ],
+    },
+  });
+
+  try {
+    await harness.handleCommand("settings", ["model"]);
+
+    const currentMessage = harness.takeSingleMessage();
+    assert.match(currentMessage, /设置项：\/settings model/);
+    assert.match(currentMessage, /当前值：gpt-5\.4/);
+    assert.match(currentMessage, /来源：Themis 系统默认值/);
+    assert.match(currentMessage, /可选值：gpt-5\.4 \| gpt-5\.4-mini/);
+    assert.equal(harness.getStoredPrincipalTaskSettings(), null);
+
+    await harness.handleCommand("settings", ["model", "gpt-5.4-mini"]);
+    const updatedMessage = harness.takeSingleMessage();
+    assert.match(updatedMessage, /默认模型已更新为：gpt-5\.4-mini/);
+    assert.deepEqual(harness.getStoredPrincipalTaskSettings(), {
+      model: "gpt-5.4-mini",
+    });
+    assert.equal(harness.createTaskPayload("session-model-a", "hello").options?.model, "gpt-5.4-mini");
+
+    await harness.handleCommand("settings", ["model", "default"]);
+    const clearedMessage = harness.takeSingleMessage();
+    assert.match(clearedMessage, /默认模型已改为：跟随 Themis 系统默认值 gpt-5\.4/);
+    assert.equal(harness.getStoredPrincipalTaskSettings(), null);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/settings reasoning 支持查看、设置和恢复 principal 默认思维强度", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("settings", ["reasoning"]);
+
+    const currentMessage = harness.takeSingleMessage();
+    assert.match(currentMessage, /设置项：\/settings reasoning/);
+    assert.match(currentMessage, /当前模型：gpt-5\.4/);
+    assert.match(currentMessage, /当前值：medium/);
+    assert.match(currentMessage, /来源：Themis 系统默认值/);
+    assert.match(currentMessage, /可选值：medium \| low \| high \| xhigh/);
+    assert.equal(harness.getStoredPrincipalTaskSettings(), null);
+
+    await harness.handleCommand("settings", ["reasoning", "xhigh"]);
+    const updatedMessage = harness.takeSingleMessage();
+    assert.match(updatedMessage, /默认思维强度已更新为：xhigh/);
+    assert.deepEqual(harness.getStoredPrincipalTaskSettings(), {
+      reasoning: "xhigh",
+    });
+    assert.equal(harness.createTaskPayload("session-reasoning-a", "hello").options?.reasoning, "xhigh");
+
+    await harness.handleCommand("settings", ["reasoning", "default"]);
+    const clearedMessage = harness.takeSingleMessage();
+    assert.match(clearedMessage, /默认思维强度已改为：跟随 Themis 系统默认值 medium/);
+    assert.equal(harness.getStoredPrincipalTaskSettings(), null);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("/settings network off 会写入 principal 默认，并影响后续不同会话的新任务", async () => {
   const harness = createHarness();
 
@@ -2286,6 +2358,8 @@ test("/settings foo 会回退到 settings 第一层帮助", async () => {
 
     const message = harness.takeSingleMessage();
     assert.match(message, /未识别的设置项：foo/);
+    assert.match(message, /\/settings model/);
+    assert.match(message, /\/settings reasoning/);
     assert.match(message, /\/settings sandbox/);
     assert.match(message, /\/settings account/);
   } finally {

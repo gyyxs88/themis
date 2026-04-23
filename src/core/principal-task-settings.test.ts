@@ -12,6 +12,8 @@ import { SqliteCodexSessionRegistry } from "../storage/index.js";
 
 test("normalizePrincipalTaskSettings 只保留允许字段", () => {
   const result = normalizePrincipalTaskSettings({
+    model: "gpt-5.4",
+    reasoning: "xhigh",
     sandboxMode: "workspace-write",
     webSearchMode: "live",
     networkAccessEnabled: true,
@@ -21,6 +23,8 @@ test("normalizePrincipalTaskSettings 只保留允许字段", () => {
   });
 
   assert.deepEqual(result, {
+    model: "gpt-5.4",
+    reasoning: "xhigh",
     sandboxMode: "workspace-write",
     webSearchMode: "live",
     networkAccessEnabled: true,
@@ -32,16 +36,21 @@ test("normalizePrincipalTaskSettings 只保留允许字段", () => {
 test("mergePrincipalTaskSettings 会覆盖已有字段并保留未修改字段", () => {
   const result = mergePrincipalTaskSettings(
     {
+      model: "gpt-5.4",
+      reasoning: "high",
       sandboxMode: "workspace-write",
       webSearchMode: "live",
       networkAccessEnabled: true,
     },
     {
+      model: "gpt-5.4-mini",
       webSearchMode: "disabled",
     },
   );
 
   assert.deepEqual(result, {
+    model: "gpt-5.4-mini",
+    reasoning: "high",
     sandboxMode: "workspace-write",
     webSearchMode: "disabled",
     networkAccessEnabled: true,
@@ -66,6 +75,8 @@ test("SqliteCodexSessionRegistry 可以按 principal 读写任务默认配置", 
     registry.savePrincipalTaskSettings({
       principalId: "principal-1",
       settings: {
+        model: "gpt-5.4",
+        reasoning: "xhigh",
         sandboxMode: "workspace-write",
         webSearchMode: "live",
         networkAccessEnabled: true,
@@ -79,6 +90,8 @@ test("SqliteCodexSessionRegistry 可以按 principal 读写任务默认配置", 
     assert.deepEqual(
       registry.getPrincipalTaskSettings("principal-1")?.settings,
       {
+        model: "gpt-5.4",
+        reasoning: "xhigh",
         sandboxMode: "workspace-write",
         webSearchMode: "live",
         networkAccessEnabled: true,
@@ -111,6 +124,8 @@ test("AppServerTaskRuntime 会把 principal 默认配置并入后续新任务", 
     runtimeStore.savePrincipalTaskSettings({
       principalId: identity.principalId,
       settings: {
+        model: "gpt-5.4-mini",
+        reasoning: "high",
         sandboxMode: "workspace-write",
         webSearchMode: "live",
         networkAccessEnabled: true,
@@ -137,6 +152,8 @@ test("AppServerTaskRuntime 会把 principal 默认配置并入后续新任务", 
       }): {
         request: {
           options?: {
+            model?: string;
+            reasoning?: string;
             sandboxMode?: string;
             webSearchMode?: string;
             networkAccessEnabled?: boolean;
@@ -161,6 +178,8 @@ test("AppServerTaskRuntime 会把 principal 默认配置并入后续新任务", 
     });
 
     assert.equal(resolved.principalId, identity.principalId);
+    assert.equal(resolved.request.options?.model, "gpt-5.4-mini");
+    assert.equal(resolved.request.options?.reasoning, "high");
     assert.equal(resolved.request.options?.sandboxMode, "workspace-write");
     assert.equal(resolved.request.options?.webSearchMode, "live");
     assert.equal(resolved.request.options?.networkAccessEnabled, true);

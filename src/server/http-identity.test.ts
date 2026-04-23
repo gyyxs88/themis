@@ -85,6 +85,8 @@ test("/api/identity/reset 和 /api/identity/task-settings 会写入 web 审计",
       body: JSON.stringify({
         ...identityPayload,
         settings: {
+          model: "gpt-5.4",
+          reasoning: "xhigh",
           sandboxMode: "workspace-write",
         },
       }),

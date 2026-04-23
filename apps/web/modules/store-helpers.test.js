@@ -5,12 +5,14 @@ import { createStoreHelpers } from "./store-helpers.js";
 import { createStoreModelHelpers } from "./store-models.js";
 import * as utils from "./utils.js";
 
-test("principal task settings 会覆盖旧的会话级 sandbox/search/network/approval/account", () => {
+test("principal task settings 会为缺省线程提供 model/reasoning/sandbox/search/network/approval/account 默认值", () => {
   const helpers = createStoreHelpers({
     app: createAppHarness({
       identity: {
         taskSettings: {
           authAccountId: "principal-account",
+          model: "gpt-5.4-mini",
+          reasoning: "high",
           sandboxMode: "workspace-write",
           webSearchMode: "disabled",
           networkAccessEnabled: false,
@@ -23,14 +25,11 @@ test("principal task settings 会覆盖旧的会话级 sandbox/search/network/ap
   });
 
   const effective = helpers.resolveEffectiveSettings({
-    authAccountId: "legacy-session-account",
-    sandboxMode: "workspace-write",
-    webSearchMode: "live",
-    networkAccessEnabled: true,
-    approvalPolicy: "never",
   });
 
   assert.equal(effective.authAccountId, "principal-account");
+  assert.equal(effective.model, "gpt-5.4-mini");
+  assert.equal(effective.reasoning, "high");
   assert.equal(effective.sandboxMode, "workspace-write");
   assert.equal(effective.webSearchMode, "disabled");
   assert.equal(effective.networkAccessEnabled, false);
@@ -43,6 +42,8 @@ test("buildTaskOptions 会把 principal task settings 带到新任务里", () =>
       identity: {
         taskSettings: {
           authAccountId: "principal-account",
+          model: "gpt-5.4-mini",
+          reasoning: "high",
           sandboxMode: "workspace-write",
           webSearchMode: "disabled",
           networkAccessEnabled: false,
@@ -57,6 +58,8 @@ test("buildTaskOptions 会把 principal task settings 带到新任务里", () =>
   const options = helpers.buildTaskOptions({});
 
   assert.equal(options.authAccountId, "principal-account");
+  assert.equal(options.model, "gpt-5.4-mini");
+  assert.equal(options.reasoning, "high");
   assert.equal(options.sandboxMode, "workspace-write");
   assert.equal(options.webSearchMode, "disabled");
   assert.equal(options.networkAccessEnabled, false);
@@ -934,6 +937,8 @@ function createAppHarness(overrides = {}) {
         assistantSoul: "",
         taskSettings: {
           authAccountId: "",
+          model: "",
+          reasoning: "",
           sandboxMode: "",
           webSearchMode: "",
           networkAccessEnabled: null,

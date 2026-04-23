@@ -14,7 +14,7 @@ import { validateWorkspacePath } from "../../core/session-workspace.js";
 import { resolveStoredSessionThreadReference } from "../../core/session-thread-reference.js";
 import {
   isPrincipalTaskSettingsEmpty,
-  mergePrincipalTaskSettings,
+  normalizePrincipalTaskSettings,
 } from "../../core/principal-task-settings.js";
 import { persistSessionTaskSettings } from "../../core/session-settings-service.js";
 import { appendTaskReplyQuotaFooter } from "../../core/task-reply-quota.js";
@@ -23,7 +23,9 @@ import { applyThemisGlobalDefaultsToRuntimeCatalog } from "../../core/task-defau
 import { createTaskError } from "../../server/http-errors.js";
 import {
   APPROVAL_POLICIES,
+  REASONING_LEVELS,
   type PrincipalTaskSettings,
+  type ReasoningLevel,
   type SessionTaskSettings,
   type StoredAgentWorkItemRecord,
   type StoredManagedAgentRecord,
@@ -1917,11 +1919,14 @@ export class FeishuChannelService {
 
   private writePrincipalTaskSettings(
     context: FeishuIncomingContext,
-    patch: Partial<PrincipalTaskSettings>,
+    patch: unknown,
   ): { principalId: string; settings: PrincipalTaskSettings } {
     const principal = this.ensurePrincipalIdentity(context);
     const current = this.runtime.getPrincipalTaskSettings(principal.principalId) ?? {};
-    const next = mergePrincipalTaskSettings(current, patch);
+    const next = normalizePrincipalTaskSettings({
+      ...current,
+      ...(typeof patch === "object" && patch !== null ? patch : {}),
+    });
 
     return {
       principalId: principal.principalId,
@@ -1962,6 +1967,10 @@ export class FeishuChannelService {
       FEISHU_SETTINGS_SCOPE_LINE,
       FEISHU_SETTINGS_EFFECT_LINE,
       "",
+      "/settings model",
+      `当前值：${formatSettingSummaryValue(effective.model, Boolean(settings.model))}`,
+      "/settings reasoning",
+      `当前值：${formatSettingSummaryValue(effective.reasoning, Boolean(settings.reasoning))}`,
       "/settings sandbox",
       `当前值：${formatSettingSummaryValue(effective.sandboxMode, Boolean(settings.sandboxMode))}`,
       "/settings search",
@@ -1993,6 +2002,12 @@ export class FeishuChannelService {
     switch (subcommand) {
       case "":
         await this.sendSessionSettings(context.chatId, context);
+        return;
+      case "model":
+        await this.updateModelSetting(restArgs, context);
+        return;
+      case "reasoning":
+        await this.updateReasoningSetting(restArgs, context);
         return;
       case "sandbox":
         await this.updateSandboxMode(restArgs, context);
@@ -2579,6 +2594,153 @@ export class FeishuChannelService {
     );
   }
 
+  private async sendModelSetting(chatId: string, context: FeishuIncomingContext, invalidValue?: string): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const settings = this.readPrincipalTaskSettings(context);
+    const runtimeConfig = await this.readRuntimeConfig();
+    const effective = resolveEffectivePrincipalSettings(settings, runtimeConfig);
+    const modelChoices = listAvailablePrincipalModelIds(runtimeConfig, settings.model ?? effective.model);
+    const lines = [
+      invalidValue ? `无效取值：${invalidValue}` : "设置项：/settings model",
+      `当前 principal：${principal.principalId}`,
+      `当前值：${effective.model ?? "未配置"}`,
+      `来源：${formatSettingSourceLabel(Boolean(settings.model))}`,
+      FEISHU_SETTINGS_SCOPE_LINE,
+      FEISHU_SETTINGS_EFFECT_LINE,
+      `可选值：${modelChoices.length ? modelChoices.join(" | ") : "当前运行时未返回模型列表"}`,
+      "恢复默认：/settings model default",
+      `示例：/settings model ${modelChoices[0] ?? "gpt-5.4"}`,
+    ];
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async updateModelSetting(args: string[], context: FeishuIncomingContext): Promise<void> {
+    if (!args.length) {
+      await this.sendModelSetting(context.chatId, context);
+      return;
+    }
+
+    const runtimeConfig = await this.readRuntimeConfig();
+    const currentSettings = this.readPrincipalTaskSettings(context);
+    const rawValue = normalizeText(args.join(" "));
+
+    if (!rawValue) {
+      await this.sendModelSetting(context.chatId, context);
+      return;
+    }
+
+    if (isDefaultSettingArgument(rawValue)) {
+      const saved = this.writePrincipalTaskSettings(context, { model: "" });
+      const effective = resolveEffectivePrincipalSettings(saved.settings, runtimeConfig);
+      await this.sendPrincipalSettingClearedMessage(
+        context.chatId,
+        saved.principalId,
+        "默认模型",
+        effective.model,
+        "/settings model",
+      );
+      return;
+    }
+
+    const model = resolveRuntimeModelArgument(rawValue, runtimeConfig, currentSettings.model);
+
+    if (!model) {
+      await this.sendModelSetting(context.chatId, context, rawValue);
+      return;
+    }
+
+    const saved = this.writePrincipalTaskSettings(context, { model });
+    await this.sendPrincipalSettingUpdatedMessage(
+      context.chatId,
+      saved.principalId,
+      "默认模型",
+      model,
+      "/settings model",
+    );
+  }
+
+  private async sendReasoningSetting(
+    chatId: string,
+    context: FeishuIncomingContext,
+    invalidValue?: string,
+  ): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const settings = this.readPrincipalTaskSettings(context);
+    const runtimeConfig = await this.readRuntimeConfig();
+    const effective = resolveEffectivePrincipalSettings(settings, runtimeConfig);
+    const reasoningChoices = listAvailablePrincipalReasoningChoices(
+      runtimeConfig,
+      effective.model,
+      settings.reasoning ?? effective.reasoning,
+    );
+    const lines = [
+      invalidValue ? `无效取值：${invalidValue}` : "设置项：/settings reasoning",
+      `当前 principal：${principal.principalId}`,
+      `当前模型：${effective.model ?? "未配置"}`,
+      `当前值：${effective.reasoning ?? "未配置"}`,
+      `来源：${formatSettingSourceLabel(Boolean(settings.reasoning))}`,
+      FEISHU_SETTINGS_SCOPE_LINE,
+      FEISHU_SETTINGS_EFFECT_LINE,
+      `可选值：${reasoningChoices.join(" | ")}`,
+      "恢复默认：/settings reasoning default",
+      `示例：/settings reasoning ${reasoningChoices.at(-1) ?? "xhigh"}`,
+    ];
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async updateReasoningSetting(args: string[], context: FeishuIncomingContext): Promise<void> {
+    if (!args.length) {
+      await this.sendReasoningSetting(context.chatId, context);
+      return;
+    }
+
+    const runtimeConfig = await this.readRuntimeConfig();
+    const settings = this.readPrincipalTaskSettings(context);
+    const effective = resolveEffectivePrincipalSettings(settings, runtimeConfig);
+    const rawValue = normalizeText(args.join(" "));
+
+    if (!rawValue) {
+      await this.sendReasoningSetting(context.chatId, context);
+      return;
+    }
+
+    if (isDefaultSettingArgument(rawValue)) {
+      const saved = this.writePrincipalTaskSettings(context, { reasoning: "" });
+      const nextEffective = resolveEffectivePrincipalSettings(saved.settings, runtimeConfig);
+      await this.sendPrincipalSettingClearedMessage(
+        context.chatId,
+        saved.principalId,
+        "默认思维强度",
+        nextEffective.reasoning,
+        "/settings reasoning",
+      );
+      return;
+    }
+
+    const reasoningChoices = listAvailablePrincipalReasoningChoices(
+      runtimeConfig,
+      effective.model,
+      settings.reasoning ?? effective.reasoning,
+    );
+    const reasoning = resolveRuntimeReasoningArgument(rawValue, reasoningChoices);
+
+    if (!reasoning) {
+      await this.sendReasoningSetting(context.chatId, context, rawValue);
+      return;
+    }
+
+    const saved = this.writePrincipalTaskSettings(context, { reasoning });
+    await this.sendPrincipalSettingUpdatedMessage(
+      context.chatId,
+      saved.principalId,
+      "默认思维强度",
+      reasoning,
+      "/settings reasoning",
+    );
+  }
+
   private async sendWebSearchSetting(chatId: string, context: FeishuIncomingContext, invalidValue?: string): Promise<void> {
     const principal = this.ensurePrincipalIdentity(context);
     const settings = this.readPrincipalTaskSettings(context);
@@ -2721,6 +2883,25 @@ export class FeishuChannelService {
     const lines = [
       `当前 principal：${principalId}`,
       `${label}已更新为：${value}`,
+      FEISHU_SETTINGS_EFFECT_LINE,
+      `查看：${viewCommand}`,
+    ];
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendPrincipalSettingClearedMessage(
+    chatId: string,
+    principalId: string,
+    label: string,
+    value: string | null,
+    viewCommand: string,
+  ): Promise<void> {
+    const lines = [
+      `当前 principal：${principalId}`,
+      value
+        ? `${label}已改为：跟随 Themis 系统默认值 ${value}`
+        : `${label}已改为：跟随 Themis 系统默认值`,
       FEISHU_SETTINGS_EFFECT_LINE,
       `查看：${viewCommand}`,
     ];
@@ -6232,6 +6413,11 @@ function parseSandboxModeArgument(args: string[]): SandboxMode | null {
   return SANDBOX_MODES.includes(value as SandboxMode) ? (value as SandboxMode) : null;
 }
 
+function isDefaultSettingArgument(value: string): boolean {
+  const normalized = normalizeText(value)?.toLowerCase();
+  return normalized === "default" || normalized === "follow" || normalized === "clear";
+}
+
 function parseWebSearchModeArgument(args: string[]): WebSearchMode | null {
   const value = normalizeText(args.join(" "))?.toLowerCase();
 
@@ -6240,6 +6426,26 @@ function parseWebSearchModeArgument(args: string[]): WebSearchMode | null {
   }
 
   return WEB_SEARCH_MODES.includes(value as WebSearchMode) ? (value as WebSearchMode) : null;
+}
+
+function resolveRuntimeModelArgument(
+  value: string,
+  runtimeConfig: CodexRuntimeCatalog | null,
+  currentModel?: string | null,
+): string | null {
+  const normalizedValue = normalizeText(value);
+
+  if (!normalizedValue) {
+    return null;
+  }
+
+  const models = listAvailablePrincipalModelIds(runtimeConfig, currentModel);
+
+  if (models.length === 0) {
+    return normalizedValue;
+  }
+
+  return matchCaseInsensitiveChoice(normalizedValue, models);
 }
 
 function parseGroupRoutePolicyArgument(args: string[]): FeishuChatRoutePolicy | null {
@@ -6290,6 +6496,20 @@ function parseApprovalPolicyArgument(args: string[]): ApprovalPolicy | null {
   return APPROVAL_POLICIES.includes(value as ApprovalPolicy) ? (value as ApprovalPolicy) : null;
 }
 
+function resolveRuntimeReasoningArgument(
+  value: string,
+  choices: readonly string[],
+): ReasoningLevel | null {
+  const normalizedValue = normalizeText(value);
+
+  if (!normalizedValue) {
+    return null;
+  }
+
+  const matched = matchCaseInsensitiveChoice(normalizedValue, choices);
+  return matched && REASONING_LEVELS.includes(matched as ReasoningLevel) ? (matched as ReasoningLevel) : null;
+}
+
 function parseNetworkAccessArgument(args: string[]): boolean | null {
   const value = normalizeText(args.join(" "))?.toLowerCase();
 
@@ -6312,6 +6532,8 @@ function resolveEffectivePrincipalSettings(
   settings: PrincipalTaskSettings,
   runtimeConfig: CodexRuntimeCatalog | null,
 ): {
+  model: string | null;
+  reasoning: string | null;
   approvalPolicy: string | null;
   sandboxMode: string | null;
   webSearchMode: string | null;
@@ -6320,6 +6542,8 @@ function resolveEffectivePrincipalSettings(
   const runtimeDefaults = runtimeConfig?.defaults ?? null;
 
   return {
+    model: settings.model ?? runtimeDefaults?.model ?? null,
+    reasoning: settings.reasoning ?? runtimeDefaults?.reasoning ?? null,
     approvalPolicy: settings.approvalPolicy ?? runtimeDefaults?.approvalPolicy ?? null,
     sandboxMode: settings.sandboxMode ?? runtimeDefaults?.sandboxMode ?? null,
     webSearchMode: settings.webSearchMode ?? runtimeDefaults?.webSearchMode ?? null,
@@ -6348,6 +6572,52 @@ function formatBooleanCommandValue(value: boolean | null | undefined): string {
 function formatWorkspaceValue(value: string | null | undefined): string {
   const normalized = normalizeText(value);
   return normalized ?? "未设置（回退到 Themis 启动目录）";
+}
+
+function listAvailablePrincipalModelIds(
+  runtimeConfig: CodexRuntimeCatalog | null,
+  currentModel?: string | null,
+): string[] {
+  const configuredModel = normalizeText(runtimeConfig?.defaults.model);
+  const normalizedCurrentModel = normalizeText(currentModel);
+  const models = (runtimeConfig?.models ?? [])
+    .filter((model) => !model.hidden || model.model === configuredModel || model.model === normalizedCurrentModel)
+    .map((model) => model.model);
+
+  return dedupeTextValues([
+    normalizedCurrentModel,
+    configuredModel,
+    ...models,
+  ]);
+}
+
+function listAvailablePrincipalReasoningChoices(
+  runtimeConfig: CodexRuntimeCatalog | null,
+  model: string | null | undefined,
+  currentReasoning?: string | null,
+): string[] {
+  const normalizedModel = normalizeText(model);
+  const activeModel = normalizedModel
+    ? runtimeConfig?.models.find((entry) => entry.model === normalizedModel) ?? null
+    : null;
+  const modelChoices = Array.isArray(activeModel?.supportedReasoningEfforts) && activeModel.supportedReasoningEfforts.length
+    ? activeModel.supportedReasoningEfforts.map((entry) => normalizeText(entry.reasoningEffort))
+    : [...REASONING_LEVELS];
+
+  return dedupeTextValues([
+    normalizeText(currentReasoning),
+    ...modelChoices,
+  ]);
+}
+
+function matchCaseInsensitiveChoice(value: string, choices: readonly string[]): string | null {
+  const normalizedValue = normalizeText(value)?.toLowerCase();
+
+  if (!normalizedValue) {
+    return null;
+  }
+
+  return choices.find((choice) => choice.toLowerCase() === normalizedValue) ?? null;
 }
 
 function formatSkillSyncSummary(summary: {

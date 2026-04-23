@@ -25,6 +25,8 @@ function createDefaultIdentityState(browserUserId = "") {
 function createDefaultTaskSettings() {
   return {
     authAccountId: "",
+    model: "",
+    reasoning: "",
     sandboxMode: "",
     webSearchMode: "",
     networkAccessEnabled: null,
@@ -363,6 +365,8 @@ function normalizeTaskSettings(value) {
 
   return {
     authAccountId: typeof value.authAccountId === "string" ? value.authAccountId : "",
+    model: typeof value.model === "string" ? value.model : "",
+    reasoning: typeof value.reasoning === "string" ? value.reasoning : "",
     sandboxMode: typeof value.sandboxMode === "string" ? value.sandboxMode : "",
     webSearchMode: typeof value.webSearchMode === "string" ? value.webSearchMode : "",
     networkAccessEnabled: typeof value.networkAccessEnabled === "boolean" ? value.networkAccessEnabled : null,
@@ -372,6 +376,8 @@ function normalizeTaskSettings(value) {
 
 function isSameTaskSettings(left, right) {
   return left.authAccountId === right.authAccountId
+    && left.model === right.model
+    && left.reasoning === right.reasoning
     && left.sandboxMode === right.sandboxMode
     && left.webSearchMode === right.webSearchMode
     && left.networkAccessEnabled === right.networkAccessEnabled
