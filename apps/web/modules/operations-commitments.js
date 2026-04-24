@@ -615,7 +615,7 @@ function normalizeEvidenceRefs(value) {
 
 function normalizeMilestoneStatus(value) {
   const normalized = normalizeText(value);
-  return ["planned", "active", "blocked", "done"].includes(normalized) ? normalized : "planned";
+  return ["planned", "active", "in_progress", "blocked", "done"].includes(normalized) ? normalized : "planned";
 }
 
 function normalizeEvidenceKind(value) {

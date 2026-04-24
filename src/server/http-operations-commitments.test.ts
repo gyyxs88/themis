@@ -88,7 +88,7 @@ test("POST /api/operations/commitments/create|list|update 会维护当前 princi
         summary: "把运营中枢推进到可用控制面",
         milestones: [{
           title: "内测验收",
-          status: "active",
+          status: "in_progress",
           dueAt: "2026-05-15T23:59:00.000Z",
           evidenceRefs: [],
         }],
@@ -108,12 +108,14 @@ test("POST /api/operations/commitments/create|list|update 会维护当前 princi
         title?: string;
         dueAt?: string;
         progressPercent?: number;
+        milestones?: Array<{ status?: string; title?: string }>;
       };
     };
     assert.ok(created.commitment?.commitmentId);
     assert.equal(created.commitment?.title, "Q2 发布主线必须收口");
     assert.equal(created.commitment?.dueAt, "2026-06-30T23:59:00.000Z");
     assert.equal(created.commitment?.progressPercent, 30);
+    assert.equal(created.commitment?.milestones?.[0]?.status, "in_progress");
 
     const listResponse = await postJson(baseUrl, "/api/operations/commitments/list", {
       ...buildIdentityPayload("owner-commitments-http"),
@@ -129,7 +131,7 @@ test("POST /api/operations/commitments/create|list|update 会维护当前 princi
         status?: string;
         ownerPrincipalId?: string;
         progressPercent?: number;
-        milestones?: Array<{ title?: string }>;
+        milestones?: Array<{ status?: string; title?: string }>;
         evidenceRefs?: Array<{ kind?: string; value?: string; label?: string }>;
         linkedRiskIds?: string[];
       }>;
@@ -140,6 +142,7 @@ test("POST /api/operations/commitments/create|list|update 会维护当前 princi
     assert.equal(listed.commitments?.[0]?.ownerPrincipalId, "principal-owner");
     assert.equal(listed.commitments?.[0]?.progressPercent, 30);
     assert.equal(listed.commitments?.[0]?.milestones?.[0]?.title, "内测验收");
+    assert.equal(listed.commitments?.[0]?.milestones?.[0]?.status, "in_progress");
     assert.deepEqual(listed.commitments?.[0]?.evidenceRefs?.[0], {
       kind: "work_item",
       value: "work-item-evidence-1",
@@ -226,6 +229,35 @@ test("POST /api/operations/commitments/create|list|update 会维护当前 princi
       && edge.toObjectType === "commitment"
       && edge.toObjectId === created.commitment?.commitmentId
     ));
+  });
+});
+
+test("POST /api/operations/commitments/create 遇到未知里程碑状态会返回客户端错误", async () => {
+  await withHttpServer(async ({ baseUrl, runtimeStore }) => {
+    const authHeaders = await createAuthenticatedWebHeaders({ baseUrl, runtimeStore });
+
+    const response = await postJson(baseUrl, "/api/operations/commitments/create", {
+      ...buildIdentityPayload("owner-commitments-http-invalid-milestone-status"),
+      commitment: {
+        title: "Q2 发布主线",
+        status: "active",
+        milestones: [{
+          title: "未知状态",
+          status: "doing_now",
+          evidenceRefs: [],
+        }],
+      },
+    }, authHeaders);
+
+    assert.equal(response.status, 400);
+    const payload = await response.json() as {
+      error?: {
+        code?: string;
+        message?: string;
+      };
+    };
+    assert.equal(payload.error?.code, "INVALID_REQUEST");
+    assert.equal(payload.error?.message, "Unsupported commitment milestone status: doing_now.");
   });
 });
 

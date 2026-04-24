@@ -300,7 +300,7 @@ function normalizeCommitmentProgress(value: number | undefined, status: Principa
 }
 
 function normalizeCommitmentMilestones(value?: PrincipalCommitmentMilestone[]): PrincipalCommitmentMilestone[] {
-  return normalizePrincipalCommitmentMilestones(value);
+  return normalizePrincipalCommitmentMilestones(value, { strictStatus: true });
 }
 
 function normalizeCommitmentEvidenceRefs(value?: PrincipalCommitmentEvidenceRef[]): PrincipalCommitmentEvidenceRef[] {

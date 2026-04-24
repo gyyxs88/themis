@@ -52,7 +52,7 @@ test("createCommitment 会创建首版承诺目标并落到 SQLite schema", () =
       summary: "把运营中枢从方向页推进到可用控制面",
       milestones: [{
         title: "内测验收",
-        status: "active",
+        status: "in_progress",
         dueAt: "2026-05-15T23:59:00.000Z",
         evidenceRefs: [{ kind: "work_item", value: "work-item-evidence-1", label: "验收任务" }],
       }],
@@ -72,6 +72,7 @@ test("createCommitment 会创建首版承诺目标并落到 SQLite schema", () =
     assert.equal(commitment.progressPercent, 38);
     assert.equal(commitment.ownerPrincipalId, "principal-owner");
     assert.equal(commitment.milestones[0]?.title, "内测验收");
+    assert.equal(commitment.milestones[0]?.status, "in_progress");
     assert.equal(commitment.evidenceRefs[0]?.kind, "work_item");
     assert.deepEqual(commitment.relatedAssetIds, ["asset-ledger-1"]);
     assert.deepEqual(commitment.linkedRiskIds, ["risk-ledger-1"]);
@@ -98,6 +99,29 @@ test("createCommitment 会创建首版承诺目标并落到 SQLite schema", () =
     } finally {
       inspector.close();
     }
+  } finally {
+    rmSync(context.root, { recursive: true, force: true });
+  }
+});
+
+test("createCommitment 会拒绝未知里程碑状态，避免静默降级为 planned", () => {
+  const context = createServiceContext();
+
+  try {
+    assert.throws(
+      () => context.service.createCommitment({
+        principalId: "principal-owner",
+        title: "Q2 发布主线",
+        status: "active",
+        milestones: [{
+          title: "未知状态",
+          status: "doing_now",
+          evidenceRefs: [],
+        }] as never,
+        now: "2026-04-23T18:15:00.000Z",
+      }),
+      /Unsupported commitment milestone status: doing_now\./,
+    );
   } finally {
     rmSync(context.root, { recursive: true, force: true });
   }

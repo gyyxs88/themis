@@ -7188,7 +7188,7 @@ export class SqliteCodexSessionRegistry {
     const dueAt = normalizeText(record.dueAt);
     const progressPercent = normalizePrincipalCommitmentProgressPercent(record.progressPercent);
     const summary = normalizeText(record.summary);
-    const milestones = normalizePrincipalCommitmentMilestones(record.milestones);
+    const milestones = normalizePrincipalCommitmentMilestones(record.milestones, { strictStatus: true });
     const evidenceRefs = normalizePrincipalCommitmentEvidenceRefs(record.evidenceRefs);
     const relatedAssetIds = normalizePrincipalCommitmentRelatedIds(record.relatedAssetIds);
     const linkedDecisionIds = normalizePrincipalCommitmentRelatedIds(record.linkedDecisionIds);

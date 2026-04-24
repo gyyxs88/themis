@@ -247,7 +247,7 @@ function normalizePrincipalCommitmentUpsertPayload(value: unknown): PrincipalCom
   const dueAt = normalizeText(value.commitment.dueAt);
   const progressPercent = normalizePrincipalCommitmentProgressPercent(value.commitment.progressPercent);
   const summary = typeof value.commitment.summary === "string" ? value.commitment.summary.trim() : "";
-  const milestones = normalizePrincipalCommitmentMilestones(value.commitment.milestones);
+  const milestones = normalizePrincipalCommitmentMilestones(value.commitment.milestones, { strictStatus: true });
   const evidenceRefs = normalizePrincipalCommitmentEvidenceRefs(value.commitment.evidenceRefs);
   const relatedAssetIds = normalizePrincipalCommitmentRelatedIds(value.commitment.relatedAssetIds);
   const linkedDecisionIds = normalizePrincipalCommitmentRelatedIds(value.commitment.linkedDecisionIds);

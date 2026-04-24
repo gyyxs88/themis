@@ -538,7 +538,7 @@
 
 当前里程碑和证据仍保持轻量：
 
-- 里程碑字段：`title / status / dueAt / completedAt / summary / evidenceRefs`
+- 里程碑字段：`title / status / dueAt / completedAt / summary / evidenceRefs`，其中 `status` 支持 `planned / active / in_progress / blocked / done`；写入未知状态必须显式报错，不能静默降级。
 - 证据字段：`kind / value / label / capturedAt`
 - 当前只有 `kind = work_item` 的证据会进入自动补边
 - 对象详情反链仍复用对象卡片，不另起详情页

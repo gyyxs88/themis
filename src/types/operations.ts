@@ -231,9 +231,13 @@ export const PRINCIPAL_COMMITMENT_STATUSES = ["planned", "active", "at_risk", "d
 
 export type PrincipalCommitmentStatus = (typeof PRINCIPAL_COMMITMENT_STATUSES)[number];
 
-export const PRINCIPAL_COMMITMENT_MILESTONE_STATUSES = ["planned", "active", "blocked", "done"] as const;
+export const PRINCIPAL_COMMITMENT_MILESTONE_STATUSES = ["planned", "active", "in_progress", "blocked", "done"] as const;
 
 export type PrincipalCommitmentMilestoneStatus = (typeof PRINCIPAL_COMMITMENT_MILESTONE_STATUSES)[number];
+
+export interface NormalizePrincipalCommitmentMilestoneOptions {
+  strictStatus?: boolean;
+}
 
 export const PRINCIPAL_COMMITMENT_EVIDENCE_KINDS = [
   "url",
@@ -367,7 +371,43 @@ export function normalizePrincipalCommitmentEvidenceRefs(value: unknown): Princi
   return refs;
 }
 
-export function normalizePrincipalCommitmentMilestone(value: unknown): PrincipalCommitmentMilestone | null {
+export function normalizePrincipalCommitmentMilestoneStatus(
+  value: unknown,
+  options: NormalizePrincipalCommitmentMilestoneOptions = {},
+): PrincipalCommitmentMilestoneStatus {
+  if (value === undefined || value === null) {
+    return "planned";
+  }
+
+  if (typeof value !== "string") {
+    if (options.strictStatus) {
+      throw new Error("Commitment milestone status must be a string.");
+    }
+
+    return "planned";
+  }
+
+  const normalized = value.trim();
+
+  if (!normalized) {
+    return "planned";
+  }
+
+  if (PRINCIPAL_COMMITMENT_MILESTONE_STATUSES.includes(normalized as PrincipalCommitmentMilestoneStatus)) {
+    return normalized as PrincipalCommitmentMilestoneStatus;
+  }
+
+  if (options.strictStatus) {
+    throw new Error(`Unsupported commitment milestone status: ${normalized}.`);
+  }
+
+  return "planned";
+}
+
+export function normalizePrincipalCommitmentMilestone(
+  value: unknown,
+  options: NormalizePrincipalCommitmentMilestoneOptions = {},
+): PrincipalCommitmentMilestone | null {
   if (typeof value !== "object" || value === null) {
     return null;
   }
@@ -375,13 +415,10 @@ export function normalizePrincipalCommitmentMilestone(value: unknown): Principal
   const record = value as Record<string, unknown>;
   const milestoneId = typeof record.milestoneId === "string" ? record.milestoneId.trim() : "";
   const title = typeof record.title === "string" ? record.title.trim() : "";
-  const rawStatus = typeof record.status === "string" ? record.status.trim() : "planned";
   const dueAt = typeof record.dueAt === "string" ? record.dueAt.trim() : "";
   const completedAt = typeof record.completedAt === "string" ? record.completedAt.trim() : "";
   const summary = typeof record.summary === "string" ? record.summary.trim() : "";
-  const status = PRINCIPAL_COMMITMENT_MILESTONE_STATUSES.includes(rawStatus as PrincipalCommitmentMilestoneStatus)
-    ? rawStatus as PrincipalCommitmentMilestoneStatus
-    : "planned";
+  const status = normalizePrincipalCommitmentMilestoneStatus(record.status, options);
 
   if (!title) {
     return null;
@@ -398,7 +435,10 @@ export function normalizePrincipalCommitmentMilestone(value: unknown): Principal
   };
 }
 
-export function normalizePrincipalCommitmentMilestones(value: unknown): PrincipalCommitmentMilestone[] {
+export function normalizePrincipalCommitmentMilestones(
+  value: unknown,
+  options: NormalizePrincipalCommitmentMilestoneOptions = {},
+): PrincipalCommitmentMilestone[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -407,7 +447,7 @@ export function normalizePrincipalCommitmentMilestones(value: unknown): Principa
   const milestones: PrincipalCommitmentMilestone[] = [];
 
   for (const item of value) {
-    const normalized = normalizePrincipalCommitmentMilestone(item);
+    const normalized = normalizePrincipalCommitmentMilestone(item, options);
 
     if (!normalized) {
       continue;

@@ -85,7 +85,7 @@ test("save 在新建后会刷新列表，并把筛选切到新承诺状态", asy
     linkedRiskIdsText: "risk-ledger-1",
     relatedCadenceIdsText: "cadence-ledger-1",
     relatedWorkItemIdsText: "work-item-1\nwork-item-2",
-    milestonesText: "active | 内测验收 | 2026-05-15T23:59:00.000Z | | 正在补回归",
+    milestonesText: "in_progress | 内测验收 | 2026-05-15T23:59:00.000Z | | 正在补回归",
     evidenceRefsText: "work_item | work-item-evidence-1 | 验收任务",
     summary: "当前最大风险是发布窗口被事故阻塞",
   };
@@ -115,7 +115,7 @@ test("save 在新建后会刷新列表，并把筛选切到新承诺状态", asy
             progressPercent: 64,
             milestones: [{
               title: "内测验收",
-              status: "active",
+              status: "in_progress",
               dueAt: "2026-05-15T23:59:00.000Z",
               summary: "正在补回归",
               evidenceRefs: [],
@@ -148,7 +148,7 @@ test("save 在新建后会刷新列表，并把筛选切到新承诺状态", asy
           progressPercent: 64,
           milestones: [{
             title: "内测验收",
-            status: "active",
+            status: "in_progress",
             dueAt: "2026-05-15T23:59:00.000Z",
             summary: "正在补回归",
             evidenceRefs: [],
@@ -176,7 +176,7 @@ test("save 在新建后会刷新列表，并把筛选切到新承诺状态", asy
     assert.equal(calls[0].body.commitment.progressPercent, 64);
     assert.deepEqual(calls[0].body.commitment.milestones, [{
       title: "内测验收",
-      status: "active",
+      status: "in_progress",
       dueAt: "2026-05-15T23:59:00.000Z",
       summary: "正在补回归",
       evidenceRefs: [],

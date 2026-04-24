@@ -537,7 +537,7 @@ export class ThemisOperationsMcpTools {
           ...optionalTextField("dueAt", fields.dueAt),
           ...(hasOwn(fields, "progressPercent") ? { progressPercent: normalizePrincipalCommitmentProgressPercent(fields.progressPercent) } : {}),
           ...optionalMultilineTextField("summary", fields.summary),
-          ...(hasOwn(fields, "milestones") ? { milestones: normalizePrincipalCommitmentMilestones(fields.milestones) } : {}),
+          ...(hasOwn(fields, "milestones") ? { milestones: normalizePrincipalCommitmentMilestones(fields.milestones, { strictStatus: true }) } : {}),
           ...(hasOwn(fields, "evidenceRefs") ? { evidenceRefs: normalizePrincipalCommitmentEvidenceRefs(fields.evidenceRefs) } : {}),
           ...(hasOwn(fields, "relatedAssetIds")
             ? { relatedAssetIds: normalizeStringArray(fields.relatedAssetIds, "fields.relatedAssetIds must be an array of strings.") }
@@ -728,7 +728,7 @@ export class ThemisOperationsMcpTools {
             : existing.progressPercent,
           ...(summary ? { summary } : {}),
           milestones: hasOwn(fields, "milestones")
-            ? normalizePrincipalCommitmentMilestones(fields.milestones)
+            ? normalizePrincipalCommitmentMilestones(fields.milestones, { strictStatus: true })
             : existing.milestones,
           evidenceRefs: hasOwn(fields, "evidenceRefs")
             ? normalizePrincipalCommitmentEvidenceRefs(fields.evidenceRefs)
@@ -942,7 +942,7 @@ function buildOperationFieldsSchema(): Record<string, unknown> {
       "decision: title, status, summary, decidedByPrincipalId, decidedAt, relatedAssetIds, relatedWorkItemIds.",
       "risk: title, type, severity, status, ownerPrincipalId, summary, detectedAt, relatedAssetIds, linkedDecisionIds, relatedWorkItemIds.",
       "cadence: title, frequency, status, nextRunAt, ownerPrincipalId, playbookRef, summary, relatedAssetIds.",
-      "commitment: title, status, ownerPrincipalId, startsAt, dueAt, progressPercent, summary, milestones, evidenceRefs, relatedAssetIds, linkedDecisionIds, linkedRiskIds, relatedCadenceIds, relatedWorkItemIds.",
+      "commitment: title, status, ownerPrincipalId, startsAt, dueAt, progressPercent, summary, milestones (status: planned / active / in_progress / blocked / done), evidenceRefs, relatedAssetIds, linkedDecisionIds, linkedRiskIds, relatedCadenceIds, relatedWorkItemIds.",
     ].join(" "),
   };
 }
