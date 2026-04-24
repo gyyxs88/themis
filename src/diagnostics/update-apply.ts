@@ -5,7 +5,8 @@ import { resolvePrimaryProjectEnvFile, setProjectEnvValue } from "../config/proj
 import { resolveThemisUpdateTarget, type ThemisUpdateChannel } from "./update-check.js";
 
 const DEFAULT_UPDATE_REPO = "gyyxs88/themis";
-const DEFAULT_UPDATE_SYSTEMD_SERVICE = "themis-prod.service";
+export const DEFAULT_THEMIS_UPDATE_SYSTEMD_SERVICE = "themis-prod.service";
+const DEFAULT_UPDATE_SYSTEMD_SERVICE = DEFAULT_THEMIS_UPDATE_SYSTEMD_SERVICE;
 const UPDATE_LOCK_RELATIVE_PATH = "infra/local/themis-update.lock";
 const LAST_UPDATE_RECORD_RELATIVE_PATH = "infra/local/themis-last-update.json";
 

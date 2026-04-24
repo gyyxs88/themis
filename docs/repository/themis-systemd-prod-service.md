@@ -206,7 +206,7 @@ cd ~/services/themis-prod
 ./themis update apply
 ```
 
-如果你已经能登录这台正式实例的 Web，也可以直接在“运行参数 -> 实例升级”里点“后台升级 / 回滚上一版”；飞书单聊里也可以用 `/update`、`/update apply confirm`、`/update rollback confirm` 作为同一条受控升级链的入口。它们不会在 HTTP / 飞书请求里直接执行重活，而是会把进度落到 `infra/local/themis-update-operation.json`，后台完成版本切换后再请求重启当前 `systemd --user` 服务。
+如果你已经能登录这台正式实例的 Web，也可以直接在“运行参数 -> 实例升级”里点“后台升级 / 回滚上一版”；飞书单聊里也可以用 `/update`、`/update apply confirm`、`/update rollback confirm` 作为同一条受控升级链的入口。它们不会在 HTTP / 飞书请求里直接执行重活，而是会把进度落到 `infra/local/themis-update-operation.json`，后台完成版本切换后再请求重启当前 `systemd --user` 服务。单独查看实例状态和最近一次重启确认使用飞书 `/ops status`，单独请求重启当前服务使用 `/ops restart confirm`。
 
 它会按顺序执行：
 

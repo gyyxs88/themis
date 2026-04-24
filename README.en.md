@@ -214,5 +214,5 @@ Common commands for a formal instance:
 
 - `THEMIS_UPDATE_CHANNEL` supports `branch` and `release`; the default is still `branch`.
 - Controlled update currently supports only clean public-repository `git clone` deployments on the default branch, with fast-forward-only updates.
-- Web supports "runtime settings -> instance update"; Feishu supports `/update`, `/update apply confirm`, and `/update rollback confirm`.
+- Web supports "runtime settings -> instance update"; Feishu supports `/update`, `/update apply confirm`, `/update rollback confirm`, `/ops status`, and `/ops restart confirm`.
 - See [Release, canary, and rollback](./docs/repository/themis-release-rollout-and-rollback.md) and [Production systemd deployment](./docs/repository/themis-systemd-prod-service.md) for boundaries and rollback details.

@@ -1,6 +1,6 @@
 # Themis 飞书渠道说明
 
-更新日期：2026-04-21
+更新日期：2026-04-24
 
 ## 当前实现
 
@@ -24,7 +24,7 @@ Themis 已接入飞书长连接渠道，特点如下：
 - 群聊会话策略支持 `personal / shared`：`personal` 继续按人隔离当前会话与附件草稿，`shared` 则改为整群共用一条当前会话和同一份附件草稿
 - 飞书已补 `/group` 最小管理员控制：可查看和修改当前群的路由、会话策略与管理员名单；当前群还没有管理员时，首次成功修改群设置的人会自动成为首个管理员
 - 当群聊处于 `shared` 会话策略时，只有群管理员可以执行 `/new`、`/use`、`/workspace`，避免整群当前会话被随手切乱
-- 飞书已补 `/update` 运维入口：`/update` 可查看当前实例更新状态，`/update apply confirm` / `/update rollback confirm` 可在单聊里触发后台升级或回滚；高风险动作默认要求显式 `confirm`
+- 飞书已补 `/update` 和 `/ops` 运维入口：`/update` 可查看当前实例更新状态，`/update apply confirm` / `/update rollback confirm` 可在单聊里触发后台升级或回滚；`/ops status` 可查看当前服务状态和最近一次重启确认，`/ops restart confirm` 可在单聊里请求受控重启当前服务；高风险动作默认要求显式 `confirm`
 - 飞书发任务前会读取当前 principal 保存的 Themis 默认任务配置，并带上对应 `options`
 - 飞书支持会话级工作区：`/workspace`（别名 `/ws`）会写当前激活会话的 `workspacePath`，不改 principal 默认配置
 - 如果当前 principal 还没有长期协作档案，首次普通消息会先进入一次性人格 bootstrap
@@ -353,9 +353,11 @@ infra/local/feishu-attachment-drafts.json
 规则：
 
 - `/ops`：查看实例运维命令。
+- `/ops status`：查看当前提交、当前进程启动时间、`systemd --user` 服务状态，以及最近一次重启请求是否已由新进程确认。
 - `/ops restart`：查看当前服务重启说明和可重启服务名。
 - `/ops restart confirm`：请求重启当前 Themis 服务，不会拉代码、装依赖或改版本。
 - `/ops restart confirm` 只允许在和 Themis 的单聊里执行，避免群聊误触导致实例重启。
+- `/ops restart confirm` 和后台升级 / 回滚请求服务重启时会写入 `infra/local/themis-restart-request.json`；服务启动后会根据新进程启动时间确认 marker，`/ops status` 会显示最近一次请求状态。
 - 普通对话任务如果判断“需要重启当前 Themis 服务才能生效”，应提示用户发送 `/ops restart confirm`，不要在 Codex 沙箱里直接尝试 `systemctl --user restart`。
 
 ### `/link <绑定码>`

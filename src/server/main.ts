@@ -106,6 +106,12 @@ const authRuntime = new CodexAuthRuntime({
 const updateService = new ThemisUpdateService({
   workingDirectory: appServerRuntime.getWorkingDirectory(),
 });
+try {
+  updateService.acknowledgeRestartRequest();
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.warn(`[themis/update] 确认重启请求 marker 失败：${message}`);
+}
 const platformMeetingRoomGateway = resolvePlatformMeetingRoomGateway();
 feishuService = new FeishuChannelService({
   runtime: appServerRuntime,

@@ -83,7 +83,13 @@ import {
   createTaskInputEnvelope,
 } from "../../core/task-input.js";
 import { formatShortCommitHash } from "../../diagnostics/update-check.js";
-import { ThemisUpdateService, type ThemisManagedUpdateOverview } from "../../diagnostics/update-service.js";
+import {
+  ThemisUpdateService,
+  type ThemisManagedUpdateOverview,
+  type ThemisOpsStatusSnapshot,
+  type ThemisRestartRequestMarker,
+  type ThemisSystemdServiceStatus,
+} from "../../diagnostics/update-service.js";
 import {
   downloadFeishuMessageResources,
   extractFeishuMessageResources,
@@ -2958,8 +2964,10 @@ export class FeishuChannelService {
     switch (subcommand) {
       case "":
       case "help":
-      case "status":
         await this.sendOpsOverview(context.chatId);
+        return;
+      case "status":
+        await this.sendOpsStatus(context.chatId);
         return;
       case "restart":
         await this.handleOpsRestartCommand(args.slice(1), context);
@@ -2969,6 +2977,7 @@ export class FeishuChannelService {
           context.chatId,
           [
             "/ops 查看实例运维命令",
+            "/ops status 查看当前实例状态",
             "/ops restart 查看受控重启说明",
             "/ops restart confirm 请求重启当前 Themis 服务",
             "/update 查看升级 / 回滚状态",
@@ -2983,6 +2992,7 @@ export class FeishuChannelService {
       chatId,
       [
         "Themis 实例运维命令：",
+        "/ops status 查看当前实例状态",
         "/ops restart 查看受控重启说明",
         "/ops restart confirm 请求重启当前 Themis 服务",
         "/update 查看升级 / 回滚状态",
@@ -2990,6 +3000,16 @@ export class FeishuChannelService {
         "普通对话任务不会直接重启当前服务；需要服务重启时，请使用上面的确认命令。",
       ].join("\n"),
     );
+  }
+
+  private async sendOpsStatus(chatId: string): Promise<void> {
+    try {
+      const status = this.updateService.readOpsStatus();
+      await this.safeSendText(chatId, formatOpsStatusMessage(status));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.safeSendText(chatId, `读取 Themis 实例状态失败：${message}`);
+    }
   }
 
   private async handleOpsRestartCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
@@ -3011,6 +3031,7 @@ export class FeishuChannelService {
           serviceLine,
           "这个命令只负责请求重启当前 Themis 服务，不会拉代码、装依赖或改版本。",
           "确认执行：/ops restart confirm",
+          "查看状态：/ops status",
           "升级 / 回滚请使用：/update",
         ].join("\n"),
       );
@@ -3036,13 +3057,19 @@ export class FeishuChannelService {
       [
         `已受理重启请求：${prepared.serviceUnit}`,
         "Themis 会通过受控运维入口请求重启当前服务，Web/飞书会短暂中断。",
-        "重启完成后可发送 /update 查看实例状态。",
+        "重启完成后可发送 /ops status 查看确认状态。",
       ].join("\n"),
     );
 
     try {
       await this.updateService.requestRestart({
         serviceUnitOverride: prepared.serviceUnit,
+        initiatedBy: {
+          channel: "feishu",
+          channelUserId: context.userId,
+          displayName: context.userId,
+          chatId: context.chatId,
+        },
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -5755,6 +5782,84 @@ function formatFeishuUpdateOverview(overview: ThemisManagedUpdateOverview): stri
     "执行升级：/update apply confirm",
     "执行回滚：/update rollback confirm",
   ].filter((line): line is string => Boolean(line)).join("\n");
+}
+
+function formatOpsStatusMessage(status: ThemisOpsStatusSnapshot): string {
+  const serviceStatus = status.serviceStatus;
+
+  return [
+    "Themis 实例状态：",
+    `当前提交：${formatShortCommitHash(status.currentCommit)}（${formatCommitSource(status.currentCommitSource)}）`,
+    status.currentBranch ? `当前分支：${status.currentBranch}` : null,
+    `当前进程启动：${formatTimestamp(status.processStartedAt)}`,
+    `服务单元：${status.serviceUnit ?? "未检测到"}`,
+    serviceStatus ? `服务状态：${formatSystemdServiceState(serviceStatus)}` : null,
+    serviceStatus?.mainPid ? `MainPID：${serviceStatus.mainPid}` : null,
+    serviceStatus?.execMainStartTimestamp ? `systemd 启动时间：${serviceStatus.execMainStartTimestamp}` : null,
+    status.restartPlanErrorMessage ? `重启入口：未就绪，${status.restartPlanErrorMessage}` : status.restartPlanMessage ? `重启入口：${status.restartPlanMessage}` : null,
+    formatRestartRequestMarker(status.restartRequest),
+    "",
+    "请求重启：/ops restart confirm",
+    "升级 / 回滚：/update",
+  ].filter((line): line is string => Boolean(line)).join("\n");
+}
+
+function formatSystemdServiceState(status: ThemisSystemdServiceStatus): string {
+  if (status.errorMessage) {
+    return `读取失败，${status.errorMessage}`;
+  }
+
+  const activeState = status.activeState
+    ? status.subState ? `${status.activeState} (${status.subState})` : status.activeState
+    : "未知";
+  return status.loadState ? `${activeState}，LoadState=${status.loadState}` : activeState;
+}
+
+function formatRestartRequestMarker(marker: ThemisRestartRequestMarker | null): string {
+  if (!marker) {
+    return "最近重启请求：无";
+  }
+
+  const reason = formatRestartRequestReason(marker.reason);
+
+  if (marker.status === "confirmed") {
+    const confirmedAt = marker.confirmedAt ? formatTimestamp(marker.confirmedAt) : "未知时间";
+    const processStartedAt = marker.confirmedProcessStartedAt
+      ? `，新进程启动 ${formatTimestamp(marker.confirmedProcessStartedAt)}`
+      : "";
+    return `最近重启请求：已确认（${reason}，${confirmedAt}${processStartedAt}）`;
+  }
+
+  if (marker.status === "failed") {
+    const failedAt = marker.failedAt ? formatTimestamp(marker.failedAt) : "未知时间";
+    return `最近重启请求：请求失败（${reason}，${failedAt}${marker.errorMessage ? `，${marker.errorMessage}` : ""}）`;
+  }
+
+  return `最近重启请求：等待确认（${reason}，请求于 ${formatTimestamp(marker.requestedAt)}）`;
+}
+
+function formatRestartRequestReason(reason: ThemisRestartRequestMarker["reason"]): string {
+  switch (reason) {
+    case "managed_update_apply":
+      return "升级后重启";
+    case "managed_update_rollback":
+      return "回滚后重启";
+    case "ops_restart":
+    default:
+      return "手动重启";
+  }
+}
+
+function formatCommitSource(source: ThemisOpsStatusSnapshot["currentCommitSource"]): string {
+  switch (source) {
+    case "env":
+      return "THEMIS_BUILD_COMMIT";
+    case "git":
+      return "git";
+    case "unknown":
+    default:
+      return "未检测到";
+  }
 }
 
 function parseFeishuCommand(text: string): ParsedFeishuCommand | null {

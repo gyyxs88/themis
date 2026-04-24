@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type {
@@ -10,6 +11,7 @@ import type {
 } from "./update-apply.js";
 import {
   applyThemisUpdate,
+  DEFAULT_THEMIS_UPDATE_SYSTEMD_SERVICE,
   readThemisLastUpdateRecord,
   requestDetachedThemisUpdateRestart,
   resolveThemisUpdateRestartPlan,
@@ -18,6 +20,7 @@ import {
 import { checkThemisUpdates, formatShortCommitHash, type ThemisUpdateCheckResult } from "./update-check.js";
 
 const UPDATE_OPERATION_RELATIVE_PATH = "infra/local/themis-update-operation.json";
+const RESTART_REQUEST_RELATIVE_PATH = "infra/local/themis-restart-request.json";
 
 export type ThemisManagedUpdateAction = "apply" | "rollback";
 
@@ -108,6 +111,9 @@ interface ThemisUpdateServiceOptions {
   cliPath?: string;
   resolveRestartPlan?: typeof resolveThemisUpdateRestartPlan;
   requestRestartProcess?: typeof requestDetachedThemisUpdateRestart;
+  readServiceStatus?: typeof readThemisSystemdServiceStatus;
+  processStartedAt?: string;
+  now?: () => Date;
   spawnWorkerProcess?: (
     cliPath: string,
     args: string[],
@@ -123,12 +129,58 @@ export interface ThemisRestartRequestResult {
   message: string;
 }
 
+export type ThemisRestartRequestReason = "ops_restart" | "managed_update_apply" | "managed_update_rollback";
+
+export interface ThemisRestartRequestMarker {
+  requestId: string;
+  reason: ThemisRestartRequestReason;
+  status: "requested" | "confirmed" | "failed";
+  serviceUnit: string;
+  requestedAt: string;
+  requestedCommit: string | null;
+  requestedCommitSource: "git" | "env" | "unknown";
+  requestedProcessStartedAt: string;
+  initiatedBy: ThemisManagedUpdateInitiator | null;
+  confirmedAt: string | null;
+  confirmedCommit: string | null;
+  confirmedCommitSource: "git" | "env" | "unknown" | null;
+  confirmedProcessStartedAt: string | null;
+  confirmedProcessId: number | null;
+  failedAt: string | null;
+  errorMessage: string | null;
+}
+
+export interface ThemisSystemdServiceStatus {
+  serviceUnit: string;
+  loadState: string | null;
+  activeState: string | null;
+  subState: string | null;
+  mainPid: number | null;
+  execMainStartTimestamp: string | null;
+  errorMessage: string | null;
+}
+
+export interface ThemisOpsStatusSnapshot {
+  processStartedAt: string;
+  currentCommit: string | null;
+  currentCommitSource: "git" | "env" | "unknown";
+  currentBranch: string | null;
+  serviceUnit: string | null;
+  restartPlanMessage: string | null;
+  restartPlanErrorMessage: string | null;
+  serviceStatus: ThemisSystemdServiceStatus | null;
+  restartRequest: ThemisRestartRequestMarker | null;
+}
+
 export class ThemisUpdateService {
   private readonly workingDirectory: string;
   private readonly env: NodeJS.ProcessEnv;
   private readonly cliPath: string;
   private readonly resolveRestartPlan: typeof resolveThemisUpdateRestartPlan;
   private readonly requestRestartProcess: typeof requestDetachedThemisUpdateRestart;
+  private readonly readServiceStatusImpl: typeof readThemisSystemdServiceStatus;
+  private readonly processStartedAt: string;
+  private readonly now: () => Date;
   private readonly spawnWorkerProcess: NonNullable<ThemisUpdateServiceOptions["spawnWorkerProcess"]>;
 
   constructor(options: ThemisUpdateServiceOptions) {
@@ -137,6 +189,9 @@ export class ThemisUpdateService {
     this.cliPath = options.cliPath ?? resolve(this.workingDirectory, "themis");
     this.resolveRestartPlan = options.resolveRestartPlan ?? resolveThemisUpdateRestartPlan;
     this.requestRestartProcess = options.requestRestartProcess ?? requestDetachedThemisUpdateRestart;
+    this.readServiceStatusImpl = options.readServiceStatus ?? readThemisSystemdServiceStatus;
+    this.processStartedAt = options.processStartedAt ?? resolveCurrentProcessStartedAt();
+    this.now = options.now ?? (() => new Date());
     this.spawnWorkerProcess = options.spawnWorkerProcess ?? spawnDetachedWorkerProcess;
   }
 
@@ -173,6 +228,66 @@ export class ThemisUpdateService {
     });
   }
 
+  readOpsStatus(input: {
+    serviceUnitOverride?: string | null;
+  } = {}): ThemisOpsStatusSnapshot {
+    const acknowledgedRestartRequest = this.acknowledgeRestartRequest();
+    const localBuild = readThemisLocalBuildSnapshot(this.workingDirectory, this.env);
+    const restartPlan = this.resolveRestartPlanForStatus(input);
+    const serviceUnit = restartPlan.serviceUnit
+      ?? normalizeText(input.serviceUnitOverride)
+      ?? normalizeText(this.env.THEMIS_UPDATE_SYSTEMD_SERVICE)
+      ?? DEFAULT_THEMIS_UPDATE_SYSTEMD_SERVICE;
+
+    return {
+      processStartedAt: this.processStartedAt,
+      currentCommit: localBuild.commit,
+      currentCommitSource: localBuild.source,
+      currentBranch: localBuild.branch,
+      serviceUnit,
+      restartPlanMessage: restartPlan.message,
+      restartPlanErrorMessage: restartPlan.errorMessage,
+      serviceStatus: serviceUnit
+        ? this.readServiceStatusImpl({
+          serviceUnit,
+          workingDirectory: this.workingDirectory,
+          env: this.env,
+        })
+        : null,
+      restartRequest: acknowledgedRestartRequest,
+    };
+  }
+
+  acknowledgeRestartRequest(): ThemisRestartRequestMarker | null {
+    const marker = readThemisRestartRequestMarker(this.workingDirectory);
+
+    if (!marker || marker.status !== "requested") {
+      return marker;
+    }
+
+    const requestedAtMs = Date.parse(marker.requestedAt);
+    const processStartedAtMs = Date.parse(this.processStartedAt);
+
+    if (!Number.isFinite(requestedAtMs) || !Number.isFinite(processStartedAtMs) || processStartedAtMs <= requestedAtMs) {
+      return marker;
+    }
+
+    const localBuild = readThemisLocalBuildSnapshot(this.workingDirectory, this.env);
+    const confirmed: ThemisRestartRequestMarker = {
+      ...marker,
+      status: "confirmed",
+      confirmedAt: this.now().toISOString(),
+      confirmedCommit: localBuild.commit,
+      confirmedCommitSource: localBuild.source,
+      confirmedProcessStartedAt: this.processStartedAt,
+      confirmedProcessId: process.pid,
+      failedAt: null,
+      errorMessage: null,
+    };
+    writeThemisRestartRequestMarker(this.workingDirectory, confirmed);
+    return confirmed;
+  }
+
   prepareRestart(input: {
     serviceUnitOverride?: string | null;
   } = {}): ThemisRestartRequestResult {
@@ -187,6 +302,8 @@ export class ThemisUpdateService {
 
   async requestRestart(input: {
     serviceUnitOverride?: string | null;
+    initiatedBy?: ThemisManagedUpdateInitiator | null;
+    reason?: ThemisRestartRequestReason;
   } = {}): Promise<ThemisRestartRequestResult> {
     const plan = this.resolveRestartPlan({
       workingDirectory: this.workingDirectory,
@@ -194,13 +311,56 @@ export class ThemisUpdateService {
       ...(input.serviceUnitOverride !== undefined ? { serviceUnitOverride: input.serviceUnitOverride } : {}),
     });
     const result = buildRestartRequestResult(plan);
-
-    await this.requestRestartProcess(plan, {
+    const marker = createThemisRestartRequestMarker({
       workingDirectory: this.workingDirectory,
       env: this.env,
+      serviceUnit: result.serviceUnit,
+      reason: input.reason ?? "ops_restart",
+      initiatedBy: input.initiatedBy ?? null,
+      requestedAt: this.now().toISOString(),
+      processStartedAt: this.processStartedAt,
     });
+    writeThemisRestartRequestMarker(this.workingDirectory, marker);
+
+    try {
+      await this.requestRestartProcess(plan, {
+        workingDirectory: this.workingDirectory,
+        env: this.env,
+      });
+    } catch (error) {
+      markThemisRestartRequestFailed(this.workingDirectory, marker, error, this.now().toISOString());
+      throw error;
+    }
 
     return result;
+  }
+
+  private resolveRestartPlanForStatus(input: {
+    serviceUnitOverride?: string | null;
+  }): {
+    serviceUnit: string | null;
+    message: string | null;
+    errorMessage: string | null;
+  } {
+    try {
+      const plan = this.resolveRestartPlan({
+        workingDirectory: this.workingDirectory,
+        env: this.env,
+        ...(input.serviceUnitOverride !== undefined ? { serviceUnitOverride: input.serviceUnitOverride } : {}),
+      });
+
+      return {
+        serviceUnit: plan.serviceUnit,
+        message: plan.message,
+        errorMessage: null,
+      };
+    } catch (error) {
+      return {
+        serviceUnit: null,
+        message: null,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   private async startOperation(input: StartManagedUpdateProcessOptions): Promise<ThemisManagedUpdateOperationState> {
@@ -436,6 +596,115 @@ function writeThemisManagedUpdateOperation(
   writeFileSync(filePath, `${JSON.stringify(operation, null, 2)}\n`, "utf8");
 }
 
+export function readThemisRestartRequestMarker(
+  workingDirectory: string,
+): ThemisRestartRequestMarker | null {
+  const filePath = resolve(workingDirectory, RESTART_REQUEST_RELATIVE_PATH);
+
+  if (!existsSync(filePath)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, "utf8")) as Partial<ThemisRestartRequestMarker>;
+    const status = parsed.status === "requested" || parsed.status === "confirmed" || parsed.status === "failed"
+      ? parsed.status
+      : null;
+    const reason = normalizeRestartRequestReason(parsed.reason);
+    const requestedCommitSource = normalizeBuildCommitSource(parsed.requestedCommitSource);
+    const confirmedCommitSource = normalizeBuildCommitSource(parsed.confirmedCommitSource);
+
+    if (
+      !status
+      || !reason
+      || !requestedCommitSource
+      || typeof parsed.requestId !== "string"
+      || typeof parsed.serviceUnit !== "string"
+      || typeof parsed.requestedAt !== "string"
+      || typeof parsed.requestedProcessStartedAt !== "string"
+    ) {
+      return null;
+    }
+
+    return {
+      requestId: parsed.requestId,
+      reason,
+      status,
+      serviceUnit: parsed.serviceUnit,
+      requestedAt: parsed.requestedAt,
+      requestedCommit: typeof parsed.requestedCommit === "string" ? parsed.requestedCommit : null,
+      requestedCommitSource,
+      requestedProcessStartedAt: parsed.requestedProcessStartedAt,
+      initiatedBy: normalizeOptionalInitiator(parsed.initiatedBy),
+      confirmedAt: typeof parsed.confirmedAt === "string" ? parsed.confirmedAt : null,
+      confirmedCommit: typeof parsed.confirmedCommit === "string" ? parsed.confirmedCommit : null,
+      confirmedCommitSource,
+      confirmedProcessStartedAt: typeof parsed.confirmedProcessStartedAt === "string" ? parsed.confirmedProcessStartedAt : null,
+      confirmedProcessId: typeof parsed.confirmedProcessId === "number" && parsed.confirmedProcessId > 0
+        ? parsed.confirmedProcessId
+        : null,
+      failedAt: typeof parsed.failedAt === "string" ? parsed.failedAt : null,
+      errorMessage: typeof parsed.errorMessage === "string" ? parsed.errorMessage : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeThemisRestartRequestMarker(
+  workingDirectory: string,
+  marker: ThemisRestartRequestMarker,
+): void {
+  const filePath = resolve(workingDirectory, RESTART_REQUEST_RELATIVE_PATH);
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(marker, null, 2)}\n`, "utf8");
+}
+
+function createThemisRestartRequestMarker(input: {
+  workingDirectory: string;
+  env: NodeJS.ProcessEnv;
+  serviceUnit: string;
+  reason: ThemisRestartRequestReason;
+  initiatedBy: ThemisManagedUpdateInitiator | null;
+  requestedAt: string;
+  processStartedAt: string;
+}): ThemisRestartRequestMarker {
+  const localBuild = readThemisLocalBuildSnapshot(input.workingDirectory, input.env);
+
+  return {
+    requestId: randomUUID(),
+    reason: input.reason,
+    status: "requested",
+    serviceUnit: input.serviceUnit,
+    requestedAt: input.requestedAt,
+    requestedCommit: localBuild.commit,
+    requestedCommitSource: localBuild.source,
+    requestedProcessStartedAt: input.processStartedAt,
+    initiatedBy: input.initiatedBy ? normalizeInitiator(input.initiatedBy) : null,
+    confirmedAt: null,
+    confirmedCommit: null,
+    confirmedCommitSource: null,
+    confirmedProcessStartedAt: null,
+    confirmedProcessId: null,
+    failedAt: null,
+    errorMessage: null,
+  };
+}
+
+function markThemisRestartRequestFailed(
+  workingDirectory: string,
+  marker: ThemisRestartRequestMarker,
+  error: unknown,
+  failedAt: string,
+): void {
+  writeThemisRestartRequestMarker(workingDirectory, {
+    ...marker,
+    status: "failed",
+    failedAt,
+    errorMessage: error instanceof Error ? error.message : String(error),
+  });
+}
+
 async function finalizeManagedUpdateRestart(input: {
   workingDirectory: string;
   env: NodeJS.ProcessEnv;
@@ -447,6 +716,17 @@ async function finalizeManagedUpdateRestart(input: {
     return input.state;
   }
 
+  const marker = createThemisRestartRequestMarker({
+    workingDirectory: input.workingDirectory,
+    env: input.env,
+    serviceUnit: input.restartPlan.serviceUnit as string,
+    reason: input.state.action === "apply" ? "managed_update_apply" : "managed_update_rollback",
+    initiatedBy: input.state.initiatedBy,
+    requestedAt: new Date().toISOString(),
+    processStartedAt: resolveCurrentProcessStartedAt(),
+  });
+  writeThemisRestartRequestMarker(input.workingDirectory, marker);
+
   try {
     await input.requestRestartImpl(input.restartPlan, {
       workingDirectory: input.workingDirectory,
@@ -454,6 +734,7 @@ async function finalizeManagedUpdateRestart(input: {
     });
     return input.state;
   } catch (error) {
+    markThemisRestartRequestFailed(input.workingDirectory, marker, error, new Date().toISOString());
     const message = error instanceof Error ? error.message : String(error);
     const nextState: ThemisManagedUpdateOperationState = {
       ...input.state,
@@ -577,6 +858,157 @@ function buildRestartRequestResult(plan: ThemisUpdateRestartPlan): ThemisRestart
     serviceUnit: plan.serviceUnit,
     message: plan.message,
   };
+}
+
+function readThemisSystemdServiceStatus(input: {
+  serviceUnit: string;
+  workingDirectory: string;
+  env: NodeJS.ProcessEnv;
+}): ThemisSystemdServiceStatus {
+  try {
+    const result = spawnSync(
+      "systemctl",
+      [
+        "--user",
+        "show",
+        "--property=LoadState",
+        "--property=ActiveState",
+        "--property=SubState",
+        "--property=MainPID",
+        "--property=ExecMainStartTimestamp",
+        input.serviceUnit,
+      ],
+      {
+        cwd: input.workingDirectory,
+        env: input.env,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    if (result.error) {
+      return buildSystemdStatusError(input.serviceUnit, result.error.message);
+    }
+
+    const values = parseSystemdShowOutput(result.stdout ?? "");
+    const detail = normalizeText(result.stderr);
+
+    return {
+      serviceUnit: input.serviceUnit,
+      loadState: normalizeText(values.LoadState),
+      activeState: normalizeText(values.ActiveState),
+      subState: normalizeText(values.SubState),
+      mainPid: parsePositiveInteger(values.MainPID),
+      execMainStartTimestamp: normalizeText(values.ExecMainStartTimestamp),
+      errorMessage: result.status === 0 ? null : detail ?? `systemctl show 执行失败（exit ${result.status ?? 1}）`,
+    };
+  } catch (error) {
+    return buildSystemdStatusError(input.serviceUnit, error instanceof Error ? error.message : String(error));
+  }
+}
+
+function buildSystemdStatusError(serviceUnit: string, message: string): ThemisSystemdServiceStatus {
+  return {
+    serviceUnit,
+    loadState: null,
+    activeState: null,
+    subState: null,
+    mainPid: null,
+    execMainStartTimestamp: null,
+    errorMessage: message,
+  };
+}
+
+function parseSystemdShowOutput(output: string): Record<string, string> {
+  const values: Record<string, string> = {};
+
+  for (const line of output.split(/\r?\n/)) {
+    const separatorIndex = line.indexOf("=");
+
+    if (separatorIndex <= 0) {
+      continue;
+    }
+
+    values[line.slice(0, separatorIndex)] = line.slice(separatorIndex + 1);
+  }
+
+  return values;
+}
+
+function readThemisLocalBuildSnapshot(
+  workingDirectory: string,
+  env: NodeJS.ProcessEnv,
+): {
+  commit: string | null;
+  branch: string | null;
+  source: "git" | "env" | "unknown";
+} {
+  const envCommit = normalizeText(env.THEMIS_BUILD_COMMIT);
+
+  if (envCommit) {
+    return {
+      commit: envCommit,
+      branch: normalizeText(env.THEMIS_BUILD_BRANCH),
+      source: "env",
+    };
+  }
+
+  const gitCommit = readGitOutput(workingDirectory, ["rev-parse", "HEAD"]);
+
+  if (!gitCommit) {
+    return {
+      commit: null,
+      branch: null,
+      source: "unknown",
+    };
+  }
+
+  return {
+    commit: gitCommit,
+    branch: readGitOutput(workingDirectory, ["rev-parse", "--abbrev-ref", "HEAD"]),
+    source: "git",
+  };
+}
+
+function readGitOutput(workingDirectory: string, args: string[]): string | null {
+  try {
+    const result = spawnSync("git", args, {
+      cwd: workingDirectory,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+
+    if (result.error || result.status !== 0) {
+      return null;
+    }
+
+    return normalizeText(result.stdout);
+  } catch {
+    return null;
+  }
+}
+
+function resolveCurrentProcessStartedAt(): string {
+  return new Date(Date.now() - Math.round(process.uptime() * 1000)).toISOString();
+}
+
+function normalizeRestartRequestReason(value: unknown): ThemisRestartRequestReason | null {
+  return value === "ops_restart" || value === "managed_update_apply" || value === "managed_update_rollback"
+    ? value
+    : null;
+}
+
+function normalizeBuildCommitSource(value: unknown): "git" | "env" | "unknown" | null {
+  return value === "git" || value === "env" || value === "unknown" ? value : null;
+}
+
+function parsePositiveInteger(value: unknown): number | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function normalizeManagedUpdateResult(value: unknown): ThemisManagedUpdateResult | null {
