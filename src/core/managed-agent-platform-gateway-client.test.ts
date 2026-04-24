@@ -832,6 +832,9 @@ test("ManagedAgentPlatformGatewayClient 会按 agents 与 governance 契约读�
           displayName: "Alpha Runtime",
           model: "gpt-5.4",
           reasoning: "high",
+          sandboxMode: "workspace-write",
+          networkAccessEnabled: false,
+          approvalPolicy: "never",
           createdAt: "2026-04-13T10:31:00.000Z",
           updatedAt: "2026-04-13T10:31:00.000Z",
         },
@@ -889,6 +892,9 @@ test("ManagedAgentPlatformGatewayClient 会按 agents 与 governance 契约读�
       displayName: "Alpha Runtime",
       model: "gpt-5.4",
       reasoning: "high",
+      sandboxMode: "workspace-write",
+      networkAccessEnabled: false,
+      approvalPolicy: "never",
     },
   });
   const policy = await client.updateSpawnPolicy({
@@ -908,6 +914,9 @@ test("ManagedAgentPlatformGatewayClient 会按 agents 与 governance 契约读�
   assert.equal(created.agent.agentId, "agent-alpha");
   assert.equal(boundary.workspacePolicy.workspacePath, "/srv/alpha");
   assert.deepEqual(boundary.workspacePolicy.additionalDirectories, ["/srv/shared"]);
+  assert.equal(boundary.runtimeProfile.sandboxMode, "workspace-write");
+  assert.equal(boundary.runtimeProfile.networkAccessEnabled, false);
+  assert.equal(boundary.runtimeProfile.approvalPolicy, "never");
   assert.equal(policy.maxActiveAgents, 6);
   assert.equal(waiting.summary.totalCount, 2);
 
@@ -937,6 +946,9 @@ test("ManagedAgentPlatformGatewayClient 会按 agents 与 governance 契约读�
         displayName: "Alpha Runtime",
         model: "gpt-5.4",
         reasoning: "high",
+        sandboxMode: "workspace-write",
+        networkAccessEnabled: false,
+        approvalPolicy: "never",
       },
     },
   });
