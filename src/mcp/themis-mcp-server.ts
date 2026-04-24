@@ -1085,12 +1085,12 @@ function buildToolDefinitions(): McpToolDefinition[] {
             enum: [...MANAGED_AGENT_PRIORITIES],
           },
           workspacePolicySnapshot: {
-            type: "object",
+            ...buildManagedAgentWorkspacePolicySchema(),
             description: "可选。覆盖默认工作区快照。",
           },
           runtimeProfileSnapshot: {
-            type: "object",
-            description: "可选。覆盖默认运行时快照。",
+            ...buildManagedAgentRuntimeProfileSchema(),
+            description: "可选。覆盖默认运行时快照；只读工单应显式传 sandboxMode=read-only，避免只在 goal 里写不要修改。",
           },
           scheduledAt: {
             type: "string",
