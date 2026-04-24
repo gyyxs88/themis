@@ -346,6 +346,18 @@ infra/local/feishu-attachment-drafts.json
 - `apply / rollback` 只允许在和 Themis 的单聊里执行，避免群聊误触导致实例重启。
 - 飞书这里只负责“发起”和“看状态”；进度文件固定写在 `infra/local/themis-update-operation.json`，服务重启期间飞书会短暂中断，稍后再发 `/update` 即可查看最终结果。
 
+### `/ops`
+
+查看实例运维命令。当前只承载服务重启这类不应进入普通 Codex 任务的运维动作。
+
+规则：
+
+- `/ops`：查看实例运维命令。
+- `/ops restart`：查看当前服务重启说明和可重启服务名。
+- `/ops restart confirm`：请求重启当前 Themis 服务，不会拉代码、装依赖或改版本。
+- `/ops restart confirm` 只允许在和 Themis 的单聊里执行，避免群聊误触导致实例重启。
+- 普通对话任务如果判断“需要重启当前 Themis 服务才能生效”，应提示用户发送 `/ops restart confirm`，不要在 Codex 沙箱里直接尝试 `systemctl --user restart`。
+
 ### `/link <绑定码>`
 
 可选能力。默认情况下，飞书和 Web 已共享同一个私人助理 principal；只有需要认领旧 Web 浏览器身份时，才需要它。

@@ -1288,6 +1288,11 @@ export class FeishuChannelService {
       case "plugin":
         await this.handlePluginsCommand(command.args, context);
         return;
+      case "ops":
+      case "operation":
+      case "operations":
+        await this.handleOpsCommand(command.args, context);
+        return;
       case "update":
       case "upgrade":
         await this.handleUpdateCommand(command.args, context);
@@ -1347,8 +1352,10 @@ export class FeishuChannelService {
       case "testupdate":
         await this.probeMessageUpdate(context);
         return;
-      case "reset":
       case "restart":
+        await this.sendRestartCommandNotice(context.chatId);
+        return;
+      case "reset":
       case "wipe":
         await this.resetPrincipalState(command.args, context);
         return;
@@ -2926,6 +2933,7 @@ export class FeishuChannelService {
       "/settings 查看设置树",
       "/group 查看当前群聊设置、路由和管理员控制",
       "/update 查看实例更新状态，或发起后台升级 / 回滚",
+      "/ops 查看实例运维命令",
       "/skills 查看和维护当前 principal 的 skills",
       "/mcp 查看和维护当前 principal 的 MCP server",
       "/plugins 查看和维护当前 principal 的 plugins",
@@ -2942,6 +2950,115 @@ export class FeishuChannelService {
     ].join("\n");
 
     await this.safeSendText(chatId, helpText);
+  }
+
+  private async handleOpsCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const subcommand = normalizeText(args[0])?.toLowerCase() ?? "";
+
+    switch (subcommand) {
+      case "":
+      case "help":
+      case "status":
+        await this.sendOpsOverview(context.chatId);
+        return;
+      case "restart":
+        await this.handleOpsRestartCommand(args.slice(1), context);
+        return;
+      default:
+        await this.safeSendText(
+          context.chatId,
+          [
+            "/ops 查看实例运维命令",
+            "/ops restart 查看受控重启说明",
+            "/ops restart confirm 请求重启当前 Themis 服务",
+            "/update 查看升级 / 回滚状态",
+          ].join("\n"),
+        );
+        return;
+    }
+  }
+
+  private async sendOpsOverview(chatId: string): Promise<void> {
+    await this.safeSendText(
+      chatId,
+      [
+        "Themis 实例运维命令：",
+        "/ops restart 查看受控重启说明",
+        "/ops restart confirm 请求重启当前 Themis 服务",
+        "/update 查看升级 / 回滚状态",
+        "",
+        "普通对话任务不会直接重启当前服务；需要服务重启时，请使用上面的确认命令。",
+      ].join("\n"),
+    );
+  }
+
+  private async handleOpsRestartCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    if (!isResetConfirmed(args)) {
+      let serviceLine = "当前可重启服务：未检测";
+
+      try {
+        const prepared = this.updateService.prepareRestart();
+        serviceLine = `当前可重启服务：${prepared.serviceUnit}`;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        serviceLine = `当前重启入口未就绪：${message}`;
+      }
+
+      await this.safeSendText(
+        context.chatId,
+        [
+          "Themis 受控重启：",
+          serviceLine,
+          "这个命令只负责请求重启当前 Themis 服务，不会拉代码、装依赖或改版本。",
+          "确认执行：/ops restart confirm",
+          "升级 / 回滚请使用：/update",
+        ].join("\n"),
+      );
+      return;
+    }
+
+    if (!await this.ensureUpdateMutationAllowed(context, "/ops restart")) {
+      return;
+    }
+
+    let prepared: { serviceUnit: string };
+
+    try {
+      prepared = this.updateService.prepareRestart();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.safeSendText(context.chatId, `当前不能请求重启：${message}`);
+      return;
+    }
+
+    await this.safeSendText(
+      context.chatId,
+      [
+        `已受理重启请求：${prepared.serviceUnit}`,
+        "Themis 会通过受控运维入口请求重启当前服务，Web/飞书会短暂中断。",
+        "重启完成后可发送 /update 查看实例状态。",
+      ].join("\n"),
+    );
+
+    try {
+      await this.updateService.requestRestart({
+        serviceUnitOverride: prepared.serviceUnit,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.safeSendText(context.chatId, `请求重启失败：${message}`);
+    }
+  }
+
+  private async sendRestartCommandNotice(chatId: string): Promise<void> {
+    await this.safeSendText(
+      chatId,
+      [
+        "服务重启已经收口到受控运维命令。",
+        "查看说明：/ops restart",
+        "确认重启当前 Themis 服务：/ops restart confirm",
+      ].join("\n"),
+    );
   }
 
   private async handleUpdateCommand(args: string[], context: FeishuIncomingContext): Promise<void> {

@@ -106,6 +106,8 @@ Themis 飞书命令：
 /use <序号|conversationId> 切换会话
 /current 查看当前会话
 /settings 查看配置命令树
+/update 查看实例更新状态
+/ops 查看实例运维命令
 /link <绑定码> 认领旧 Web 身份
 /reset confirm 重置当前 principal
 /quota 查看额度

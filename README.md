@@ -191,6 +191,8 @@ npm run themis -- config set FEISHU_APP_SECRET xxx
 
 当前公开发布采用“双仓”方式：开发仓负责日常开发与本地资料，公开仓负责 GitHub 可公开内容。
 
+普通 Codex 对话任务不应直接尝试重启当前 Themis 服务；如果用户在飞书里要求“部署生效 / 重启自己 / 重启当前实例”，应提示用户在单聊发送 `/ops restart confirm`，由受控运维命令请求重启当前服务。
+
 导出公开仓：
 
 ```bash
@@ -217,5 +219,5 @@ git push origin main
 
 - `THEMIS_UPDATE_CHANNEL` 支持 `branch` 和 `release`；默认仍是 `branch`。
 - 受控升级当前只支持公开仓 `git clone` 的正式实例、默认分支 `ff-only` 快进升级，以及干净工作区。
-- Web 已支持“运行参数 -> 实例升级”，飞书也已支持 `/update`、`/update apply confirm`、`/update rollback confirm`。
+- Web 已支持“运行参数 -> 实例升级”，飞书也已支持 `/update`、`/update apply confirm`、`/update rollback confirm`；单独重启当前服务使用飞书单聊 `/ops restart confirm`。
 - 详细边界、灰度与回滚流程，直接看 [发布、灰度与回退说明](./docs/repository/themis-release-rollout-and-rollback.md) 和 [正式版部署说明](./docs/repository/themis-systemd-prod-service.md)。

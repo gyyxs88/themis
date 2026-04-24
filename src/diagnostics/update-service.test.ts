@@ -102,3 +102,42 @@ test("ThemisUpdateService.startApply 会写入 running 状态并启动后台 wor
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("ThemisUpdateService.requestRestart 会按受控重启计划请求 systemd 重启", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-update-restart-"));
+  const calls: Array<{ serviceUnit: string; workingDirectory: string }> = [];
+
+  try {
+    const service = new ThemisUpdateService({
+      workingDirectory: root,
+      resolveRestartPlan: () => ({
+        mode: "restart",
+        serviceUnit: "themis-prod.service",
+        message: "重启 systemd --user 服务 themis-prod.service。",
+      }),
+      requestRestartProcess: async (plan, input) => {
+        if (plan.mode === "restart" && plan.serviceUnit) {
+          calls.push({
+            serviceUnit: plan.serviceUnit,
+            workingDirectory: input.workingDirectory,
+          });
+        }
+      },
+    });
+
+    const prepared = service.prepareRestart();
+    assert.deepEqual(prepared, {
+      serviceUnit: "themis-prod.service",
+      message: "重启 systemd --user 服务 themis-prod.service。",
+    });
+
+    const result = await service.requestRestart();
+    assert.deepEqual(result, prepared);
+    assert.deepEqual(calls, [{
+      serviceUnit: "themis-prod.service",
+      workingDirectory: root,
+    }]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

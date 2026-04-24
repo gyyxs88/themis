@@ -40,6 +40,7 @@ test("/help 只展示第一层命令", async () => {
     assert.match(message, /\/sessions 查看最近会话/);
     assert.match(message, /\/workspace 查看或设置当前会话工作区/);
     assert.match(message, /\/quota 查看当前 Codex \/ ChatGPT 额度信息/);
+    assert.match(message, /\/ops 查看实例运维命令/);
     assert.doesNotMatch(message, /\/sandbox /);
     assert.doesNotMatch(message, /\/account list/);
     assert.doesNotMatch(message, /\/settings network/);
@@ -180,6 +181,117 @@ test("/update apply confirm 会启动后台升级", async () => {
       displayName: "user-1",
       chatId: "chat-1",
     }]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/ops 会展示实例运维命令", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("ops", []);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /Themis 实例运维命令：/);
+    assert.match(message, /\/ops restart 查看受控重启说明/);
+    assert.match(message, /\/ops restart confirm 请求重启当前 Themis 服务/);
+    assert.match(message, /普通对话任务不会直接重启当前服务/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/ops restart 在缺少 confirm 时只返回安全提示，不会请求重启", async () => {
+  const calls: string[] = [];
+  const harness = createHarness({
+    updateService: {
+      async readOverview() {
+        throw new Error("not used");
+      },
+      async startApply() {
+        throw new Error("not used");
+      },
+      async startRollback() {
+        throw new Error("not used");
+      },
+      prepareRestart() {
+        return {
+          serviceUnit: "themis-prod.service",
+          message: "重启 systemd --user 服务 themis-prod.service。",
+        };
+      },
+      async requestRestart() {
+        calls.push("restart");
+        throw new Error("not used");
+      },
+    },
+  });
+
+  try {
+    await harness.handleCommand("ops", ["restart"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /Themis 受控重启：/);
+    assert.match(message, /当前可重启服务：themis-prod\.service/);
+    assert.match(message, /确认执行：\/ops restart confirm/);
+    assert.deepEqual(calls, []);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/ops restart confirm 会请求重启当前 Themis 服务", async () => {
+  const calls: Array<{ serviceUnitOverride?: string | null }> = [];
+  const harness = createHarness({
+    updateService: {
+      async readOverview() {
+        throw new Error("not used");
+      },
+      async startApply() {
+        throw new Error("not used");
+      },
+      async startRollback() {
+        throw new Error("not used");
+      },
+      prepareRestart() {
+        return {
+          serviceUnit: "themis-prod.service",
+          message: "重启 systemd --user 服务 themis-prod.service。",
+        };
+      },
+      async requestRestart(input) {
+        calls.push(input ?? {});
+        return {
+          serviceUnit: "themis-prod.service",
+          message: "重启 systemd --user 服务 themis-prod.service。",
+        };
+      },
+    },
+  });
+
+  try {
+    await harness.handleCommand("ops", ["restart", "confirm"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /已受理重启请求：themis-prod\.service/);
+    assert.match(message, /Web\/飞书会短暂中断/);
+    assert.deepEqual(calls, [{ serviceUnitOverride: "themis-prod.service" }]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/restart 不再作为重置别名，会提示使用 /ops restart", async () => {
+  const harness = createHarness();
+
+  try {
+    await harness.handleCommand("restart", ["confirm"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /服务重启已经收口到受控运维命令/);
+    assert.match(message, /\/ops restart confirm/);
+    assert.doesNotMatch(message, /已重置 principal/);
   } finally {
     harness.cleanup();
   }
@@ -7648,7 +7760,8 @@ type FeishuHarnessConfig = {
   listItems?: Array<FeishuHarnessSkillItem>;
   curatedItems?: Array<FeishuHarnessCuratedItem>;
   pluginService?: FeishuHarnessPluginService;
-  updateService?: Pick<ThemisUpdateService, "readOverview" | "startApply" | "startRollback">;
+  updateService?: Pick<ThemisUpdateService, "readOverview" | "startApply" | "startRollback">
+    & Partial<Pick<ThemisUpdateService, "prepareRestart" | "requestRestart">>;
 };
 
 type FeishuHarnessSkillCall =

@@ -106,6 +106,8 @@ interface ThemisUpdateServiceOptions {
   workingDirectory: string;
   env?: NodeJS.ProcessEnv;
   cliPath?: string;
+  resolveRestartPlan?: typeof resolveThemisUpdateRestartPlan;
+  requestRestartProcess?: typeof requestDetachedThemisUpdateRestart;
   spawnWorkerProcess?: (
     cliPath: string,
     args: string[],
@@ -116,16 +118,25 @@ interface ThemisUpdateServiceOptions {
   ) => Promise<void>;
 }
 
+export interface ThemisRestartRequestResult {
+  serviceUnit: string;
+  message: string;
+}
+
 export class ThemisUpdateService {
   private readonly workingDirectory: string;
   private readonly env: NodeJS.ProcessEnv;
   private readonly cliPath: string;
+  private readonly resolveRestartPlan: typeof resolveThemisUpdateRestartPlan;
+  private readonly requestRestartProcess: typeof requestDetachedThemisUpdateRestart;
   private readonly spawnWorkerProcess: NonNullable<ThemisUpdateServiceOptions["spawnWorkerProcess"]>;
 
   constructor(options: ThemisUpdateServiceOptions) {
     this.workingDirectory = options.workingDirectory;
     this.env = options.env ?? process.env;
     this.cliPath = options.cliPath ?? resolve(this.workingDirectory, "themis");
+    this.resolveRestartPlan = options.resolveRestartPlan ?? resolveThemisUpdateRestartPlan;
+    this.requestRestartProcess = options.requestRestartProcess ?? requestDetachedThemisUpdateRestart;
     this.spawnWorkerProcess = options.spawnWorkerProcess ?? spawnDetachedWorkerProcess;
   }
 
@@ -160,6 +171,36 @@ export class ThemisUpdateService {
       action: "rollback",
       ...input,
     });
+  }
+
+  prepareRestart(input: {
+    serviceUnitOverride?: string | null;
+  } = {}): ThemisRestartRequestResult {
+    const plan = this.resolveRestartPlan({
+      workingDirectory: this.workingDirectory,
+      env: this.env,
+      ...(input.serviceUnitOverride !== undefined ? { serviceUnitOverride: input.serviceUnitOverride } : {}),
+    });
+
+    return buildRestartRequestResult(plan);
+  }
+
+  async requestRestart(input: {
+    serviceUnitOverride?: string | null;
+  } = {}): Promise<ThemisRestartRequestResult> {
+    const plan = this.resolveRestartPlan({
+      workingDirectory: this.workingDirectory,
+      env: this.env,
+      ...(input.serviceUnitOverride !== undefined ? { serviceUnitOverride: input.serviceUnitOverride } : {}),
+    });
+    const result = buildRestartRequestResult(plan);
+
+    await this.requestRestartProcess(plan, {
+      workingDirectory: this.workingDirectory,
+      env: this.env,
+    });
+
+    return result;
   }
 
   private async startOperation(input: StartManagedUpdateProcessOptions): Promise<ThemisManagedUpdateOperationState> {
@@ -525,6 +566,17 @@ function mapRestartPlanToResultStatus(
   restartPlan: ThemisUpdateRestartPlan,
 ): ThemisManagedUpdateResult["restartStatus"] {
   return restartPlan.mode === "restart" ? "requested" : "skipped";
+}
+
+function buildRestartRequestResult(plan: ThemisUpdateRestartPlan): ThemisRestartRequestResult {
+  if (plan.mode !== "restart" || !plan.serviceUnit) {
+    throw new Error(plan.message);
+  }
+
+  return {
+    serviceUnit: plan.serviceUnit,
+    message: plan.message,
+  };
 }
 
 function normalizeManagedUpdateResult(value: unknown): ThemisManagedUpdateResult | null {
