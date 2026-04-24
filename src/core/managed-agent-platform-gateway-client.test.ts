@@ -821,7 +821,8 @@ test("ManagedAgentPlatformGatewayClient 会按 agents 与 governance 契约读�
           policyId: "workspace-policy-alpha",
           ownerAgentId: "agent-alpha",
           displayName: "Alpha Workspace",
-          workspacePath: "/srv/alpha",
+          canonicalWorkspacePath: "/srv/alpha",
+          additionalWorkspacePaths: ["/srv/shared"],
           createdAt: "2026-04-13T10:31:00.000Z",
           updatedAt: "2026-04-13T10:31:00.000Z",
         },
@@ -882,6 +883,7 @@ test("ManagedAgentPlatformGatewayClient 会按 agents 与 governance 契约读�
     workspacePolicy: {
       displayName: "Alpha Workspace",
       workspacePath: "/srv/alpha",
+      additionalDirectories: ["/srv/shared"],
     },
     runtimeProfile: {
       displayName: "Alpha Runtime",
@@ -905,6 +907,7 @@ test("ManagedAgentPlatformGatewayClient 会按 agents 与 governance 契约读�
 
   assert.equal(created.agent.agentId, "agent-alpha");
   assert.equal(boundary.workspacePolicy.workspacePath, "/srv/alpha");
+  assert.deepEqual(boundary.workspacePolicy.additionalDirectories, ["/srv/shared"]);
   assert.equal(policy.maxActiveAgents, 6);
   assert.equal(waiting.summary.totalCount, 2);
 
@@ -926,6 +929,9 @@ test("ManagedAgentPlatformGatewayClient 会按 agents 与 governance 契约读�
       workspacePolicy: {
         displayName: "Alpha Workspace",
         workspacePath: "/srv/alpha",
+        additionalDirectories: ["/srv/shared"],
+        canonicalWorkspacePath: "/srv/alpha",
+        additionalWorkspacePaths: ["/srv/shared"],
       },
       runtimeProfile: {
         displayName: "Alpha Runtime",

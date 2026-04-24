@@ -344,7 +344,7 @@ export class ManagedAgentPlatformGatewayClient {
       organization: payload.organization ?? null,
       principal: payload.principal ?? null,
       agent: payload.agent,
-      workspacePolicy: payload.workspacePolicy ?? null,
+      workspacePolicy: normalizeGatewayWorkspacePolicy(payload.workspacePolicy),
       runtimeProfile: payload.runtimeProfile ?? null,
       authAccounts: Array.isArray(payload.authAccounts) ? payload.authAccounts : [],
       thirdPartyProviders: Array.isArray(payload.thirdPartyProviders) ? payload.thirdPartyProviders : [],
@@ -380,7 +380,7 @@ export class ManagedAgentPlatformGatewayClient {
       organization: payload.organization ?? null,
       principal: payload.principal ?? null,
       agent: payload.agent,
-      workspacePolicy: payload.workspacePolicy ?? null,
+      workspacePolicy: normalizeGatewayWorkspacePolicy(payload.workspacePolicy),
       runtimeProfile: payload.runtimeProfile ?? null,
       authAccounts: Array.isArray(payload.authAccounts) ? payload.authAccounts : [],
       thirdPartyProviders: Array.isArray(payload.thirdPartyProviders) ? payload.thirdPartyProviders : [],
@@ -390,17 +390,19 @@ export class ManagedAgentPlatformGatewayClient {
   async updateManagedAgentExecutionBoundary(
     input: ManagedAgentPlatformAgentExecutionBoundaryUpdateInput,
   ): Promise<ManagedAgentPlatformAgentExecutionBoundaryUpdateResult> {
-    return await this.requestJson<ManagedAgentPlatformAgentExecutionBoundaryUpdateResult>(
+    const payload = await this.requestJson<ManagedAgentPlatformAgentExecutionBoundaryUpdateResult>(
       "/api/platform/agents/execution-boundary/update",
       {
         ownerPrincipalId: this.ownerPrincipalId,
         agentId: input.agentId,
         boundary: {
-          ...(input.workspacePolicy ? { workspacePolicy: input.workspacePolicy } : {}),
+          ...(input.workspacePolicy ? { workspacePolicy: toGatewayWorkspacePolicyPayload(input.workspacePolicy) } : {}),
           ...(input.runtimeProfile ? { runtimeProfile: input.runtimeProfile } : {}),
         },
       },
     );
+
+    return normalizeGatewayExecutionBoundaryResult(payload);
   }
 
   async updateSpawnPolicy(
@@ -1064,6 +1066,80 @@ function normalizeOptionalText(value: string | null | undefined): string | null 
 
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function readOptionalRecordText(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  return typeof value === "string" ? normalizeOptionalText(value) : null;
+}
+
+function readOptionalRecordStringArray(record: Record<string, unknown>, key: string): string[] | null {
+  const value = record[key];
+
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  return Array.from(new Set(
+    value
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+  ));
+}
+
+function toGatewayWorkspacePolicyPayload(
+  workspacePolicy: NonNullable<ManagedAgentPlatformAgentExecutionBoundaryUpdateInput["workspacePolicy"]>,
+): Record<string, unknown> {
+  const payload = { ...workspacePolicy } as Record<string, unknown>;
+  const canonicalWorkspacePath = readOptionalRecordText(payload, "canonicalWorkspacePath")
+    ?? readOptionalRecordText(payload, "workspacePath");
+  const additionalWorkspacePaths = readOptionalRecordStringArray(payload, "additionalWorkspacePaths")
+    ?? readOptionalRecordStringArray(payload, "additionalDirectories");
+
+  if (canonicalWorkspacePath) {
+    payload.canonicalWorkspacePath = canonicalWorkspacePath;
+  }
+
+  if (additionalWorkspacePaths) {
+    payload.additionalWorkspacePaths = additionalWorkspacePaths;
+  }
+
+  return payload;
+}
+
+function normalizeGatewayWorkspacePolicy<T>(workspacePolicy: T): T {
+  if (!isRecord(workspacePolicy)) {
+    return workspacePolicy;
+  }
+
+  const normalized: Record<string, unknown> = { ...workspacePolicy };
+  const workspacePath = readOptionalRecordText(normalized, "workspacePath")
+    ?? readOptionalRecordText(normalized, "canonicalWorkspacePath");
+  const additionalDirectories = readOptionalRecordStringArray(normalized, "additionalDirectories")
+    ?? readOptionalRecordStringArray(normalized, "additionalWorkspacePaths");
+
+  if (workspacePath) {
+    normalized.workspacePath = workspacePath;
+    normalized.canonicalWorkspacePath = readOptionalRecordText(normalized, "canonicalWorkspacePath") ?? workspacePath;
+  }
+
+  if (additionalDirectories) {
+    normalized.additionalDirectories = additionalDirectories;
+    normalized.additionalWorkspacePaths = readOptionalRecordStringArray(normalized, "additionalWorkspacePaths")
+      ?? additionalDirectories;
+  }
+
+  return normalized as T;
+}
+
+function normalizeGatewayExecutionBoundaryResult<T extends {
+  workspacePolicy?: unknown;
+}>(payload: T): T {
+  return {
+    ...payload,
+    workspacePolicy: normalizeGatewayWorkspacePolicy(payload.workspacePolicy),
+  };
 }
 
 function toGatewayGovernanceFilters(filters: OrganizationGovernanceFilters): Record<string, unknown> {
