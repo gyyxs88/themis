@@ -126,7 +126,7 @@ npm run start:platform
 - `./themis` 里的 `auth platform`、`doctor worker-node`、`doctor worker-fleet`、`worker-node`、`worker-fleet` 当前仍保留兼容别名，但日常使用已推荐切到独立入口；后续会继续收口兼容层。
 - 平台侧值班 / 平台令牌 / `worker-fleet`：`./themis-platform`
 - Worker Node 本机预检 / 常驻执行：`./themis-worker-node`
-- `themis-platform` 与 `themis-worker-node` 当前都通过 `file:../themis-contracts` 依赖共享契约；真实部署时要把 `themis-contracts` 放到同级目录，再执行 `npm ci`。
+- `themis`、`themis-platform` 与 `themis-worker-node` 当前都通过 `file:../themis-contracts` 依赖共享契约；真实部署时要把 `themis-contracts` 放到同级目录，再执行 `npm ci`。
 - `THEMIS_PLATFORM_WEB_ACCESS_TOKEN` 当前负责主 Themis 的管理者 gateway：除了 `agents / projects / work-items / runs`，还可访问节点观察/治理接口 `nodes/list|detail|drain|offline|reclaim`；节点运行态 `nodes/register|heartbeat`、`/api/platform/worker/*` 和 `worker-node run` 仍统一使用 `worker` 角色的平台服务令牌。
 - Worker Node、平台值班和多机场景的完整入口，先看 [仓库运维文档索引](./docs/repository/README.md)；如果要回看首轮三机联调记录，再看 `docs/repository/archive/themis-first-lan-joint-test-checklist.md`。
 

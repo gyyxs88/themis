@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { buildPlatformServiceOwnerMismatchErrorResponse } from "../contracts/managed-agent-platform-access.js";
+import { buildPlatformServiceOwnerMismatchErrorResponse } from "themis-contracts/managed-agent-platform-access";
 import type { ManagedAgentControlPlaneFacadeLike } from "../core/managed-agent-control-plane-facade.js";
 import type { ManagedAgentExecutionService } from "../core/managed-agent-execution-service.js";
 import type {
@@ -16,7 +16,7 @@ import type {
   ManagedAgentPlatformCollaborationDashboardPayload,
   ManagedAgentPlatformGovernanceFiltersPayload,
   ManagedAgentPlatformWaitingQueueListPayload,
-} from "../contracts/managed-agent-platform-agents.js";
+} from "themis-contracts/managed-agent-platform-agents";
 import type {
   ManagedAgentPlatformHandoffListPayload,
   ManagedAgentPlatformMailboxAckPayload,
@@ -26,12 +26,12 @@ import type {
   ManagedAgentPlatformMailboxResponsePayload,
   ManagedAgentPlatformRunDetailPayload,
   ManagedAgentPlatformRunListPayload,
-} from "../contracts/managed-agent-platform-collaboration.js";
+} from "themis-contracts/managed-agent-platform-collaboration";
 import type {
   ManagedAgentPlatformProjectWorkspaceBindingDetailPayload,
   ManagedAgentPlatformProjectWorkspaceBindingListPayload,
   ManagedAgentPlatformProjectWorkspaceBindingUpsertPayload,
-} from "../contracts/managed-agent-platform-projects.js";
+} from "themis-contracts/managed-agent-platform-projects";
 import type {
   ManagedAgentPlatformWorkItemCancelPayload,
   ManagedAgentPlatformWorkItemDetailPayload,
@@ -40,7 +40,7 @@ import type {
   ManagedAgentPlatformWorkItemListPayload,
   ManagedAgentPlatformWorkItemResponsePayload,
   ManagedAgentPlatformWorkItemRespondPayload,
-} from "../contracts/managed-agent-platform-work-items.js";
+} from "themis-contracts/managed-agent-platform-work-items";
 import type {
   ManagedAgentPlatformNodeDetailPayload,
   ManagedAgentPlatformNodeHeartbeatPayload,
@@ -53,7 +53,7 @@ import type {
   ManagedAgentPlatformWorkerRunStatusPayload,
   ManagedAgentPlatformWorkerWaitingActionPayload,
   ManagedAgentPlatformWorkerRunCompletePayload,
-} from "../contracts/managed-agent-platform-worker.js";
+} from "themis-contracts/managed-agent-platform-worker";
 import {
   type ApprovalPolicy,
   MANAGED_AGENT_IDLE_RECOVERY_ACTIONS,
@@ -233,7 +233,7 @@ export async function handlePlatformAgentExecutionBoundaryUpdate(
       agentId: payload.agentId,
       ...(payload.boundary.workspacePolicy ? { workspacePolicy: payload.boundary.workspacePolicy } : {}),
       ...(payload.boundary.runtimeProfile ? { runtimeProfile: payload.boundary.runtimeProfile } : {}),
-    });
+    } as Parameters<ManagedAgentControlPlaneFacade["updateManagedAgentExecutionBoundary"]>[0]);
 
     writeJson(response, 200, {
       ok: true,
@@ -424,8 +424,8 @@ export async function handlePlatformAgentSpawnPolicyUpdate(
     const policy = await facade.updateSpawnPolicy({
       ownerPrincipalId: payload.ownerPrincipalId,
       ...(payload.policy.organizationId ? { organizationId: payload.policy.organizationId } : {}),
-      maxActiveAgents: payload.policy.maxActiveAgents,
-      maxActiveAgentsPerRole: payload.policy.maxActiveAgentsPerRole,
+      maxActiveAgents: payload.policy.maxActiveAgents ?? 0,
+      maxActiveAgentsPerRole: payload.policy.maxActiveAgentsPerRole ?? 0,
     });
     writeJson(response, 200, {
       ok: true,
@@ -485,11 +485,11 @@ async function handlePlatformAgentSpawnSuggestionDecision(
       ? await facade.ignoreSpawnSuggestion({
         ownerPrincipalId: payload.ownerPrincipalId,
         ...payload.suggestion,
-      })
+      } as Parameters<ManagedAgentControlPlaneFacade["ignoreSpawnSuggestion"]>[0])
       : await facade.rejectSpawnSuggestion({
         ownerPrincipalId: payload.ownerPrincipalId,
         ...payload.suggestion,
-      });
+      } as Parameters<ManagedAgentControlPlaneFacade["rejectSpawnSuggestion"]>[0]);
 
     writeJson(response, 200, {
       ok: true,
@@ -744,7 +744,7 @@ export async function handlePlatformWorkItemDispatch(
       ...(payload.workItem.sourceAgentId ? { sourceAgentId: payload.workItem.sourceAgentId } : {}),
       sourcePrincipalId: payload.workItem.sourcePrincipalId ?? payload.ownerPrincipalId,
       ...(payload.workItem.parentWorkItemId ? { parentWorkItemId: payload.workItem.parentWorkItemId } : {}),
-      dispatchReason: payload.workItem.dispatchReason,
+      dispatchReason: payload.workItem.dispatchReason ?? "",
       goal: payload.workItem.goal,
       ...(hasOwn(payload.workItem, "contextPacket") ? { contextPacket: payload.workItem.contextPacket } : {}),
       ...(payload.workItem.priority ? { priority: payload.workItem.priority } : {}),

@@ -62,10 +62,10 @@ export interface CreateManagedAgentPlatformGatewayFacadeOptions extends ManagedA
 export function createManagedAgentPlatformGatewayFacade(
   options: CreateManagedAgentPlatformGatewayFacadeOptions,
 ): ManagedAgentControlPlaneFacadeLike {
-  return new ManagedAgentPlatformGatewayFacade(options);
+  return new ManagedAgentPlatformGatewayFacade(options) as unknown as ManagedAgentControlPlaneFacadeLike;
 }
 
-class ManagedAgentPlatformGatewayFacade implements ManagedAgentControlPlaneFacadeLike {
+class ManagedAgentPlatformGatewayFacade {
   private readonly client: ManagedAgentPlatformGatewayClient;
   private readonly ownerPrincipalId: string;
 
@@ -86,12 +86,12 @@ class ManagedAgentPlatformGatewayFacade implements ManagedAgentControlPlaneFacad
 
   async getSpawnSuggestionsView(ownerPrincipalId: string): Promise<ManagedAgentSpawnSuggestionsView> {
     this.assertOwned(ownerPrincipalId);
-    return await this.client.getSpawnSuggestionsView();
+    return await this.client.getSpawnSuggestionsView() as unknown as ManagedAgentSpawnSuggestionsView;
   }
 
   async getIdleRecoverySuggestionsView(ownerPrincipalId: string): Promise<ManagedAgentIdleRecoverySuggestionsView> {
     this.assertOwned(ownerPrincipalId);
-    return await this.client.getIdleRecoverySuggestionsView();
+    return await this.client.getIdleRecoverySuggestionsView() as unknown as ManagedAgentIdleRecoverySuggestionsView;
   }
 
   async getManagedAgentDetailView(ownerPrincipalId: string, agentId: string) {
@@ -108,7 +108,9 @@ class ManagedAgentPlatformGatewayFacade implements ManagedAgentControlPlaneFacad
     input: UpdateManagedAgentExecutionBoundaryInput,
   ): Promise<ManagedAgentExecutionBoundaryView> {
     this.assertOwned(input.ownerPrincipalId);
-    return await this.client.updateManagedAgentExecutionBoundary(input);
+    return await this.client.updateManagedAgentExecutionBoundary(
+      input as unknown as Parameters<ManagedAgentPlatformGatewayClient["updateManagedAgentExecutionBoundary"]>[0],
+    ) as unknown as ManagedAgentExecutionBoundaryView;
   }
 
   async listProjectWorkspaceBindings(ownerPrincipalId: string, organizationId?: string) {
@@ -161,12 +163,12 @@ class ManagedAgentPlatformGatewayFacade implements ManagedAgentControlPlaneFacad
 
   async updateManagedAgentLifecycle(input: ManagedAgentLifecycleUpdateInput): Promise<ManagedAgentOwnerView | null> {
     this.assertOwned(input.ownerPrincipalId);
-    return await this.client.updateManagedAgentLifecycle(input);
+    return await this.client.updateManagedAgentLifecycle(input) as unknown as ManagedAgentOwnerView | null;
   }
 
   async dispatchWorkItem(input: DispatchWorkItemInput) {
     this.assertOwned(input.ownerPrincipalId);
-    return await this.client.dispatchWorkItem(input);
+    return await this.client.dispatchWorkItem(input as unknown as Parameters<ManagedAgentPlatformGatewayClient["dispatchWorkItem"]>[0]);
   }
 
   async listWorkItems(ownerPrincipalId: string, targetAgentId?: string) {
@@ -181,7 +183,7 @@ class ManagedAgentPlatformGatewayFacade implements ManagedAgentControlPlaneFacad
     filters: OrganizationGovernanceFilters = {},
   ): Promise<OrganizationWaitingQueueResult> {
     this.assertOwned(ownerPrincipalId);
-    return await this.client.listOrganizationWaitingQueue(filters);
+    return await this.client.listOrganizationWaitingQueue(filters) as unknown as OrganizationWaitingQueueResult;
   }
 
   async listOrganizationCollaborationDashboard(
@@ -189,7 +191,7 @@ class ManagedAgentPlatformGatewayFacade implements ManagedAgentControlPlaneFacad
     filters: OrganizationGovernanceFilters = {},
   ): Promise<OrganizationCollaborationDashboardResult> {
     this.assertOwned(ownerPrincipalId);
-    return await this.client.listOrganizationCollaborationDashboard(filters);
+    return await this.client.listOrganizationCollaborationDashboard(filters) as unknown as OrganizationCollaborationDashboardResult;
   }
 
   async getOrganizationGovernanceOverview(
@@ -197,7 +199,7 @@ class ManagedAgentPlatformGatewayFacade implements ManagedAgentControlPlaneFacad
     filters: OrganizationGovernanceFilters = {},
   ): Promise<OrganizationGovernanceOverview> {
     this.assertOwned(ownerPrincipalId);
-    return await this.client.getOrganizationGovernanceOverview(filters);
+    return await this.client.getOrganizationGovernanceOverview(filters) as unknown as OrganizationGovernanceOverview;
   }
 
   async getWorkItemDetailView(ownerPrincipalId: string, workItemId: string) {
@@ -247,12 +249,12 @@ class ManagedAgentPlatformGatewayFacade implements ManagedAgentControlPlaneFacad
     },
   ): Promise<ManagedAgentHandoffListView> {
     this.assertOwned(ownerPrincipalId);
-    return await this.client.getAgentHandoffListView(input);
+    return await this.client.getAgentHandoffListView(input) as unknown as ManagedAgentHandoffListView;
   }
 
   async getAgentMailboxListView(ownerPrincipalId: string, agentId: string): Promise<ManagedAgentMailboxListView> {
     this.assertOwned(ownerPrincipalId);
-    return await this.client.getAgentMailboxListView(agentId);
+    return await this.client.getAgentMailboxListView(agentId) as unknown as ManagedAgentMailboxListView;
   }
 
   async listRuns(input: ManagedAgentRunListInput) {
@@ -262,17 +264,17 @@ class ManagedAgentPlatformGatewayFacade implements ManagedAgentControlPlaneFacad
 
   async getRunDetailView(ownerPrincipalId: string, runId: string): Promise<ManagedAgentRunDetailView | null> {
     this.assertOwned(ownerPrincipalId);
-    return await this.client.getRunDetail(runId);
+    return await this.client.getRunDetail(runId) as unknown as ManagedAgentRunDetailView | null;
   }
 
   async registerNode(input: RegisterManagedAgentNodeInput): Promise<ManagedAgentNodeMutationResult> {
     this.assertOwned(input.ownerPrincipalId);
-    return await this.client.registerNode(input);
+    return await this.client.registerNode(input) as unknown as ManagedAgentNodeMutationResult;
   }
 
   async heartbeatNode(input: HeartbeatManagedAgentNodeInput): Promise<ManagedAgentNodeMutationResult> {
     this.assertOwned(input.ownerPrincipalId);
-    return await this.client.heartbeatNode(input);
+    return await this.client.heartbeatNode(input) as unknown as ManagedAgentNodeMutationResult;
   }
 
   async listNodes(ownerPrincipalId: string, organizationId?: string) {
@@ -284,37 +286,39 @@ class ManagedAgentPlatformGatewayFacade implements ManagedAgentControlPlaneFacad
 
   async getNodeDetailView(ownerPrincipalId: string, nodeId: string): Promise<ManagedAgentNodeDetailView | null> {
     this.assertOwned(ownerPrincipalId);
-    return await this.client.getNodeDetail(nodeId);
+    return await this.client.getNodeDetail(nodeId) as unknown as ManagedAgentNodeDetailView | null;
   }
 
   async markNodeDraining(input: ManagedAgentNodeGovernanceInput): Promise<ManagedAgentNodeMutationResult> {
     this.assertOwned(input.ownerPrincipalId);
-    return await this.client.markNodeDraining(input.nodeId);
+    return await this.client.markNodeDraining(input.nodeId) as unknown as ManagedAgentNodeMutationResult;
   }
 
   async markNodeOffline(input: ManagedAgentNodeGovernanceInput): Promise<ManagedAgentNodeMutationResult> {
     this.assertOwned(input.ownerPrincipalId);
-    return await this.client.markNodeOffline(input.nodeId);
+    return await this.client.markNodeOffline(input.nodeId) as unknown as ManagedAgentNodeMutationResult;
   }
 
   async reclaimNodeLeases(input: ManagedAgentNodeLeaseReclaimInput): Promise<ManagedAgentNodeLeaseRecoveryResult> {
     this.assertOwned(input.ownerPrincipalId);
-    return await this.client.reclaimNodeLeases(input);
+    return await this.client.reclaimNodeLeases(input) as unknown as ManagedAgentNodeLeaseRecoveryResult;
   }
 
   async pullAssignedRun(input: PullManagedAgentAssignedRunInput): Promise<ManagedAgentWorkerAssignedRun | null> {
     this.assertOwned(input.ownerPrincipalId);
-    return await this.client.pullAssignedRun(input);
+    return await this.client.pullAssignedRun(input) as unknown as ManagedAgentWorkerAssignedRun | null;
   }
 
   async updateWorkerRunStatus(input: UpdateManagedAgentWorkerRunStatusInput): Promise<ManagedAgentWorkerRunMutationResult> {
     this.assertOwned(input.ownerPrincipalId);
-    return await this.client.updateWorkerRunStatus(input);
+    return await this.client.updateWorkerRunStatus(input) as unknown as ManagedAgentWorkerRunMutationResult;
   }
 
   async completeWorkerRun(input: CompleteManagedAgentWorkerRunInput): Promise<ManagedAgentWorkerRunMutationResult> {
     this.assertOwned(input.ownerPrincipalId);
-    return await this.client.completeWorkerRun(input);
+    return await this.client.completeWorkerRun(
+      input as unknown as Parameters<ManagedAgentPlatformGatewayClient["completeWorkerRun"]>[0],
+    ) as unknown as ManagedAgentWorkerRunMutationResult;
   }
 
   private assertOwned(ownerPrincipalId: string): void {

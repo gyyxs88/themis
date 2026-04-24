@@ -125,7 +125,7 @@ Notes:
 - Compatibility aliases still exist under `./themis` for `auth platform`, `doctor worker-node`, `doctor worker-fleet`, `worker-node`, and `worker-fleet`, but daily use should move to the dedicated entrypoints.
 - Platform on-call, platform tokens, and `worker-fleet`: `./themis-platform`
 - Worker Node local preflight and daemon execution: `./themis-worker-node`
-- `themis-platform` and `themis-worker-node` currently depend on shared contracts through `file:../themis-contracts`. For real deployment, place `themis-contracts` as a sibling directory before running `npm ci`.
+- `themis`, `themis-platform`, and `themis-worker-node` currently depend on shared contracts through `file:../themis-contracts`. For real deployment, place `themis-contracts` as a sibling directory before running `npm ci`.
 - `THEMIS_PLATFORM_WEB_ACCESS_TOKEN` is the manager gateway token for main Themis. Besides `agents / projects / work-items / runs`, it can access manager-view node observation and governance endpoints: `nodes/list|detail|drain|offline|reclaim`. Node runtime endpoints such as `nodes/register|heartbeat`, `/api/platform/worker/*`, and `worker-node run` still use a platform service token with the `worker` role.
 
 To install a user-level `themis` command similar to `codex`, run once from the repository root:

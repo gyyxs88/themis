@@ -148,9 +148,11 @@ function summarizeHeartbeat(
   freshness: WorkerFleetDiagnosticsNodeSummary["heartbeatFreshness"];
 } {
   const nowTs = Date.parse(now);
-  const lastHeartbeatTs = Date.parse(node.lastHeartbeatAt);
+  const lastHeartbeatAt = node.lastHeartbeatAt ?? "";
+  const heartbeatTtlSeconds = node.heartbeatTtlSeconds ?? 0;
+  const lastHeartbeatTs = Date.parse(lastHeartbeatAt);
 
-  if (Number.isNaN(nowTs) || Number.isNaN(lastHeartbeatTs) || node.heartbeatTtlSeconds <= 0) {
+  if (Number.isNaN(nowTs) || Number.isNaN(lastHeartbeatTs) || heartbeatTtlSeconds <= 0) {
     return {
       ageSeconds: null,
       remainingSeconds: null,
@@ -159,8 +161,8 @@ function summarizeHeartbeat(
   }
 
   const ageSeconds = Math.max(0, Math.floor((nowTs - lastHeartbeatTs) / 1000));
-  const remainingSeconds = node.heartbeatTtlSeconds - ageSeconds;
-  if (ageSeconds > node.heartbeatTtlSeconds) {
+  const remainingSeconds = heartbeatTtlSeconds - ageSeconds;
+  if (ageSeconds > heartbeatTtlSeconds) {
     return {
       ageSeconds,
       remainingSeconds,
@@ -168,7 +170,7 @@ function summarizeHeartbeat(
     };
   }
 
-  if (ageSeconds > Math.floor((node.heartbeatTtlSeconds * 2) / 3)) {
+  if (ageSeconds > Math.floor((heartbeatTtlSeconds * 2) / 3)) {
     return {
       ageSeconds,
       remainingSeconds,

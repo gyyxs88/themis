@@ -13,8 +13,8 @@ import type {
   ManagedAgentPlatformWorkerRunCompleteInput,
   ManagedAgentPlatformWorkerRunMutationResult,
   ManagedAgentPlatformWorkerRunStatusInput,
-} from "../contracts/managed-agent-platform-worker.js";
-import { buildPlatformServiceAuthorizationHeader } from "../contracts/managed-agent-platform-access.js";
+} from "themis-contracts/managed-agent-platform-worker";
+import { buildPlatformServiceAuthorizationHeader } from "themis-contracts/managed-agent-platform-access";
 
 export type {
   ManagedAgentPlatformWorkerAssignedRunResult,
@@ -41,7 +41,7 @@ export type {
   ManagedAgentPlatformWorkerRunStatus,
   ManagedAgentPlatformWorkerRunStatusInput,
   ManagedAgentPlatformWorkerWaitingActionPayload,
-} from "../contracts/managed-agent-platform-worker.js";
+} from "themis-contracts/managed-agent-platform-worker";
 
 export interface ManagedAgentPlatformWorkerClientOptions {
   baseUrl: string;

@@ -160,7 +160,7 @@ import {
   handleScheduledTaskCreate,
   handleScheduledTaskList,
 } from "./http-scheduled-tasks.js";
-import { buildPlatformRouteNotFoundErrorResponse } from "../contracts/managed-agent-platform-access.js";
+import { buildPlatformRouteNotFoundErrorResponse } from "themis-contracts/managed-agent-platform-access";
 import { writeJson } from "./http-responses.js";
 import { maybeHandleWebAccessRoute, requireWebAccess } from "./http-web-access.js";
 import {

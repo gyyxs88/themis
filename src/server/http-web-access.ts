@@ -3,7 +3,7 @@ import {
   buildPlatformServiceAuthDeniedErrorResponse,
   buildPlatformServiceForbiddenErrorResponse,
   readPlatformServiceAuthorizationHeader,
-} from "../contracts/managed-agent-platform-access.js";
+} from "themis-contracts/managed-agent-platform-access";
 import {
   WebAccessService,
   type PlatformServiceRole,

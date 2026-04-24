@@ -4,7 +4,7 @@ import { MeetingRoomRoundExecutor } from "../core/meeting-room-round-executor.js
 import type { PlatformMeetingRoomGateway, PlatformMeetingRoomGatewayStatus } from "../core/platform-meeting-room-gateway.js";
 import {
   buildManagedAgentMeetingRoomStreamEvent,
-} from "../contracts/managed-agent-platform-meetings.js";
+} from "themis-contracts/managed-agent-platform-meetings";
 import type {
   ManagedAgentPlatformMeetingRoomAppendFailureInput,
   ManagedAgentPlatformMeetingRoomCloseInput,
@@ -12,7 +12,7 @@ import type {
   ManagedAgentPlatformMeetingRoomCreateResolutionInput,
   ManagedAgentPlatformMeetingRoomMessageCreateInput,
   ManagedAgentPlatformMeetingRoomPromoteResolutionInput,
-} from "../contracts/managed-agent-platform-meetings.js";
+} from "themis-contracts/managed-agent-platform-meetings";
 import { readJsonBody } from "./http-request.js";
 import { writeJson, writeNdjson } from "./http-responses.js";
 

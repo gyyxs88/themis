@@ -44,7 +44,7 @@ import type {
   ManagedAgentPlatformRunDetailResult,
   ManagedAgentPlatformRunListInput,
   ManagedAgentPlatformRunListResult,
-} from "../contracts/managed-agent-platform-collaboration.js";
+} from "themis-contracts/managed-agent-platform-collaboration";
 import type {
   ManagedAgentPlatformAgentCardUpdatePayload,
   ManagedAgentPlatformAgentCardUpdateResult,
@@ -70,7 +70,7 @@ import type {
   ManagedAgentPlatformGovernanceFiltersInput,
   ManagedAgentPlatformGovernanceOverviewResult,
   ManagedAgentPlatformWaitingQueueResult,
-} from "../contracts/managed-agent-platform-agents.js";
+} from "themis-contracts/managed-agent-platform-agents";
 import type {
   ManagedAgentPlatformProjectWorkspaceBindingDetailResult,
   ManagedAgentPlatformProjectWorkspaceBindingListInput,
@@ -78,7 +78,7 @@ import type {
   ManagedAgentPlatformProjectWorkspaceBindingRecord,
   ManagedAgentPlatformProjectWorkspaceBindingUpsertInput,
   ManagedAgentPlatformProjectWorkspaceBindingUpsertResult,
-} from "../contracts/managed-agent-platform-projects.js";
+} from "themis-contracts/managed-agent-platform-projects";
 import { deriveManagedAgentCompletionInsight } from "./managed-agent-completion-insight.js";
 import type {
   ManagedAgentPlatformWorkItemCancelResult,
@@ -91,8 +91,8 @@ import type {
   ManagedAgentPlatformWorkItemListResult,
   ManagedAgentPlatformWorkItemRespondInput,
   ManagedAgentPlatformWorkItemRespondResult,
-} from "../contracts/managed-agent-platform-work-items.js";
-import { buildPlatformServiceAuthorizationHeader } from "../contracts/managed-agent-platform-access.js";
+} from "themis-contracts/managed-agent-platform-work-items";
+import { buildPlatformServiceAuthorizationHeader } from "themis-contracts/managed-agent-platform-access";
 import type {
   ManagedAgentPlatformWorkerNodeDetailResult,
   ManagedAgentPlatformWorkerNodeLeaseRecoveryResult,
@@ -107,7 +107,7 @@ import type {
   ManagedAgentPlatformWorkerPullInput,
   ManagedAgentPlatformWorkerRunCompleteInput,
   ManagedAgentPlatformWorkerRunStatusInput,
-} from "../contracts/managed-agent-platform-worker.js";
+} from "themis-contracts/managed-agent-platform-worker";
 import type {
   StoredAgentSpawnPolicyRecord,
   StoredAgentWorkItemRecord,
@@ -154,7 +154,7 @@ export type {
   ManagedAgentPlatformGovernanceOverviewResult,
   ManagedAgentPlatformWaitingQueueListPayload,
   ManagedAgentPlatformWaitingQueueResult,
-} from "../contracts/managed-agent-platform-agents.js";
+} from "themis-contracts/managed-agent-platform-agents";
 export type {
   ManagedAgentPlatformHandoffListInput,
   ManagedAgentPlatformHandoffListPayload,
@@ -178,7 +178,7 @@ export type {
   ManagedAgentPlatformRunListInput,
   ManagedAgentPlatformRunListPayload,
   ManagedAgentPlatformRunListResult,
-} from "../contracts/managed-agent-platform-collaboration.js";
+} from "themis-contracts/managed-agent-platform-collaboration";
 export type {
   ManagedAgentPlatformProjectWorkspaceBindingDetailInput,
   ManagedAgentPlatformProjectWorkspaceBindingDetailResult,
@@ -187,7 +187,7 @@ export type {
   ManagedAgentPlatformProjectWorkspaceBindingRecord,
   ManagedAgentPlatformProjectWorkspaceBindingUpsertInput,
   ManagedAgentPlatformProjectWorkspaceBindingUpsertResult,
-} from "../contracts/managed-agent-platform-projects.js";
+} from "themis-contracts/managed-agent-platform-projects";
 export type {
   ManagedAgentPlatformWorkItemCancelPayload,
   ManagedAgentPlatformWorkItemCancelResult,
@@ -206,7 +206,7 @@ export type {
   ManagedAgentPlatformWorkItemRespondInput,
   ManagedAgentPlatformWorkItemRespondPayload,
   ManagedAgentPlatformWorkItemRespondResult,
-} from "../contracts/managed-agent-platform-work-items.js";
+} from "themis-contracts/managed-agent-platform-work-items";
 
 export interface ManagedAgentPlatformGatewayConfig {
   baseUrl: string;
@@ -348,7 +348,7 @@ export class ManagedAgentPlatformGatewayClient {
       runtimeProfile: payload.runtimeProfile ?? null,
       authAccounts: Array.isArray(payload.authAccounts) ? payload.authAccounts : [],
       thirdPartyProviders: Array.isArray(payload.thirdPartyProviders) ? payload.thirdPartyProviders : [],
-    };
+    } as unknown as ManagedAgentPlatformGatewayDetailResult;
   }
 
   async createManagedAgent(input: ManagedAgentPlatformAgentCreateInput): Promise<ManagedAgentPlatformAgentCreateResult> {
@@ -384,7 +384,7 @@ export class ManagedAgentPlatformGatewayClient {
       runtimeProfile: payload.runtimeProfile ?? null,
       authAccounts: Array.isArray(payload.authAccounts) ? payload.authAccounts : [],
       thirdPartyProviders: Array.isArray(payload.thirdPartyProviders) ? payload.thirdPartyProviders : [],
-    };
+    } as unknown as ManagedAgentPlatformGatewayDetailResult;
   }
 
   async updateManagedAgentExecutionBoundary(
@@ -418,7 +418,7 @@ export class ManagedAgentPlatformGatewayClient {
       },
     );
 
-    return payload.policy;
+    return payload.policy as unknown as StoredAgentSpawnPolicyRecord;
   }
 
   async approveSpawnSuggestion(
@@ -526,7 +526,7 @@ export class ManagedAgentPlatformGatewayClient {
       ...(input.agentId ? { agentId: input.agentId } : {}),
     });
 
-    return Array.isArray(payload.workItems) ? payload.workItems : [];
+    return (Array.isArray(payload.workItems) ? payload.workItems : []) as unknown as StoredAgentWorkItemRecord[];
   }
 
   async dispatchWorkItem(input: ManagedAgentPlatformWorkItemDispatchInput): Promise<ManagedAgentPlatformWorkItemDispatchResult> {
@@ -665,6 +665,7 @@ export class ManagedAgentPlatformGatewayClient {
             normalCount: 0,
           },
       items: Array.isArray(payload.items) ? payload.items : [],
+      parents: Array.isArray(payload.parents) ? payload.parents : [],
     };
   }
 
@@ -705,7 +706,7 @@ export class ManagedAgentPlatformGatewayClient {
       },
       messages: Array.isArray(payload.messages) ? payload.messages : [],
       ...(latestCompletion !== undefined ? { latestCompletion } : {}),
-    };
+    } as unknown as ManagedAgentPlatformWorkItemDetailResult;
   }
 
   async listRuns(input: ManagedAgentPlatformRunListInput = {}): Promise<NonNullable<ManagedAgentPlatformRunListResult["runs"]>> {
@@ -744,7 +745,7 @@ export class ManagedAgentPlatformGatewayClient {
       node: payload.node ?? null,
       executionLease: payload.executionLease ?? null,
       ...(completionResult !== undefined ? { completionResult } : {}),
-    };
+    } as unknown as ManagedAgentRunDetailView;
   }
 
   async getAgentHandoffListView(

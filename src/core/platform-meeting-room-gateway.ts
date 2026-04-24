@@ -1,4 +1,4 @@
-import { buildPlatformServiceAuthorizationHeader } from "../contracts/managed-agent-platform-access.js";
+import { buildPlatformServiceAuthorizationHeader } from "themis-contracts/managed-agent-platform-access";
 import type {
   ManagedAgentPlatformMeetingRoomAppendFailureInput,
   ManagedAgentPlatformMeetingRoomAppendReplyInput,
@@ -16,7 +16,7 @@ import type {
   ManagedAgentPlatformMeetingRoomParticipantsAddResult,
   ManagedAgentPlatformMeetingRoomPromoteResolutionInput,
   ManagedAgentPlatformMeetingRoomPromoteResolutionResult,
-} from "../contracts/managed-agent-platform-meetings.js";
+} from "themis-contracts/managed-agent-platform-meetings";
 import { readManagedAgentPlatformGatewayConfig } from "./managed-agent-platform-gateway-client.js";
 
 export interface PlatformMeetingRoomGatewayStatus {

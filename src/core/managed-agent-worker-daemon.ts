@@ -90,7 +90,7 @@ export class ManagedAgentWorkerDaemon {
       };
     }
 
-    return await this.executeAssignedRun(nodeId, assigned);
+    return await this.executeAssignedRun(nodeId, assigned as unknown as ManagedAgentWorkerAssignedRun);
   }
 
   async runLoop(signal?: AbortSignal): Promise<void> {

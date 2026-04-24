@@ -3,7 +3,7 @@ import test from "node:test";
 import type {
   ManagedAgentPlatformMeetingRoomDetailResult,
   ManagedAgentPlatformMeetingRoomMessageCreateResult,
-} from "../contracts/managed-agent-platform-meetings.js";
+} from "themis-contracts/managed-agent-platform-meetings";
 import type { TaskRequest, TaskResult } from "../types/task.js";
 import type { AppServerTaskRuntime } from "./app-server-task-runtime.js";
 import { MeetingRoomRoundExecutor } from "./meeting-room-round-executor.js";

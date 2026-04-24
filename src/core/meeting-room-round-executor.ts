@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { buildManagedAgentMeetingRoomStreamEvent } from "../contracts/managed-agent-platform-meetings.js";
+import { buildManagedAgentMeetingRoomStreamEvent } from "themis-contracts/managed-agent-platform-meetings";
 import type {
   ManagedAgentPlatformMeetingMessageRecord,
   ManagedAgentPlatformMeetingParticipantRecord,
   ManagedAgentPlatformMeetingRoomDetailResult,
   ManagedAgentPlatformMeetingRoomMessageCreateResult,
   ManagedAgentPlatformMeetingRoomStreamEvent,
-} from "../contracts/managed-agent-platform-meetings.js";
+} from "themis-contracts/managed-agent-platform-meetings";
 import type { TaskRequest } from "../types/task.js";
 import type { AppServerTaskRuntime } from "./app-server-task-runtime.js";
 import type { PlatformMeetingRoomGateway } from "./platform-meeting-room-gateway.js";

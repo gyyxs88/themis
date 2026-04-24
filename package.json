@@ -34,7 +34,8 @@
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "@openai/codex": "^0.122.0",
     "better-sqlite3": "^12.8.0",
-    "mysql2": "^3.22.0"
+    "mysql2": "^3.22.0",
+    "themis-contracts": "file:../themis-contracts"
   },
   "overrides": {
     "axios": "1.15.0"
