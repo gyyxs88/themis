@@ -27,6 +27,7 @@ import {
   type PrincipalTaskSettings,
   type ReasoningLevel,
   type SessionTaskSettings,
+  type StoredAgentRunRecord,
   type StoredAgentWorkItemRecord,
   type StoredManagedAgentRecord,
   type StoredScheduledTaskRecord,
@@ -241,6 +242,10 @@ interface RecoveredFeishuAttachmentCandidate {
   exists: boolean;
 }
 
+type ManagedAgentFollowupRunRecord = StoredAgentRunRecord & {
+  nodeId?: string | null;
+};
+
 export class FeishuChannelService {
   private readonly runtime: RuntimeServiceHost;
   private readonly runtimeRegistry: TaskRuntimeRegistry;
@@ -400,6 +405,7 @@ export class FeishuChannelService {
     workItem: StoredAgentWorkItemRecord;
     targetAgent?: StoredManagedAgentRecord | null;
     outcome: "completed" | "failed" | "cancelled";
+    runs?: ManagedAgentFollowupRunRecord[];
     latestCompletion?: {
       summary: string;
       output?: unknown;
@@ -1506,6 +1512,7 @@ export class FeishuChannelService {
       workItem: StoredAgentWorkItemRecord;
       targetAgent?: StoredManagedAgentRecord | null;
       outcome: "completed" | "failed" | "cancelled";
+      runs?: ManagedAgentFollowupRunRecord[];
       latestCompletion?: {
         summary: string;
         output?: unknown;
@@ -6386,6 +6393,7 @@ function buildManagedAgentScheduledFollowupResolvedText(input: {
   workItem: StoredAgentWorkItemRecord;
   targetAgent?: StoredManagedAgentRecord | null;
   outcome: "completed" | "failed" | "cancelled";
+  runs?: ManagedAgentFollowupRunRecord[];
   latestCompletion?: {
     summary: string;
     output?: unknown;
@@ -6403,6 +6411,8 @@ function buildManagedAgentScheduledFollowupResolvedText(input: {
     `工作项 ID：${input.workItem.workItemId}`,
   ];
 
+  appendManagedAgentFollowupRunLines(lines, input.runs);
+
   if (summary) {
     lines.push(`结果摘要：${summary}`);
   }
@@ -6415,6 +6425,7 @@ function buildManagedAgentScheduledFollowupResolvedTaskPrompt(input: {
   workItem: StoredAgentWorkItemRecord;
   targetAgent?: StoredManagedAgentRecord | null;
   outcome: "completed" | "failed" | "cancelled";
+  runs?: ManagedAgentFollowupRunRecord[];
   latestCompletion?: {
     summary: string;
     output?: unknown;
@@ -6435,6 +6446,8 @@ function buildManagedAgentScheduledFollowupResolvedTaskPrompt(input: {
     `工作项 ID：${input.workItem.workItemId}`,
   ];
 
+  appendManagedAgentFollowupRunLines(lines, input.runs);
+
   if (summary) {
     lines.push(`结果摘要：${summary}`);
   }
@@ -6445,10 +6458,69 @@ function buildManagedAgentScheduledFollowupResolvedTaskPrompt(input: {
 
   lines.push(
     "",
-    "请在当前会话里处理这个系统事件：告诉用户这条回看为什么提前收口、当前 work item 已经是什么终态，并基于这个事实更新下一步推进计划。不要再说等待同一个 work item 出报告。",
+    "请在当前会话里处理这个系统事件：告诉用户这条回看为什么提前收口、当前 work item 已经是什么终态；如果上面已经有最近 run 的失败码/失败原因，必须直接说明这些事实，不要再说“先查失败原因”；再基于这些事实更新下一步推进计划。不要再说等待同一个 work item 出报告。",
   );
 
   return lines.join("\n");
+}
+
+function appendManagedAgentFollowupRunLines(lines: string[], runs: ManagedAgentFollowupRunRecord[] | undefined): void {
+  const latestRun = selectLatestManagedAgentFollowupRun(runs);
+
+  if (!latestRun) {
+    return;
+  }
+
+  lines.push(`最近 run：${latestRun.runId}`);
+  lines.push(`run 状态：${latestRun.status}`);
+
+  const nodeId = normalizeText(latestRun.nodeId);
+  if (nodeId) {
+    lines.push(`worker 节点：${nodeId}`);
+  }
+
+  const failureCode = normalizeText(latestRun.failureCode);
+  if (failureCode) {
+    lines.push(`失败码：${failureCode}`);
+  }
+
+  const failureMessage = normalizeText(latestRun.failureMessage);
+  if (failureMessage) {
+    lines.push(`失败原因：${failureMessage}`);
+  }
+}
+
+function selectLatestManagedAgentFollowupRun(
+  runs: ManagedAgentFollowupRunRecord[] | undefined,
+): ManagedAgentFollowupRunRecord | null {
+  if (!runs?.length) {
+    return null;
+  }
+
+  return [...runs].sort(compareManagedAgentFollowupRunsDesc)[0] ?? null;
+}
+
+function compareManagedAgentFollowupRunsDesc(
+  left: ManagedAgentFollowupRunRecord,
+  right: ManagedAgentFollowupRunRecord,
+): number {
+  const rightTime = parseManagedAgentFollowupRunTime(right);
+  const leftTime = parseManagedAgentFollowupRunTime(left);
+
+  if (rightTime !== leftTime) {
+    return rightTime - leftTime;
+  }
+
+  return right.runId.localeCompare(left.runId);
+}
+
+function parseManagedAgentFollowupRunTime(run: ManagedAgentFollowupRunRecord): number {
+  const timeValue = normalizeText(run.updatedAt)
+    ?? normalizeText(run.completedAt)
+    ?? normalizeText(run.startedAt)
+    ?? normalizeText(run.createdAt);
+  const timestamp = timeValue ? Date.parse(timeValue) : NaN;
+  return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
 function describeScheduledTaskOutcome(outcome: "completed" | "failed" | "cancelled"): string {

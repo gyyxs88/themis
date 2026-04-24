@@ -301,6 +301,18 @@ test("ManagedAgentPlatformGatewayClient 会按 work-items 契约读写平台协�
           createdAt: "2026-04-13T09:00:00.000Z",
           updatedAt: "2026-04-13T09:00:00.000Z",
         },
+        runs: [{
+          runId: "run-beta",
+          organizationId: "org-alpha",
+          workItemId: "work-item-beta",
+          targetAgentId: "agent-alpha",
+          nodeId: "node-alpha",
+          status: "failed",
+          failureCode: "WORKER_NODE_EXECUTION_FAILED",
+          failureMessage: "spawn codex ENOENT",
+          createdAt: "2026-04-13T10:06:00.000Z",
+          updatedAt: "2026-04-13T10:08:00.000Z",
+        }],
         messages: [],
         latestCompletion: {
           summary: "Alpha Agent 已提交完整交付。",
@@ -375,6 +387,7 @@ test("ManagedAgentPlatformGatewayClient 会按 work-items 契约读写平台协�
   assert.equal(escalated.workItem.status, "waiting_human");
   assert.equal(detail?.workItem.workItemId, "work-item-beta");
   assert.equal(detail?.targetAgent?.agentId, "agent-alpha");
+  assert.equal(detail?.runs?.[0]?.failureMessage, "spawn codex ENOENT");
   assert.equal(detail?.latestCompletion?.summary, "Alpha Agent 已提交完整交付。");
   assert.equal(detail?.latestCompletion?.detailLevel, "full_execution_snapshot");
   assert.equal(

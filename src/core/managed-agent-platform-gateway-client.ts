@@ -706,6 +706,7 @@ export class ManagedAgentPlatformGatewayClient {
         },
         childWorkItems: Array.isArray(payload.collaboration?.childWorkItems) ? payload.collaboration.childWorkItems : [],
       },
+      runs: Array.isArray(payload.runs) ? payload.runs : [],
       messages: Array.isArray(payload.messages) ? payload.messages : [],
       ...(latestCompletion !== undefined ? { latestCompletion } : {}),
     } as unknown as ManagedAgentPlatformWorkItemDetailResult;

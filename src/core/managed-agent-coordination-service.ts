@@ -136,6 +136,7 @@ export interface ManagedAgentWorkItemDetailView {
   targetAgent: StoredManagedAgentRecord | null;
   sourceAgent: StoredManagedAgentRecord | null;
   sourcePrincipal: StoredPrincipalRecord | null;
+  runs?: StoredAgentRunRecord[];
   messages: StoredAgentMessageRecord[];
   collaboration: ManagedAgentWorkItemCollaborationView;
   latestCompletion?: {
@@ -541,6 +542,7 @@ export class ManagedAgentCoordinationService {
         ? this.registry.getManagedAgent(workItem.sourceAgentId as string)
         : null,
       sourcePrincipal: this.registry.getPrincipal(workItem.sourcePrincipalId),
+      runs: this.registry.listAgentRunsByWorkItem(workItem.workItemId),
       messages: this.registry.listAgentMessagesByWorkItem(workItem.workItemId),
       collaboration: this.getWorkItemCollaboration(ownerPrincipalId, workItem.workItemId),
     };

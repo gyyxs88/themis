@@ -12,6 +12,7 @@ import { SESSION_WORKSPACE_LOCKED_ERROR } from "../../core/session-settings-serv
 import type {
   PrincipalTaskSettings,
   SessionTaskSettings,
+  StoredAgentRunRecord,
   StoredAgentWorkItemRecord,
   StoredManagedAgentRecord,
   StoredScheduledTaskRecord,
@@ -791,6 +792,75 @@ test("被 watch 的派工提前完成后，飞书会激活原会话 Themis 处�
     assert.match(messages, /系统事件：watched managed-agent work item 已提前收口/);
     assert.match(messages, /Cloudflare 只读核查已完成/);
     assert.doesNotMatch(messages, /\[派工提前回执\]/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("派工提前收口事件会把最近 run 的失败原因交给同会话 Themis", async () => {
+  const harness = createHarness();
+
+  try {
+    harness.setCurrentSession("session-feishu-followup-failed-1");
+
+    const delivered = await harness.notifyManagedAgentScheduledFollowupResolved({
+      task: {
+        scheduledTaskId: "scheduled-task-followup-failed-1",
+        principalId: harness.getCurrentPrincipalId(),
+        sourceChannel: "feishu",
+        channelUserId: "user-1",
+        sessionId: "session-feishu-followup-failed-1",
+        channelSessionKey: "session-feishu-followup-failed-1",
+        goal: "回看 worker smoke 结果",
+        timezone: "Asia/Shanghai",
+        scheduledAt: "2026-04-24T06:30:00.000Z",
+        status: "cancelled",
+        createdAt: "2026-04-24T06:00:00.000Z",
+        updatedAt: "2026-04-24T06:10:00.000Z",
+        cancelledAt: "2026-04-24T06:10:00.000Z",
+        watch: {
+          workItemId: "work-item-platform-31",
+        },
+      } satisfies StoredScheduledTaskRecord,
+      workItem: {
+        workItemId: "work-item-platform-31",
+        organizationId: "org-1",
+        targetAgentId: "agent-worker-1",
+        sourceType: "human",
+        sourcePrincipalId: harness.getCurrentPrincipalId(),
+        dispatchReason: "worker smoke",
+        goal: "验证 worker workspace 与运行契约",
+        priority: "normal",
+        status: "failed",
+        createdAt: "2026-04-24T06:00:00.000Z",
+        completedAt: "2026-04-24T06:09:00.000Z",
+        updatedAt: "2026-04-24T06:09:00.000Z",
+      } satisfies StoredAgentWorkItemRecord,
+      outcome: "failed",
+      runs: [{
+        runId: "run-platform-22",
+        organizationId: "org-1",
+        workItemId: "work-item-platform-31",
+        targetAgentId: "agent-worker-1",
+        schedulerId: "scheduler-1",
+        leaseToken: "lease-1",
+        leaseExpiresAt: "2026-04-24T06:15:00.000Z",
+        status: "failed",
+        failureCode: "WORKER_NODE_EXECUTION_FAILED",
+        failureMessage: "spawn codex ENOENT",
+        createdAt: "2026-04-24T06:00:00.000Z",
+        updatedAt: "2026-04-24T06:09:00.000Z",
+      } satisfies StoredAgentRunRecord],
+      latestCompletion: null,
+    });
+
+    assert.equal(delivered, true);
+    const requests = harness.getTaskRequests();
+    assert.equal(requests.length, 1);
+    assert.match(requests[0]?.goal ?? "", /最近 run：run-platform-22/);
+    assert.match(requests[0]?.goal ?? "", /失败码：WORKER_NODE_EXECUTION_FAILED/);
+    assert.match(requests[0]?.goal ?? "", /失败原因：spawn codex ENOENT/);
+    assert.match(requests[0]?.goal ?? "", /不要再说“先查失败原因”/);
   } finally {
     harness.cleanup();
   }
@@ -9317,6 +9387,7 @@ function createHarness(
       workItem: StoredAgentWorkItemRecord;
       targetAgent?: StoredManagedAgentRecord | null;
       outcome: "completed" | "failed" | "cancelled";
+      runs?: StoredAgentRunRecord[];
       latestCompletion?: {
         summary: string;
         output?: unknown;

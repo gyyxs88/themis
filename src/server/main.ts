@@ -72,6 +72,7 @@ const managedAgentScheduledFollowupService = new ManagedAgentScheduledFollowupSe
       workItem: notification.workItemDetail.workItem,
       targetAgent: notification.workItemDetail.targetAgent,
       outcome: notification.outcome,
+      runs: notification.workItemDetail.runs ?? [],
       latestCompletion: notification.workItemDetail.latestCompletion ?? null,
     });
   },

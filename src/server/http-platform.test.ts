@@ -304,10 +304,12 @@ test("POST /api/platform/* 会暴露控制面最小主链", async () => {
     const workItemDetailPayload = await workItemDetailResponse.json() as {
       workItem?: { workItemId?: string };
       sourcePrincipal?: { principalId?: string };
+      runs?: Array<{ runId?: string }>;
       collaboration?: { childSummary?: { totalCount?: number } };
     };
     assert.equal(workItemDetailPayload.workItem?.workItemId, dispatchPayload.workItem?.workItemId);
     assert.equal(workItemDetailPayload.sourcePrincipal?.principalId, ownerPrincipalId);
+    assert.deepEqual(workItemDetailPayload.runs, []);
     assert.equal(workItemDetailPayload.collaboration?.childSummary?.totalCount, 0);
 
     const claim = runtime.getManagedAgentSchedulerService().claimNextRunnableWorkItem({
@@ -328,6 +330,17 @@ test("POST /api/platform/* 会暴露控制面最小主链", async () => {
     };
     assert.deepEqual(runListPayload.runs?.map((run) => run.runId), [claim?.run.runId]);
     assert.equal(runListPayload.runs?.[0]?.targetAgentId, createPayload.agent?.agentId);
+
+    const workItemDetailAfterRunResponse = await postJson(baseUrl, "/api/platform/work-items/detail", {
+      ownerPrincipalId,
+      workItemId: dispatchPayload.workItem?.workItemId,
+    }, authHeaders);
+
+    assert.equal(workItemDetailAfterRunResponse.status, 200);
+    const workItemDetailAfterRunPayload = await workItemDetailAfterRunResponse.json() as {
+      runs?: Array<{ runId?: string }>;
+    };
+    assert.deepEqual(workItemDetailAfterRunPayload.runs?.map((run) => run.runId), [claim?.run.runId]);
 
     const runDetailResponse = await postJson(baseUrl, "/api/platform/runs/detail", {
       ownerPrincipalId,

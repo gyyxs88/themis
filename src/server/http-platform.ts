@@ -887,6 +887,7 @@ export async function handlePlatformWorkItemDetail(
       targetAgent: detail.targetAgent,
       sourceAgent: detail.sourceAgent,
       sourcePrincipal: detail.sourcePrincipal,
+      ...(detail.runs !== undefined ? { runs: detail.runs } : {}),
       messages: detail.messages,
       collaboration: detail.collaboration,
       ...(detail.latestCompletion !== undefined ? { latestCompletion: detail.latestCompletion } : {}),
