@@ -715,7 +715,7 @@ test("定时任务回执会在飞书切换会话后仍发回原 chat", async () 
   }
 });
 
-test("被 watch 的派工提前完成后，飞书会主动回原 chat 并取消回看", async () => {
+test("被 watch 的派工提前完成后，飞书会激活原会话 Themis 处理收口事件", async () => {
   const harness = createHarness();
 
   try {
@@ -779,12 +779,142 @@ test("被 watch 的派工提前完成后，飞书会主动回原 chat 并取消�
     });
 
     assert.equal(delivered, true);
-    const message = harness.takeSingleMessage();
-    assert.match(message, /状态：关联 work item 已完成/);
-    assert.match(message, /已取消回看：16:40 回来看 Cloudflare 只读派工结果/);
-    assert.match(message, /员工：顾潮/);
-    assert.match(message, /结果摘要：Cloudflare 只读核查已完成/);
-    assert.match(message, /\[派工提前回执\]/);
+    const requests = harness.getTaskRequests();
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]?.sourceChannel, "feishu");
+    assert.equal(requests[0]?.channelContext.sessionId, "session-feishu-followup-old-1");
+    assert.match(requests[0]?.goal ?? "", /系统事件：watched managed-agent work item 已提前收口/);
+    assert.match(requests[0]?.goal ?? "", /工作项 ID：work-item-followup-1/);
+    assert.match(requests[0]?.goal ?? "", /不要再说等待同一个 work item 出报告/);
+
+    const messages = harness.takeMessages().join("\n");
+    assert.match(messages, /系统事件：watched managed-agent work item 已提前收口/);
+    assert.match(messages, /Cloudflare 只读核查已完成/);
+    assert.doesNotMatch(messages, /\[派工提前回执\]/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("派工提前收口事件会等待当前会话 Themis 任务结束后再激活", async () => {
+  let releaseFirstTask!: () => void;
+  let markFirstTaskStarted!: () => void;
+  const firstTaskCanFinish = new Promise<void>((resolve) => {
+    releaseFirstTask = resolve;
+  });
+  const firstTaskStarted = new Promise<void>((resolve) => {
+    markFirstTaskStarted = resolve;
+  });
+  const requests: TaskRequest[] = [];
+  const harness = createHarness({
+    appServerRuntimeFactory: (input) => {
+      const base = createTaskRuntimeDouble({
+        engine: "app-server",
+        runtimeStore: input.runtimeStore,
+        identityService: input.identityService,
+        principalMcpService: input.principalMcpService,
+        pluginService: input.pluginService,
+        principalSkillsService: input.principalSkillsService,
+        taskRuntimeCalls: input.taskRuntimeCalls,
+      });
+
+      return {
+        ...base,
+        async runTask(request, hooks = {}) {
+          input.taskRuntimeCalls.appServer += 1;
+          requests.push(request);
+
+          await hooks.onEvent?.({
+            eventId: `event-${requests.length}`,
+            taskId: request.taskId ?? `task-${requests.length}`,
+            requestId: request.requestId,
+            type: "task.progress",
+            status: "running",
+            message: request.goal,
+            payload: {
+              itemType: "agent_message",
+              threadEventType: "item.completed",
+              itemId: `item-${requests.length}`,
+            },
+            timestamp: new Date().toISOString(),
+          });
+
+          if (request.goal === "当前会话任务还在运行") {
+            markFirstTaskStarted();
+            await firstTaskCanFinish;
+          }
+
+          const result: TaskResult = {
+            taskId: request.taskId ?? `task-${requests.length}`,
+            requestId: request.requestId,
+            status: "completed",
+            summary: request.goal,
+            output: request.goal,
+            completedAt: new Date().toISOString(),
+          };
+
+          return hooks.finalizeResult ? await hooks.finalizeResult(request, result) : result;
+        },
+      };
+    },
+  });
+
+  try {
+    harness.setCurrentSession("session-feishu-followup-queued-1");
+
+    const runningTask = harness.handleIncomingText("当前会话任务还在运行");
+    await firstTaskStarted;
+
+    const delivered = harness.notifyManagedAgentScheduledFollowupResolved({
+      task: {
+        scheduledTaskId: "scheduled-task-followup-queued-1",
+        principalId: harness.getCurrentPrincipalId(),
+        sourceChannel: "feishu",
+        channelUserId: "user-1",
+        sessionId: "session-feishu-followup-queued-1",
+        channelSessionKey: "session-feishu-followup-queued-1",
+        goal: "稍后回看派工结果",
+        timezone: "Asia/Shanghai",
+        scheduledAt: "2026-04-22T08:40:00.000Z",
+        status: "cancelled",
+        createdAt: "2026-04-22T08:10:00.000Z",
+        updatedAt: "2026-04-22T08:15:10.000Z",
+        cancelledAt: "2026-04-22T08:15:10.000Z",
+        watch: {
+          workItemId: "work-item-followup-queued-1",
+        },
+      } satisfies StoredScheduledTaskRecord,
+      workItem: {
+        workItemId: "work-item-followup-queued-1",
+        organizationId: "org-1",
+        targetAgentId: "agent-cloudflare-1",
+        sourceType: "human",
+        sourcePrincipalId: harness.getCurrentPrincipalId(),
+        dispatchReason: "Cloudflare 只读核查",
+        goal: "只读确认 DNS 记录",
+        priority: "normal",
+        status: "completed",
+        createdAt: "2026-04-22T08:10:00.000Z",
+        completedAt: "2026-04-22T08:15:00.000Z",
+        updatedAt: "2026-04-22T08:15:00.000Z",
+      } satisfies StoredAgentWorkItemRecord,
+      targetAgent: null,
+      outcome: "completed",
+      latestCompletion: {
+        summary: "DNS 只读核查已完成。",
+        completedAt: "2026-04-22T08:15:00.000Z",
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]?.goal, "当前会话任务还在运行");
+
+    releaseFirstTask();
+    await runningTask;
+    assert.equal(await delivered, true);
+    assert.equal(requests.length, 2);
+    assert.match(requests[1]?.goal ?? "", /系统事件：watched managed-agent work item 已提前收口/);
   } finally {
     harness.cleanup();
   }

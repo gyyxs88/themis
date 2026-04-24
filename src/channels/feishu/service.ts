@@ -158,6 +158,10 @@ interface FeishuSessionTaskLease {
   release: () => void;
 }
 
+interface FeishuSessionTaskLeaseOptions {
+  interruptActiveTask?: boolean;
+}
+
 type FeishuResolvedAccountCommandTarget =
   | {
     ok: true;
@@ -409,6 +413,15 @@ export class FeishuChannelService {
         `[themis/feishu] 派工提前回执丢失会话映射：task=${input.task.scheduledTaskId} session=${input.task.sessionId ?? input.task.channelSessionKey ?? "-"}`,
       );
       return false;
+    }
+
+    try {
+      await this.runManagedAgentScheduledFollowupResolvedTask(input, conversation);
+      return true;
+    } catch (error) {
+      this.logger.error(
+        `[themis/feishu] 派工提前回执激活 Themis 失败，回退为系统通知：task=${input.task.scheduledTaskId} workItem=${input.workItem.workItemId} error=${toErrorMessage(error)}`,
+      );
     }
 
     const text = buildManagedAgentScheduledFollowupResolvedText(input);
@@ -1487,6 +1500,108 @@ export class FeishuChannelService {
     }
   }
 
+  private async runManagedAgentScheduledFollowupResolvedTask(
+    input: {
+      task: StoredScheduledTaskRecord;
+      workItem: StoredAgentWorkItemRecord;
+      targetAgent?: StoredManagedAgentRecord | null;
+      outcome: "completed" | "failed" | "cancelled";
+      latestCompletion?: {
+        summary: string;
+        output?: unknown;
+        completedAt?: string;
+      } | null;
+    },
+    conversation: FeishuConversationKey,
+  ): Promise<void> {
+    const sessionId = normalizeText(input.task.sessionId) ?? normalizeText(input.task.channelSessionKey);
+
+    if (!sessionId) {
+      throw new Error("watched follow-up 缺少 sessionId，无法激活同会话 Themis。");
+    }
+
+    const text = buildManagedAgentScheduledFollowupResolvedTaskPrompt(input);
+    const context: Extract<FeishuIncomingContext, { kind: "text" }> = {
+      kind: "text",
+      chatId: conversation.chatId,
+      messageId: `managed-agent-followup:${input.task.scheduledTaskId}:${input.workItem.workItemId}`,
+      userId: input.task.channelUserId,
+      text,
+    };
+    const taskLease = await this.acquireSessionTaskLease(sessionId, {
+      interruptActiveTask: false,
+    });
+    const bridge = new FeishuTaskMessageBridge({
+      createText: async (messageText) => this.createTextMessage(conversation.chatId, messageText),
+      updateText: async (messageId, messageText) => this.updateTextMessage(messageId, messageText),
+      recallMessage: async (messageId) => this.recallMessage(messageId),
+      createDraft: async (draft) => this.createMessage(conversation.chatId, draft),
+      updateDraft: async (messageId, draft) => this.updateMessage(messageId, draft),
+      sendText: async (messageText) => {
+        await this.createAssistantMessage(conversation.chatId, messageText);
+      },
+      splitText: splitForFeishuText,
+    });
+    const router = new InMemoryCommunicationRouter();
+    const adapter = new FeishuAdapter({
+      deliver: async (message) => {
+        try {
+          const enriched = await this.decorateDeliveryMessageForMobile(message, sessionId);
+          if (await this.tryDeliverApprovalCard(context, sessionId, bridge, enriched)) {
+            return;
+          }
+          await bridge.deliver(enriched);
+        } catch (error) {
+          this.logger.error(`[themis/feishu] 推送派工提前收口任务消息失败：${toErrorMessage(error)}`);
+        }
+      },
+    });
+
+    router.registerAdapter(adapter);
+
+    let normalizedRequest: TaskRequest | null = null;
+    const activityTimeout = createTaskActivityTimeoutController(taskLease.signal, this.taskTimeoutMs);
+
+    try {
+      normalizedRequest = router.normalizeRequest(this.createTaskPayload(context, sessionId, {
+        additionalPromptSections: [
+          "这是 Themis 内部系统事件，不是用户新发来的消息。请把它当作当前会话里刚发生的事实：关联的 watched managed-agent work item 已经提前进入终态，原定回看任务已经取消。请基于这个事实向用户更新状态和下一步计划，不要再说等待同一个 work item 出报告。",
+        ],
+      }));
+      await activityTimeout.wrap(bridge.prepareResponseSlot());
+      await ensureAuthAvailable(this.authRuntime, normalizedRequest);
+      const selectedRuntime = resolvePublicTaskRuntime(this.runtimeRegistry, normalizedRequest.options?.runtimeEngine);
+
+      const result = await selectedRuntime.runTask(normalizedRequest, {
+        signal: activityTimeout.signal,
+        finalizeResult: async (request, taskResult) => {
+          const explicitAttachmentResult = finalizeFeishuOutboundAttachmentResult(taskResult);
+          return await appendTaskReplyQuotaFooter(this.authRuntime, request, explicitAttachmentResult);
+        },
+        onEvent: async (taskEvent) => {
+          activityTimeout.touch();
+          await activityTimeout.wrap(router.publishEvent(taskEvent));
+        },
+      });
+
+      await activityTimeout.wrap(router.publishResult(result));
+      await this.publishTaskResultAttachmentsIfNeeded(conversation.chatId, normalizedRequest, result);
+      await this.publishTaskInputCompileFollowupIfNeeded(conversation.chatId, normalizedRequest.requestId, result.status);
+    } catch (error) {
+      const taskError = createTaskError(error, Boolean(normalizedRequest));
+
+      if (normalizedRequest) {
+        await router.publishError(taskError, normalizedRequest);
+        await this.publishTaskInputCompileFollowupIfNeeded(conversation.chatId, normalizedRequest.requestId, "failed");
+      }
+
+      throw error;
+    } finally {
+      activityTimeout.cleanup();
+      taskLease.release();
+    }
+  }
+
   private async downloadInlineAttachments(
     context: Extract<FeishuIncomingContext, { kind: "text" }>,
     sessionId: string,
@@ -1809,7 +1924,14 @@ export class FeishuChannelService {
     };
   }
 
-  private async acquireSessionTaskLease(sessionId: string): Promise<FeishuSessionTaskLease> {
+  private async acquireSessionTaskLease(
+    sessionId: string,
+    options: FeishuSessionTaskLeaseOptions = {},
+  ): Promise<FeishuSessionTaskLease> {
+    if (options.interruptActiveTask === false) {
+      return await this.acquireQueuedSessionTaskLease(sessionId);
+    }
+
     return this.withSessionMutation(sessionId, async () => {
       await this.abortActiveSessionTask(
         sessionId,
@@ -1817,32 +1939,59 @@ export class FeishuChannelService {
         `[themis/feishu] 新消息将打断当前会话任务：session=${sessionId}`,
       );
 
-      const abortController = new AbortController();
-      const token = Symbol(sessionId);
-      let markCompleted = (): void => {};
-      const completed = new Promise<void>((resolve) => {
-        markCompleted = resolve;
-      });
-
-      this.activeSessionTasks.set(sessionId, {
-        token,
-        abortController,
-        completed,
-      });
-
-      return {
-        signal: abortController.signal,
-        release: () => {
-          markCompleted();
-
-          const currentTask = this.activeSessionTasks.get(sessionId);
-
-          if (currentTask?.token === token) {
-            this.activeSessionTasks.delete(sessionId);
-          }
-        },
-      };
+      return this.createSessionTaskLease(sessionId);
     });
+  }
+
+  private async acquireQueuedSessionTaskLease(sessionId: string): Promise<FeishuSessionTaskLease> {
+    while (true) {
+      const existingTask = this.activeSessionTasks.get(sessionId);
+
+      if (existingTask) {
+        await existingTask.completed;
+        continue;
+      }
+
+      const lease = await this.withSessionMutation(sessionId, async () => {
+        if (this.activeSessionTasks.has(sessionId)) {
+          return null;
+        }
+
+        return this.createSessionTaskLease(sessionId);
+      });
+
+      if (lease) {
+        return lease;
+      }
+    }
+  }
+
+  private createSessionTaskLease(sessionId: string): FeishuSessionTaskLease {
+    const abortController = new AbortController();
+    const token = Symbol(sessionId);
+    let markCompleted = (): void => {};
+    const completed = new Promise<void>((resolve) => {
+      markCompleted = resolve;
+    });
+
+    this.activeSessionTasks.set(sessionId, {
+      token,
+      abortController,
+      completed,
+    });
+
+    return {
+      signal: abortController.signal,
+      release: () => {
+        markCompleted();
+
+        const currentTask = this.activeSessionTasks.get(sessionId);
+
+        if (currentTask?.token === token) {
+          this.activeSessionTasks.delete(sessionId);
+        }
+      },
+    };
   }
 
   private async abortActiveSessionTask(sessionId: string, reason: string, logMessage: string): Promise<boolean> {
@@ -6257,6 +6406,47 @@ function buildManagedAgentScheduledFollowupResolvedText(input: {
   if (summary) {
     lines.push(`结果摘要：${summary}`);
   }
+
+  return lines.join("\n");
+}
+
+function buildManagedAgentScheduledFollowupResolvedTaskPrompt(input: {
+  task: StoredScheduledTaskRecord;
+  workItem: StoredAgentWorkItemRecord;
+  targetAgent?: StoredManagedAgentRecord | null;
+  outcome: "completed" | "failed" | "cancelled";
+  latestCompletion?: {
+    summary: string;
+    output?: unknown;
+    completedAt?: string;
+  } | null;
+}): string {
+  const summary = normalizeText(input.latestCompletion?.summary);
+  const completedAt = normalizeText(input.latestCompletion?.completedAt);
+  const targetAgentLabel = normalizeText(input.targetAgent?.displayName) ?? input.workItem.targetAgentId;
+  const lines = [
+    "系统事件：watched managed-agent work item 已提前收口。",
+    "",
+    `关联 work item 状态：${describeManagedAgentScheduledFollowupOutcome(input.outcome)}`,
+    `已取消原回看：${input.task.goal}`,
+    `原计划回看时间：${input.task.scheduledAt} (${input.task.timezone})`,
+    `员工：${targetAgentLabel}`,
+    `工作项：${input.workItem.goal}`,
+    `工作项 ID：${input.workItem.workItemId}`,
+  ];
+
+  if (summary) {
+    lines.push(`结果摘要：${summary}`);
+  }
+
+  if (completedAt) {
+    lines.push(`收口时间：${completedAt}`);
+  }
+
+  lines.push(
+    "",
+    "请在当前会话里处理这个系统事件：告诉用户这条回看为什么提前收口、当前 work item 已经是什么终态，并基于这个事实更新下一步推进计划。不要再说等待同一个 work item 出报告。",
+  );
 
   return lines.join("\n");
 }
