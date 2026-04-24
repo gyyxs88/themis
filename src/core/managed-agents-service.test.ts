@@ -255,7 +255,7 @@ test("ManagedAgentsService 会为 agent 自动补齐默认执行边界，并绑�
     assert.equal(boundary?.workspacePolicy.allowNetworkAccess, true);
     assert.equal(boundary?.runtimeProfile.accessMode, "auth");
     assert.equal(boundary?.runtimeProfile.authAccountId, "acct-default");
-    assert.equal(boundary?.runtimeProfile.model, "gpt-5.4");
+    assert.equal(boundary?.runtimeProfile.model, "gpt-5.5");
     assert.equal(boundary?.runtimeProfile.reasoning, "xhigh");
     assert.equal(boundary?.runtimeProfile.sandboxMode, "workspace-write");
     assert.equal(boundary?.runtimeProfile.approvalPolicy, "never");

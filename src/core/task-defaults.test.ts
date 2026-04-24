@@ -23,7 +23,7 @@ test("显式 TaskOptions 会覆盖 Themis 全局默认配置", () => {
       approvalPolicy: "on-request",
     }),
     {
-      model: "gpt-5.4",
+      model: "gpt-5.5",
       reasoning: "xhigh",
       sandboxMode: "danger-full-access",
       webSearchMode: "disabled",
@@ -55,7 +55,7 @@ test("运行时目录会补齐 Themis 全局默认配置", () => {
     applyThemisGlobalDefaultsToRuntimeCatalog(catalog).defaults,
     {
       profile: null,
-      model: "gpt-5.4",
+      model: "gpt-5.5",
       reasoning: "xhigh",
       approvalPolicy: "never",
       sandboxMode: "workspace-write",

@@ -2,7 +2,7 @@ import type { CodexRuntimeCatalog } from "./codex-app-server.js";
 import type { SessionTaskSettings, TaskOptions } from "../types/index.js";
 
 export const THEMIS_GLOBAL_TASK_DEFAULTS = {
-  model: "gpt-5.4",
+  model: "gpt-5.5",
   reasoning: "xhigh",
   sandboxMode: "workspace-write",
   webSearchMode: "live",
