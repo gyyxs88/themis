@@ -12,6 +12,7 @@ export interface FeishuMessageMutationResponse {
 export interface FeishuTaskMessageBridgeOptions {
   createText: (text: string) => Promise<FeishuMessageMutationResponse>;
   updateText: (messageId: string, text: string) => Promise<FeishuMessageMutationResponse>;
+  recallMessage?: (messageId: string) => Promise<FeishuMessageMutationResponse | void>;
   sendText: (text: string) => Promise<void>;
   splitText: (text: string) => string[];
   createDraft?: (draft: FeishuRenderedMessageDraft) => Promise<FeishuMessageMutationResponse>;
@@ -19,6 +20,7 @@ export interface FeishuTaskMessageBridgeOptions {
 }
 
 export const FEISHU_PLACEHOLDER_TEXT = "处理中...";
+export const FEISHU_CONTINUING_TEXT = "继续处理中";
 export const FEISHU_COMPLETED_TEXT = "已完成";
 
 export class FeishuTaskMessageBridge {
@@ -29,6 +31,7 @@ export class FeishuTaskMessageBridge {
   private readonly toolTraceUpdatable = new Map<string, boolean>();
   private readonly createText: (text: string) => Promise<FeishuMessageMutationResponse>;
   private readonly updateText: (messageId: string, text: string) => Promise<FeishuMessageMutationResponse>;
+  private readonly recallMessage: ((messageId: string) => Promise<FeishuMessageMutationResponse | void>) | null;
   private readonly sendText: (text: string) => Promise<void>;
   private readonly splitText: (text: string) => string[];
   private readonly createDraft: ((draft: FeishuRenderedMessageDraft) => Promise<FeishuMessageMutationResponse>) | null;
@@ -41,6 +44,7 @@ export class FeishuTaskMessageBridge {
   constructor(options: FeishuTaskMessageBridgeOptions) {
     this.createText = options.createText;
     this.updateText = options.updateText;
+    this.recallMessage = options.recallMessage ?? null;
     this.sendText = options.sendText;
     this.splitText = options.splitText;
     this.createDraft = options.createDraft ?? null;
@@ -192,7 +196,14 @@ export class FeishuTaskMessageBridge {
       created = await this.commitCurrentPlaceholder(text);
       await this.ensureFollowupPlaceholderAfterProgress();
     } else {
+      const shouldMovePlaceholder = this.shouldMoveCurrentPlaceholderBehindStandaloneToolTrace();
+      if (shouldMovePlaceholder) {
+        await this.retireCurrentPlaceholderBeforeStandaloneToolTrace();
+      }
       created = await this.sendStandaloneMessage(text);
+      if (shouldMovePlaceholder) {
+        await this.ensureFollowupPlaceholderAfterProgress();
+      }
     }
 
     this.toolTraceMessageIds.set(bucketId, created.messageId);
@@ -392,6 +403,37 @@ export class FeishuTaskMessageBridge {
       && this.toolTraceMessageIds.size === 0
       && this.currentPlaceholderUpdatable
       && Boolean(this.currentPlaceholderMessageId);
+  }
+
+  private shouldMoveCurrentPlaceholderBehindStandaloneToolTrace(): boolean {
+    return this.currentPlaceholderUpdatable && Boolean(this.currentPlaceholderMessageId);
+  }
+
+  private async retireCurrentPlaceholderBeforeStandaloneToolTrace(): Promise<void> {
+    const messageId = this.currentPlaceholderMessageId;
+    const updatable = this.currentPlaceholderUpdatable;
+    this.clearCurrentPlaceholder();
+
+    if (!messageId) {
+      return;
+    }
+
+    if (this.recallMessage) {
+      try {
+        await this.recallMessage(messageId);
+        return;
+      } catch {
+        // 撤回失败时降级为文本收口，避免最终答案继续落在工具轨迹上方。
+      }
+    }
+
+    if (updatable) {
+      try {
+        await this.updateText(messageId, FEISHU_CONTINUING_TEXT);
+      } catch {
+        // 旧占位无法收口时也不再复用它；后续结果会落到新的尾部占位上。
+      }
+    }
   }
 }
 

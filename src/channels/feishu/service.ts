@@ -1375,6 +1375,7 @@ export class FeishuChannelService {
     const bridge = new FeishuTaskMessageBridge({
       createText: async (text) => this.createTextMessage(context.chatId, text),
       updateText: async (messageId, text) => this.updateTextMessage(messageId, text),
+      recallMessage: async (messageId) => this.recallMessage(messageId),
       createDraft: async (draft) => this.createMessage(context.chatId, draft),
       updateDraft: async (messageId, draft) => this.updateMessage(messageId, draft),
       sendText: async (text) => {
@@ -4875,6 +4876,35 @@ export class FeishuChannelService {
       msgType: "text",
       content: JSON.stringify({ text: normalizedText }),
     });
+  }
+
+  private async recallMessage(messageId: string): Promise<FeishuMessageMutationResponse> {
+    const client = this.client;
+
+    if (!client) {
+      throw new Error("飞书客户端未就绪，无法撤回消息。");
+    }
+
+    const startedAt = Date.now();
+
+    try {
+      const response = await client.im.v1.message.delete({
+        path: {
+          message_id: messageId,
+        },
+      });
+      const elapsedMs = Math.max(0, Date.now() - startedAt);
+      this.logger.info(
+        `[themis/feishu] 飞书消息发送完成：action=recall msgType=- chat=- message=${messageId} elapsedMs=${elapsedMs} bytes=0`,
+      );
+      return response;
+    } catch (error) {
+      const elapsedMs = Math.max(0, Date.now() - startedAt);
+      this.logger.error(
+        `[themis/feishu] 飞书消息发送失败：action=recall msgType=- chat=- message=${messageId} elapsedMs=${elapsedMs} bytes=0 error=${toErrorMessage(error)}`,
+      );
+      throw error;
+    }
   }
 
   private async createAssistantMessage(
