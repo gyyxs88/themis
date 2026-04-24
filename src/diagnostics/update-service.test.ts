@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { requestDetachedThemisUpdateRestart } from "./update-apply.js";
 import {
   ThemisUpdateService,
   readThemisManagedUpdateOperation,
@@ -148,6 +149,76 @@ test("ThemisUpdateService.requestRestart 会按受控重启计划请求 systemd 
   }
 });
 
+test("requestDetachedThemisUpdateRestart 会等待 systemctl 退出码并暴露失败", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-update-systemctl-fail-"));
+  const binDir = join(root, "bin");
+  mkdirSync(binDir, { recursive: true });
+  const systemctlPath = join(binDir, "systemctl");
+  writeFileSync(systemctlPath, [
+    "#!/usr/bin/env bash",
+    "echo \"systemctl $*\" > \"$THEMIS_FAKE_COMMAND_LOG\"",
+    "echo restart failed >&2",
+    "exit 7",
+    "",
+  ].join("\n"), "utf8");
+  chmodSync(systemctlPath, 0o755);
+
+  try {
+    await assert.rejects(
+      async () => await requestDetachedThemisUpdateRestart(
+        {
+          mode: "restart",
+          serviceUnit: "themis-prod.service",
+          message: "重启 systemd --user 服务 themis-prod.service。",
+        },
+        {
+          workingDirectory: root,
+          env: {
+            ...process.env,
+            PATH: `${binDir}:${process.env.PATH ?? ""}`,
+            THEMIS_FAKE_COMMAND_LOG: join(root, "commands.log"),
+            THEMIS_UPDATE_RESTART_EXIT_WAIT_MS: "1000",
+          },
+        },
+      ),
+      /systemctl --user restart themis-prod\.service 执行失败（exit 7）：restart failed/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ThemisUpdateService.requestRestart 会在 systemctl 失败时把 marker 标记为 failed", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-update-restart-failed-"));
+
+  try {
+    const service = new ThemisUpdateService({
+      workingDirectory: root,
+      now: () => new Date("2026-04-24T03:10:00.000Z"),
+      resolveRestartPlan: () => ({
+        mode: "restart",
+        serviceUnit: "themis-prod.service",
+        message: "重启 systemd --user 服务 themis-prod.service。",
+      }),
+      requestRestartProcess: async () => {
+        throw new Error("systemctl restart failed");
+      },
+    });
+
+    await assert.rejects(
+      async () => await service.requestRestart(),
+      /systemctl restart failed/,
+    );
+
+    const marker = readThemisRestartRequestMarker(root);
+    assert.equal(marker?.status, "failed");
+    assert.equal(marker?.failedAt, "2026-04-24T03:10:00.000Z");
+    assert.equal(marker?.errorMessage, "systemctl restart failed");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("ThemisUpdateService.acknowledgeRestartRequest 会在新进程启动后确认 marker", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-update-restart-ack-"));
 
@@ -186,6 +257,47 @@ test("ThemisUpdateService.acknowledgeRestartRequest 会在新进程启动后确�
     assert.equal(marker?.confirmedAt, "2026-04-24T03:11:05.000Z");
     assert.equal(marker?.confirmedCommit, "111111122222223333333444444455555556666");
     assert.equal(marker?.confirmedProcessStartedAt, "2026-04-24T03:11:00.000Z");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ThemisUpdateService.readOpsStatus 会把超时未确认的重启 marker 标记为 failed", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-update-restart-timeout-"));
+  let currentTime = "2026-04-24T03:01:00.000Z";
+
+  try {
+    const service = new ThemisUpdateService({
+      workingDirectory: root,
+      processStartedAt: "2026-04-24T03:00:00.000Z",
+      now: () => new Date(currentTime),
+      restartConfirmTimeoutMs: 60_000,
+      resolveRestartPlan: () => ({
+        mode: "restart",
+        serviceUnit: "themis-prod.service",
+        message: "重启 systemd --user 服务 themis-prod.service。",
+      }),
+      readServiceStatus: ({ serviceUnit }) => ({
+        serviceUnit,
+        loadState: "loaded",
+        activeState: "active",
+        subState: "running",
+        mainPid: 1234,
+        execMainStartTimestamp: "Fri 2026-04-24 11:00:00 CST",
+        errorMessage: null,
+      }),
+      requestRestartProcess: async () => {},
+    });
+
+    await service.requestRestart();
+
+    currentTime = "2026-04-24T03:10:00.000Z";
+    const status = service.readOpsStatus();
+    assert.equal(status.restartRequest?.status, "failed");
+    assert.equal(status.restartRequest?.failedAt, "2026-04-24T03:10:00.000Z");
+    assert.match(status.restartRequest?.errorMessage ?? "", /超过 60 秒仍未被新进程确认/);
+    assert.match(status.restartRequest?.errorMessage ?? "", /MainPID=1234/);
+    assert.equal(readThemisRestartRequestMarker(root)?.status, "failed");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

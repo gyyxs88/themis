@@ -7,6 +7,7 @@ import { resolveThemisUpdateTarget, type ThemisUpdateChannel } from "./update-ch
 const DEFAULT_UPDATE_REPO = "gyyxs88/themis";
 export const DEFAULT_THEMIS_UPDATE_SYSTEMD_SERVICE = "themis-prod.service";
 const DEFAULT_UPDATE_SYSTEMD_SERVICE = DEFAULT_THEMIS_UPDATE_SYSTEMD_SERVICE;
+const DEFAULT_RESTART_EXIT_WAIT_MS = 15_000;
 const UPDATE_LOCK_RELATIVE_PATH = "infra/local/themis-update.lock";
 const LAST_UPDATE_RECORD_RELATIVE_PATH = "infra/local/themis-last-update.json";
 
@@ -854,8 +855,12 @@ export async function requestDetachedThemisUpdateRestart(
   }
 
   const env = input.env ?? process.env;
+  const waitMs = parsePositiveInteger(env.THEMIS_UPDATE_RESTART_EXIT_WAIT_MS) ?? DEFAULT_RESTART_EXIT_WAIT_MS;
 
   await new Promise<void>((resolvePromise, reject) => {
+    let settled = false;
+    let stderr = "";
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const child = spawn(
       "systemctl",
       ["--user", "restart", plan.serviceUnit as string],
@@ -863,16 +868,60 @@ export async function requestDetachedThemisUpdateRestart(
         cwd: input.workingDirectory,
         env,
         detached: true,
-        stdio: "ignore",
+        stdio: ["ignore", "ignore", "pipe"],
       },
     );
+    const settle = (callback: () => void): void => {
+      if (settled) {
+        return;
+      }
 
-    child.once("error", reject);
-    child.once("spawn", () => {
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      callback();
+    };
+    timer = setTimeout(() => {
       child.unref();
-      resolvePromise();
+      settle(resolvePromise);
+    }, waitMs);
+
+    child.stderr?.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.once("error", (error) => {
+      settle(() => reject(error));
+    });
+    child.once("close", (code, signal) => {
+      settle(() => {
+        if (code === 0) {
+          resolvePromise();
+          return;
+        }
+
+        const detail = normalizeOptionalText(stderr);
+        reject(new Error(
+          `systemctl --user restart ${plan.serviceUnit} 执行失败（${signal ? `signal ${signal}` : `exit ${code ?? 1}`}）${detail ? `：${detail}` : ""}`,
+        ));
+      });
     });
   });
+}
+
+function parsePositiveInteger(value: string | number | null | undefined): number | null {
+  if (typeof value === "number") {
+    return Number.isInteger(value) && value > 0 ? value : null;
+  }
+
+  const normalized = normalizeOptionalText(value);
+
+  if (!normalized) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(normalized, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function normalizeRepoSlug(value: string | undefined): string {

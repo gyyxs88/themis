@@ -91,6 +91,8 @@ THEMIS_UPDATE_SYSTEMD_SERVICE=themis-prod.service
 
 这样正式实例会跟随 GitHub 最新正式 release，而不是默认分支头提交；升级成功后，CLI 也会直接重启这条 `systemd --user` 服务。如果你的正式服务名不是 `themis-prod.service`，就在这里改成真实名字。
 
+飞书 `/ops restart confirm` 和后台升级 / 回滚后的重启请求会写 `infra/local/themis-restart-request.json`。默认会等待 `systemctl --user restart` 最多 15 秒来捕获非 0 退出码；如果 marker 超过 120 秒仍未被新进程确认，`/ops status` 会把它收口成 failed。需要调整时可设置 `THEMIS_UPDATE_RESTART_EXIT_WAIT_MS` 和 `THEMIS_RESTART_CONFIRM_TIMEOUT_MS`。
+
 正式实例通常不需要开发仓里的 `TODOIST_API_TOKEN` 之类本地运维变量，建议不要直接原样复制整份 `.env.local`。
 
 如果你希望正式实例自动继承当前系统用户已有的 Codex / ChatGPT 登录态，也不要显式设置 `CODEX_HOME`。保持未配置时，Themis 会按默认逻辑读取 `~/.codex`。

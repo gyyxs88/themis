@@ -21,6 +21,7 @@ import { checkThemisUpdates, formatShortCommitHash, type ThemisUpdateCheckResult
 
 const UPDATE_OPERATION_RELATIVE_PATH = "infra/local/themis-update-operation.json";
 const RESTART_REQUEST_RELATIVE_PATH = "infra/local/themis-restart-request.json";
+const DEFAULT_RESTART_CONFIRM_TIMEOUT_MS = 120_000;
 
 export type ThemisManagedUpdateAction = "apply" | "rollback";
 
@@ -113,6 +114,7 @@ interface ThemisUpdateServiceOptions {
   requestRestartProcess?: typeof requestDetachedThemisUpdateRestart;
   readServiceStatus?: typeof readThemisSystemdServiceStatus;
   processStartedAt?: string;
+  restartConfirmTimeoutMs?: number;
   now?: () => Date;
   spawnWorkerProcess?: (
     cliPath: string,
@@ -180,6 +182,7 @@ export class ThemisUpdateService {
   private readonly requestRestartProcess: typeof requestDetachedThemisUpdateRestart;
   private readonly readServiceStatusImpl: typeof readThemisSystemdServiceStatus;
   private readonly processStartedAt: string;
+  private readonly restartConfirmTimeoutMs: number;
   private readonly now: () => Date;
   private readonly spawnWorkerProcess: NonNullable<ThemisUpdateServiceOptions["spawnWorkerProcess"]>;
 
@@ -191,6 +194,9 @@ export class ThemisUpdateService {
     this.requestRestartProcess = options.requestRestartProcess ?? requestDetachedThemisUpdateRestart;
     this.readServiceStatusImpl = options.readServiceStatus ?? readThemisSystemdServiceStatus;
     this.processStartedAt = options.processStartedAt ?? resolveCurrentProcessStartedAt();
+    this.restartConfirmTimeoutMs = parsePositiveInteger(options.restartConfirmTimeoutMs)
+      ?? parsePositiveInteger(this.env.THEMIS_RESTART_CONFIRM_TIMEOUT_MS)
+      ?? DEFAULT_RESTART_CONFIRM_TIMEOUT_MS;
     this.now = options.now ?? (() => new Date());
     this.spawnWorkerProcess = options.spawnWorkerProcess ?? spawnDetachedWorkerProcess;
   }
@@ -238,6 +244,14 @@ export class ThemisUpdateService {
       ?? normalizeText(input.serviceUnitOverride)
       ?? normalizeText(this.env.THEMIS_UPDATE_SYSTEMD_SERVICE)
       ?? DEFAULT_THEMIS_UPDATE_SYSTEMD_SERVICE;
+    const serviceStatus = serviceUnit
+      ? this.readServiceStatusImpl({
+        serviceUnit,
+        workingDirectory: this.workingDirectory,
+        env: this.env,
+      })
+      : null;
+    const restartRequest = this.markTimedOutRestartRequest(acknowledgedRestartRequest, serviceStatus);
 
     return {
       processStartedAt: this.processStartedAt,
@@ -247,14 +261,8 @@ export class ThemisUpdateService {
       serviceUnit,
       restartPlanMessage: restartPlan.message,
       restartPlanErrorMessage: restartPlan.errorMessage,
-      serviceStatus: serviceUnit
-        ? this.readServiceStatusImpl({
-          serviceUnit,
-          workingDirectory: this.workingDirectory,
-          env: this.env,
-        })
-        : null,
-      restartRequest: acknowledgedRestartRequest,
+      serviceStatus,
+      restartRequest,
     };
   }
 
@@ -286,6 +294,39 @@ export class ThemisUpdateService {
     };
     writeThemisRestartRequestMarker(this.workingDirectory, confirmed);
     return confirmed;
+  }
+
+  private markTimedOutRestartRequest(
+    marker: ThemisRestartRequestMarker | null,
+    serviceStatus: ThemisSystemdServiceStatus | null,
+  ): ThemisRestartRequestMarker | null {
+    if (!marker || marker.status !== "requested") {
+      return marker;
+    }
+
+    const requestedAtMs = Date.parse(marker.requestedAt);
+    const processStartedAtMs = Date.parse(this.processStartedAt);
+    const now = this.now();
+    const nowMs = now.getTime();
+
+    if (
+      !Number.isFinite(requestedAtMs)
+      || !Number.isFinite(processStartedAtMs)
+      || processStartedAtMs > requestedAtMs
+      || nowMs - requestedAtMs < this.restartConfirmTimeoutMs
+    ) {
+      return marker;
+    }
+
+    const serviceSummary = serviceStatus
+      ? ` 当前服务状态：${serviceStatus.activeState ?? "unknown"}${serviceStatus.subState ? `/${serviceStatus.subState}` : ""}${serviceStatus.mainPid ? `，MainPID=${serviceStatus.mainPid}` : ""}。`
+      : "";
+    return markThemisRestartRequestFailed(
+      this.workingDirectory,
+      marker,
+      `重启请求超过 ${Math.ceil(this.restartConfirmTimeoutMs / 1000)} 秒仍未被新进程确认。${serviceSummary}`.trim(),
+      now.toISOString(),
+    );
   }
 
   prepareRestart(input: {
@@ -696,13 +737,15 @@ function markThemisRestartRequestFailed(
   marker: ThemisRestartRequestMarker,
   error: unknown,
   failedAt: string,
-): void {
-  writeThemisRestartRequestMarker(workingDirectory, {
+): ThemisRestartRequestMarker {
+  const failed: ThemisRestartRequestMarker = {
     ...marker,
     status: "failed",
     failedAt,
     errorMessage: error instanceof Error ? error.message : String(error),
-  });
+  };
+  writeThemisRestartRequestMarker(workingDirectory, failed);
+  return failed;
 }
 
 async function finalizeManagedUpdateRestart(input: {
@@ -1003,6 +1046,10 @@ function normalizeBuildCommitSource(value: unknown): "git" | "env" | "unknown" |
 }
 
 function parsePositiveInteger(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isInteger(value) && value > 0 ? value : null;
+  }
+
   if (typeof value !== "string") {
     return null;
   }

@@ -167,7 +167,7 @@ npm run themis -- config set FEISHU_APP_SECRET xxx
 - Platform gateway: `THEMIS_PLATFORM_BASE_URL`, `THEMIS_PLATFORM_OWNER_PRINCIPAL_ID`, `THEMIS_PLATFORM_WEB_ACCESS_TOKEN`
 - Feishu: `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_PROGRESS_FLUSH_TIMEOUT_MS`
 - OpenAI-compatible provider: `THEMIS_OPENAI_COMPAT_BASE_URL`, `THEMIS_OPENAI_COMPAT_API_KEY`, `THEMIS_OPENAI_COMPAT_MODEL`
-- Update and build metadata: `THEMIS_BUILD_COMMIT`, `THEMIS_BUILD_BRANCH`, `THEMIS_UPDATE_REPO`, `THEMIS_UPDATE_CHANNEL`, `THEMIS_UPDATE_DEFAULT_BRANCH`, `THEMIS_UPDATE_SYSTEMD_SERVICE`, `THEMIS_GITHUB_TOKEN`
+- Update and build metadata: `THEMIS_BUILD_COMMIT`, `THEMIS_BUILD_BRANCH`, `THEMIS_UPDATE_REPO`, `THEMIS_UPDATE_CHANNEL`, `THEMIS_UPDATE_DEFAULT_BRANCH`, `THEMIS_UPDATE_SYSTEMD_SERVICE`, `THEMIS_UPDATE_RESTART_EXIT_WAIT_MS`, `THEMIS_RESTART_CONFIRM_TIMEOUT_MS`, `THEMIS_GITHUB_TOKEN`
 - Platform-layer MySQL, runtime snapshot, and execution runtime variables are documented in [Platform MySQL control-plane cutover](./docs/repository/themis-platform-mysql-control-plane-cutover.md) and the [repository operations docs index](./docs/repository/README.md).
 
 ## Documentation
