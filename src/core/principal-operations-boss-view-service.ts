@@ -122,6 +122,7 @@ export class PrincipalOperationsBossViewService {
         overdueCommitments,
         atRiskCommitments,
         watchAssets,
+        assetCoverageById: buildAssetCoverageById({ risks, cadences }),
         labels,
       }),
       relationItems: buildRelationItems(bossViewEdges, labels),
@@ -146,7 +147,14 @@ interface FocusInput {
   overdueCommitments: StoredPrincipalCommitmentRecord[];
   atRiskCommitments: StoredPrincipalCommitmentRecord[];
   watchAssets: StoredPrincipalAssetRecord[];
+  assetCoverageById: Map<string, AssetFocusCoverage>;
   labels: (type: string, id: string) => string;
+}
+
+interface AssetFocusCoverage {
+  hasRisk: boolean;
+  hasActiveRisk: boolean;
+  hasActiveCadence: boolean;
 }
 
 interface InventoryInput {
@@ -338,17 +346,99 @@ function buildFocusItems(input: FocusInput): PrincipalOperationsBossViewFocusIte
       summary: commitment.summary ?? buildRelatedSummary("关联风险", commitment.linkedRiskIds, input.labels, "risk"),
       actionLabel: "确认承诺 owner / 截止动作",
     }));
-  const assetItems = input.watchAssets.map((asset): PrincipalOperationsBossViewFocusItem => ({
-    objectType: "asset",
-    objectId: asset.assetId,
-    title: asset.name,
-    label: `${asset.kind} / watch`,
-    tone: "amber",
-    summary: asset.summary ?? "该资产处于 watch，需要补负责人、风险或固定巡检节奏。",
-    actionLabel: "补风险或节奏",
-  }));
+  const assetItems = input.watchAssets.map((asset): PrincipalOperationsBossViewFocusItem => {
+    const coverage = input.assetCoverageById.get(asset.assetId) ?? {
+      hasRisk: false,
+      hasActiveRisk: false,
+      hasActiveCadence: false,
+    };
+
+    return {
+      objectType: "asset",
+      objectId: asset.assetId,
+      title: asset.name,
+      label: `${asset.kind} / watch`,
+      tone: "amber",
+      summary: asset.summary ?? buildWatchAssetSummary(coverage),
+      actionLabel: resolveWatchAssetActionLabel(coverage),
+    };
+  });
 
   return [...riskItems, ...edgeItems, ...commitmentItems, ...cadenceItems, ...assetItems].slice(0, 8);
+}
+
+function buildAssetCoverageById(input: {
+  risks: StoredPrincipalRiskRecord[];
+  cadences: StoredPrincipalCadenceRecord[];
+}): Map<string, AssetFocusCoverage> {
+  const coverageById = new Map<string, AssetFocusCoverage>();
+  const ensureCoverage = (assetId: string): AssetFocusCoverage => {
+    const existing = coverageById.get(assetId);
+
+    if (existing) {
+      return existing;
+    }
+
+    const created: AssetFocusCoverage = {
+      hasRisk: false,
+      hasActiveRisk: false,
+      hasActiveCadence: false,
+    };
+    coverageById.set(assetId, created);
+    return created;
+  };
+
+  for (const risk of input.risks) {
+    if (risk.status === "archived") {
+      continue;
+    }
+
+    for (const assetId of risk.relatedAssetIds) {
+      const coverage = ensureCoverage(assetId);
+      coverage.hasRisk = true;
+      coverage.hasActiveRisk ||= risk.status === "open" || risk.status === "watch";
+    }
+  }
+
+  for (const cadence of input.cadences) {
+    if (cadence.status !== "active") {
+      continue;
+    }
+
+    for (const assetId of cadence.relatedAssetIds) {
+      ensureCoverage(assetId).hasActiveCadence = true;
+    }
+  }
+
+  return coverageById;
+}
+
+function buildWatchAssetSummary(coverage: AssetFocusCoverage): string {
+  if (coverage.hasRisk && coverage.hasActiveCadence) {
+    return "该资产处于 watch，已有风险和节奏事实，适合复查观察结论。";
+  }
+
+  return "该资产处于 watch，需要补负责人、风险或固定巡检节奏。";
+}
+
+function resolveWatchAssetActionLabel(coverage: AssetFocusCoverage): string {
+  if (coverage.hasActiveRisk && coverage.hasActiveCadence) {
+    return "跟进风险和节奏";
+  }
+
+  if (coverage.hasRisk && coverage.hasActiveCadence) {
+    return "复查观察结论";
+  }
+
+  if (coverage.hasRisk) {
+    return "补巡检节奏";
+  }
+
+  if (coverage.hasActiveCadence) {
+    return "补风险判断";
+  }
+
+  return "补风险或节奏";
 }
 
 function buildRelationItems(
