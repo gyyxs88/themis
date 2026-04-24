@@ -198,6 +198,7 @@ export class ThemisMcpServer {
   private readonly operationsMcpTools: ThemisOperationsMcpTools;
   private readonly managedAgentControlPlaneFacade: ManagedAgentControlPlaneFacadeLike;
   private readonly managedAgentOwnerPrincipalId: string | null;
+  private readonly workingDirectory: string;
   private readonly identityInput: ChannelIdentityInput;
   private readonly defaultSessionId: string | undefined;
   private readonly defaultChannelSessionKey: string | undefined;
@@ -206,7 +207,8 @@ export class ThemisMcpServer {
   private initializeResponded = false;
 
   constructor(options: ThemisMcpServerOptions = {}) {
-    const workingDirectory = options.workingDirectory ?? process.cwd();
+    const workingDirectory = resolve(options.workingDirectory ?? process.cwd());
+    this.workingDirectory = workingDirectory;
 
     this.registry = options.registry ?? new SqliteCodexSessionRegistry({
       databaseFile: resolve(workingDirectory, "infra/local/themis.db"),
@@ -589,6 +591,7 @@ export class ThemisMcpServer {
     argumentsRecord: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     const args = normalizeUpdateManagedAgentExecutionBoundaryToolArgs(argumentsRecord);
+    this.assertWorkspacePolicyDoesNotUseThemisServiceDirectory(args.workspacePolicy);
     const identity = this.ensureIdentity();
     const ownerPrincipalId = this.resolveManagedAgentOwnerPrincipalId(identity);
     const result = await this.managedAgentControlPlaneFacade.updateManagedAgentExecutionBoundary({
@@ -607,6 +610,29 @@ export class ThemisMcpServer {
         workspacePolicy: result.workspacePolicy,
         runtimeProfile: result.runtimeProfile,
       },
+    );
+  }
+
+  private assertWorkspacePolicyDoesNotUseThemisServiceDirectory(
+    workspacePolicy: ManagedAgentExecutionBoundaryWorkspacePolicyInput | undefined,
+  ): void {
+    if (!workspacePolicy) {
+      return;
+    }
+
+    const serviceDirectory = this.workingDirectory;
+    const managedWorkspace = resolve(workspacePolicy.workspacePath);
+    const additionalDirectories = (workspacePolicy.additionalDirectories ?? []).map((directory) => resolve(directory));
+    const usesServiceDirectory = managedWorkspace === serviceDirectory
+      || additionalDirectories.includes(serviceDirectory);
+
+    if (!usesServiceDirectory) {
+      return;
+    }
+
+    throw new Error(
+      `员工工作区不能直接设置为当前 Themis 服务目录 ${serviceDirectory}。`
+      + " managed_agent 的 workspace 应该是明确的业务/项目目录或 worker 节点可访问目录；如果还没确定，请先保持原边界并向用户说明需要一个具体工作区。",
     );
   }
 

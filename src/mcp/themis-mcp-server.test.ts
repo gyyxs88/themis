@@ -545,6 +545,29 @@ test("Themis MCP server 支持员工治理工具闭环", async () => {
     assert.equal(boundaryPayload.result?.structuredContent?.workspacePolicy?.allowNetworkAccess, false);
     assert.equal(boundaryPayload.result?.structuredContent?.runtimeProfile?.approvalPolicy, "never");
 
+    const serviceWorkspaceResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 11.5,
+      method: "tools/call",
+      params: {
+        name: "update_managed_agent_execution_boundary",
+        arguments: {
+          agentId,
+          workspacePolicy: {
+            workspacePath: workspace,
+          },
+        },
+      },
+    }));
+
+    assert.ok(serviceWorkspaceResponse);
+    const serviceWorkspacePayload = JSON.parse(serviceWorkspaceResponse);
+    assert.equal(serviceWorkspacePayload.result?.isError, true);
+    assert.match(
+      serviceWorkspacePayload.result?.content?.[0]?.text ?? "",
+      /员工工作区不能直接设置为当前 Themis 服务目录/,
+    );
+
     const dispatchResponse = await server.handleMessage(JSON.stringify({
       jsonrpc: "2.0",
       id: 12,
