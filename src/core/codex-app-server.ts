@@ -487,6 +487,12 @@ export class CodexAppServerSession {
     };
   }
 
+  async compactThread(threadId: string): Promise<void> {
+    await this.request("thread/compact/start", {
+      threadId,
+    });
+  }
+
   async readThread(
     threadId: string,
     options: {

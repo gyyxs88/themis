@@ -150,6 +150,7 @@ export interface AppServerTaskRuntimeSession {
   startThread(params: AppServerThreadStartParams): Promise<{ threadId: string }>;
   resumeThread(threadId: string, params: AppServerThreadStartParams): Promise<{ threadId: string }>;
   forkThread?(threadId: string): Promise<{ threadId: string }>;
+  compactThread?(threadId: string): Promise<void>;
   readThread?(
     threadId: string,
     options?: {
@@ -626,7 +627,8 @@ export class AppServerTaskRuntime {
       finalAnswer: "",
     };
     const agentMessageTextByItemId = new Map<string, string>();
-    const turnCompletion = createAppServerTurnCompletionState();
+    let turnCompletion = createAppServerTurnCompletionState();
+    let threadCompaction = createAppServerThreadCompactionState();
     const pendingServerRequests = new Set<Promise<void>>();
     const sessionId = normalizeSessionId(request.channelContext.sessionId);
     let skipFinalEventFlush = false;
@@ -804,6 +806,7 @@ export class AppServerTaskRuntime {
         touch();
         collectAppServerResponseArtifacts(notification, responseArtifacts);
         observeAppServerTurnCompletion(notification, turnCompletion);
+        observeAppServerThreadCompaction(notification, threadCompaction);
         const toolSignal = translateAppServerToolSignal(notification);
 
         if (toolSignal) {
@@ -940,21 +943,74 @@ export class AppServerTaskRuntime {
           ...compiledInput.nativeInputParts.map(mapAppServerTurnInputPart),
         ]
         : prompt;
-      const turn = await abortable(() => activeSession.startTurn(threadId, turnInput), signal);
-      turnCompletion.targetTurnId = turn.turnId;
-      await hooks.onExecutionReady?.({
-        threadId,
-        turnId: turn.turnId,
-        interrupt: async () => {
-          if (typeof activeSession.interruptTurn !== "function") {
-            return;
-          }
 
-          await activeSession.interruptTurn(threadId, turn.turnId);
-        },
-      });
-      await abortable(() => waitForPendingServerRequests(pendingServerRequests), signal);
-      await abortable(() => turnCompletion.promise, signal);
+      const runTurn = async (targetThreadId: string, input: string | AppServerTurnInputPart[]): Promise<void> => {
+        turnCompletion = createAppServerTurnCompletionState();
+        const turn = await abortable(() => activeSession.startTurn(targetThreadId, input), signal);
+        turnCompletion.targetTurnId = turn.turnId;
+        await hooks.onExecutionReady?.({
+          threadId: targetThreadId,
+          turnId: turn.turnId,
+          interrupt: async () => {
+            if (typeof activeSession.interruptTurn !== "function") {
+              return;
+            }
+
+            await activeSession.interruptTurn(targetThreadId, turn.turnId);
+          },
+        });
+        await abortable(() => waitForPendingServerRequests(pendingServerRequests), signal);
+        await abortable(() => turnCompletion.promise, signal);
+      };
+
+      try {
+        await runTurn(threadId, turnInput);
+      } catch (error) {
+        if (!resumableThreadId || !isAppServerContextWindowExhaustedError(error)) {
+          throw error;
+        }
+
+        await emit(createTaskEvent(
+          taskId,
+          request.requestId,
+          "task.progress",
+          "running",
+          "当前 Codex thread 上下文已满，Themis 正在执行原生压缩，压缩完成后会自动继续。",
+          {
+            reason: "context_window_exhausted",
+            recoveryAction: "compact_thread",
+            threadId,
+          },
+        ));
+
+        const compactThread = activeSession.compactThread;
+
+        if (typeof compactThread !== "function") {
+          throw new Error("当前 Codex app-server 不支持 thread/compact/start，无法自动压缩并继续。");
+        }
+
+        threadCompaction = createAppServerThreadCompactionState(threadId);
+        await abortable(() => compactThread(threadId), signal);
+        await abortable(() => threadCompaction.promise, signal);
+
+        await emit(createTaskEvent(
+          taskId,
+          request.requestId,
+          "task.progress",
+          "running",
+          "Codex 原生压缩已完成，Themis 正在继续执行当前消息。",
+          {
+            reason: "context_window_recovered",
+            recoveryAction: "compact_thread",
+            threadId,
+          },
+        ));
+
+        responseArtifacts.latestAssistantMessage = "";
+        responseArtifacts.finalAnswer = "";
+        agentMessageTextByItemId.clear();
+        await runTurn(threadId, turnInput);
+      }
       toolTraceTimeline.interruptOpenOps(new Date().toISOString());
       await abortable(() => flushToolTraceNow(), signal);
       await abortable(() => eventDelivery.flush(), signal);
@@ -1725,6 +1781,14 @@ interface AppServerTurnCompletionState {
   reject: (error: Error) => void;
 }
 
+interface AppServerThreadCompactionState {
+  targetThreadId: string;
+  settled: boolean;
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
+
 function resolveActionScopeFromRequest(request: TaskRequest, principalId?: string): TaskActionScope | undefined {
   const sessionId = normalizeTextValue(request.channelContext.sessionId ?? request.channelContext.channelSessionKey);
   const normalizedPrincipalId = normalizeTextValue(principalId);
@@ -2389,6 +2453,24 @@ function createAppServerTurnCompletionState(): AppServerTurnCompletionState {
   };
 }
 
+function createAppServerThreadCompactionState(targetThreadId = ""): AppServerThreadCompactionState {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+
+  const promise = new Promise<void>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+
+  return {
+    targetThreadId,
+    settled: false,
+    promise,
+    resolve,
+    reject,
+  };
+}
+
 function observeAppServerTurnCompletion(
   notification: CodexAppServerNotification,
   state: AppServerTurnCompletionState,
@@ -2446,6 +2528,71 @@ function observeAppServerTurnCompletion(
     const errorRecord = asRecord(params?.error);
     state.settled = true;
     state.reject(new Error(normalizeTextValue(errorRecord?.message) ?? "App-server turn failed."));
+  }
+}
+
+function observeAppServerThreadCompaction(
+  notification: CodexAppServerNotification,
+  state: AppServerThreadCompactionState,
+): void {
+  if (state.settled || !state.targetThreadId) {
+    return;
+  }
+
+  const params = asRecord(notification.params);
+  const threadId = normalizeTextValue(params?.threadId);
+
+  if (threadId !== state.targetThreadId) {
+    return;
+  }
+
+  if (notification.method === "thread/compacted") {
+    state.settled = true;
+    state.resolve();
+    return;
+  }
+
+  if (notification.method === "item/completed") {
+    const item = asRecord(params?.item);
+
+    if (normalizeTextValue(item?.type) !== "contextCompaction") {
+      return;
+    }
+
+    state.settled = true;
+    state.resolve();
+    return;
+  }
+
+  if (notification.method === "turn/completed") {
+    const turn = asRecord(params?.turn);
+    const items = Array.isArray(turn?.items) ? turn.items : [];
+    const hasContextCompaction = items
+      .map((item) => asRecord(item))
+      .some((item) => normalizeTextValue(item?.type) === "contextCompaction");
+
+    if (!hasContextCompaction) {
+      return;
+    }
+
+    const status = normalizeTextValue(turn?.status);
+
+    if (status === "completed") {
+      state.settled = true;
+      state.resolve();
+      return;
+    }
+
+    const errorRecord = asRecord(turn?.error);
+    state.settled = true;
+    state.reject(new Error(normalizeTextValue(errorRecord?.message) ?? "Codex context compaction failed."));
+    return;
+  }
+
+  if (notification.method === "error") {
+    const errorRecord = asRecord(params?.error);
+    state.settled = true;
+    state.reject(new Error(normalizeTextValue(errorRecord?.message) ?? "Codex context compaction failed."));
   }
 }
 
@@ -2662,6 +2809,14 @@ function persistThreadSession(
     createdAt: existing?.createdAt ?? timestamp,
     updatedAt: timestamp,
   });
+}
+
+function isAppServerContextWindowExhaustedError(error: unknown): boolean {
+  const message = toErrorMessage(error).toLowerCase();
+  return message.includes("ran out of room in the model's context window")
+    || message.includes("context window")
+    || message.includes("maximum context length")
+    || message.includes("context_length_exceeded");
 }
 
 function resolveAppServerThreadId(

@@ -425,6 +425,27 @@ test("forkThread 和 readThread 会规范化 thread 响应", async () => {
   });
 });
 
+test("compactThread 会调用 app-server 原生 thread/compact/start", async () => {
+  const { session } = createSessionStub();
+  const calls: Array<{ method: string; params: unknown }> = [];
+
+  session.request = async (method: string, params: unknown) => {
+    calls.push({ method, params });
+    return {};
+  };
+
+  await session.compactThread("thread-compact-1");
+
+  assert.deepEqual(calls, [
+    {
+      method: "thread/compact/start",
+      params: {
+        threadId: "thread-compact-1",
+      },
+    },
+  ]);
+});
+
 test("startTurn 会按当前 app-server 协议发送 input，并兼容 turn.id 响应", async () => {
   const { session } = createSessionStub();
   const calls: Array<{ method: string; params: unknown }> = [];

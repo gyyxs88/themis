@@ -26,6 +26,7 @@ interface SessionDoubleState {
   factoryCalls: number;
   started: AppServerThreadStartParams[];
   resumed: Array<{ threadId: string; params: AppServerThreadStartParams }>;
+  compactions: Array<{ threadId: string }>;
   turns: Array<{
     threadId: string;
     prompt: string | null;
@@ -215,6 +216,7 @@ function createSessionFactory(overrides: {
   steerTurn?: (threadId: string, turnId: string, message: string, state: SessionDoubleState) => Promise<{
     turnId: string;
   }>;
+  compactThread?: (threadId: string, state: SessionDoubleState) => Promise<void>;
   startTurn?: (state: SessionDoubleState) => Promise<{ turnId: string }>;
   close?: (state: SessionDoubleState) => Promise<void>;
 } = {}): {
@@ -226,6 +228,7 @@ function createSessionFactory(overrides: {
     factoryCalls: 0,
     started: [],
     resumed: [],
+    compactions: [],
     turns: [],
     reviews: [],
     steers: [],
@@ -273,6 +276,22 @@ function createSessionFactory(overrides: {
           return await overrides.steerTurn(threadId, turnId, message, state);
         }
         return { turnId };
+      },
+      compactThread: async (threadId) => {
+        state.compactions.push({ threadId });
+        if (overrides.compactThread) {
+          await overrides.compactThread(threadId, state);
+          return;
+        }
+        setTimeout(() => {
+          state.notificationHandler?.({
+            method: "thread/compacted",
+            params: {
+              threadId,
+              turnId: "turn-app-compact-1",
+            },
+          });
+        }, 0);
       },
       readThread: async (threadId, options) => {
         state.readThreads.push({ threadId, includeTurns: options?.includeTurns === true });
@@ -2308,6 +2327,87 @@ test("AppServerTaskRuntime 恢复会话时会使用存储里的 threadId，而�
     assert.equal(state.resumed.length, 1);
     assert.equal(state.resumed[0]?.threadId, "thread-app-stored-1");
     assert.equal(readSessionPayload(result).sessionId, "web-session-resume-1");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("AppServerTaskRuntime 在恢复 thread 上下文耗尽时会原生压缩并在同一 thread 重试", async () => {
+  const { state, sessionFactory } = createSessionFactory({
+    resumeThreadId: "thread-app-context-full-1",
+    compactThread: async (threadId, sessionState) => {
+      setTimeout(() => {
+        sessionState.notificationHandler?.({
+          method: "item/completed",
+          params: {
+            threadId,
+            turnId: "turn-app-compact-1",
+            item: {
+              type: "contextCompaction",
+              id: "item-context-compaction-1",
+            },
+          },
+        });
+      }, 0);
+    },
+    startTurn: async (sessionState) => {
+      const currentThreadId = sessionState.turns.at(-1)?.threadId;
+      assert.ok(currentThreadId);
+
+      if (sessionState.turns.length === 1) {
+        scheduleCompletedTurn(sessionState, "turn-app-context-full-1", {
+          threadId: currentThreadId,
+          status: "failed",
+          errorMessage: "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
+        });
+        return { turnId: "turn-app-context-full-1" };
+      }
+
+      scheduleCompletedTurn(sessionState, "turn-app-context-full-2", {
+        threadId: currentThreadId,
+      });
+      return { turnId: "turn-app-context-full-2" };
+    },
+  });
+  const fixture = createRuntimeFixture({ sessionFactory });
+  const events: TaskEvent[] = [];
+
+  try {
+    fixture.runtimeStore.saveSession({
+      sessionId: "web-session-context-full-1",
+      threadId: "thread-app-context-full-1",
+      createdAt: "2026-04-27T04:00:00.000Z",
+      updatedAt: "2026-04-27T04:00:00.000Z",
+    });
+
+    const result = await fixture.runtime.runTask({
+      requestId: "req-app-context-full-1",
+      taskId: "task-app-context-full-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "补丁已经打了，你再测一下",
+      channelContext: { sessionId: "web-session-context-full-1" },
+      createdAt: "2026-04-27T04:01:00.000Z",
+    }, {
+      onEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    assert.equal(result.status, "completed");
+    assert.equal(state.started.length, 0);
+    assert.equal(state.resumed.length, 1);
+    assert.equal(state.compactions.length, 1);
+    assert.equal(state.compactions[0]?.threadId, "thread-app-context-full-1");
+    assert.equal(state.turns.length, 2);
+    assert.equal(state.turns[0]?.threadId, "thread-app-context-full-1");
+    assert.equal(state.turns[1]?.threadId, "thread-app-context-full-1");
+    assert.equal(state.turns[1]?.prompt, state.turns[0]?.prompt);
+    assert.equal(readSessionPayload(result).threadId, "thread-app-context-full-1");
+    assert.equal(readSessionPayload(result).mode, "resumed");
+    assert.equal(fixture.runtimeStore.resolveThreadId("web-session-context-full-1"), "thread-app-context-full-1");
+    assert.equal(events.some((event) => event.type === "task.progress" && typeof event.message === "string" && /原生压缩/.test(event.message)), true);
+    assert.equal(events.some((event) => event.type === "task.progress" && typeof event.message === "string" && /继续执行当前消息/.test(event.message)), true);
   } finally {
     fixture.cleanup();
   }
