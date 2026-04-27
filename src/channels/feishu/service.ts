@@ -92,6 +92,11 @@ import {
   type ThemisSystemdServiceStatus,
 } from "../../diagnostics/update-service.js";
 import { WorkerSecretStore } from "../../core/worker-secret-store.js";
+import { ThemisSecretStore } from "../../core/themis-secret-store.js";
+import {
+  parseThemisSecretIntake,
+  redactThemisSecretIntakeText,
+} from "../../core/themis-secret-intake.js";
 import {
   downloadFeishuMessageResources,
   extractFeishuMessageResources,
@@ -210,6 +215,7 @@ export interface FeishuChannelServiceOptions {
   approvalCardStore?: FeishuApprovalCardStateStore;
   updateService?: ThemisUpdateService;
   workerSecretStore?: WorkerSecretStore;
+  themisSecretStore?: ThemisSecretStore;
   logger?: FeishuChannelLogger;
 }
 
@@ -267,6 +273,7 @@ export class FeishuChannelService {
   private readonly approvalCardStore: FeishuApprovalCardStateStore;
   private readonly updateService: ThemisUpdateService;
   private readonly workerSecretStore: WorkerSecretStore;
+  private readonly themisSecretStore: ThemisSecretStore;
   private readonly logger: FeishuChannelLogger;
   private readonly cardActionHandler: Lark.CardActionHandler;
   private readonly client: Lark.Client | null;
@@ -309,6 +316,9 @@ export class FeishuChannelService {
       workingDirectory: this.runtime.getWorkingDirectory(),
     });
     this.workerSecretStore = options.workerSecretStore ?? new WorkerSecretStore({
+      cwd: this.runtime.getWorkingDirectory(),
+    });
+    this.themisSecretStore = options.themisSecretStore ?? new ThemisSecretStore({
       cwd: this.runtime.getWorkingDirectory(),
     });
     this.approvalCardStore = options.approvalCardStore ?? new FeishuApprovalCardStateStore({
@@ -704,6 +714,10 @@ export class FeishuChannelService {
 
       if (context.kind === "attachment") {
         await this.handleAttachmentMessage(context);
+        return;
+      }
+
+      if (await this.tryHandleThemisSecretIntake(context)) {
         return;
       }
 
@@ -3201,6 +3215,39 @@ export class FeishuChannelService {
         );
         return;
     }
+  }
+
+  private async tryHandleThemisSecretIntake(
+    context: Extract<FeishuIncomingContext, { kind: "text" }>,
+  ): Promise<boolean> {
+    const intake = parseThemisSecretIntake(context.text);
+
+    if (!intake) {
+      return false;
+    }
+
+    if (!await this.ensureSecretMutationAllowed(context, "自然语言 secret 保存")) {
+      return true;
+    }
+
+    try {
+      const snapshot = this.themisSecretStore.setSecret(intake.secretRef, intake.value);
+      await this.safeSendText(
+        context.chatId,
+        [
+          "已收到并保存到 Themis 密码本。",
+          `secretRef：${intake.secretRef}`,
+          `用途：${intake.label}`,
+          `路径：${snapshot.filePath}`,
+          "值不会回显，也不会进入 Codex 对话、工单正文、contextPacket 或员工报告。",
+          "后续任务只使用 secretRef 引用它。",
+        ].join("\n"),
+      );
+    } catch (error) {
+      await this.safeSendText(context.chatId, contextChatError("保存 Themis secret 失败", error));
+    }
+
+    return true;
   }
 
   private async sendWorkerSecretList(chatId: string): Promise<void> {
@@ -6876,7 +6923,7 @@ function redactSensitiveFeishuLogText(text: string): string {
     return `${prefix}${name} ${scope} ${subcommand}${secretRef ? ` ${secretRef}` : ""} [REDACTED_SECRET]`;
   }
 
-  return text;
+  return redactThemisSecretIntakeText(text);
 }
 
 async function ensureAuthAvailable(authRuntime: CodexAuthRuntime, request: TaskRequest): Promise<void> {

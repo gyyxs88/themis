@@ -27,6 +27,7 @@ import type {
 import { SqliteCodexSessionRegistry } from "../../storage/index.js";
 import type { ThemisUpdateService } from "../../diagnostics/update-service.js";
 import { WorkerSecretStore } from "../../core/worker-secret-store.js";
+import { ThemisSecretStore } from "../../core/themis-secret-store.js";
 import { FeishuDiagnosticsStateStore } from "./diagnostics-state-store.js";
 import { FeishuChannelService } from "./service.js";
 import { FeishuSessionStore } from "./session-store.js";
@@ -98,6 +99,66 @@ test("飞书 secret 命令的入站日志会脱敏", async () => {
 
     const logs = harness.getInfoLogs().join("\n");
     assert.match(logs, /cloudflare-readonly-token \[REDACTED_SECRET\]/);
+    assert.doesNotMatch(logs, new RegExp(secretValue));
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书自然语言交付 Cloudflare 管理 token 会保存到 Themis 密码本且不进入任务", async () => {
+  const harness = createHarness();
+  const secretValue = "cf-management-token-1234567890abcdef1234567890";
+
+  try {
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-1",
+      userId: "user-1",
+      messageId: "message-cloudflare-management-token",
+      text: `这个是 Cloudflare 管理 token，给你保存好：${secretValue}`,
+    }));
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /已收到并保存到 Themis 密码本/);
+    assert.match(message, /secretRef：cloudflare-management-token/);
+    assert.doesNotMatch(message, new RegExp(secretValue));
+    assert.deepEqual(harness.readThemisSecretStore(), {
+      "cloudflare-management-token": secretValue,
+    });
+    assert.equal(harness.getTaskRuntimeCalls().appServer, 0);
+    assert.equal(harness.getTaskRuntimeCalls().sdk, 0);
+
+    const logs = harness.getInfoLogs().join("\n");
+    assert.match(logs, /\[REDACTED_SECRET\]/);
+    assert.doesNotMatch(logs, new RegExp(secretValue));
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书自然语言交付任意平台 secretRef 会走同一个 Themis 密码本 intake", async () => {
+  const harness = createHarness();
+  const secretValue = "github_pat_11AAAA2222_bbbbbbbbbbbbbbbbbbbbbbbb";
+
+  try {
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-1",
+      userId: "user-1",
+      messageId: "message-github-worker-token",
+      text: `把这个 GitHub token 保存为 github-worker-token：${secretValue}`,
+    }));
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /已收到并保存到 Themis 密码本/);
+    assert.match(message, /secretRef：github-worker-token/);
+    assert.doesNotMatch(message, new RegExp(secretValue));
+    assert.deepEqual(harness.readThemisSecretStore(), {
+      "github-worker-token": secretValue,
+    });
+    assert.equal(harness.getTaskRuntimeCalls().appServer, 0);
+    assert.equal(harness.getTaskRuntimeCalls().sdk, 0);
+
+    const logs = harness.getInfoLogs().join("\n");
+    assert.match(logs, /\[REDACTED_SECRET\]/);
     assert.doesNotMatch(logs, new RegExp(secretValue));
   } finally {
     harness.cleanup();
@@ -8094,6 +8155,7 @@ type FeishuHarnessConfig = {
   updateService?: Pick<ThemisUpdateService, "readOverview" | "startApply" | "startRollback">
     & Partial<Pick<ThemisUpdateService, "prepareRestart" | "requestRestart" | "readOpsStatus">>;
   workerSecretStore?: WorkerSecretStore;
+  themisSecretStore?: ThemisSecretStore;
 };
 
 type FeishuHarnessSkillCall =
@@ -8382,6 +8444,8 @@ function createHarness(
       || "resolveFailureActionIds" in runtimeCatalogOrSkillsOverrides
       || "pluginService" in runtimeCatalogOrSkillsOverrides
       || "updateService" in runtimeCatalogOrSkillsOverrides
+      || "themisSecretStore" in runtimeCatalogOrSkillsOverrides
+      || "workerSecretStore" in runtimeCatalogOrSkillsOverrides
     )
       ? runtimeCatalogOrSkillsOverrides as FeishuHarnessConfig
       : null;
@@ -8415,6 +8479,9 @@ function createHarness(
   });
   const workerSecretStore = harnessConfig?.workerSecretStore ?? new WorkerSecretStore({
     filePath: join(workingDirectory, "infra/local/worker-secrets.json"),
+  });
+  const themisSecretStore = harnessConfig?.themisSecretStore ?? new ThemisSecretStore({
+    filePath: join(workingDirectory, "infra/local/themis-secrets.json"),
   });
   const accounts = [
     {
@@ -9099,6 +9166,7 @@ function createHarness(
     sessionStore,
     diagnosticsStateStore,
     workerSecretStore,
+    themisSecretStore,
     ...(harnessConfig?.updateService ? { updateService: harnessConfig.updateService as never } : {}),
     logger: loggerState.logger,
   });
@@ -9366,6 +9434,13 @@ function createHarness(
     },
     readWorkerSecretStore() {
       const filePath = workerSecretStore.getFilePath();
+      if (!existsSync(filePath)) {
+        return null;
+      }
+      return JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
+    },
+    readThemisSecretStore() {
+      const filePath = themisSecretStore.getFilePath();
       if (!existsSync(filePath)) {
         return null;
       }

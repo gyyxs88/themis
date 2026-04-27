@@ -187,8 +187,8 @@ export class CloudflareWorkerSecretProvisioner {
     if (!managementToken) {
       throw new Error(
         "Cloudflare 管理 token 未配置。请把具备 API Tokens Write 权限的 token 放入 "
-        + "THEMIS_CLOUDFLARE_MANAGEMENT_TOKEN 或 Themis secret store 的 cloudflare-management-token；"
-        + "不要从聊天正文、工单正文或员工报告里回捞 token。",
+        + "THEMIS_CLOUDFLARE_MANAGEMENT_TOKEN，或直接在和 Themis 的单聊里把它交给 Themis 保存为 "
+        + "密码本 secretRef=cloudflare-management-token；不要从工单正文、contextPacket 或员工报告里回捞 token。",
       );
     }
 

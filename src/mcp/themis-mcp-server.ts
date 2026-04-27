@@ -34,6 +34,7 @@ import {
   CloudflareWorkerSecretProvisioner,
   type CloudflareWorkerSecretProvisionResult,
 } from "../core/cloudflare-worker-secret-provisioner.js";
+import { ThemisSecretStore } from "../core/themis-secret-store.js";
 import {
   buildThemisOperationsToolDefinitions,
   ThemisOperationsMcpTools,
@@ -200,6 +201,14 @@ interface ProvisionCloudflareWorkerSecretToolArgs {
   dryRun?: boolean;
 }
 
+interface ManageThemisSecretToolArgs {
+  action: "list" | "get" | "set" | "rename" | "remove";
+  secretRef?: string;
+  value?: string;
+  newSecretRef?: string;
+  overwrite?: boolean;
+}
+
 interface UpdateManagedAgentLifecycleToolArgs {
   agentId: string;
   action: "pause" | "resume" | "archive";
@@ -210,6 +219,7 @@ export class ThemisMcpServer {
   private readonly identityLinkService: IdentityLinkService;
   private readonly scheduledTasksService: ScheduledTasksService;
   private readonly operationsMcpTools: ThemisOperationsMcpTools;
+  private readonly themisSecretStore: ThemisSecretStore;
   private readonly cloudflareWorkerSecretProvisioner: CloudflareWorkerSecretProvisioner;
   private readonly managedAgentControlPlaneFacade: ManagedAgentControlPlaneFacadeLike;
   private readonly managedAgentOwnerPrincipalId: string | null;
@@ -234,6 +244,10 @@ export class ThemisMcpServer {
     });
     this.operationsMcpTools = new ThemisOperationsMcpTools({
       registry: this.registry,
+    });
+    this.themisSecretStore = new ThemisSecretStore({
+      cwd: workingDirectory,
+      ...(options.env ? { env: options.env } : {}),
     });
     this.cloudflareWorkerSecretProvisioner = new CloudflareWorkerSecretProvisioner({
       cwd: workingDirectory,
@@ -391,6 +405,8 @@ export class ThemisMcpServer {
         return this.runToolSafely(() => this.updateManagedAgentExecutionBoundary(argumentsRecord));
       case "dispatch_work_item":
         return this.runToolSafely(() => this.dispatchWorkItem(argumentsRecord));
+      case "manage_themis_secret":
+        return this.runToolSafely(() => this.manageThemisSecret(argumentsRecord));
       case "provision_cloudflare_worker_secret":
         return this.runToolSafely(() => this.provisionCloudflareWorkerSecret(argumentsRecord));
       case "update_managed_agent_lifecycle":
@@ -691,6 +707,113 @@ export class ThemisMcpServer {
         ...(result.mailboxEntry ? { mailboxEntry: result.mailboxEntry } : {}),
       },
     );
+  }
+
+  private manageThemisSecret(argumentsRecord: Record<string, unknown>): Record<string, unknown> {
+    const args = normalizeManageThemisSecretToolArgs(argumentsRecord);
+
+    switch (args.action) {
+      case "list": {
+        const snapshot = this.themisSecretStore.readSnapshot();
+        return createToolResult(
+          snapshot.secretRefs.length > 0
+            ? `Themis 密码本已有 ${snapshot.secretRefs.length} 个 secretRef。`
+            : "Themis 密码本当前没有 secret。",
+          {
+            action: args.action,
+            secretRefs: snapshot.secretRefs,
+            filePath: snapshot.filePath,
+          },
+        );
+      }
+      case "get": {
+        const secretRef = expectSecretBookSecretRef(args.secretRef, "secretRef is required.");
+        const exists = this.themisSecretStore.getSecret(secretRef) !== null;
+        return createToolResult(
+          exists ? `Themis 密码本已配置 ${secretRef}。` : `Themis 密码本未配置 ${secretRef}。`,
+          {
+            action: args.action,
+            secretRef,
+            exists,
+            filePath: this.themisSecretStore.getFilePath(),
+          },
+        );
+      }
+      case "set": {
+        const secretRef = expectSecretBookSecretRef(args.secretRef, "secretRef is required.");
+        const value = expectSecretBookValue(args.value, "value is required.");
+        const snapshot = this.themisSecretStore.setSecret(secretRef, value);
+        return createToolResult(
+          `Themis 密码本已保存 ${secretRef}。`,
+          {
+            action: args.action,
+            secretRef,
+            secretRefs: snapshot.secretRefs,
+            filePath: snapshot.filePath,
+            valueStored: true,
+          },
+        );
+      }
+      case "rename": {
+        const secretRef = expectSecretBookSecretRef(args.secretRef, "secretRef is required.");
+        const newSecretRef = expectSecretBookSecretRef(args.newSecretRef, "newSecretRef is required.");
+
+        if (secretRef === newSecretRef) {
+          const snapshot = this.themisSecretStore.readSnapshot();
+          return createToolResult(
+            `Themis 密码本已保持 ${secretRef} 不变。`,
+            {
+              action: args.action,
+              secretRef,
+              newSecretRef,
+              secretRefs: snapshot.secretRefs,
+              filePath: snapshot.filePath,
+              renamed: false,
+            },
+          );
+        }
+
+        const existingValue = this.themisSecretStore.getSecret(secretRef);
+
+        if (existingValue === null) {
+          throw new Error(`Themis 密码本未配置 ${secretRef}，无法改名。`);
+        }
+
+        if (!args.overwrite && this.themisSecretStore.getSecret(newSecretRef) !== null) {
+          throw new Error(`Themis 密码本已存在 ${newSecretRef}；如确实要覆盖，请传 overwrite=true。`);
+        }
+
+        this.themisSecretStore.setSecret(newSecretRef, existingValue);
+        const result = this.themisSecretStore.removeSecret(secretRef);
+        return createToolResult(
+          `Themis 密码本已将 ${secretRef} 改名为 ${newSecretRef}。`,
+          {
+            action: args.action,
+            secretRef,
+            newSecretRef,
+            secretRefs: result.snapshot.secretRefs,
+            filePath: result.snapshot.filePath,
+            renamed: true,
+          },
+        );
+      }
+      case "remove": {
+        const secretRef = expectSecretBookSecretRef(args.secretRef, "secretRef is required.");
+        const result = this.themisSecretStore.removeSecret(secretRef);
+        return createToolResult(
+          result.removed
+            ? `Themis 密码本已删除 ${secretRef}。`
+            : `Themis 密码本不存在 ${secretRef}，未做修改。`,
+          {
+            action: args.action,
+            secretRef,
+            removed: result.removed,
+            secretRefs: result.snapshot.secretRefs,
+            filePath: result.snapshot.filePath,
+          },
+        );
+      }
+    }
   }
 
   private async provisionCloudflareWorkerSecret(
@@ -1134,6 +1257,43 @@ function buildToolDefinitions(): McpToolDefinition[] {
           },
         },
         required: ["targetAgentId", "dispatchReason", "goal"],
+      },
+    },
+    {
+      name: "manage_themis_secret",
+      title: "Manage Themis Password Book",
+      description: [
+        "管理 Themis 自己的私有密码本，用于保存、查询、改名或删除平台 token、API key、credential 等 secret。",
+        "本工具允许 Themis 根据用户自然语言意图自行维护 secretRef，不需要用户使用斜杠命令。",
+        "工具结果只返回 secretRef、存在状态和路径，不回显 secret 值；需要给 worker 使用时仍通过 broker/provisioner 或 secretEnvRefs 传引用。",
+      ].join(" "),
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          action: {
+            type: "string",
+            enum: ["list", "get", "set", "rename", "remove"],
+            description: "要执行的密码本动作。",
+          },
+          secretRef: {
+            type: "string",
+            description: "secret 引用名，例如 cloudflare-management-token、github-token。",
+          },
+          value: {
+            type: "string",
+            description: "仅 action=set 时使用。要保存的 secret 值；工具结果不会回显。",
+          },
+          newSecretRef: {
+            type: "string",
+            description: "仅 action=rename 时使用。新的 secret 引用名。",
+          },
+          overwrite: {
+            type: "boolean",
+            description: "仅 action=rename 时使用。目标 secretRef 已存在时是否覆盖。",
+          },
+        },
+        required: ["action"],
       },
     },
     {
@@ -1622,6 +1782,27 @@ function normalizeProvisionCloudflareWorkerSecretToolArgs(
   };
 }
 
+function normalizeManageThemisSecretToolArgs(value: Record<string, unknown>): ManageThemisSecretToolArgs {
+  assertOnlyKeys(
+    value,
+    new Set(["action", "secretRef", "value", "newSecretRef", "overwrite"]),
+    "manage_themis_secret arguments",
+  );
+  return {
+    action: expectEnumText(
+      value.action,
+      ["list", "get", "set", "rename", "remove"] as const,
+      "Unsupported secret book action.",
+    ),
+    ...(normalizeText(value.secretRef) ? { secretRef: normalizeText(value.secretRef) as string } : {}),
+    ...(normalizeText(value.value) ? { value: normalizeText(value.value) as string } : {}),
+    ...(normalizeText(value.newSecretRef) ? { newSecretRef: normalizeText(value.newSecretRef) as string } : {}),
+    ...(hasOwn(value, "overwrite")
+      ? { overwrite: expectBoolean(value.overwrite, "overwrite must be a boolean.") }
+      : {}),
+  };
+}
+
 function normalizeUpdateManagedAgentLifecycleToolArgs(
   value: Record<string, unknown>,
 ): UpdateManagedAgentLifecycleToolArgs {
@@ -1966,6 +2147,24 @@ function expectRequiredText(value: unknown, message: string): string {
   }
 
   return normalized;
+}
+
+function expectSecretBookSecretRef(value: string | undefined, message: string): string {
+  const normalized = expectRequiredText(value, message);
+
+  if (/\s/.test(normalized)) {
+    throw new JsonRpcProtocolError(JSON_RPC_INVALID_PARAMS, "secretRef must not contain whitespace.");
+  }
+
+  if (normalized.length > 160) {
+    throw new JsonRpcProtocolError(JSON_RPC_INVALID_PARAMS, "secretRef is too long.");
+  }
+
+  return normalized;
+}
+
+function expectSecretBookValue(value: string | undefined, message: string): string {
+  return expectRequiredText(value, message);
 }
 
 function expectEnumText<const T extends readonly string[]>(

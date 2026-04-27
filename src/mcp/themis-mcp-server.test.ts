@@ -87,6 +87,7 @@ test("Themis MCP server 会暴露定时任务和员工治理工具列表", async
         "update_managed_agent_card",
         "update_managed_agent_execution_boundary",
         "dispatch_work_item",
+        "manage_themis_secret",
         "provision_cloudflare_worker_secret",
         "update_managed_agent_lifecycle",
         "list_operation_objects",
@@ -99,6 +100,167 @@ test("Themis MCP server 会暴露定时任务和员工治理工具列表", async
         "get_operations_boss_view",
       ],
     );
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("Themis MCP server 提供密码本工具给 Themis 自己增删改查且不回显 secret", async () => {
+  const workspace = createWorkspace("themis-mcp-secret-book");
+  const themisSecretStoreFile = resolve(workspace, "infra/local/themis-secrets.json");
+  const secretValue = "github_pat_11AAAA2222_bbbbbbbbbbbbbbbbbbbbbbbb";
+  const server = new ThemisMcpServer({
+    workingDirectory: workspace,
+    env: {
+      ...process.env,
+      THEMIS_SECRET_STORE_FILE: themisSecretStoreFile,
+    },
+    identity: {
+      channel: "cli",
+      channelUserId: "tester",
+      displayName: "Tester",
+    },
+  });
+
+  try {
+    await initializeServer(server);
+    const setResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 30,
+      method: "tools/call",
+      params: {
+        name: "manage_themis_secret",
+        arguments: {
+          action: "set",
+          secretRef: "github-token",
+          value: secretValue,
+        },
+      },
+    }));
+
+    assert.ok(setResponse);
+    const setPayload = JSON.parse(setResponse);
+    assert.equal(setPayload.result?.isError, false);
+    assert.equal(setPayload.result?.structuredContent?.secretRef, "github-token");
+    assert.equal(setPayload.result?.structuredContent?.valueStored, true);
+    assert.doesNotMatch(JSON.stringify(setPayload), new RegExp(secretValue));
+    assert.deepEqual(JSON.parse(readFileSync(themisSecretStoreFile, "utf8")), {
+      "github-token": secretValue,
+    });
+
+    const listResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 31,
+      method: "tools/call",
+      params: {
+        name: "manage_themis_secret",
+        arguments: {
+          action: "list",
+        },
+      },
+    }));
+
+    assert.ok(listResponse);
+    const listPayload = JSON.parse(listResponse);
+    assert.equal(listPayload.result?.isError, false);
+    assert.deepEqual(listPayload.result?.structuredContent?.secretRefs, ["github-token"]);
+
+    const getResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 32,
+      method: "tools/call",
+      params: {
+        name: "manage_themis_secret",
+        arguments: {
+          action: "get",
+          secretRef: "github-token",
+        },
+      },
+    }));
+
+    assert.ok(getResponse);
+    const getPayload = JSON.parse(getResponse);
+    assert.equal(getPayload.result?.isError, false);
+    assert.equal(getPayload.result?.structuredContent?.exists, true);
+    assert.doesNotMatch(JSON.stringify(getPayload), new RegExp(secretValue));
+
+    const renameResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 33,
+      method: "tools/call",
+      params: {
+        name: "manage_themis_secret",
+        arguments: {
+          action: "rename",
+          secretRef: "github-token",
+          newSecretRef: "github-worker-token",
+        },
+      },
+    }));
+
+    assert.ok(renameResponse);
+    const renamePayload = JSON.parse(renameResponse);
+    assert.equal(renamePayload.result?.isError, false);
+    assert.equal(renamePayload.result?.structuredContent?.renamed, true);
+    assert.deepEqual(JSON.parse(readFileSync(themisSecretStoreFile, "utf8")), {
+      "github-worker-token": secretValue,
+    });
+    assert.doesNotMatch(JSON.stringify(renamePayload), new RegExp(secretValue));
+
+    const removeResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 34,
+      method: "tools/call",
+      params: {
+        name: "manage_themis_secret",
+        arguments: {
+          action: "remove",
+          secretRef: "github-worker-token",
+        },
+      },
+    }));
+
+    assert.ok(removeResponse);
+    const removePayload = JSON.parse(removeResponse);
+    assert.equal(removePayload.result?.isError, false);
+    assert.equal(removePayload.result?.structuredContent?.removed, true);
+    assert.deepEqual(JSON.parse(readFileSync(themisSecretStoreFile, "utf8")), {});
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("Themis MCP server 密码本工具拒绝未知 token 参数", async () => {
+  const workspace = createWorkspace("themis-mcp-secret-book-token-arg");
+  const server = new ThemisMcpServer({
+    workingDirectory: workspace,
+    identity: {
+      channel: "cli",
+      channelUserId: "tester",
+      displayName: "Tester",
+    },
+  });
+
+  try {
+    await initializeServer(server);
+    const response = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 35,
+      method: "tools/call",
+      params: {
+        name: "manage_themis_secret",
+        arguments: {
+          action: "set",
+          secretRef: "github-token",
+          token: "should-not-be-accepted",
+        },
+      },
+    }));
+
+    assert.ok(response);
+    const payload = JSON.parse(response);
+    assert.equal(payload.result?.isError, true);
+    assert.match(payload.result?.content?.[0]?.text ?? "", /token is not allowed/);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
