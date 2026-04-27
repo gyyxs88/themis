@@ -627,6 +627,7 @@ export class AppServerTaskRuntime {
       finalAnswer: "",
     };
     const agentMessageTextByItemId = new Map<string, string>();
+    const executionDiagnostics = createAppServerExecutionDiagnostics();
     let turnCompletion = createAppServerTurnCompletionState();
     let threadCompaction = createAppServerThreadCompactionState();
     const pendingServerRequests = new Set<Promise<void>>();
@@ -641,6 +642,7 @@ export class AppServerTaskRuntime {
     let toolTraceFlushPromise: Promise<void> | null = null;
     let lastToolTraceBucketId: string | null = null;
     let lastToolTraceText: string | null = null;
+    let tokenPressureNoticeEmitted = false;
 
     const emit = async (event: TaskEvent): Promise<void> => {
       touch();
@@ -719,6 +721,7 @@ export class AppServerTaskRuntime {
 
     const recordToolTrace = (toolSignal: AppServerToolTraceSignal): void => {
       const now = new Date().toISOString();
+      observeAppServerToolTraceSignal(executionDiagnostics, toolSignal, now);
       toolTraceTimeline.apply({
         ...toolSignal,
         startedAt: now,
@@ -804,6 +807,25 @@ export class AppServerTaskRuntime {
 
       unsubscribeNotification = toUnsubscribe(activeSession.onNotification((notification) => {
         touch();
+        observeAppServerExecutionNotification(executionDiagnostics, notification);
+
+        if (!tokenPressureNoticeEmitted && isHighTokenPressure(executionDiagnostics.tokenPressure)) {
+          tokenPressureNoticeEmitted = true;
+          eventDelivery.enqueue(createTaskEvent(
+            taskId,
+            request.requestId,
+            "task.progress",
+            "running",
+            "当前 Codex thread 上下文接近上限；如果需要续写，Themis 会等待 Codex 原生压缩完成后继续。",
+            {
+              reason: "context_window_high_water",
+              inputTokens: executionDiagnostics.tokenPressure.inputTokens,
+              contextWindow: executionDiagnostics.tokenPressure.contextWindow,
+              ratio: executionDiagnostics.tokenPressure.ratio,
+            },
+          ));
+        }
+
         collectAppServerResponseArtifacts(notification, responseArtifacts);
         observeAppServerTurnCompletion(notification, turnCompletion);
         observeAppServerThreadCompaction(notification, threadCompaction);
@@ -946,6 +968,7 @@ export class AppServerTaskRuntime {
 
       const runTurn = async (targetThreadId: string, input: string | AppServerTurnInputPart[]): Promise<void> => {
         turnCompletion = createAppServerTurnCompletionState();
+        executionDiagnostics.phase = "waiting_for_model";
         const turn = await abortable(() => activeSession.startTurn(targetThreadId, input), signal);
         turnCompletion.targetTurnId = turn.turnId;
         await hooks.onExecutionReady?.({
@@ -990,8 +1013,10 @@ export class AppServerTaskRuntime {
         }
 
         threadCompaction = createAppServerThreadCompactionState(threadId);
+        executionDiagnostics.phase = "context_compacting";
         await abortable(() => compactThread(threadId), signal);
         await abortable(() => threadCompaction.promise, signal);
+        executionDiagnostics.phase = "context_recovered";
 
         await emit(createTaskEvent(
           taskId,
@@ -1147,7 +1172,7 @@ export class AppServerTaskRuntime {
       const waitingError = isAppServerTaskWaitingForActionError(error);
       const cancelledError = !waitingError && (isAbortLikeError(error) || isAppServerTurnCancelledError(error) || signal.aborted);
       const message = cancelledError
-        ? describeAbort(signal, error)
+        ? describeAbort(signal, error, executionDiagnostics)
         : toErrorMessage(error);
 
       try {
@@ -1207,14 +1232,17 @@ export class AppServerTaskRuntime {
           summary: message,
           ...(resolvedThreadId
             ? {
-                structuredOutput: createAppServerStructuredOutput(
-                  sessionId,
-                  resolvedThreadId,
-                  sessionMode,
-                  sessionAccess,
-                  request.options,
-                  null,
-                ),
+                structuredOutput: {
+                  ...createAppServerStructuredOutput(
+                    sessionId,
+                    resolvedThreadId,
+                    sessionMode,
+                    sessionAccess,
+                    request.options,
+                    null,
+                  ),
+                  runtimeDiagnostics: createAppServerRuntimeDiagnosticsPayload(executionDiagnostics),
+                },
               }
             : {}),
           completedAt: new Date().toISOString(),
@@ -1787,6 +1815,29 @@ interface AppServerThreadCompactionState {
   promise: Promise<void>;
   resolve: () => void;
   reject: (error: Error) => void;
+}
+
+interface AppServerTokenPressureSnapshot {
+  inputTokens: number;
+  contextWindow: number;
+  ratio: number;
+  observedAt: string;
+}
+
+interface AppServerExecutionDiagnostics {
+  phase:
+    | "initializing"
+    | "waiting_for_model"
+    | "tool_running"
+    | "waiting_for_model_after_tool"
+    | "context_compacting"
+    | "context_recovered";
+  lastTool: {
+    toolKind: string;
+    phase: AppServerToolTraceSignal["phase"];
+    updatedAt: string;
+  } | null;
+  tokenPressure: AppServerTokenPressureSnapshot | null;
 }
 
 function resolveActionScopeFromRequest(request: TaskRequest, principalId?: string): TaskActionScope | undefined {
@@ -2453,6 +2504,144 @@ function createAppServerTurnCompletionState(): AppServerTurnCompletionState {
   };
 }
 
+function createAppServerExecutionDiagnostics(): AppServerExecutionDiagnostics {
+  return {
+    phase: "initializing",
+    lastTool: null,
+    tokenPressure: null,
+  };
+}
+
+function observeAppServerToolTraceSignal(
+  diagnostics: AppServerExecutionDiagnostics,
+  toolSignal: AppServerToolTraceSignal,
+  observedAt: string,
+): void {
+  diagnostics.lastTool = {
+    toolKind: toolSignal.toolKind,
+    phase: toolSignal.phase,
+    updatedAt: observedAt,
+  };
+
+  if (toolSignal.phase === "completed" || toolSignal.phase === "failed" || toolSignal.phase === "interrupted") {
+    diagnostics.phase = "waiting_for_model_after_tool";
+    return;
+  }
+
+  diagnostics.phase = "tool_running";
+}
+
+function observeAppServerExecutionNotification(
+  diagnostics: AppServerExecutionDiagnostics,
+  notification: CodexAppServerNotification,
+): void {
+  const tokenPressure = readAppServerTokenPressure(notification);
+
+  if (tokenPressure) {
+    diagnostics.tokenPressure = tokenPressure;
+  }
+
+  if (notification.method !== "item/completed") {
+    return;
+  }
+
+  const params = asRecord(notification.params);
+  const item = asRecord(params?.item);
+  const itemType = normalizeTextValue(item?.type);
+
+  if (itemType === "contextCompaction") {
+    diagnostics.phase = "context_compacting";
+    return;
+  }
+
+  if (itemType === "agentMessage" && normalizeTextValue(item?.text)) {
+    diagnostics.phase = "waiting_for_model";
+  }
+}
+
+function readAppServerTokenPressure(notification: CodexAppServerNotification): AppServerTokenPressureSnapshot | null {
+  const params = asRecord(notification.params);
+  const payload = notification.method === "token_count"
+    ? params
+    : asRecord(params?.payload) ?? params;
+  const info = asRecord(payload?.info) ?? payload;
+  const usage = asRecord(info?.last_token_usage)
+    ?? asRecord(info?.lastTokenUsage)
+    ?? asRecord(info?.total_token_usage)
+    ?? asRecord(info?.totalTokenUsage)
+    ?? info;
+  const inputTokens = readFiniteNumber(
+    usage?.input_tokens,
+    usage?.inputTokens,
+    usage?.total_tokens,
+    usage?.totalTokens,
+  );
+  const contextWindow = readFiniteNumber(
+    info?.model_context_window,
+    info?.modelContextWindow,
+    payload?.model_context_window,
+    payload?.modelContextWindow,
+  );
+
+  if (!inputTokens || !contextWindow || contextWindow <= 0) {
+    return null;
+  }
+
+  return {
+    inputTokens,
+    contextWindow,
+    ratio: inputTokens / contextWindow,
+    observedAt: new Date().toISOString(),
+  };
+}
+
+function isHighTokenPressure(snapshot: AppServerTokenPressureSnapshot | null): snapshot is AppServerTokenPressureSnapshot {
+  return Boolean(snapshot && snapshot.ratio >= 0.9);
+}
+
+function readFiniteNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const numberValue = typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : Number.NaN;
+
+    if (Number.isFinite(numberValue) && numberValue > 0) {
+      return numberValue;
+    }
+  }
+
+  return null;
+}
+
+function createAppServerRuntimeDiagnosticsPayload(
+  diagnostics: AppServerExecutionDiagnostics,
+): Record<string, unknown> {
+  return {
+    phase: diagnostics.phase,
+    ...(diagnostics.lastTool
+      ? {
+          lastTool: {
+            toolKind: diagnostics.lastTool.toolKind,
+            phase: diagnostics.lastTool.phase,
+            updatedAt: diagnostics.lastTool.updatedAt,
+          },
+        }
+      : {}),
+    ...(diagnostics.tokenPressure
+      ? {
+          tokenPressure: {
+            inputTokens: diagnostics.tokenPressure.inputTokens,
+            contextWindow: diagnostics.tokenPressure.contextWindow,
+            ratio: diagnostics.tokenPressure.ratio,
+            observedAt: diagnostics.tokenPressure.observedAt,
+          },
+        }
+      : {}),
+  };
+}
+
 function createAppServerThreadCompactionState(targetThreadId = ""): AppServerThreadCompactionState {
   let resolve!: () => void;
   let reject!: (error: Error) => void;
@@ -2703,7 +2892,11 @@ function isAbortLikeError(error: unknown): boolean {
   return error.name === "AbortError" || error.message.startsWith("TASK_TIMEOUT:");
 }
 
-function describeAbort(signal: AbortSignal, error?: unknown): string {
+function describeAbort(
+  signal: AbortSignal,
+  error?: unknown,
+  diagnostics?: AppServerExecutionDiagnostics,
+): string {
   if (isAppServerTurnCancelledError(error)) {
     return error.message || "任务已被取消。";
   }
@@ -2714,7 +2907,7 @@ function describeAbort(signal: AbortSignal, error?: unknown): string {
     if (reason.message.startsWith("TASK_TIMEOUT:")) {
       const timeout = reason.message.split(":")[1] ?? "0";
       const seconds = Math.max(1, Math.round(Number.parseInt(timeout, 10) / 1000));
-      return `任务因超时被取消，超时时间约为 ${seconds} 秒。`;
+      return describeTaskTimeout(seconds, diagnostics);
     }
 
     if (reason.message === "WORK_ITEM_CANCELLED") {
@@ -2723,6 +2916,40 @@ function describeAbort(signal: AbortSignal, error?: unknown): string {
   }
 
   return "任务已被取消。";
+}
+
+function describeTaskTimeout(seconds: number, diagnostics?: AppServerExecutionDiagnostics): string {
+  const tokenPressureSuffix = isHighTokenPressure(diagnostics?.tokenPressure ?? null)
+    ? "检测到上下文接近上限，这不是业务命令仍在运行。"
+    : "";
+
+  if (diagnostics?.phase === "context_compacting" || diagnostics?.phase === "context_recovered") {
+    return joinTimeoutMessage(
+      `Codex 原生上下文压缩/压缩后续写阶段超过 ${seconds} 秒未返回，任务被取消。`,
+      tokenPressureSuffix,
+    );
+  }
+
+  if (
+    diagnostics?.phase === "waiting_for_model_after_tool"
+    && diagnostics.lastTool
+    && ["completed", "failed", "interrupted"].includes(diagnostics.lastTool.phase)
+  ) {
+    return joinTimeoutMessage(
+      `工具已完成，但模型续写/上下文压缩阶段超过 ${seconds} 秒未返回，任务被取消。`,
+      tokenPressureSuffix,
+    );
+  }
+
+  if (diagnostics?.phase === "tool_running") {
+    return `任务因超时被取消：最近仍处于工具执行阶段，超时时间约为 ${seconds} 秒。`;
+  }
+
+  return `任务因超时被取消，超时时间约为 ${seconds} 秒。`;
+}
+
+function joinTimeoutMessage(primary: string, suffix: string): string {
+  return suffix ? `${primary}${suffix}` : primary;
 }
 
 async function withOperationTimeout<T>(promise: Promise<T>, label: string): Promise<T> {

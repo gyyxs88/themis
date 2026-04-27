@@ -2145,6 +2145,89 @@ test("AppServerTaskRuntime 会按工具 item 生命周期发出 started/complete
   }
 });
 
+test("AppServerTaskRuntime 在工具完成后静默超时时会报告模型续写或上下文压缩卡住", { timeout: 600 }, async () => {
+  const progressMessages: string[] = [];
+  const { sessionFactory } = createSessionFactory({
+    startTurn: async (state) => {
+      state.notificationHandler?.({
+        method: "token_count",
+        params: {
+          info: {
+            last_token_usage: {
+              input_tokens: 262_868,
+            },
+            model_context_window: 258_400,
+          },
+        },
+      });
+      state.notificationHandler?.({
+        method: "item/started",
+        params: {
+          threadId: "thread-tool-timeout-1",
+          turnId: "turn-tool-timeout-1",
+          item: {
+            type: "commandExecution",
+            id: "item-command-timeout-1",
+            command: "ssh check",
+            status: "inProgress",
+          },
+        },
+      });
+      state.notificationHandler?.({
+        method: "item/completed",
+        params: {
+          threadId: "thread-tool-timeout-1",
+          turnId: "turn-tool-timeout-1",
+          item: {
+            type: "commandExecution",
+            id: "item-command-timeout-1",
+            command: "ssh check",
+            status: "completed",
+            aggregatedOutput: "Permission denied (publickey).",
+            exitCode: 0,
+          },
+        },
+      });
+      return { turnId: "turn-tool-timeout-1" };
+    },
+  });
+  const fixture = createRuntimeFixture({
+    sessionFactory,
+    toolTraceDebounceMs: 0,
+  });
+
+  try {
+    const result = await fixture.runtime.runTask({
+      requestId: "req-app-tool-continuation-timeout-1",
+      taskId: "task-app-tool-continuation-timeout-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "run ssh check",
+      channelContext: { channelSessionKey: "web-session-tool-continuation-timeout-1" },
+      createdAt: "2026-04-27T13:47:00.000Z",
+    }, {
+      timeoutMs: 30,
+      onEvent: async (event) => {
+        if (event.type === "task.progress" && typeof event.message === "string") {
+          progressMessages.push(event.message);
+        }
+      },
+    });
+
+    assert.equal(result.status, "cancelled");
+    assert.match(result.summary, /工具已完成，但模型续写\/上下文压缩阶段超过/);
+    assert.match(result.summary, /上下文接近上限/);
+    assert.ok(progressMessages.some((message) => message.includes("上下文接近上限")));
+    assert.equal(result.structuredOutput?.runtimeDiagnostics && typeof result.structuredOutput.runtimeDiagnostics, "object");
+    const diagnostics = result.structuredOutput?.runtimeDiagnostics as Record<string, any> | undefined;
+    assert.equal(diagnostics?.phase, "waiting_for_model_after_tool");
+    assert.equal(diagnostics?.lastTool?.phase, "completed");
+    assert.equal(diagnostics?.tokenPressure?.inputTokens, 262_868);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("AppServerTaskRuntime 会在任务失败时把未完成的工具轨迹收口成 interrupted", async () => {
   const toolProgresses: string[] = [];
   const { sessionFactory } = createSessionFactory({
