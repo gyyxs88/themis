@@ -533,6 +533,11 @@ test("Themis MCP server 支持员工治理工具闭环", async () => {
           runtimeProfile: {
             approvalPolicy: "never",
             memoryMode: "auto",
+            secretEnvRefs: [{
+              envName: "CLOUDFLARE_API_TOKEN",
+              secretRef: "cloudflare-readonly-token",
+              required: true,
+            }],
           },
         },
       },
@@ -544,6 +549,11 @@ test("Themis MCP server 支持员工治理工具闭环", async () => {
     assert.equal(boundaryPayload.result?.structuredContent?.workspacePolicy?.workspacePath, agentWorkspace);
     assert.equal(boundaryPayload.result?.structuredContent?.workspacePolicy?.allowNetworkAccess, false);
     assert.equal(boundaryPayload.result?.structuredContent?.runtimeProfile?.approvalPolicy, "never");
+    assert.deepEqual(boundaryPayload.result?.structuredContent?.runtimeProfile?.secretEnvRefs, [{
+      envName: "CLOUDFLARE_API_TOKEN",
+      secretRef: "cloudflare-readonly-token",
+      required: true,
+    }]);
 
     const serviceWorkspaceResponse = await server.handleMessage(JSON.stringify({
       jsonrpc: "2.0",
@@ -587,6 +597,35 @@ test("Themis MCP server 支持员工治理工具闭环", async () => {
     assert.equal(dispatchPayload.result?.isError, false);
     assert.equal(dispatchPayload.result?.structuredContent?.targetAgent?.agentId, agentId);
     assert.equal(dispatchPayload.result?.structuredContent?.workItem?.targetAgentId, agentId);
+
+    const dispatchWithSecretValueResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 12.5,
+      method: "tools/call",
+      params: {
+        name: "dispatch_work_item",
+        arguments: {
+          targetAgentId: agentId,
+          dispatchReason: "验证 secret 引用",
+          goal: "只允许传 secret 引用。",
+          runtimeProfileSnapshot: {
+            secretEnvRefs: [{
+              envName: "CLOUDFLARE_API_TOKEN",
+              secretRef: "cloudflare-readonly-token",
+              value: "cf-secret-value",
+            }],
+          },
+        },
+      },
+    }));
+
+    assert.ok(dispatchWithSecretValueResponse);
+    const dispatchWithSecretValuePayload = JSON.parse(dispatchWithSecretValueResponse);
+    assert.equal(dispatchWithSecretValuePayload.result?.isError, true);
+    assert.match(
+      dispatchWithSecretValuePayload.result?.content?.[0]?.text ?? "",
+      /secretEnvRefs.*value/i,
+    );
 
     const lifecycleResponse = await server.handleMessage(JSON.stringify({
       jsonrpc: "2.0",

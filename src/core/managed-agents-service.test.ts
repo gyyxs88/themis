@@ -321,6 +321,11 @@ test("ManagedAgentsService 支持持久化更新默认执行边界", () => {
           approvalPolicy: "on-request",
           webSearchMode: "disabled",
           networkAccessEnabled: false,
+          secretEnvRefs: [{
+            envName: "CLOUDFLARE_API_TOKEN",
+            secretRef: "cloudflare-readonly-token",
+            required: true,
+          }],
         },
         now: "2026-04-07T11:12:00.000Z",
       });
@@ -339,8 +344,18 @@ test("ManagedAgentsService 支持持久化更新默认执行边界", () => {
       assert.equal(updated.runtimeProfile.approvalPolicy, "on-request");
       assert.equal(updated.runtimeProfile.webSearchMode, "disabled");
       assert.equal(updated.runtimeProfile.networkAccessEnabled, false);
+      assert.deepEqual(updated.runtimeProfile.secretEnvRefs, [{
+        envName: "CLOUDFLARE_API_TOKEN",
+        secretRef: "cloudflare-readonly-token",
+        required: true,
+      }]);
       assert.equal(reloaded?.workspacePolicy.workspacePath, workspacePath);
       assert.equal(reloaded?.runtimeProfile.thirdPartyProviderId, "gateway-a");
+      assert.deepEqual(reloaded?.runtimeProfile.secretEnvRefs, [{
+        envName: "CLOUDFLARE_API_TOKEN",
+        secretRef: "cloudflare-readonly-token",
+        required: true,
+      }]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

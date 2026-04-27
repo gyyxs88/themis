@@ -242,6 +242,12 @@ export interface ManagedAgentWorkspacePolicySnapshot {
   allowNetworkAccess?: boolean;
 }
 
+export interface ManagedAgentSecretEnvRef {
+  envName: string;
+  secretRef: string;
+  required?: boolean;
+}
+
 export interface ManagedAgentRuntimeProfileSnapshot {
   profileId?: string;
   displayName?: string;
@@ -255,6 +261,7 @@ export interface ManagedAgentRuntimeProfileSnapshot {
   accessMode?: TaskAccessMode;
   authAccountId?: string;
   thirdPartyProviderId?: string;
+  secretEnvRefs?: ManagedAgentSecretEnvRef[];
 }
 
 export const PROJECT_WORKSPACE_CONTINUITY_MODES = ["sticky", "replicated", "portable"] as const;

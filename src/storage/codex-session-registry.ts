@@ -131,6 +131,7 @@ import type {
   PrincipalMainMemoryStatus,
   ReasoningLevel,
   SandboxMode,
+  ManagedAgentSecretEnvRef,
   ScheduledTaskRunStatus,
   ScheduledTaskStatus,
   SessionTaskSettings,
@@ -15074,6 +15075,7 @@ function normalizeManagedAgentRuntimeProfileSnapshot(
   const accessMode = normalizeEnum<TaskAccessMode>(asString(record.accessMode), TASK_ACCESS_MODES);
   const authAccountId = normalizeText(asString(record.authAccountId));
   const thirdPartyProviderId = normalizeText(asString(record.thirdPartyProviderId));
+  const secretEnvRefs = normalizeManagedAgentSecretEnvRefs(record.secretEnvRefs);
 
   return {
     ...(profileId ? { profileId } : {}),
@@ -15092,7 +15094,32 @@ function normalizeManagedAgentRuntimeProfileSnapshot(
     ...(accessMode ? { accessMode } : {}),
     ...(authAccountId ? { authAccountId } : {}),
     ...(thirdPartyProviderId ? { thirdPartyProviderId } : {}),
+    ...(secretEnvRefs ? { secretEnvRefs } : {}),
   };
+}
+
+function normalizeManagedAgentSecretEnvRefs(value: unknown): ManagedAgentSecretEnvRef[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value
+    .map((entry) => {
+      const record = asRecord(entry);
+      const envName = normalizeText(asString(record?.envName));
+      const secretRef = normalizeText(asString(record?.secretRef));
+
+      if (!envName || !secretRef) {
+        return null;
+      }
+
+      return {
+        envName,
+        secretRef,
+        ...(typeof record?.required === "boolean" ? { required: record.required } : {}),
+      };
+    })
+    .filter((entry): entry is ManagedAgentSecretEnvRef => entry !== null);
 }
 
 function normalizeText(value: string | undefined): string | undefined {

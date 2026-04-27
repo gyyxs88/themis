@@ -71,6 +71,7 @@ const JSON_RPC_INVALID_PARAMS = -32602;
 const JSON_RPC_INTERNAL_ERROR = -32603;
 const JSON_RPC_SERVER_NOT_INITIALIZED = -32002;
 const MAX_LIST_LIMIT = 100;
+const SECRET_ENV_NAME_PATTERN = "^[A-Z_][A-Z0-9_]*$";
 
 type JsonRpcId = string | number | null;
 
@@ -1261,7 +1262,35 @@ function buildManagedAgentRuntimeProfileSchema(): Record<string, unknown> {
       thirdPartyProviderId: {
         type: "string",
       },
+      secretEnvRefs: buildSecretEnvRefsSchema(),
     },
+  };
+}
+
+function buildSecretEnvRefsSchema(): Record<string, unknown> {
+  return {
+    type: "array",
+    items: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        envName: {
+          type: "string",
+          pattern: SECRET_ENV_NAME_PATTERN,
+          description: "注入给 worker 子进程的环境变量名，例如 CLOUDFLARE_API_TOKEN。",
+        },
+        secretRef: {
+          type: "string",
+          description: "worker 本地 secret store 中的引用名；不要填 secret 明文。",
+        },
+        required: {
+          type: "boolean",
+          description: "为 true 时，worker 无法解析该 secretRef 就直接失败，不启动子进程。",
+        },
+      },
+      required: ["envName", "secretRef"],
+    },
+    description: "可选。只传 secret 引用，禁止在 goal、contextPacket 或本字段中传 token 明文。",
   };
 }
 
@@ -1480,7 +1509,10 @@ function normalizeDispatchWorkItemToolArgs(value: Record<string, unknown>): Disp
       ? { workspacePolicySnapshot: expectRecord(value.workspacePolicySnapshot, "workspacePolicySnapshot must be an object.") }
       : {}),
     ...(hasOwn(value, "runtimeProfileSnapshot")
-      ? { runtimeProfileSnapshot: expectRecord(value.runtimeProfileSnapshot, "runtimeProfileSnapshot must be an object.") }
+      ? { runtimeProfileSnapshot: normalizeRuntimeProfileSnapshotInput(
+          expectRecord(value.runtimeProfileSnapshot, "runtimeProfileSnapshot must be an object."),
+          "runtimeProfileSnapshot",
+        ) }
       : {}),
     ...(normalizeText(value.scheduledAt) ? { scheduledAt: normalizeText(value.scheduledAt) as string } : {}),
   };
@@ -1616,6 +1648,9 @@ function normalizeManagedAgentRuntimeProfileInput(
     ...(normalizeText(value.thirdPartyProviderId)
       ? { thirdPartyProviderId: normalizeText(value.thirdPartyProviderId) as string }
       : {}),
+    ...(hasOwn(value, "secretEnvRefs")
+      ? { secretEnvRefs: normalizeSecretEnvRefs(value.secretEnvRefs, "runtimeProfile.secretEnvRefs") }
+      : {}),
   };
 
   if (Object.keys(result).length === 0) {
@@ -1623,6 +1658,61 @@ function normalizeManagedAgentRuntimeProfileInput(
   }
 
   return result;
+}
+
+function normalizeRuntimeProfileSnapshotInput(
+  value: Record<string, unknown>,
+  fieldName: string,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...value };
+
+  if (hasOwn(value, "secretEnvRefs")) {
+    result.secretEnvRefs = normalizeSecretEnvRefs(value.secretEnvRefs, `${fieldName}.secretEnvRefs`);
+  }
+
+  return result;
+}
+
+function normalizeSecretEnvRefs(
+  value: unknown,
+  fieldName: string,
+): Array<{ envName: string; secretRef: string; required?: boolean }> {
+  if (!Array.isArray(value)) {
+    throw new JsonRpcProtocolError(JSON_RPC_INVALID_PARAMS, `${fieldName} must be an array.`);
+  }
+
+  const allowedKeys = new Set(["envName", "secretRef", "required"]);
+
+  return value.map((entry, index) => {
+    const record = expectRecord(entry, `${fieldName}[${index}] must be an object.`);
+    const unknownKey = Object.keys(record).find((key) => !allowedKeys.has(key));
+
+    if (unknownKey) {
+      throw new JsonRpcProtocolError(
+        JSON_RPC_INVALID_PARAMS,
+        `${fieldName}[${index}] must only include envName, secretRef and required; ${unknownKey} is not allowed.`,
+      );
+    }
+
+    const envName = expectRequiredText(record.envName, `${fieldName}[${index}].envName is required.`);
+
+    if (!new RegExp(SECRET_ENV_NAME_PATTERN).test(envName)) {
+      throw new JsonRpcProtocolError(
+        JSON_RPC_INVALID_PARAMS,
+        `${fieldName}[${index}].envName must match ${SECRET_ENV_NAME_PATTERN}.`,
+      );
+    }
+
+    const secretRef = expectRequiredText(record.secretRef, `${fieldName}[${index}].secretRef is required.`);
+
+    return {
+      envName,
+      secretRef,
+      ...(hasOwn(record, "required")
+        ? { required: expectBoolean(record.required, `${fieldName}[${index}].required must be a boolean.`) }
+        : {}),
+    };
+  });
 }
 
 function createResultResponse(id: JsonRpcId, result: unknown): JsonRpcResponse {

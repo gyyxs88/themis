@@ -10,6 +10,7 @@ import type {
   ManagedAgentAutonomyLevel,
   ManagedAgentCreationMode,
   ManagedAgentExposurePolicy,
+  ManagedAgentSecretEnvRef,
   ProjectWorkspaceContinuityMode,
   ManagedAgentStatus,
   AgentSpawnSuggestionState,
@@ -132,6 +133,7 @@ export interface ManagedAgentExecutionBoundaryRuntimeProfileInput {
   accessMode?: TaskAccessMode;
   authAccountId?: string;
   thirdPartyProviderId?: string;
+  secretEnvRefs?: ManagedAgentSecretEnvRef[];
 }
 
 export interface UpdateManagedAgentExecutionBoundaryInput {
@@ -1987,6 +1989,17 @@ export class ManagedAgentsService {
     const sandboxMode = normalizeSandboxMode(profileInput.sandboxMode ?? input.currentProfile?.sandboxMode);
     const webSearchMode = normalizeWebSearchMode(profileInput.webSearchMode ?? input.currentProfile?.webSearchMode);
     const approvalPolicy = normalizeApprovalPolicy(profileInput.approvalPolicy ?? input.currentProfile?.approvalPolicy);
+    const secretEnvRefs = Array.isArray(profileInput.secretEnvRefs)
+      ? profileInput.secretEnvRefs.map((entry) => ({
+          envName: entry.envName,
+          secretRef: entry.secretRef,
+          ...(typeof entry.required === "boolean" ? { required: entry.required } : {}),
+        }))
+      : input.currentProfile?.secretEnvRefs?.map((entry) => ({
+          envName: entry.envName,
+          secretRef: entry.secretRef,
+          ...(typeof entry.required === "boolean" ? { required: entry.required } : {}),
+        }));
 
     return {
       profileId: input.currentProfile?.profileId ?? createId("agent-runtime-profile"),
@@ -2008,6 +2021,7 @@ export class ManagedAgentsService {
       accessMode,
       ...(authAccountId ? { authAccountId } : {}),
       ...(thirdPartyProviderId ? { thirdPartyProviderId } : {}),
+      ...(secretEnvRefs !== undefined ? { secretEnvRefs } : {}),
       createdAt: input.currentProfile?.createdAt ?? input.now,
       updatedAt: input.now,
     };
