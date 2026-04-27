@@ -983,7 +983,7 @@ export class AppServerTaskRuntime {
           },
         ));
 
-        const compactThread = activeSession.compactThread;
+        const compactThread = activeSession.compactThread?.bind(activeSession);
 
         if (typeof compactThread !== "function") {
           throw new Error("当前 Codex app-server 不支持 thread/compact/start，无法自动压缩并继续。");

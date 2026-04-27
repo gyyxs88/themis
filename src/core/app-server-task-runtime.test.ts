@@ -277,7 +277,8 @@ function createSessionFactory(overrides: {
         }
         return { turnId };
       },
-      compactThread: async (threadId) => {
+      compactThread: async function (this: AppServerTaskRuntimeSession, threadId) {
+        assert.equal(typeof this.startTurn, "function");
         state.compactions.push({ threadId });
         if (overrides.compactThread) {
           await overrides.compactThread(threadId, state);
