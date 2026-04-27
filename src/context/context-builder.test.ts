@@ -50,12 +50,53 @@ test("ContextBuilder 会按优先级读取 README、AGENTS、memory 和 docs/mem
     assert.ok(result.blocks.some((block) => block.kind === "repoRules" && block.sourcePath === "AGENTS.md"));
     assert.ok(result.blocks.some((block) => block.kind === "projectState" && block.sourcePath === "README.md"));
     assert.ok(result.blocks.some((block) => block.kind === "relevantMemories" && block.sourcePath.endsWith("provider-search.md")));
+    assert.equal(result.blocks.find((block) => block.sourcePath === "README.md")?.delivery, "reference");
+    assert.match(result.blocks.find((block) => block.sourcePath === "README.md")?.text ?? "", /Source file: README\.md/);
+    assert.equal(result.blocks.find((block) => block.sourcePath === "AGENTS.md")?.delivery, "inline");
+    assert.equal(result.sourceStats.find((stat) => stat.sourceId === "README.md")?.delivery, "reference");
     assert.ok(result.warnings.some((warning) => warning.sourceId === "memory/sessions/active.md"));
     assert.equal(result.sourceStats.find((stat) => stat.sourceId === "AGENTS.md")?.included, true);
     assert.deepEqual(
       result.blocks.map((block) => block.priority),
       [...result.blocks.map((block) => block.priority)].sort((left, right) => right - left),
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ContextBuilder 会把任务台账和过大的 docs/memory 文档改成引用块", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-context-builder-reference-"));
+
+  try {
+    writeFileSync(join(root, "AGENTS.md"), "始终使用中文回复。", "utf8");
+    writeFileSync(join(root, "README.md"), "# Demo\n\n短说明。\n", "utf8");
+    mkdirSync(join(root, "memory", "tasks"), { recursive: true });
+    mkdirSync(join(root, "docs", "memory", "2026", "03"), { recursive: true });
+    writeFileSync(join(root, "memory", "tasks", "in-progress.md"), `# In Progress\n\n${"当前任务。\n".repeat(100)}`, "utf8");
+    writeFileSync(join(root, "docs", "memory", "2026", "03", "large-provider-search.md"), `# Provider Search\n\n${"search 约束。\n".repeat(800)}`, "utf8");
+    writeFileSync(join(root, "docs", "memory", "2026", "03", "small-provider-search.md"), "# Small\n\nprovider search 小记。\n", "utf8");
+
+    const builder = new ContextBuilder({
+      workingDirectory: root,
+      maxDocsMemoryFiles: 2,
+    });
+
+    const result = await builder.build({
+      request: createRequest(root),
+      principalId: "principal-local-owner",
+      conversationId: "session-context-1",
+    });
+    const inProgress = result.blocks.find((block) => block.sourcePath === "memory/tasks/in-progress.md");
+    const largeMemory = result.blocks.find((block) => block.sourcePath.endsWith("large-provider-search.md"));
+    const smallMemory = result.blocks.find((block) => block.sourcePath.endsWith("small-provider-search.md"));
+
+    assert.equal(inProgress?.delivery, "reference");
+    assert.match(inProgress?.text ?? "", /read it directly/);
+    assert.equal(largeMemory?.delivery, "reference");
+    assert.match(largeMemory?.text ?? "", /Original size:/);
+    assert.equal(smallMemory?.delivery, "inline");
+    assert.match(smallMemory?.text ?? "", /provider search 小记/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

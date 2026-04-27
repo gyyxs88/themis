@@ -11,6 +11,8 @@ export const CONTEXT_BLOCK_KINDS = [
 
 export type ContextBlockKind = (typeof CONTEXT_BLOCK_KINDS)[number];
 
+export type ContextBlockDelivery = "inline" | "reference";
+
 export interface ContextBlock {
   kind: ContextBlockKind;
   title: string;
@@ -18,6 +20,8 @@ export interface ContextBlock {
   sourcePath: string;
   priority: number;
   truncated: boolean;
+  delivery?: ContextBlockDelivery;
+  originalChars?: number;
 }
 
 export interface ContextBuildWarning {
@@ -31,8 +35,10 @@ export interface ContextSourceStat {
   sourceId: string;
   included: boolean;
   includedChars: number;
+  originalChars?: number;
   truncated: boolean;
   reason: "selected" | "missing" | "unreadable" | "budget";
+  delivery?: ContextBlockDelivery;
 }
 
 export interface ContextBuildInput {

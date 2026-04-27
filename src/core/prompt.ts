@@ -260,6 +260,8 @@ function formatTaskContext(taskContext?: ContextBuildResult | null): string | nu
           `source: ${block.sourcePath}`,
           `priority: ${block.priority}`,
           `truncated: ${String(block.truncated)}`,
+          `delivery: ${block.delivery ?? "inline"}`,
+          ...(typeof block.originalChars === "number" ? [`originalChars: ${block.originalChars}`] : []),
           "content:",
           ...prefixBlockLines(block.text, "| "),
         ]),

@@ -1130,7 +1130,10 @@ test("AppServerTaskRuntime 会在 task.started 前发出单次 task.context_buil
     assert.match(state.turns[0]?.prompt ?? "", /kind: repoRules/);
     assert.match(state.turns[0]?.prompt ?? "", /source: AGENTS\.md/);
     assert.match(state.turns[0]?.prompt ?? "", /title: Repository rules/);
-    assert.match(state.turns[0]?.prompt ?? "", /\| ```ts/);
+    assert.match(state.turns[0]?.prompt ?? "", /source: README\.md/);
+    assert.match(state.turns[0]?.prompt ?? "", /delivery: reference/);
+    assert.match(state.turns[0]?.prompt ?? "", /Source file: README\.md/);
+    assert.doesNotMatch(state.turns[0]?.prompt ?? "", /const provider = true/);
     assert.match(state.turns[0]?.prompt ?? "", /Response guidance:/);
   } finally {
     fixture.cleanup();

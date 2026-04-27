@@ -3,6 +3,7 @@ import { join, relative } from "node:path";
 import { setImmediate as waitForNextTurn } from "node:timers/promises";
 import type {
   ContextBlock,
+  ContextBlockDelivery,
   ContextBuildInput,
   ContextBuildResult,
   ContextBuildWarning,
@@ -19,7 +20,11 @@ interface SourceCandidate {
   kind: ContextBlock["kind"];
   title: string;
   priority: number;
+  delivery?: ContextBlockDelivery;
+  inlineMaxChars?: number;
 }
+
+const DEFAULT_REFERENCE_INLINE_MAX_CHARS = 4_000;
 
 const SOURCE_CANDIDATES: SourceCandidate[] = [
   {
@@ -33,6 +38,7 @@ const SOURCE_CANDIDATES: SourceCandidate[] = [
     kind: "projectState",
     title: "Repository overview",
     priority: 80,
+    delivery: "reference",
   },
   {
     path: "memory/architecture/overview.md",
@@ -51,18 +57,21 @@ const SOURCE_CANDIDATES: SourceCandidate[] = [
     kind: "projectState",
     title: "Backlog",
     priority: 65,
+    delivery: "reference",
   },
   {
     path: "memory/tasks/in-progress.md",
     kind: "projectState",
     title: "In progress",
     priority: 64,
+    delivery: "reference",
   },
   {
     path: "memory/tasks/done.md",
     kind: "projectState",
     title: "Done",
     priority: 63,
+    delivery: "reference",
   },
 ];
 
@@ -133,20 +142,24 @@ export class ContextBuilder {
         continue;
       }
 
-      blocks.push({
+      const block = createContextBlock({
         kind: candidate.kind,
         title: candidate.title,
         text,
         sourcePath: candidate.path,
         priority: candidate.priority,
-        truncated: false,
+        delivery: candidate.delivery ?? "inline",
+        ...(candidate.inlineMaxChars ? { inlineMaxChars: candidate.inlineMaxChars } : {}),
       });
+      blocks.push(block);
       sourceStats.push({
         sourceId: candidate.path,
         included: true,
-        includedChars: text.length,
+        includedChars: block.text.length,
+        originalChars: text.length,
         truncated: false,
         reason: "selected",
+        delivery: block.delivery ?? "inline",
       });
     }
 
@@ -186,20 +199,24 @@ export class ContextBuilder {
       }
 
       const sourcePath = relative(this.workingDirectory, filePath);
-      blocks.push({
+      const block = createContextBlock({
         kind: "relevantMemories",
         title: "Relevant memory",
         text,
         sourcePath,
         priority: 55,
-        truncated: false,
+        delivery: text.length <= DEFAULT_REFERENCE_INLINE_MAX_CHARS ? "inline" : "reference",
+        inlineMaxChars: DEFAULT_REFERENCE_INLINE_MAX_CHARS,
       });
+      blocks.push(block);
       sourceStats.push({
         sourceId: sourcePath,
         included: true,
-        includedChars: text.length,
+        includedChars: block.text.length,
+        originalChars: text.length,
         truncated: false,
         reason: "selected",
+        delivery: block.delivery ?? "inline",
       });
     }
 
@@ -221,6 +238,75 @@ export class ContextBuilder {
       sourceStats,
     };
   }
+}
+
+function createContextBlock(input: {
+  kind: ContextBlock["kind"];
+  title: string;
+  text: string;
+  sourcePath: string;
+  priority: number;
+  delivery: ContextBlockDelivery;
+  inlineMaxChars?: number;
+}): ContextBlock {
+  const originalChars = input.text.length;
+  const delivery = input.delivery === "reference" && originalChars > (input.inlineMaxChars ?? 0)
+    ? "reference"
+    : input.delivery;
+
+  if (delivery === "inline") {
+    return {
+      kind: input.kind,
+      title: input.title,
+      text: input.text,
+      sourcePath: input.sourcePath,
+      priority: input.priority,
+      truncated: false,
+      delivery,
+      originalChars,
+    };
+  }
+
+  return {
+    kind: input.kind,
+    title: input.title,
+    text: formatReferenceBlock({
+      title: input.title,
+      sourcePath: input.sourcePath,
+      originalChars,
+      preview: extractReferencePreview(input.text),
+    }),
+    sourcePath: input.sourcePath,
+    priority: input.priority,
+    truncated: false,
+    delivery,
+    originalChars,
+  };
+}
+
+function formatReferenceBlock(input: {
+  title: string;
+  sourcePath: string;
+  originalChars: number;
+  preview: string;
+}): string {
+  return [
+    `Source file: ${input.sourcePath}`,
+    `Original size: ${input.originalChars} chars`,
+    "Delivery: reference only; full content is not injected to reduce repeated context.",
+    "Use this file when the task requires its facts; read it directly before relying on details.",
+    ...(input.preview ? ["Preview:", input.preview] : []),
+  ].join("\n");
+}
+
+function extractReferencePreview(text: string): string {
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const heading = lines.find((line) => line.startsWith("#"));
+  const body = lines.find((line) => !line.startsWith("#"));
+  return [heading, body].filter((line): line is string => Boolean(line)).join("\n").slice(0, 500);
 }
 
 interface PickRelevantMemoryFilesInput {
