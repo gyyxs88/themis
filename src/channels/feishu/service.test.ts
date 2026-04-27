@@ -26,6 +26,7 @@ import type {
 } from "../../types/index.js";
 import { SqliteCodexSessionRegistry } from "../../storage/index.js";
 import type { ThemisUpdateService } from "../../diagnostics/update-service.js";
+import { WorkerSecretStore } from "../../core/worker-secret-store.js";
 import { FeishuDiagnosticsStateStore } from "./diagnostics-state-store.js";
 import { FeishuChannelService } from "./service.js";
 import { FeishuSessionStore } from "./session-store.js";
@@ -45,6 +46,59 @@ test("/help 只展示第一层命令", async () => {
     assert.doesNotMatch(message, /\/sandbox /);
     assert.doesNotMatch(message, /\/account list/);
     assert.doesNotMatch(message, /\/settings network/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/secrets worker set 写入 worker secret store 且不回显 secret", async () => {
+  const harness = createHarness();
+  const secretValue = "cf-secret-value-123456";
+
+  try {
+    await harness.handleCommand("secrets", ["worker", "set", "cloudflare-readonly-token", secretValue]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /Worker secret 已写入/);
+    assert.match(message, /secretRef：cloudflare-readonly-token/);
+    assert.doesNotMatch(message, new RegExp(secretValue));
+    assert.deepEqual(harness.readWorkerSecretStore(), {
+      "cloudflare-readonly-token": secretValue,
+    });
+
+    const commandLogs = harness.getInfoLogs().filter((entry) => entry.includes("斜杠命令完成"));
+    assert.equal(commandLogs.length, 1);
+    assert.match(commandLogs[0] ?? "", /secrets worker set cloudflare-readonly-token \[REDACTED_SECRET\]/);
+    assert.doesNotMatch(commandLogs.join("\n"), new RegExp(secretValue));
+
+    await harness.handleCommand("secrets", ["worker", "list"]);
+    const listMessage = harness.takeSingleMessage();
+    assert.match(listMessage, /已配置 secretRef：cloudflare-readonly-token/);
+    assert.doesNotMatch(listMessage, new RegExp(secretValue));
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("飞书 secret 命令的入站日志会脱敏", async () => {
+  const harness = createHarness();
+  const secretValue = "cf-secret-value-raw-123456";
+
+  try {
+    await harness.handleRawMessageEvent(createFeishuTextEvent({
+      chatId: "chat-1",
+      userId: "user-1",
+      messageId: "message-secret-raw",
+      text: `/secrets worker set cloudflare-readonly-token ${secretValue}`,
+    }));
+
+    const messages = harness.takeMessages().join("\n");
+    assert.match(messages, /Worker secret 已写入/);
+    assert.doesNotMatch(messages, new RegExp(secretValue));
+
+    const logs = harness.getInfoLogs().join("\n");
+    assert.match(logs, /cloudflare-readonly-token \[REDACTED_SECRET\]/);
+    assert.doesNotMatch(logs, new RegExp(secretValue));
   } finally {
     harness.cleanup();
   }
@@ -8039,6 +8093,7 @@ type FeishuHarnessConfig = {
   pluginService?: FeishuHarnessPluginService;
   updateService?: Pick<ThemisUpdateService, "readOverview" | "startApply" | "startRollback">
     & Partial<Pick<ThemisUpdateService, "prepareRestart" | "requestRestart" | "readOpsStatus">>;
+  workerSecretStore?: WorkerSecretStore;
 };
 
 type FeishuHarnessSkillCall =
@@ -8357,6 +8412,9 @@ function createHarness(
   });
   const diagnosticsStateStore = new FeishuDiagnosticsStateStore({
     filePath: join(workingDirectory, "infra/local/feishu-diagnostics.json"),
+  });
+  const workerSecretStore = harnessConfig?.workerSecretStore ?? new WorkerSecretStore({
+    filePath: join(workingDirectory, "infra/local/worker-secrets.json"),
   });
   const accounts = [
     {
@@ -9040,6 +9098,7 @@ function createHarness(
     taskTimeoutMs: harnessConfig?.taskTimeoutMs ?? 5_000,
     sessionStore,
     diagnosticsStateStore,
+    workerSecretStore,
     ...(harnessConfig?.updateService ? { updateService: harnessConfig.updateService as never } : {}),
     logger: loggerState.logger,
   });
@@ -9304,6 +9363,13 @@ function createHarness(
     },
     readFeishuDiagnosticsStore() {
       return diagnosticsStateStore.readSnapshot();
+    },
+    readWorkerSecretStore() {
+      const filePath = workerSecretStore.getFilePath();
+      if (!existsSync(filePath)) {
+        return null;
+      }
+      return JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
     },
     injectPendingAction(input: {
       taskId?: string;

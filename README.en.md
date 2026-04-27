@@ -168,6 +168,7 @@ npm run themis -- config set FEISHU_APP_SECRET xxx
 - Feishu: `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_PROGRESS_FLUSH_TIMEOUT_MS`
 - OpenAI-compatible provider: `THEMIS_OPENAI_COMPAT_BASE_URL`, `THEMIS_OPENAI_COMPAT_API_KEY`, `THEMIS_OPENAI_COMPAT_MODEL`
 - Update and build metadata: `THEMIS_BUILD_COMMIT`, `THEMIS_BUILD_BRANCH`, `THEMIS_UPDATE_REPO`, `THEMIS_UPDATE_CHANNEL`, `THEMIS_UPDATE_DEFAULT_BRANCH`, `THEMIS_UPDATE_SYSTEMD_SERVICE`, `THEMIS_UPDATE_RESTART_EXIT_WAIT_MS`, `THEMIS_RESTART_CONFIRM_TIMEOUT_MS`, `THEMIS_GITHUB_TOKEN`
+- Worker secret injection: `THEMIS_MANAGED_AGENT_WORKER_SECRET_STORE_FILE` overrides the worker secret store path written by Feishu `/secrets worker`; by default it targets sibling `../themis-worker-node/infra/local/worker-secrets.json`.
 - Platform-layer MySQL, runtime snapshot, and execution runtime variables are documented in [Platform MySQL control-plane cutover](./docs/repository/themis-platform-mysql-control-plane-cutover.md) and the [repository operations docs index](./docs/repository/README.md).
 
 ## Documentation
@@ -214,5 +215,5 @@ Common commands for a formal instance:
 
 - `THEMIS_UPDATE_CHANNEL` supports `branch` and `release`; the default is still `branch`.
 - Controlled update currently supports only clean public-repository `git clone` deployments on the default branch, with fast-forward-only updates.
-- Web supports "runtime settings -> instance update"; Feishu supports `/update`, `/update apply confirm`, `/update rollback confirm`, `/ops status`, and `/ops restart confirm`.
+- Web supports "runtime settings -> instance update"; Feishu supports `/update`, `/update apply confirm`, `/update rollback confirm`, `/ops status`, `/ops restart confirm`, and `/secrets worker` for worker secret references.
 - See [Release, canary, and rollback](./docs/repository/themis-release-rollout-and-rollback.md) and [Production systemd deployment](./docs/repository/themis-systemd-prod-service.md) for boundaries and rollback details.

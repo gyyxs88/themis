@@ -170,6 +170,7 @@ npm run themis -- config set FEISHU_APP_SECRET xxx
 - 飞书：`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_PROGRESS_FLUSH_TIMEOUT_MS`
 - OpenAI-compatible provider：`THEMIS_OPENAI_COMPAT_BASE_URL`、`THEMIS_OPENAI_COMPAT_API_KEY`、`THEMIS_OPENAI_COMPAT_MODEL`
 - 升级与版本：`THEMIS_BUILD_COMMIT`、`THEMIS_BUILD_BRANCH`、`THEMIS_UPDATE_REPO`、`THEMIS_UPDATE_CHANNEL`、`THEMIS_UPDATE_DEFAULT_BRANCH`、`THEMIS_UPDATE_SYSTEMD_SERVICE`、`THEMIS_UPDATE_RESTART_EXIT_WAIT_MS`、`THEMIS_RESTART_CONFIRM_TIMEOUT_MS`、`THEMIS_GITHUB_TOKEN`
+- Worker secret 注入：`THEMIS_MANAGED_AGENT_WORKER_SECRET_STORE_FILE` 可覆盖主 Themis 通过飞书 `/secrets worker` 写入的 worker secret store 路径；默认指向同级 `../themis-worker-node/infra/local/worker-secrets.json`
 - 平台层 MySQL、runtime snapshot、execution runtime 这类部署级变量，直接看 [平台层切 MySQL 操作说明](./docs/repository/themis-platform-mysql-control-plane-cutover.md)；跨机场景和历史联调细节见 [仓库运维文档索引](./docs/repository/README.md)
 
 ## 文档导航
@@ -191,7 +192,7 @@ npm run themis -- config set FEISHU_APP_SECRET xxx
 
 当前公开发布采用“双仓”方式：开发仓负责日常开发与本地资料，公开仓负责 GitHub 可公开内容。
 
-普通 Codex 对话任务不应直接尝试重启当前 Themis 服务；如果用户在飞书里要求“部署生效 / 重启自己 / 重启当前实例”，应提示用户在单聊发送 `/ops restart confirm`，由受控运维命令请求重启当前服务；重启前后状态用 `/ops status` 查看。
+普通 Codex 对话任务不应直接尝试重启当前 Themis 服务；如果用户在飞书里要求“部署生效 / 重启自己 / 重启当前实例”，应提示用户在单聊发送 `/ops restart confirm`，由受控运维命令请求重启当前服务；重启前后状态用 `/ops status` 查看。需要给 worker 注入第三方 API token 时，不要把 token 写进普通对话、工单正文或报告；让用户在飞书单聊执行 `/secrets worker set <secretRef> <secretValue>`，随后派工只传 `runtimeProfileSnapshot.secretEnvRefs` 引用。
 
 导出公开仓：
 
@@ -219,5 +220,5 @@ git push origin main
 
 - `THEMIS_UPDATE_CHANNEL` 支持 `branch` 和 `release`；默认仍是 `branch`。
 - 受控升级当前只支持公开仓 `git clone` 的正式实例、默认分支 `ff-only` 快进升级，以及干净工作区。
-- Web 已支持“运行参数 -> 实例升级”，飞书也已支持 `/update`、`/update apply confirm`、`/update rollback confirm`；单独重启当前服务使用飞书单聊 `/ops restart confirm`，实例状态和最近一次重启确认用 `/ops status` 查看。
+- Web 已支持“运行参数 -> 实例升级”，飞书也已支持 `/update`、`/update apply confirm`、`/update rollback confirm`；单独重启当前服务使用飞书单聊 `/ops restart confirm`，实例状态和最近一次重启确认用 `/ops status` 查看；worker secret 引用通过飞书单聊 `/secrets worker` 维护。
 - 详细边界、灰度与回滚流程，直接看 [发布、灰度与回退说明](./docs/repository/themis-release-rollout-and-rollback.md) 和 [正式版部署说明](./docs/repository/themis-systemd-prod-service.md)。

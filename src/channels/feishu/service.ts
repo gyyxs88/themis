@@ -91,6 +91,7 @@ import {
   type ThemisRestartRequestMarker,
   type ThemisSystemdServiceStatus,
 } from "../../diagnostics/update-service.js";
+import { WorkerSecretStore } from "../../core/worker-secret-store.js";
 import {
   downloadFeishuMessageResources,
   extractFeishuMessageResources,
@@ -208,6 +209,7 @@ export interface FeishuChannelServiceOptions {
   chatSettingsStore?: FeishuChatSettingsStore;
   approvalCardStore?: FeishuApprovalCardStateStore;
   updateService?: ThemisUpdateService;
+  workerSecretStore?: WorkerSecretStore;
   logger?: FeishuChannelLogger;
 }
 
@@ -264,6 +266,7 @@ export class FeishuChannelService {
   private readonly chatSettingsStore: FeishuChatSettingsStore;
   private readonly approvalCardStore: FeishuApprovalCardStateStore;
   private readonly updateService: ThemisUpdateService;
+  private readonly workerSecretStore: WorkerSecretStore;
   private readonly logger: FeishuChannelLogger;
   private readonly cardActionHandler: Lark.CardActionHandler;
   private readonly client: Lark.Client | null;
@@ -304,6 +307,9 @@ export class FeishuChannelService {
     });
     this.updateService = options.updateService ?? new ThemisUpdateService({
       workingDirectory: this.runtime.getWorkingDirectory(),
+    });
+    this.workerSecretStore = options.workerSecretStore ?? new WorkerSecretStore({
+      cwd: this.runtime.getWorkingDirectory(),
     });
     this.approvalCardStore = options.approvalCardStore ?? new FeishuApprovalCardStateStore({
       filePath: join(this.runtime.getWorkingDirectory(), "infra/local/feishu-approval-cards.json"),
@@ -652,7 +658,7 @@ export class FeishuChannelService {
     this.logger.info(
       context.kind === "attachment"
         ? `[themis/feishu] 收到消息事件：chat=${context.chatId} user=${context.userId} message=${context.messageId} kind=attachment attachments=${context.attachments.length}`
-        : `[themis/feishu] 收到消息事件：chat=${context.chatId} user=${context.userId} message=${context.messageId} kind=text text=${truncateText(context.text, 120)}`,
+        : `[themis/feishu] 收到消息事件：chat=${context.chatId} user=${context.userId} message=${context.messageId} kind=text text=${truncateText(redactSensitiveFeishuLogText(context.text), 120)}`,
     );
 
     void this.handleMessageReceiveEvent(context);
@@ -1269,7 +1275,7 @@ export class FeishuChannelService {
       throw error;
     } finally {
       const elapsedMs = Math.max(0, Date.now() - startedAt);
-      const commandLabel = normalizeText(command.raw) ?? `/${command.name}`;
+      const commandLabel = redactSensitiveFeishuLogText(normalizeText(command.raw) ?? `/${command.name}`);
       this.logger.info(
         `[themis/feishu] 斜杠命令完成：command=${commandLabel} elapsedMs=${elapsedMs} status=${status} chat=${context.chatId} message=${context.messageId}`,
       );
@@ -1312,6 +1318,10 @@ export class FeishuChannelService {
       case "plugins":
       case "plugin":
         await this.handlePluginsCommand(command.args, context);
+        return;
+      case "secrets":
+      case "secret":
+        await this.handleSecretsCommand(command.args, context);
         return;
       case "ops":
       case "operation":
@@ -3096,6 +3106,7 @@ export class FeishuChannelService {
       "/group 查看当前群聊设置、路由和管理员控制",
       "/update 查看实例更新状态，或发起后台升级 / 回滚",
       "/ops 查看实例运维命令",
+      "/secrets 查看和维护 worker 本地 secret 引用",
       "/skills 查看和维护当前 principal 的 skills",
       "/mcp 查看和维护当前 principal 的 MCP server",
       "/plugins 查看和维护当前 principal 的 plugins",
@@ -3112,6 +3123,190 @@ export class FeishuChannelService {
     ].join("\n");
 
     await this.safeSendText(chatId, helpText);
+  }
+
+  private async handleSecretsCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const scope = normalizeText(args[0])?.toLowerCase() ?? "";
+
+    switch (scope) {
+      case "":
+      case "help":
+        await this.sendSecretsOverview(context.chatId);
+        return;
+      case "worker":
+      case "workers":
+        await this.handleWorkerSecretsCommand(args.slice(1), context);
+        return;
+      default:
+        await this.safeSendText(
+          context.chatId,
+          [
+            `未识别的 secret 范围：${scope}`,
+            "",
+            "/secrets worker 查看 worker secret store",
+            "/secrets worker set <secretRef> <secretValue>",
+            "/secrets worker remove <secretRef> confirm",
+          ].join("\n"),
+        );
+        return;
+    }
+  }
+
+  private async sendSecretsOverview(chatId: string): Promise<void> {
+    await this.safeSendText(
+      chatId,
+      [
+        "Themis secret 命令：",
+        "/secrets worker 查看 worker 本地 secret store",
+        "/secrets worker list 列出已配置 secretRef，不显示值",
+        "/secrets worker set <secretRef> <secretValue> 写入或覆盖 worker secret",
+        "/secrets worker remove <secretRef> confirm 删除 worker secret",
+        "",
+        "secret 值只由命令处理器写入本地 secret store，不会进入 Codex 对话、工单正文、contextPacket 或员工报告。",
+        "请只在和 Themis 的单聊里执行写入或删除。",
+      ].join("\n"),
+    );
+  }
+
+  private async handleWorkerSecretsCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const subcommand = normalizeText(args[0])?.toLowerCase() ?? "";
+
+    switch (subcommand) {
+      case "":
+      case "list":
+      case "ls":
+        await this.sendWorkerSecretList(context.chatId);
+        return;
+      case "set":
+      case "put":
+        await this.setWorkerSecret(args.slice(1), context);
+        return;
+      case "remove":
+      case "rm":
+      case "delete":
+      case "del":
+        await this.removeWorkerSecret(args.slice(1), context);
+        return;
+      default:
+        await this.safeSendText(
+          context.chatId,
+          [
+            `未识别的 worker secret 命令：${subcommand}`,
+            "",
+            "/secrets worker list",
+            "/secrets worker set <secretRef> <secretValue>",
+            "/secrets worker remove <secretRef> confirm",
+          ].join("\n"),
+        );
+        return;
+    }
+  }
+
+  private async sendWorkerSecretList(chatId: string): Promise<void> {
+    try {
+      const snapshot = this.workerSecretStore.readSnapshot();
+      await this.safeSendText(
+        chatId,
+        [
+          "Worker secret store：",
+          `路径：${snapshot.filePath}`,
+          snapshot.secretRefs.length > 0
+            ? `已配置 secretRef：${snapshot.secretRefs.join("、")}`
+            : "已配置 secretRef：无",
+          "值不会显示。",
+        ].join("\n"),
+      );
+    } catch (error) {
+      await this.safeSendText(chatId, contextChatError("读取 worker secret store 失败", error));
+    }
+  }
+
+  private async setWorkerSecret(args: string[], context: FeishuIncomingContext): Promise<void> {
+    if (!await this.ensureSecretMutationAllowed(context, "/secrets worker set")) {
+      return;
+    }
+
+    const secretRef = normalizeText(args[0]);
+    const secretValue = normalizeText(args.slice(1).join(" "));
+
+    if (!secretRef || !secretValue) {
+      await this.safeSendText(
+        context.chatId,
+        [
+          "用法：/secrets worker set <secretRef> <secretValue>",
+          "示例：/secrets worker set cloudflare-readonly-token <Cloudflare token>",
+          "secret 值不会进入 Themis 对话或工单正文；命令日志会脱敏。",
+        ].join("\n"),
+      );
+      return;
+    }
+
+    try {
+      const snapshot = this.workerSecretStore.setSecret(secretRef, secretValue);
+      await this.safeSendText(
+        context.chatId,
+        [
+          "Worker secret 已写入。",
+          `secretRef：${secretRef}`,
+          `路径：${snapshot.filePath}`,
+          "值不会显示。",
+          "派工时使用 runtimeProfileSnapshot.secretEnvRefs 只传 envName / secretRef / required。",
+        ].join("\n"),
+      );
+    } catch (error) {
+      await this.safeSendText(context.chatId, contextChatError("写入 worker secret 失败", error));
+    }
+  }
+
+  private async removeWorkerSecret(args: string[], context: FeishuIncomingContext): Promise<void> {
+    if (!await this.ensureSecretMutationAllowed(context, "/secrets worker remove")) {
+      return;
+    }
+
+    const secretRef = normalizeText(args[0]);
+
+    if (!secretRef || !isResetConfirmed(args.slice(1))) {
+      await this.safeSendText(
+        context.chatId,
+        [
+          "用法：/secrets worker remove <secretRef> confirm",
+          "删除后，依赖这个 secretRef 的 worker 工单会在执行前失败。",
+        ].join("\n"),
+      );
+      return;
+    }
+
+    try {
+      const result = this.workerSecretStore.removeSecret(secretRef);
+      await this.safeSendText(
+        context.chatId,
+        [
+          result.removed ? "Worker secret 已删除。" : "Worker secret 不存在，未做修改。",
+          `secretRef：${secretRef}`,
+          `路径：${result.snapshot.filePath}`,
+          result.snapshot.secretRefs.length > 0
+            ? `剩余 secretRef：${result.snapshot.secretRefs.join("、")}`
+            : "剩余 secretRef：无",
+        ].join("\n"),
+      );
+    } catch (error) {
+      await this.safeSendText(context.chatId, contextChatError("删除 worker secret 失败", error));
+    }
+  }
+
+  private async ensureSecretMutationAllowed(
+    context: FeishuIncomingContext,
+    commandLabel: string,
+  ): Promise<boolean> {
+    if (context.chatType && context.chatType !== "p2p") {
+      await this.safeSendText(
+        context.chatId,
+        `${commandLabel} 只允许在和 Themis 的单聊里执行，避免群聊里暴露 secret。`,
+      );
+      return false;
+    }
+
+    return true;
   }
 
   private async handleOpsCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
@@ -6665,6 +6860,24 @@ function truncateText(text: string, maxLength: number): string {
   return `${text.slice(0, Math.max(1, maxLength - 1))}…`;
 }
 
+function redactSensitiveFeishuLogText(text: string): string {
+  const normalized = text.trim();
+  const commandText = normalized.startsWith("/") ? normalized.slice(1).trim() : normalized;
+  const segments = commandText.split(/\s+/).filter(Boolean);
+  const [name, scope, subcommand, secretRef] = segments;
+
+  if (
+    (name?.toLowerCase() === "secret" || name?.toLowerCase() === "secrets")
+    && scope?.toLowerCase() === "worker"
+    && (subcommand?.toLowerCase() === "set" || subcommand?.toLowerCase() === "put")
+  ) {
+    const prefix = normalized.startsWith("/") ? "/" : "";
+    return `${prefix}${name} ${scope} ${subcommand}${secretRef ? ` ${secretRef}` : ""} [REDACTED_SECRET]`;
+  }
+
+  return text;
+}
+
 async function ensureAuthAvailable(authRuntime: CodexAuthRuntime, request: TaskRequest): Promise<void> {
   if (request.options?.accessMode === "third-party") {
     if (authRuntime.readThirdPartyProviderProfile()?.type === "openai-compatible") {
@@ -7815,4 +8028,8 @@ function formatFeishuMessageUpdateProbeError(error: unknown): string {
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function contextChatError(prefix: string, error: unknown): string {
+  return `${prefix}：${toErrorMessage(error)}`;
 }
