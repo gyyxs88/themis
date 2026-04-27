@@ -51,6 +51,43 @@ test("RuntimeDiagnosticsService.readSummary 返回 auth/provider/context/memory/
   }
 });
 
+test("RuntimeDiagnosticsService.readSummary 在公开仓运行形态不要求开发仓记忆文件", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-diagnostics-public-"));
+
+  try {
+    writeFileSync(join(root, "README.md"), "# demo\n", "utf8");
+    mkdirSync(join(root, "memory", "sessions"), { recursive: true });
+    mkdirSync(join(root, "memory", "tasks"), { recursive: true });
+    writeFileSync(join(root, "memory", "sessions", "active.md"), "# active\n", "utf8");
+    writeFileSync(join(root, "memory", "tasks", "in-progress.md"), "# in-progress\n", "utf8");
+    writeFileSync(join(root, "memory", "tasks", "done.md"), "# done\n", "utf8");
+
+    const runtimeStore = new SqliteCodexSessionRegistry({
+      databaseFile: join(root, "infra/local/themis.db"),
+    });
+    const service = new RuntimeDiagnosticsService({
+      workingDirectory: root,
+      runtimeStore,
+      mcpInspector: {
+        list: async () => ({ servers: [] }),
+      } as never,
+    });
+
+    const summary = await service.readSummary();
+
+    assert.deepEqual(summary.context.files.map((item) => item.path), ["README.md"]);
+    assert.deepEqual(summary.memory.files.map((item) => item.path), [
+      "memory/sessions/active.md",
+      "memory/tasks/in-progress.md",
+      "memory/tasks/done.md",
+    ]);
+    assert.equal(summary.overview.hotspots.some((item) => item.id === "context_files_missing"), false);
+    assert.equal(summary.overview.hotspots.some((item) => item.id === "memory_files_missing"), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("RuntimeDiagnosticsService.readSummary 会汇总最近 turn input 的多模态事实", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-runtime-diagnostics-multimodal-"));
 
@@ -303,6 +340,56 @@ test("RuntimeDiagnosticsService.readSummary 会汇总最近 turn input 的多模
             },
           ],
         },
+      },
+    });
+
+    runtimeStore.saveSession({
+      sessionId: "runtime-smoke-web-session-newer",
+      threadId: "thread-smoke",
+      createdAt: "2026-04-03T09:40:00.000Z",
+      updatedAt: "2026-04-03T09:40:00.000Z",
+    });
+    runtimeStore.upsertTurnFromRequest(
+      createTaskRequest("web", "runtime-smoke-web-session-newer", "runtime-smoke-web-request-newer", "2026-04-03T09:40:00.000Z"),
+      "runtime-smoke-web-task-newer",
+    );
+    runtimeStore.saveTurnInput({
+      requestId: "runtime-smoke-web-request-newer",
+      createdAt: "2026-04-03T09:40:01.000Z",
+      envelope: {
+        envelopeId: "runtime-smoke-web-envelope-newer",
+        sourceChannel: "web",
+        sourceSessionId: "runtime-smoke-web-session-newer",
+        createdAt: "2026-04-03T09:40:01.000Z",
+        parts: [
+          {
+            partId: "runtime-smoke-web-image-part",
+            type: "image",
+            role: "user",
+            order: 1,
+            assetId: "runtime-smoke-web-image",
+          },
+        ],
+        assets: [
+          {
+            assetId: "runtime-smoke-web-image",
+            kind: "image",
+            mimeType: "image/jpeg",
+            localPath: "/tmp/runtime-smoke.jpg",
+            sourceChannel: "web",
+            ingestionStatus: "ready",
+          },
+        ],
+      },
+      compileSummary: {
+        runtimeTarget: "app-server",
+        degradationLevel: "blocked",
+        warnings: [
+          {
+            code: "IMAGE_NATIVE_INPUT_REQUIRED",
+            message: "runtime smoke should not dominate service diagnostics",
+          },
+        ],
       },
     });
 

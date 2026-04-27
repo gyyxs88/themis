@@ -30,6 +30,8 @@ export interface FeishuDiagnosticsRecentWindowStats {
   takeoverSubmittedCount: number;
   approvalSubmittedCount: number;
   pendingInputNotFoundCount: number;
+  pendingInputNotFoundActionableCount: number;
+  pendingInputNotFoundBenignCount: number;
   pendingInputAmbiguousCount: number;
 }
 
@@ -774,6 +776,8 @@ function summarizeDiagnosticsWindow(events: FeishuDiagnosticsEvent[]): {
     takeoverSubmittedCount: 0,
     approvalSubmittedCount: 0,
     pendingInputNotFoundCount: 0,
+    pendingInputNotFoundActionableCount: 0,
+    pendingInputNotFoundBenignCount: 0,
     pendingInputAmbiguousCount: 0,
   };
 
@@ -813,6 +817,11 @@ function summarizeDiagnosticsWindow(events: FeishuDiagnosticsEvent[]): {
         break;
       case "pending_input.not_found":
         recentWindowStats.pendingInputNotFoundCount += 1;
+        if (isBenignPendingInputNotFound(event)) {
+          recentWindowStats.pendingInputNotFoundBenignCount += 1;
+        } else {
+          recentWindowStats.pendingInputNotFoundActionableCount += 1;
+        }
         break;
       case "pending_input.ambiguous":
         recentWindowStats.pendingInputAmbiguousCount += 1;
@@ -927,7 +936,7 @@ function classifyFeishuDiagnostics(summary: {
     };
   }
 
-  if (summary.recentWindowStats.pendingInputNotFoundCount > 0) {
+  if (summary.recentWindowStats.pendingInputNotFoundActionableCount > 0) {
     return {
       primaryDiagnosis: {
         id: "pending_input_not_found",
@@ -956,7 +965,7 @@ function classifyFeishuDiagnostics(summary: {
       },
       secondaryDiagnoses: buildSecondaryDiagnoses({
         lastIgnoredMessage: null,
-        includePendingInputNotFound: summary.recentWindowStats.pendingInputNotFoundCount > 0,
+        includePendingInputNotFound: summary.recentWindowStats.pendingInputNotFoundActionableCount > 0,
       }),
       recommendedNextSteps: [
         "./themis doctor feishu",
@@ -974,7 +983,7 @@ function classifyFeishuDiagnostics(summary: {
     },
     secondaryDiagnoses: buildSecondaryDiagnoses({
       lastIgnoredMessage: null,
-      includePendingInputNotFound: summary.recentWindowStats.pendingInputNotFoundCount > 0,
+      includePendingInputNotFound: summary.recentWindowStats.pendingInputNotFoundActionableCount > 0,
     }),
     recommendedNextSteps: [
       "./themis doctor feishu",
@@ -982,6 +991,13 @@ function classifyFeishuDiagnostics(summary: {
       "./themis doctor smoke feishu",
     ],
   };
+}
+
+function isBenignPendingInputNotFound(event: FeishuDiagnosticsEvent): boolean {
+  const details = event.details ?? {};
+  return details.blockingReason === "no_pending_input"
+    && details.approvalPendingActionCount === 0
+    && details.matchedPendingActionCount === 0;
 }
 
 function summarizeActionAttempt(

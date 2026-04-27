@@ -2796,7 +2796,11 @@ test("themis doctor mcp 会输出 mcp server 摘要", () => {
   const workspace = mkdtempSync(join(tmpdir(), "themis-doctor-cli-mcp-"));
 
   try {
-    const result = runCli(["doctor", "mcp"], workspace);
+    const result = runCliWithEnv(["doctor", "mcp"], workspace, {
+      THEMIS_MCP_INSPECTOR_FIXTURE: JSON.stringify({
+        servers: [],
+      }),
+    });
     assert.equal(result.code, 0);
     assert.match(result.stdout, /Themis 诊断 - mcp/);
     assert.match(result.stdout, /说明：这里展示的是当前 Codex app-server 可见的 MCP server，不等于 Themis 原生能力清单。/);

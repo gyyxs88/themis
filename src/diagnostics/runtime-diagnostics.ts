@@ -147,18 +147,29 @@ export interface RuntimeDiagnosticsServiceOptions {
   mcpInspector?: Pick<McpInspector, "list" | "probe" | "reload"> | null;
 }
 
-const CONTEXT_FILES = [
+export interface RuntimeDiagnosticsReadSummaryOptions {
+  includeFeishu?: boolean;
+  includeMcp?: boolean;
+}
+
+const BASE_CONTEXT_FILES = [
   "README.md",
+] as const;
+
+const DEVELOPMENT_CONTEXT_FILES = [
   "AGENTS.md",
   "memory/project/overview.md",
   "memory/architecture/overview.md",
 ] as const;
 
-const MEMORY_FILES = [
+const RUNTIME_MEMORY_FILES = [
   "memory/sessions/active.md",
-  "memory/tasks/backlog.md",
   "memory/tasks/in-progress.md",
   "memory/tasks/done.md",
+] as const;
+
+const DEVELOPMENT_MEMORY_FILES = [
+  "memory/tasks/backlog.md",
 ] as const;
 
 const RECENT_MULTIMODAL_TURN_INPUT_LIMIT = 24;
@@ -181,7 +192,9 @@ export class RuntimeDiagnosticsService {
     });
   }
 
-  async readSummary(): Promise<RuntimeDiagnosticsSummary> {
+  async readSummary(options: RuntimeDiagnosticsReadSummaryOptions = {}): Promise<RuntimeDiagnosticsSummary> {
+    const includeFeishu = options.includeFeishu ?? true;
+    const includeMcp = options.includeMcp ?? true;
     const defaultCodexHome = resolveDefaultCodexHome();
     const authFilePath = resolveCodexAuthFilePath(defaultCodexHome);
     const authFileExists = existsSync(authFilePath);
@@ -209,14 +222,16 @@ export class RuntimeDiagnosticsService {
       providerReadError = toErrorMessage(error);
     }
 
-    const mcpSummary = await this.readMcpSummary();
-    const feishuSummary = await readFeishuDiagnosticsSnapshot({
-      workingDirectory: this.workingDirectory,
-      runtimeStore: this.runtimeStore,
-      sqliteFilePath: this.sqliteFilePath,
-    });
-    const contextFiles = CONTEXT_FILES.map((path) => readPathStatus(this.workingDirectory, path));
-    const memoryFiles = MEMORY_FILES.map((path) => readPathStatus(this.workingDirectory, path));
+    const mcpSummary = includeMcp ? await this.readMcpSummary() : createSkippedMcpSummary();
+    const feishuSummary = includeFeishu
+      ? await readFeishuDiagnosticsSnapshot({
+          workingDirectory: this.workingDirectory,
+          runtimeStore: this.runtimeStore,
+          sqliteFilePath: this.sqliteFilePath,
+        })
+      : createSkippedFeishuSummary();
+    const contextFiles = getContextDiagnosticFiles(this.workingDirectory).map((path) => readPathStatus(this.workingDirectory, path));
+    const memoryFiles = getMemoryDiagnosticFiles(this.workingDirectory).map((path) => readPathStatus(this.workingDirectory, path));
     const multimodal = summarizeRecentTurnInputDiagnostics(this.runtimeStore);
     const service = {
       sqlite: {
@@ -299,6 +314,101 @@ export class RuntimeDiagnosticsService {
       };
     }
   }
+}
+
+function createSkippedMcpSummary(): RuntimeDiagnosticsSummary["mcp"] {
+  return {
+    servers: [],
+    diagnostics: summarizeMcpDiagnostics({
+      servers: [],
+    }),
+  };
+}
+
+function createSkippedFeishuSummary(): FeishuDiagnosticsSummary {
+  return {
+    env: {
+      appIdConfigured: false,
+      appSecretConfigured: false,
+      useEnvProxy: false,
+    },
+    service: {
+      serviceReachable: false,
+      statusCode: null,
+    },
+    state: {
+      sessionStore: {
+        path: "infra/local/feishu-sessions.json",
+        status: "missing",
+        count: 0,
+      },
+      attachmentDraftStore: {
+        path: "infra/local/feishu-attachment-drafts.json",
+        status: "missing",
+        count: 0,
+      },
+      sessionBindingCount: 0,
+      attachmentDraftCount: 0,
+    },
+    diagnostics: {
+      store: {
+        path: "infra/local/feishu-diagnostics.json",
+        status: "missing",
+      },
+      currentConversation: null,
+      recentEvents: [],
+      recentWindowStats: {
+        duplicateIgnoredCount: 0,
+        staleIgnoredCount: 0,
+        replySubmittedCount: 0,
+        takeoverSubmittedCount: 0,
+        approvalSubmittedCount: 0,
+        pendingInputNotFoundCount: 0,
+        pendingInputNotFoundActionableCount: 0,
+        pendingInputNotFoundBenignCount: 0,
+        pendingInputAmbiguousCount: 0,
+      },
+      lastActionAttempt: null,
+      lastIgnoredMessage: null,
+      primaryDiagnosis: {
+        id: "healthy",
+        severity: "info",
+        title: "已跳过飞书诊断",
+        summary: "本次诊断目标不需要读取飞书状态。",
+      },
+      secondaryDiagnoses: [],
+      recommendedNextSteps: [],
+    },
+    docs: {
+      smokeDocExists: false,
+    },
+  };
+}
+
+function getContextDiagnosticFiles(root: string): string[] {
+  const files: string[] = [...BASE_CONTEXT_FILES];
+
+  if (hasDevelopmentMemoryScaffold(root)) {
+    files.push(...DEVELOPMENT_CONTEXT_FILES);
+  }
+
+  return files;
+}
+
+function getMemoryDiagnosticFiles(root: string): string[] {
+  const files: string[] = [...RUNTIME_MEMORY_FILES];
+
+  if (hasDevelopmentMemoryScaffold(root)) {
+    files.push(...DEVELOPMENT_MEMORY_FILES);
+  }
+
+  return files;
+}
+
+function hasDevelopmentMemoryScaffold(root: string): boolean {
+  return existsSync(join(root, "memory/README.md"))
+    || existsSync(join(root, "memory/project/overview.md"))
+    || existsSync(join(root, "memory/architecture/overview.md"));
 }
 
 function readPathStatus(root: string, relativePath: string): RuntimeDiagnosticFileStatus {
@@ -664,8 +774,8 @@ function buildFeishuHotspotSummary(summary: FeishuDiagnosticsSummary): string {
 
 function summarizeFeishuTrend(summary: FeishuDiagnosticsSummary): string | null {
   const parts = [
-    summary.diagnostics.recentWindowStats.pendingInputNotFoundCount > 0
-      ? `pending_input.not_found ${summary.diagnostics.recentWindowStats.pendingInputNotFoundCount}`
+    summary.diagnostics.recentWindowStats.pendingInputNotFoundActionableCount > 0
+      ? `pending_input.not_found ${summary.diagnostics.recentWindowStats.pendingInputNotFoundActionableCount}`
       : null,
     summary.diagnostics.recentWindowStats.pendingInputAmbiguousCount > 0
       ? `pending_input.ambiguous ${summary.diagnostics.recentWindowStats.pendingInputAmbiguousCount}`
@@ -730,6 +840,7 @@ function summarizeRecentTurnInputDiagnostics(
       turn: ReturnType<SqliteCodexSessionRegistry["listSessionTurns"]>[number];
       input: NonNullable<ReturnType<SqliteCodexSessionRegistry["getTurnInput"]>>;
     } => item !== null)
+    .filter((record) => !isRuntimeSmokeTurnInput(record))
     .sort((left, right) => compareRecentTurnInput(left.input.createdAt, left.turn.requestId, right.input.createdAt, right.turn.requestId))
     .slice(0, RECENT_MULTIMODAL_TURN_INPUT_LIMIT);
 
@@ -823,6 +934,17 @@ function summarizeRecentTurnInputDiagnostics(
       ? buildMultimodalLastTurnSummary(lastBlockedRecord)
       : null,
   };
+}
+
+function isRuntimeSmokeTurnInput(record: {
+  turn: ReturnType<SqliteCodexSessionRegistry["listSessionTurns"]>[number];
+  input: NonNullable<ReturnType<SqliteCodexSessionRegistry["getTurnInput"]>>;
+}): boolean {
+  const sessionId = record.input.envelope.sourceSessionId ?? record.turn.sessionId ?? "";
+  const sourceMessageId = record.input.envelope.sourceMessageId ?? "";
+  return record.turn.requestId.startsWith("runtime-smoke-")
+    || sessionId.startsWith("runtime-smoke-")
+    || sourceMessageId.startsWith("runtime-smoke-");
 }
 
 function createEmptyMultimodalDiagnosticsSummary(available: boolean): RuntimeMultimodalDiagnosticsSummary {

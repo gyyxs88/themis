@@ -719,7 +719,7 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
     sqliteFilePath: dbPath,
     mcpInspector: createCliMcpInspector(),
   });
-  const summary = await diagnostics.readSummary();
+  const summary = await diagnostics.readSummary(getDoctorRuntimeDiagnosticsOptions(selectedSection));
 
   if (!selectedSection) {
     console.log("Themis 运行诊断");
@@ -946,6 +946,23 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
     default:
       return;
   }
+}
+
+function getDoctorRuntimeDiagnosticsOptions(selectedSection: string | undefined): {
+  includeFeishu: boolean;
+  includeMcp: boolean;
+} {
+  if (!selectedSection || selectedSection === "release") {
+    return {
+      includeFeishu: true,
+      includeMcp: true,
+    };
+  }
+
+  return {
+    includeFeishu: selectedSection === "feishu",
+    includeMcp: selectedSection === "mcp",
+  };
 }
 
 async function handleDoctorWorkerNode(args: string[]): Promise<void> {
@@ -2125,6 +2142,8 @@ function printFeishuDiagnosticsSummary(summary: FeishuDiagnosticsSummary): void 
   console.log(`recentWindow.replySubmittedCount：${summary.diagnostics.recentWindowStats.replySubmittedCount}`);
   console.log(`recentWindow.takeoverSubmittedCount：${summary.diagnostics.recentWindowStats.takeoverSubmittedCount}`);
   console.log(`recentWindow.pendingInputNotFoundCount：${summary.diagnostics.recentWindowStats.pendingInputNotFoundCount}`);
+  console.log(`recentWindow.pendingInputNotFoundActionableCount：${summary.diagnostics.recentWindowStats.pendingInputNotFoundActionableCount}`);
+  console.log(`recentWindow.pendingInputNotFoundBenignCount：${summary.diagnostics.recentWindowStats.pendingInputNotFoundBenignCount}`);
   console.log(`recentWindow.pendingInputAmbiguousCount：${summary.diagnostics.recentWindowStats.pendingInputAmbiguousCount}`);
 
   console.log("最近一次 action 尝试");

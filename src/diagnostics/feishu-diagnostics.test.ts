@@ -512,6 +512,8 @@ test("readFeishuDiagnosticsSnapshot 会派生 recentWindowStats、lastActionAtte
     assert.equal(summary.diagnostics.recentWindowStats.replySubmittedCount, 0);
     assert.equal(summary.diagnostics.recentWindowStats.approvalSubmittedCount, 0);
     assert.equal(summary.diagnostics.recentWindowStats.pendingInputNotFoundCount, 0);
+    assert.equal(summary.diagnostics.recentWindowStats.pendingInputNotFoundActionableCount, 0);
+    assert.equal(summary.diagnostics.recentWindowStats.pendingInputNotFoundBenignCount, 0);
     assert.equal(summary.diagnostics.recentWindowStats.pendingInputAmbiguousCount, 0);
     assert.equal(summary.diagnostics.lastActionAttempt?.type, "takeover.submitted");
     assert.equal(summary.diagnostics.lastActionAttempt?.requestId, "request-1");
@@ -855,8 +857,55 @@ test("readFeishuDiagnosticsSnapshot 会把 pending_input.not_found 暴露成诊�
 
     assert.equal(result.diagnostics.primaryDiagnosis?.id, "pending_input_not_found");
     assert.equal(result.diagnostics.primaryDiagnosis?.severity, "warning");
+    assert.equal(result.diagnostics.recentWindowStats.pendingInputNotFoundActionableCount, 1);
+    assert.equal(result.diagnostics.recentWindowStats.pendingInputNotFoundBenignCount, 0);
     assert.ok(result.diagnostics.secondaryDiagnoses.some((item) => item.id === "ignored_message_window"));
     assert.ok(result.diagnostics.recommendedNextSteps.some((step) => step.includes("./themis doctor feishu")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readFeishuDiagnosticsSnapshot 不把无 pending 输入的普通文本接管探测当成主告警", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-feishu-diagnostics-benign-not-found-"));
+  const store = new FeishuDiagnosticsStateStore({
+    filePath: join(root, "infra", "local", "feishu-diagnostics.json"),
+  });
+
+  try {
+    store.appendEvent({
+      id: "event-not-found-benign-1",
+      type: "pending_input.not_found",
+      chatId: "chat-1",
+      userId: "user-1",
+      sessionId: "session-1",
+      principalId: "principal-1",
+      summary: "当前会话没有可接管的等待输入。",
+      createdAt: "2026-04-02T08:00:01.000Z",
+      details: {
+        blockingReason: "no_pending_input",
+        approvalPendingActionCount: 0,
+        matchedPendingActionCount: 0,
+      },
+    });
+
+    const result = await readFeishuDiagnosticsSnapshot({
+      workingDirectory: root,
+      env: {
+        FEISHU_APP_ID: "cli_xxx",
+        FEISHU_APP_SECRET: "secret_xxx",
+      },
+      fetchImpl: async () =>
+        new Response(null, {
+          status: 200,
+        }),
+    });
+
+    assert.equal(result.diagnostics.primaryDiagnosis?.id, "healthy");
+    assert.equal(result.diagnostics.recentWindowStats.pendingInputNotFoundCount, 1);
+    assert.equal(result.diagnostics.recentWindowStats.pendingInputNotFoundActionableCount, 0);
+    assert.equal(result.diagnostics.recentWindowStats.pendingInputNotFoundBenignCount, 1);
+    assert.deepEqual(result.diagnostics.secondaryDiagnoses, []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
