@@ -200,6 +200,7 @@ interface ProvisionCloudflareWorkerSecretToolArgs {
   forceRefresh?: boolean;
   expiresOn?: string;
   dryRun?: boolean;
+  targetNodeIds?: string[];
 }
 
 interface ManageThemisSecretToolArgs {
@@ -1302,8 +1303,8 @@ function buildToolDefinitions(): McpToolDefinition[] {
       title: "Provision Cloudflare Worker Secret",
       description: [
         "使用 Themis 本地持有的 Cloudflare 管理 token，为 worker 创建或注入只读 Cloudflare token。",
-        "本工具不接受 token 明文参数，不回显 token 值，只写入 worker secret store；派工仍只传 secretEnvRefs 引用。",
-        "当 worker 报 WORKER_NODE_SECRET_UNAVAILABLE 且缺少 cloudflare-readonly-token 时，先调用本工具再重新派工。",
+        "本工具不接受 token 明文参数，不回显 token 值；可写入本地 worker secret store，也可通过平台下发到指定 targetNodeIds。",
+        "派工仍只传 secretEnvRefs 引用。当某个 worker node 缺少 cloudflare-readonly-token 时，先带 targetNodeIds 调用本工具再重新派工。",
       ].join(" "),
       inputSchema: {
         type: "object",
@@ -1340,6 +1341,13 @@ function buildToolDefinitions(): McpToolDefinition[] {
           dryRun: {
             type: "boolean",
             description: "可选。只验证 Themis 能否准备该 secret，不写入 worker secret store。",
+          },
+          targetNodeIds: {
+            type: "array",
+            description: "可选。需要由主 Themis 下发该 worker secret 的目标 worker nodeId 列表，例如 node-4pjylh69。",
+            items: {
+              type: "string",
+            },
           },
         },
       },
@@ -1766,11 +1774,14 @@ function normalizeProvisionCloudflareWorkerSecretToolArgs(
 ): ProvisionCloudflareWorkerSecretToolArgs {
   assertOnlyKeys(
     value,
-    new Set(["secretRef", "envName", "accountId", "domains", "forceRefresh", "expiresOn", "dryRun"]),
+    new Set(["secretRef", "envName", "accountId", "domains", "forceRefresh", "expiresOn", "dryRun", "targetNodeIds"]),
     "provision_cloudflare_worker_secret arguments",
   );
   const domains = hasOwn(value, "domains")
     ? normalizeStringArray(value.domains, "domains must be an array of strings.")
+    : undefined;
+  const targetNodeIds = hasOwn(value, "targetNodeIds")
+    ? normalizeStringArray(value.targetNodeIds, "targetNodeIds must be an array of strings.")
     : undefined;
 
   return {
@@ -1785,6 +1796,7 @@ function normalizeProvisionCloudflareWorkerSecretToolArgs(
     ...(hasOwn(value, "dryRun")
       ? { dryRun: expectBoolean(value.dryRun, "dryRun must be a boolean.") }
       : {}),
+    ...(targetNodeIds ? { targetNodeIds } : {}),
   };
 }
 
@@ -2129,6 +2141,14 @@ function buildCloudflareWorkerSecretProvisionSummary(result: CloudflareWorkerSec
   const accountLine = result.accountIdConfigured
     ? "Cloudflare accountId：已配置，未回显"
     : null;
+  const targetNodeLine = result.targetNodeIds && result.targetNodeIds.length > 0
+    ? `目标 worker node：${result.targetNodeIds.join(", ")}`
+    : null;
+  const deliveryLine = result.deliveries && result.deliveries.length > 0
+    ? `平台下发：已创建 ${result.deliveries.length} 条 pending delivery`
+    : result.targetNodeIds && result.targetNodeIds.length > 0
+      ? "平台下发：未执行"
+      : null;
 
   return [
     statusLabel,
@@ -2138,6 +2158,8 @@ function buildCloudflareWorkerSecretProvisionSummary(result: CloudflareWorkerSec
     ...(endpointLine ? [endpointLine] : []),
     ...(accountLine ? [accountLine] : []),
     `写入：${result.written ? "是" : "否"}`,
+    ...(targetNodeLine ? [targetNodeLine] : []),
+    ...(deliveryLine ? [deliveryLine] : []),
     domainLine,
     zoneLine,
     `worker secret store：${result.workerSecretStorePath}`,

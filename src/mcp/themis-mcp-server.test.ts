@@ -343,6 +343,34 @@ test("Themis MCP server 能用管理 token 准备 Cloudflare worker secret 且�
       });
     }
 
+    if (url === "https://platform.example.com/api/platform/worker/secrets/push" && method === "POST") {
+      assert.ok(body);
+      const parsedBody = JSON.parse(body) as {
+        ownerPrincipalId?: string;
+        delivery?: {
+          nodeId?: string;
+          secretRef?: string;
+          value?: string;
+        };
+      };
+      assert.equal(parsedBody.ownerPrincipalId, "principal-platform-owner");
+      assert.deepEqual(parsedBody.delivery, {
+        nodeId: "node-4pjylh69",
+        secretRef: "cloudflare-readonly-token",
+        value: "generated-worker-token-secret",
+      });
+      return jsonResponse({
+        delivery: {
+          deliveryId: "delivery-platform-1",
+          nodeId: "node-4pjylh69",
+          secretRef: "cloudflare-readonly-token",
+          status: "pending",
+          createdAt: "2026-04-27T12:00:00.000Z",
+          updatedAt: "2026-04-27T12:00:00.000Z",
+        },
+      });
+    }
+
     return jsonResponse({
       success: false,
       errors: [{ message: `unexpected ${method} ${url}` }],
@@ -355,6 +383,9 @@ test("Themis MCP server 能用管理 token 准备 Cloudflare worker secret 且�
       THEMIS_CLOUDFLARE_MANAGEMENT_TOKEN: "management-token-secret",
       THEMIS_SECRET_STORE_FILE: themisSecretStoreFile,
       THEMIS_MANAGED_AGENT_WORKER_SECRET_STORE_FILE: workerSecretStoreFile,
+      THEMIS_PLATFORM_BASE_URL: "https://platform.example.com",
+      THEMIS_PLATFORM_OWNER_PRINCIPAL_ID: "principal-platform-owner",
+      THEMIS_PLATFORM_WEB_ACCESS_TOKEN: "platform-gateway-token",
     },
     fetchImpl,
     identity: {
@@ -374,6 +405,7 @@ test("Themis MCP server 能用管理 token 准备 Cloudflare worker secret 且�
         name: "provision_cloudflare_worker_secret",
         arguments: {
           domains: ["novelrift.com"],
+          targetNodeIds: ["node-4pjylh69"],
         },
       },
     }));
@@ -388,10 +420,18 @@ test("Themis MCP server 能用管理 token 准备 Cloudflare worker secret 且�
     assert.equal(payload.result?.structuredContent?.result?.written, true);
     assert.equal(payload.result?.structuredContent?.result?.cloudflareTokenEndpoint, "account");
     assert.equal(payload.result?.structuredContent?.result?.accountIdConfigured, true);
+    assert.deepEqual(payload.result?.structuredContent?.result?.targetNodeIds, ["node-4pjylh69"]);
+    assert.deepEqual(payload.result?.structuredContent?.result?.deliveries, [{
+      nodeId: "node-4pjylh69",
+      secretRef: "cloudflare-readonly-token",
+      deliveryId: "delivery-platform-1",
+      status: "pending",
+    }]);
 
     const responseText = JSON.stringify(payload);
     assert.doesNotMatch(responseText, /generated-worker-token-secret/);
     assert.doesNotMatch(responseText, /management-token-secret/);
+    assert.doesNotMatch(responseText, /platform-gateway-token/);
     assert.doesNotMatch(responseText, new RegExp(accountId));
     assert.deepEqual(JSON.parse(readFileSync(workerSecretStoreFile, "utf8")), {
       "cloudflare-readonly-token": "generated-worker-token-secret",

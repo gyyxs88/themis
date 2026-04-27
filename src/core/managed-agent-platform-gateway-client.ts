@@ -107,6 +107,8 @@ import type {
   ManagedAgentPlatformWorkerPullInput,
   ManagedAgentPlatformWorkerRunCompleteInput,
   ManagedAgentPlatformWorkerRunStatusInput,
+  ManagedAgentPlatformWorkerSecretPushInput,
+  ManagedAgentPlatformWorkerSecretPushResult,
 } from "themis-contracts/managed-agent-platform-worker";
 import type {
   StoredAgentSpawnPolicyRecord,
@@ -839,6 +841,7 @@ export class ManagedAgentPlatformGatewayClient {
         ...(input.workspaceCapabilities ? { workspaceCapabilities: input.workspaceCapabilities } : {}),
         ...(input.credentialCapabilities ? { credentialCapabilities: input.credentialCapabilities } : {}),
         ...(input.providerCapabilities ? { providerCapabilities: input.providerCapabilities } : {}),
+        ...(input.secretCapabilities ? { secretCapabilities: input.secretCapabilities } : {}),
         ...(input.heartbeatTtlSeconds !== undefined ? { heartbeatTtlSeconds: input.heartbeatTtlSeconds } : {}),
       },
     });
@@ -855,6 +858,7 @@ export class ManagedAgentPlatformGatewayClient {
         ...(input.workspaceCapabilities ? { workspaceCapabilities: input.workspaceCapabilities } : {}),
         ...(input.credentialCapabilities ? { credentialCapabilities: input.credentialCapabilities } : {}),
         ...(input.providerCapabilities ? { providerCapabilities: input.providerCapabilities } : {}),
+        ...(input.secretCapabilities ? { secretCapabilities: input.secretCapabilities } : {}),
         ...(input.heartbeatTtlSeconds !== undefined ? { heartbeatTtlSeconds: input.heartbeatTtlSeconds } : {}),
       },
     });
@@ -913,6 +917,17 @@ export class ManagedAgentPlatformGatewayClient {
       nodeId: input.nodeId,
       ...(input.failureCode ? { failureCode: input.failureCode } : {}),
       ...(input.failureMessage ? { failureMessage: input.failureMessage } : {}),
+    });
+  }
+
+  async pushWorkerSecret(input: ManagedAgentPlatformWorkerSecretPushInput): Promise<ManagedAgentPlatformWorkerSecretPushResult> {
+    return await this.requestJson<ManagedAgentPlatformWorkerSecretPushResult>("/api/platform/worker/secrets/push", {
+      ownerPrincipalId: this.ownerPrincipalId,
+      delivery: {
+        nodeId: input.nodeId,
+        secretRef: input.secretRef,
+        value: input.value,
+      },
     });
   }
 

@@ -34,6 +34,11 @@ export class WorkerSecretStore {
     };
   }
 
+  getSecret(secretRef: string): string | null {
+    const normalizedRef = normalizeWorkerSecretRef(secretRef);
+    return normalizeSecretStoreEntry(this.readStore()[normalizedRef]);
+  }
+
   setSecret(secretRef: string, value: string): WorkerSecretStoreSnapshot {
     const normalizedRef = normalizeWorkerSecretRef(secretRef);
     const normalizedValue = normalizeWorkerSecretValue(value);
@@ -133,6 +138,20 @@ function normalizeOptionalText(value: unknown): string | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeSecretStoreEntry(value: unknown): string | null {
+  const directValue = normalizeOptionalText(value);
+
+  if (directValue) {
+    return directValue;
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return normalizeOptionalText(value.value);
 }
 
 function toErrorMessage(error: unknown): string {

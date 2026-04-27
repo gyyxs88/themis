@@ -1,5 +1,9 @@
 import { WorkerSecretStore } from "./worker-secret-store.js";
 import { ThemisSecretStore } from "./themis-secret-store.js";
+import {
+  ManagedAgentPlatformGatewayClient,
+  readManagedAgentPlatformGatewayConfig,
+} from "./managed-agent-platform-gateway-client.js";
 
 const DEFAULT_CLOUDFLARE_API_BASE_URL = "https://api.cloudflare.com/client/v4";
 const DEFAULT_WORKER_SECRET_REF = "cloudflare-readonly-token";
@@ -45,6 +49,7 @@ export interface CloudflareWorkerSecretProvisionerOptions {
   now?: () => Date;
   themisSecretStore?: ThemisSecretStore;
   workerSecretStore?: WorkerSecretStore;
+  platformGatewayClient?: Pick<ManagedAgentPlatformGatewayClient, "pushWorkerSecret">;
 }
 
 export interface ProvisionCloudflareWorkerSecretInput {
@@ -55,6 +60,7 @@ export interface ProvisionCloudflareWorkerSecretInput {
   forceRefresh?: boolean;
   expiresOn?: string;
   dryRun?: boolean;
+  targetNodeIds?: string[];
 }
 
 export type CloudflareWorkerSecretProvisionStatus =
@@ -77,6 +83,13 @@ export interface CloudflareWorkerSecretProvisionPermissionGroup {
   name: string;
 }
 
+export interface CloudflareWorkerSecretProvisionDelivery {
+  nodeId: string;
+  secretRef: string;
+  deliveryId?: string;
+  status?: string;
+}
+
 export interface CloudflareWorkerSecretProvisionResult {
   status: CloudflareWorkerSecretProvisionStatus;
   source: CloudflareWorkerSecretProvisionSource;
@@ -92,6 +105,8 @@ export interface CloudflareWorkerSecretProvisionResult {
   tokenName?: string;
   tokenId?: string;
   expiresOn?: string;
+  targetNodeIds?: string[];
+  deliveries?: CloudflareWorkerSecretProvisionDelivery[];
   written: boolean;
 }
 
@@ -127,6 +142,7 @@ export class CloudflareWorkerSecretProvisioner {
   private readonly now: () => Date;
   private readonly themisSecretStore: ThemisSecretStore;
   private readonly workerSecretStore: WorkerSecretStore;
+  private readonly platformGatewayClient: Pick<ManagedAgentPlatformGatewayClient, "pushWorkerSecret"> | undefined;
 
   constructor(options: CloudflareWorkerSecretProvisionerOptions = {}) {
     const cwd = options.cwd ?? process.cwd();
@@ -142,6 +158,7 @@ export class CloudflareWorkerSecretProvisioner {
       cwd,
       env: this.env,
     });
+    this.platformGatewayClient = options.platformGatewayClient;
   }
 
   async provisionWorkerSecret(
@@ -153,10 +170,15 @@ export class CloudflareWorkerSecretProvisioner {
     const forceRefresh = input.forceRefresh === true;
     const dryRun = input.dryRun === true;
     const expiresOn = normalizeOptionalText(input.expiresOn);
+    const targetNodeIds = normalizeTargetNodeIds(input.targetNodeIds ?? []);
     const workerSnapshot = this.workerSecretStore.readSnapshot();
     const themisSnapshot = this.themisSecretStore.readSnapshot();
 
     if (!forceRefresh && workerSnapshot.secretRefs.includes(secretRef)) {
+      const existingValue = this.workerSecretStore.getSecret(secretRef);
+      const deliveries = !dryRun && targetNodeIds.length > 0
+        ? await this.deliverWorkerSecretToNodes(secretRef, existingValue, targetNodeIds)
+        : [];
       return {
         status: "already_configured",
         source: "worker_secret_store",
@@ -168,6 +190,8 @@ export class CloudflareWorkerSecretProvisioner {
         zones: [],
         permissionGroups: [],
         ...(expiresOn ? { expiresOn } : {}),
+        ...(targetNodeIds.length > 0 ? { targetNodeIds } : {}),
+        ...(deliveries.length > 0 ? { deliveries } : {}),
         written: false,
       };
     }
@@ -178,6 +202,9 @@ export class CloudflareWorkerSecretProvisioner {
       if (!dryRun) {
         this.workerSecretStore.setSecret(secretRef, existingWorkerToken);
       }
+      const deliveries = !dryRun && targetNodeIds.length > 0
+        ? await this.deliverWorkerSecretToNodes(secretRef, existingWorkerToken, targetNodeIds)
+        : [];
 
       return {
         status: dryRun ? "dry_run_ready" : "provisioned",
@@ -190,6 +217,8 @@ export class CloudflareWorkerSecretProvisioner {
         zones: [],
         permissionGroups: [],
         ...(expiresOn ? { expiresOn } : {}),
+        ...(targetNodeIds.length > 0 ? { targetNodeIds } : {}),
+        ...(deliveries.length > 0 ? { deliveries } : {}),
         written: !dryRun,
       };
     }
@@ -236,6 +265,7 @@ export class CloudflareWorkerSecretProvisioner {
         permissionGroups,
         tokenName,
         ...(expiresOn ? { expiresOn } : {}),
+        ...(targetNodeIds.length > 0 ? { targetNodeIds } : {}),
         written: false,
       };
     }
@@ -250,6 +280,9 @@ export class CloudflareWorkerSecretProvisioner {
     });
 
     this.workerSecretStore.setSecret(secretRef, createdToken.value);
+    const deliveries = targetNodeIds.length > 0
+      ? await this.deliverWorkerSecretToNodes(secretRef, createdToken.value, targetNodeIds)
+      : [];
 
     return {
       status: "provisioned",
@@ -266,8 +299,59 @@ export class CloudflareWorkerSecretProvisioner {
       tokenName,
       ...(createdToken.id ? { tokenId: createdToken.id } : {}),
       ...(expiresOn ? { expiresOn } : {}),
+      ...(targetNodeIds.length > 0 ? { targetNodeIds } : {}),
+      ...(deliveries.length > 0 ? { deliveries } : {}),
       written: true,
     };
+  }
+
+  private async deliverWorkerSecretToNodes(
+    secretRef: string,
+    value: string | null,
+    targetNodeIds: string[],
+  ): Promise<CloudflareWorkerSecretProvisionDelivery[]> {
+    if (!value) {
+      throw new Error(`worker secret store 中存在 ${secretRef}，但无法读取有效值，不能下发到 worker node。`);
+    }
+
+    const client = this.resolvePlatformGatewayClient();
+    const deliveries: CloudflareWorkerSecretProvisionDelivery[] = [];
+
+    for (const nodeId of targetNodeIds) {
+      const result = await client.pushWorkerSecret({
+        nodeId,
+        secretRef,
+        value,
+      });
+      deliveries.push({
+        nodeId: result.delivery.nodeId,
+        secretRef: result.delivery.secretRef,
+        deliveryId: result.delivery.deliveryId,
+        status: result.delivery.status,
+      });
+    }
+
+    return deliveries;
+  }
+
+  private resolvePlatformGatewayClient(): Pick<ManagedAgentPlatformGatewayClient, "pushWorkerSecret"> {
+    if (this.platformGatewayClient) {
+      return this.platformGatewayClient;
+    }
+
+    const config = readManagedAgentPlatformGatewayConfig(this.env);
+
+    if (!config) {
+      throw new Error(
+        "需要下发 worker secret 到指定 node，但未配置 THEMIS_PLATFORM_BASE_URL / "
+        + "THEMIS_PLATFORM_OWNER_PRINCIPAL_ID / THEMIS_PLATFORM_WEB_ACCESS_TOKEN。",
+      );
+    }
+
+    return new ManagedAgentPlatformGatewayClient({
+      ...config,
+      fetchImpl: this.fetchImpl,
+    });
   }
 
   private resolveExistingWorkerToken(secretRef: string): string | null {
@@ -544,6 +628,28 @@ function normalizeDomains(values: string[]): string[] {
   }
 
   return domains;
+}
+
+function normalizeTargetNodeIds(values: string[]): string[] {
+  const nodeIds: string[] = [];
+  const seen = new Set<string>();
+
+  for (const value of values) {
+    const nodeId = normalizeOptionalText(value);
+
+    if (!nodeId || seen.has(nodeId)) {
+      continue;
+    }
+
+    if (/\s/.test(nodeId)) {
+      throw new Error(`无效的 worker nodeId：${value}`);
+    }
+
+    seen.add(nodeId);
+    nodeIds.push(nodeId);
+  }
+
+  return nodeIds;
 }
 
 function normalizeDomain(value: string): string | null {
