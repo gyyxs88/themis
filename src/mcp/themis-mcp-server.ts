@@ -31,6 +31,10 @@ import { IdentityLinkService, type ChannelIdentityInput, type IdentityStatusSnap
 import { ScheduledTasksService } from "../core/scheduled-tasks-service.js";
 import { isThemisOperationsToolName } from "../core/themis-operations-tools.js";
 import {
+  CloudflareWorkerSecretProvisioner,
+  type CloudflareWorkerSecretProvisionResult,
+} from "../core/cloudflare-worker-secret-provisioner.js";
+import {
   buildThemisOperationsToolDefinitions,
   ThemisOperationsMcpTools,
 } from "./themis-operations-mcp-tools.js";
@@ -187,6 +191,15 @@ interface DispatchWorkItemToolArgs {
   scheduledAt?: string;
 }
 
+interface ProvisionCloudflareWorkerSecretToolArgs {
+  secretRef?: string;
+  envName?: string;
+  domains?: string[];
+  forceRefresh?: boolean;
+  expiresOn?: string;
+  dryRun?: boolean;
+}
+
 interface UpdateManagedAgentLifecycleToolArgs {
   agentId: string;
   action: "pause" | "resume" | "archive";
@@ -197,6 +210,7 @@ export class ThemisMcpServer {
   private readonly identityLinkService: IdentityLinkService;
   private readonly scheduledTasksService: ScheduledTasksService;
   private readonly operationsMcpTools: ThemisOperationsMcpTools;
+  private readonly cloudflareWorkerSecretProvisioner: CloudflareWorkerSecretProvisioner;
   private readonly managedAgentControlPlaneFacade: ManagedAgentControlPlaneFacadeLike;
   private readonly managedAgentOwnerPrincipalId: string | null;
   private readonly workingDirectory: string;
@@ -220,6 +234,11 @@ export class ThemisMcpServer {
     });
     this.operationsMcpTools = new ThemisOperationsMcpTools({
       registry: this.registry,
+    });
+    this.cloudflareWorkerSecretProvisioner = new CloudflareWorkerSecretProvisioner({
+      cwd: workingDirectory,
+      ...(options.env ? { env: options.env } : {}),
+      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     });
     const managedAgentControlPlane = resolveManagedAgentControlPlane({
       workingDirectory,
@@ -372,6 +391,8 @@ export class ThemisMcpServer {
         return this.runToolSafely(() => this.updateManagedAgentExecutionBoundary(argumentsRecord));
       case "dispatch_work_item":
         return this.runToolSafely(() => this.dispatchWorkItem(argumentsRecord));
+      case "provision_cloudflare_worker_secret":
+        return this.runToolSafely(() => this.provisionCloudflareWorkerSecret(argumentsRecord));
       case "update_managed_agent_lifecycle":
         return this.runToolSafely(() => this.updateManagedAgentLifecycle(argumentsRecord));
       default:
@@ -668,6 +689,20 @@ export class ThemisMcpServer {
         workItem: result.workItem,
         ...(result.dispatchMessage ? { dispatchMessage: result.dispatchMessage } : {}),
         ...(result.mailboxEntry ? { mailboxEntry: result.mailboxEntry } : {}),
+      },
+    );
+  }
+
+  private async provisionCloudflareWorkerSecret(
+    argumentsRecord: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const args = normalizeProvisionCloudflareWorkerSecretToolArgs(argumentsRecord);
+    const result = await this.cloudflareWorkerSecretProvisioner.provisionWorkerSecret(args);
+
+    return createToolResult(
+      buildCloudflareWorkerSecretProvisionSummary(result),
+      {
+        result,
       },
     );
   }
@@ -1102,6 +1137,49 @@ function buildToolDefinitions(): McpToolDefinition[] {
       },
     },
     {
+      name: "provision_cloudflare_worker_secret",
+      title: "Provision Cloudflare Worker Secret",
+      description: [
+        "使用 Themis 本地持有的 Cloudflare 管理 token，为 worker 创建或注入只读 Cloudflare token。",
+        "本工具不接受 token 明文参数，不回显 token 值，只写入 worker secret store；派工仍只传 secretEnvRefs 引用。",
+        "当 worker 报 WORKER_NODE_SECRET_UNAVAILABLE 且缺少 cloudflare-readonly-token 时，先调用本工具再重新派工。",
+      ].join(" "),
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          secretRef: {
+            type: "string",
+            description: "可选。写入 worker secret store 的引用名，默认 cloudflare-readonly-token。",
+          },
+          envName: {
+            type: "string",
+            pattern: SECRET_ENV_NAME_PATTERN,
+            description: "可选。worker 子进程注入的环境变量名，默认 CLOUDFLARE_API_TOKEN。",
+          },
+          domains: {
+            type: "array",
+            description: "需要授权只读访问的 Cloudflare zone/domain。通过管理 token 创建新 token 时必填。",
+            items: {
+              type: "string",
+            },
+          },
+          forceRefresh: {
+            type: "boolean",
+            description: "可选。即使 worker secret store 已存在该 secretRef，也重新生成或注入。",
+          },
+          expiresOn: {
+            type: "string",
+            description: "可选。新建 Cloudflare token 的过期时间，UTC ISO 字符串，例如 2026-05-01T00:00:00Z。",
+          },
+          dryRun: {
+            type: "boolean",
+            description: "可选。只验证 Themis 能否准备该 secret，不写入 worker secret store。",
+          },
+        },
+      },
+    },
+    {
       name: "update_managed_agent_lifecycle",
       title: "Update Managed Agent Lifecycle",
       description: "暂停、恢复或归档员工。",
@@ -1518,6 +1596,32 @@ function normalizeDispatchWorkItemToolArgs(value: Record<string, unknown>): Disp
   };
 }
 
+function normalizeProvisionCloudflareWorkerSecretToolArgs(
+  value: Record<string, unknown>,
+): ProvisionCloudflareWorkerSecretToolArgs {
+  assertOnlyKeys(
+    value,
+    new Set(["secretRef", "envName", "domains", "forceRefresh", "expiresOn", "dryRun"]),
+    "provision_cloudflare_worker_secret arguments",
+  );
+  const domains = hasOwn(value, "domains")
+    ? normalizeStringArray(value.domains, "domains must be an array of strings.")
+    : undefined;
+
+  return {
+    ...(normalizeText(value.secretRef) ? { secretRef: normalizeText(value.secretRef) as string } : {}),
+    ...(normalizeText(value.envName) ? { envName: normalizeText(value.envName) as string } : {}),
+    ...(domains ? { domains } : {}),
+    ...(hasOwn(value, "forceRefresh")
+      ? { forceRefresh: expectBoolean(value.forceRefresh, "forceRefresh must be a boolean.") }
+      : {}),
+    ...(normalizeText(value.expiresOn) ? { expiresOn: normalizeText(value.expiresOn) as string } : {}),
+    ...(hasOwn(value, "dryRun")
+      ? { dryRun: expectBoolean(value.dryRun, "dryRun must be a boolean.") }
+      : {}),
+  };
+}
+
 function normalizeUpdateManagedAgentLifecycleToolArgs(
   value: Record<string, unknown>,
 ): UpdateManagedAgentLifecycleToolArgs {
@@ -1817,6 +1921,35 @@ function buildManagedAgentExecutionBoundarySummary(result: ManagedAgentExecution
   ].join("\n");
 }
 
+function buildCloudflareWorkerSecretProvisionSummary(result: CloudflareWorkerSecretProvisionResult): string {
+  const statusLabel = result.status === "already_configured"
+    ? "worker secret 已存在"
+    : result.status === "dry_run_ready"
+      ? "Cloudflare worker secret 预检通过"
+      : "Cloudflare worker secret 已准备";
+  const sourceLabel = result.source === "cloudflare_management_token"
+    ? "Cloudflare 管理 token"
+    : result.source === "themis_worker_token"
+      ? "Themis 本地 worker token"
+      : "worker secret store";
+  const domainLine = result.domains.length > 0 ? `domains：${result.domains.join(", ")}` : "domains：未指定";
+  const zoneLine = result.zones.length > 0
+    ? `zones：${result.zones.map((zone) => zone.name).join(", ")}`
+    : "zones：未解析";
+
+  return [
+    statusLabel,
+    `secretRef：${result.secretRef}`,
+    `envName：${result.envName}`,
+    `来源：${sourceLabel}`,
+    `写入：${result.written ? "是" : "否"}`,
+    domainLine,
+    zoneLine,
+    `worker secret store：${result.workerSecretStorePath}`,
+    "未回显任何 token 值。",
+  ].join("\n");
+}
+
 function expectRecord(value: unknown, message: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new JsonRpcProtocolError(JSON_RPC_INVALID_PARAMS, message);
@@ -1855,6 +1988,19 @@ function expectBoolean(value: unknown, message: string): boolean {
   }
 
   return value;
+}
+
+function assertOnlyKeys(value: Record<string, unknown>, allowedKeys: Set<string>, fieldName: string): void {
+  const unknownKey = Object.keys(value).find((key) => !allowedKeys.has(key));
+
+  if (!unknownKey) {
+    return;
+  }
+
+  throw new JsonRpcProtocolError(
+    JSON_RPC_INVALID_PARAMS,
+    `${fieldName} must only include ${[...allowedKeys].join(", ")}; ${unknownKey} is not allowed.`,
+  );
 }
 
 function normalizeText(value: unknown): string | undefined {

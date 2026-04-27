@@ -24,7 +24,7 @@
 
 - 飞书第二阶段第一刀已经完成；阶段 5、阶段 6、`结构化输出 / 自动化接口` 和 `云端 / 远程执行能力评估` 也都已收口。当前结论不是把远程执行或 `codex cloud` 混进飞书主链，而是继续守住现有群路由、shared 会话和诊断复验边界；除审批卡第一轮外，其余卡片化范围仍保持 gated evaluation。
 - Themis 已接入飞书长连接，`im.message.receive_v1` 能进入现有 runtime 主链路。
-- 当前已支持飞书文本收发、`/help`、`/sessions`、`/new`、`/use`、`/current`、`/review`、`/steer`、`/workspace`、`/group`、`/link`、`/settings` 命令树、`/update`、`/ops`、`/secrets`、`/msgupdate`、`/quota`，以及 `/account`、`/sandbox`、`/search`、`/network`、`/approval` 这些兼容入口；其中 `/settings account` 已支持设备码登录、退出账号和取消登录，`/ops status` 会展示当前实例状态和最近一次重启 marker，`/ops restart confirm` 负责受控请求重启当前 Themis 服务，`/secrets worker` 负责维护 worker 本地 secret 引用。
+- 当前已支持飞书文本收发、`/help`、`/sessions`、`/new`、`/use`、`/current`、`/review`、`/steer`、`/workspace`、`/group`、`/link`、`/settings` 命令树、`/update`、`/ops`、`/secrets`、`/msgupdate`、`/quota`，以及 `/account`、`/sandbox`、`/search`、`/network`、`/approval` 这些兼容入口；其中 `/settings account` 已支持设备码登录、退出账号和取消登录，`/ops status` 会展示当前实例状态和最近一次重启 marker，`/ops restart confirm` 负责受控请求重启当前 Themis 服务，`/secrets worker` 负责维护 worker 本地 secret 引用的兜底路径；Cloudflare worker secret 主路径由 MCP 工具 `provision_cloudflare_worker_secret` 基于 Themis 本地管理 token 准备。
 - Codex 在飞书里现在走“正文主消息 + 状态消息”桥接：用户发消息后会先立刻收到 `处理中...`；只有 `item/completed(agentMessage, commentary)` 这种已经完整的中间消息，才会被立刻落成正文气泡，然后再补一条新的 `处理中...`。`delta` 只保留为内部累计快照，不再直接驱动飞书正文展示。
 - 工具调用现在走独立的“工具轨迹”气泡，不再混进正文或状态摘要：runtime 会把命令执行、文件变更、MCP / 动态工具调用以及审批 / 补输入这类稳定信号统一归一成 `traceKind=tool` 的 `task.progress`；如果任务还没出现正文，首条工具轨迹会先接手当前 `处理中...` 占位，然后飞书桥立刻补一个新的尾部占位；之后同一 bucket 继续原地更新。新 bucket 或正文后插入的工具轨迹会先尝试撤回旧尾部 `处理中...`，再在工具轨迹后创建新的尾部占位，避免最终答案气泡出现在工具轨迹上方；撤回失败时会降级把旧占位收口成 `继续处理中`。
 - 工具轨迹的每一行默认只保留前 `50` 个字符的细节内容，超出会补 `...`；条目之间会额外空一行，优先保证移动端可读性，不再尝试完整展开长命令、长文件名或长工具参数。

@@ -38,7 +38,7 @@ Themis 是一个围绕 `codex app-server` 构建的自托管协作壳。
 - 提供主 Themis 自己的会话、历史、身份、配置、任务入口与自动化接口。
 - 提供 `status / doctor / doctor smoke / doctor release` 这套运维诊断入口。
 - 提供 `POST /api/tasks/automation/run` 这类自动化接口。
-- 提供单次定时任务、员工治理与运营中枢机器协议，并通过 `themis mcp-server` 暴露 `create_scheduled_task / list_scheduled_tasks / cancel_scheduled_task`、`list_managed_agents / get_managed_agent_detail / create_managed_agent / update_managed_agent_card / update_managed_agent_execution_boundary / dispatch_work_item / update_managed_agent_lifecycle`，以及 `list_operation_objects / create_operation_object / update_operation_object / list_operation_edges / create_operation_edge / update_operation_edge / query_operation_graph / get_operations_boss_view` 给 Codex 调用。
+- 提供单次定时任务、员工治理、worker secret 准备与运营中枢机器协议，并通过 `themis mcp-server` 暴露 `create_scheduled_task / list_scheduled_tasks / cancel_scheduled_task`、`list_managed_agents / get_managed_agent_detail / create_managed_agent / update_managed_agent_card / update_managed_agent_execution_boundary / dispatch_work_item / provision_cloudflare_worker_secret / update_managed_agent_lifecycle`，以及 `list_operation_objects / create_operation_object / update_operation_object / list_operation_edges / create_operation_edge / update_operation_edge / query_operation_graph / get_operations_boss_view` 给 Codex 调用。
 - 提供平台会议室 gateway 与 Web 主持台，支持 `status / list / create / detail / participants/add / resolutions/create / resolutions/promote / close / message/stream` 这组内部会议能力，让 Themis 能以管理者身份拉多个数字员工进入同一个会议室讨论，并按轮次排队、定向发言、带上下文入场和会议收口；平台页的会议室观察台会直接读取平台真相源，并提供只读观察与终止会议能力。
 - 提供 `运营中枢` 的最小资产台账、节奏记录、承诺目标、决策记录、风险记录、对象关系边、对象图查询与只读老板视图。该系统定位为 Themis 与数字员工自用的机器原生运营账本，不是给人类填表的任务管理 UI；人类主要通过 Web / BossView 观察、审计，并在必要时通过员工生命周期和执行边界做紧急刹车。当前支持 `Asset / Cadence / Commitment / Decision / Risk / OperationEdge` 的 `list / create / update`，自动从对象字段同步基础关系边；`Commitment` 还支持进度、里程碑和证据引用，并可从 `work_item` 证据补出 `evidence_for` 关系；Web 会基于已加载 active 关系边为对象卡片展开一跳 / 二跳影响范围，`/api/operations/graph/query` 可按根对象查询小深度关系子图和可选最短路径；通过 `/api/operations/boss-view` 把这些事实聚合成红黄绿状态、关键指标、今日焦点、关键关系和近期拍板，其中已解决风险 / 已完成承诺不会继续制造当前阻塞红灯。
 
@@ -170,7 +170,7 @@ npm run themis -- config set FEISHU_APP_SECRET xxx
 - 飞书：`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_PROGRESS_FLUSH_TIMEOUT_MS`
 - OpenAI-compatible provider：`THEMIS_OPENAI_COMPAT_BASE_URL`、`THEMIS_OPENAI_COMPAT_API_KEY`、`THEMIS_OPENAI_COMPAT_MODEL`
 - 升级与版本：`THEMIS_BUILD_COMMIT`、`THEMIS_BUILD_BRANCH`、`THEMIS_UPDATE_REPO`、`THEMIS_UPDATE_CHANNEL`、`THEMIS_UPDATE_DEFAULT_BRANCH`、`THEMIS_UPDATE_SYSTEMD_SERVICE`、`THEMIS_UPDATE_RESTART_EXIT_WAIT_MS`、`THEMIS_RESTART_CONFIRM_TIMEOUT_MS`、`THEMIS_GITHUB_TOKEN`
-- Worker secret 注入：`THEMIS_MANAGED_AGENT_WORKER_SECRET_STORE_FILE` 可覆盖主 Themis 通过飞书 `/secrets worker` 写入的 worker secret store 路径；默认指向同级 `../themis-worker-node/infra/local/worker-secrets.json`
+- Themis secret / Worker secret 注入：`THEMIS_SECRET_STORE_FILE` 可覆盖主 Themis 本地 secret store，Cloudflare 管理 token 可放在 `THEMIS_CLOUDFLARE_MANAGEMENT_TOKEN` 或该 store 的 `cloudflare-management-token`；`THEMIS_MANAGED_AGENT_WORKER_SECRET_STORE_FILE` 可覆盖主 Themis 写入 worker secret store 的路径，默认指向同级 `../themis-worker-node/infra/local/worker-secrets.json`
 - 平台层 MySQL、runtime snapshot、execution runtime 这类部署级变量，直接看 [平台层切 MySQL 操作说明](./docs/repository/themis-platform-mysql-control-plane-cutover.md)；跨机场景和历史联调细节见 [仓库运维文档索引](./docs/repository/README.md)
 
 ## 文档导航
@@ -192,7 +192,7 @@ npm run themis -- config set FEISHU_APP_SECRET xxx
 
 当前公开发布采用“双仓”方式：开发仓负责日常开发与本地资料，公开仓负责 GitHub 可公开内容。
 
-普通 Codex 对话任务不应直接尝试重启当前 Themis 服务；如果用户在飞书里要求“部署生效 / 重启自己 / 重启当前实例”，应提示用户在单聊发送 `/ops restart confirm`，由受控运维命令请求重启当前服务；重启前后状态用 `/ops status` 查看。需要给 worker 注入第三方 API token 时，不要把 token 写进普通对话、工单正文或报告；让用户在飞书单聊执行 `/secrets worker set <secretRef> <secretValue>`，随后派工只传 `runtimeProfileSnapshot.secretEnvRefs` 引用。
+普通 Codex 对话任务不应直接尝试重启当前 Themis 服务；如果用户在飞书里要求“部署生效 / 重启自己 / 重启当前实例”，应提示用户在单聊发送 `/ops restart confirm`，由受控运维命令请求重启当前服务；重启前后状态用 `/ops status` 查看。需要给 worker 注入第三方 API token 时，不要把 token 写进普通对话、工单正文或报告；Cloudflare 场景优先让 Themis 调用 `provision_cloudflare_worker_secret`，由本地管理 token 生成或注入 `cloudflare-readonly-token`，随后派工只传 `runtimeProfileSnapshot.secretEnvRefs` 引用；飞书 `/secrets worker set` 只作为显式选择的兜底入口。
 
 导出公开仓：
 
@@ -220,5 +220,5 @@ git push origin main
 
 - `THEMIS_UPDATE_CHANNEL` 支持 `branch` 和 `release`；默认仍是 `branch`。
 - 受控升级当前只支持公开仓 `git clone` 的正式实例、默认分支 `ff-only` 快进升级，以及干净工作区。
-- Web 已支持“运行参数 -> 实例升级”，飞书也已支持 `/update`、`/update apply confirm`、`/update rollback confirm`；单独重启当前服务使用飞书单聊 `/ops restart confirm`，实例状态和最近一次重启确认用 `/ops status` 查看；worker secret 引用通过飞书单聊 `/secrets worker` 维护。
+- Web 已支持“运行参数 -> 实例升级”，飞书也已支持 `/update`、`/update apply confirm`、`/update rollback confirm`；单独重启当前服务使用飞书单聊 `/ops restart confirm`，实例状态和最近一次重启确认用 `/ops status` 查看；`/secrets worker` 是 worker secret 引用的兜底维护入口，Cloudflare worker secret 优先由 `provision_cloudflare_worker_secret` 从 Themis 持有的管理 token 准备。
 - 详细边界、灰度与回滚流程，直接看 [发布、灰度与回退说明](./docs/repository/themis-release-rollout-and-rollback.md) 和 [正式版部署说明](./docs/repository/themis-systemd-prod-service.md)。

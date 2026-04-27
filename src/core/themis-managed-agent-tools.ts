@@ -7,6 +7,7 @@ export const THEMIS_MANAGED_AGENT_TOOL_NAMES = [
   "update_managed_agent_card",
   "update_managed_agent_execution_boundary",
   "dispatch_work_item",
+  "provision_cloudflare_worker_secret",
   "update_managed_agent_lifecycle",
 ] as const;
 
@@ -32,7 +33,8 @@ export function buildThemisManagedAgentPromptSection(request: TaskRequest): stri
     "When dispatching a read-only work item, or a task whose goal says not to write/modify/delete files, pass runtimeProfileSnapshot.sandboxMode=\"read-only\" and contextPacket.safety=\"read_only_only_no_writes\" instead of relying on prose alone.",
     "When a worker needs a secret such as an API token, never put the token in chat text, goal, contextPacket, or work-item正文. Pass runtimeProfileSnapshot.secretEnvRefs with envName/secretRef/required only; the worker resolves the secret locally and injects it as an environment variable.",
     "Use stable secretRef names such as cloudflare-readonly-token instead of reusing envName as the secretRef; for Cloudflare API access, use envName=CLOUDFLARE_API_TOKEN and secretRef=cloudflare-readonly-token.",
-    "If a worker reports WORKER_NODE_SECRET_UNAVAILABLE, do not ask the user to edit host files or paste the token into a work item. Tell the user to run /secrets worker set <secretRef> <secretValue> in the Feishu single chat, then re-dispatch with the same runtimeProfileSnapshot.secretEnvRefs.",
+    "If a Cloudflare worker task reports WORKER_NODE_SECRET_UNAVAILABLE for cloudflare-readonly-token, first call provision_cloudflare_worker_secret with the relevant domains; Themis will use its local Cloudflare management token to create or inject the worker token and write only the worker secret store.",
+    "Only if provision_cloudflare_worker_secret reports that the Themis-side management token is unavailable, tell the user that Themis needs cloudflare-management-token configured in its local secret store or THEMIS_CLOUDFLARE_MANAGEMENT_TOKEN; do not ask for a worker token unless the user explicitly chooses the /secrets worker fallback.",
     "When dispatching public DNS/HTTP/domain/IP investigation, keep the work item narrowly framed as owner-authorized public observation; if Codex or the worker reports a cybersecurity safety block, report that exact block instead of treating it as a generic worker failure.",
     "When inspecting managed-agent completion data, treat detailLevel=metadata_only as a legacy or limited-format result boundary unless newer evidence proves a current regression.",
     "If you inspect raw platform JSON instead of gateway-normalized detailLevel, apply the same rule when a completion only shows execution metadata such as reportFile/workspacePath/runtimeContext and lacks deliverable plus artifactContents.",

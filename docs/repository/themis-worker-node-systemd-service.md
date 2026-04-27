@@ -165,7 +165,7 @@ ExecStart=%h/services/themis-worker-node/themis-worker-node worker-node run ...
 
 `THEMIS_WORKER_NODE_ID` 也建议固定下来，例如 `node-worker-a`。如果长期常驻节点不传稳定 `--node-id`，每次重启都会注册成新的 node 记录，平台里会留下同名但不同 `nodeId` 的 offline 节点，后续值班和诊断会变乱。
 
-需要给 worker 注入第三方 API token 时，不要把值写进工单正文。Worker 执行前会读取本机 secret store，默认路径是 `infra/local/worker-secrets.json`；主 Themis 飞书单聊 `/secrets worker set <secretRef> <secretValue>` 会写入同级部署下的 `../themis-worker-node/infra/local/worker-secrets.json`，派工只传 `runtimeProfileSnapshot.secretEnvRefs` 引用。
+需要给 worker 注入第三方 API token 时，不要把值写进工单正文。Worker 执行前会读取本机 secret store，默认路径是 `infra/local/worker-secrets.json`；主 Themis 可通过 MCP 工具 `provision_cloudflare_worker_secret` 使用本地 Cloudflare 管理 token 生成或注入 `cloudflare-readonly-token`，并写入同级部署下的 `../themis-worker-node/infra/local/worker-secrets.json`。飞书单聊 `/secrets worker set <secretRef> <secretValue>` 只作为兜底手工入口；派工始终只传 `runtimeProfileSnapshot.secretEnvRefs` 引用。
 
 如果你还要声明更多能力，可以继续往 `ExecStart` 里追加：
 

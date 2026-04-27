@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
@@ -37,6 +37,15 @@ async function initializeServer(server: ThemisMcpServer): Promise<void> {
   }));
 
   assert.equal(notificationResponse, null);
+}
+
+function jsonResponse(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: {
+      "content-type": "application/json",
+    },
+  });
 }
 
 test("Themis MCP server 会暴露定时任务和员工治理工具列表", async () => {
@@ -78,6 +87,7 @@ test("Themis MCP server 会暴露定时任务和员工治理工具列表", async
         "update_managed_agent_card",
         "update_managed_agent_execution_boundary",
         "dispatch_work_item",
+        "provision_cloudflare_worker_secret",
         "update_managed_agent_lifecycle",
         "list_operation_objects",
         "create_operation_object",
@@ -89,6 +99,168 @@ test("Themis MCP server 会暴露定时任务和员工治理工具列表", async
         "get_operations_boss_view",
       ],
     );
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("Themis MCP server 能用管理 token 准备 Cloudflare worker secret 且不回显 token", async () => {
+  const workspace = createWorkspace("themis-mcp-cloudflare-secret");
+  const workerSecretStoreFile = resolve(workspace, "infra/local/worker-secrets.json");
+  const calls: Array<{ url: string; method: string; body: string | null }> = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    const body = typeof init?.body === "string" ? init.body : null;
+    calls.push({ url, method, body });
+
+    if (url.endsWith("/user/tokens/permission_groups")) {
+      return jsonResponse({
+        success: true,
+        result: [
+          {
+            id: "permission-zone-read",
+            name: "Zone Read",
+            scopes: ["com.cloudflare.api.account.zone"],
+          },
+          {
+            id: "permission-dns-read",
+            name: "DNS Read",
+            scopes: ["com.cloudflare.api.account.zone"],
+          },
+        ],
+      });
+    }
+
+    if (url.includes("/zones?")) {
+      const parsed = new URL(url);
+      const domain = parsed.searchParams.get("name");
+      return jsonResponse({
+        success: true,
+        result: domain === "novelrift.com"
+          ? [{
+              id: "zone-novelrift",
+              name: "novelrift.com",
+            }]
+          : [],
+      });
+    }
+
+    if (url.endsWith("/user/tokens") && method === "POST") {
+      assert.ok(body);
+      const parsedBody = JSON.parse(body) as {
+        name?: string;
+        policies?: Array<{
+          effect?: string;
+          resources?: Record<string, string>;
+          permission_groups?: Array<{ id?: string; name?: string }>;
+        }>;
+      };
+      assert.match(parsedBody.name ?? "", /^themis-worker-cloudflare-readonly-token-/);
+      assert.equal(parsedBody.policies?.[0]?.effect, "allow");
+      assert.deepEqual(parsedBody.policies?.[0]?.resources, {
+        "com.cloudflare.api.account.zone.zone-novelrift": "*",
+      });
+      assert.deepEqual(parsedBody.policies?.[0]?.permission_groups, [
+        { id: "permission-zone-read", name: "Zone Read" },
+        { id: "permission-dns-read", name: "DNS Read" },
+      ]);
+
+      return jsonResponse({
+        success: true,
+        result: {
+          id: "created-token-id",
+          name: parsedBody.name,
+          value: "generated-worker-token-secret",
+        },
+      });
+    }
+
+    return jsonResponse({
+      success: false,
+      errors: [{ message: `unexpected ${method} ${url}` }],
+    }, 404);
+  };
+  const server = new ThemisMcpServer({
+    workingDirectory: workspace,
+    env: {
+      ...process.env,
+      THEMIS_CLOUDFLARE_MANAGEMENT_TOKEN: "management-token-secret",
+      THEMIS_MANAGED_AGENT_WORKER_SECRET_STORE_FILE: workerSecretStoreFile,
+    },
+    fetchImpl,
+    identity: {
+      channel: "cli",
+      channelUserId: "tester",
+      displayName: "Tester",
+    },
+  });
+
+  try {
+    await initializeServer(server);
+    const response = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: {
+        name: "provision_cloudflare_worker_secret",
+        arguments: {
+          domains: ["novelrift.com"],
+        },
+      },
+    }));
+
+    assert.ok(response);
+    const payload = JSON.parse(response);
+    assert.equal(payload.result?.isError, false);
+    assert.equal(payload.result?.structuredContent?.result?.status, "provisioned");
+    assert.equal(payload.result?.structuredContent?.result?.source, "cloudflare_management_token");
+    assert.equal(payload.result?.structuredContent?.result?.secretRef, "cloudflare-readonly-token");
+    assert.equal(payload.result?.structuredContent?.result?.envName, "CLOUDFLARE_API_TOKEN");
+    assert.equal(payload.result?.structuredContent?.result?.written, true);
+
+    const responseText = JSON.stringify(payload);
+    assert.doesNotMatch(responseText, /generated-worker-token-secret/);
+    assert.doesNotMatch(responseText, /management-token-secret/);
+    assert.deepEqual(JSON.parse(readFileSync(workerSecretStoreFile, "utf8")), {
+      "cloudflare-readonly-token": "generated-worker-token-secret",
+    });
+    assert.equal(calls.some((call) => call.url.endsWith("/user/tokens") && call.method === "POST"), true);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("Themis MCP server 拒绝在 Cloudflare secret provision 参数中夹带 token", async () => {
+  const workspace = createWorkspace("themis-mcp-cloudflare-secret-token-arg");
+  const server = new ThemisMcpServer({
+    workingDirectory: workspace,
+    identity: {
+      channel: "cli",
+      channelUserId: "tester",
+      displayName: "Tester",
+    },
+  });
+
+  try {
+    await initializeServer(server);
+    const response = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: {
+        name: "provision_cloudflare_worker_secret",
+        arguments: {
+          domains: ["novelrift.com"],
+          token: "should-not-be-accepted",
+        },
+      },
+    }));
+
+    assert.ok(response);
+    const payload = JSON.parse(response);
+    assert.equal(payload.result?.isError, true);
+    assert.match(payload.result?.content?.[0]?.text ?? "", /token is not allowed/);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
