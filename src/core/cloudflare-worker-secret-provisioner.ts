@@ -16,6 +16,15 @@ const MANAGEMENT_TOKEN_SECRET_REFS = [
   "THEMIS_CLOUDFLARE_MANAGEMENT_TOKEN",
   "CLOUDFLARE_MANAGEMENT_TOKEN",
 ] as const;
+const ACCOUNT_ID_ENV_KEYS = [
+  "THEMIS_CLOUDFLARE_ACCOUNT_ID",
+  "CLOUDFLARE_ACCOUNT_ID",
+] as const;
+const ACCOUNT_ID_SECRET_REFS = [
+  "cloudflare-account-id",
+  "THEMIS_CLOUDFLARE_ACCOUNT_ID",
+  "CLOUDFLARE_ACCOUNT_ID",
+] as const;
 const WORKER_TOKEN_ENV_KEYS = [
   "THEMIS_CLOUDFLARE_WORKER_TOKEN",
   "CLOUDFLARE_WORKER_TOKEN",
@@ -41,6 +50,7 @@ export interface CloudflareWorkerSecretProvisionerOptions {
 export interface ProvisionCloudflareWorkerSecretInput {
   secretRef?: string;
   envName?: string;
+  accountId?: string;
   domains?: string[];
   forceRefresh?: boolean;
   expiresOn?: string;
@@ -74,6 +84,8 @@ export interface CloudflareWorkerSecretProvisionResult {
   envName: string;
   workerSecretStorePath: string;
   themisSecretStorePath: string;
+  cloudflareTokenEndpoint?: "account";
+  accountIdConfigured?: boolean;
   domains: string[];
   zones: CloudflareWorkerSecretProvisionZone[];
   permissionGroups: CloudflareWorkerSecretProvisionPermissionGroup[];
@@ -196,7 +208,16 @@ export class CloudflareWorkerSecretProvisioner {
       throw new Error("通过 Cloudflare 管理 token 创建 worker 只读 token 时必须传 domains，避免默认生成全账户/全 zone token。");
     }
 
-    const permissionGroups = await this.fetchRequiredPermissionGroups(managementToken);
+    const accountId = this.resolveAccountId(input.accountId);
+
+    if (!accountId) {
+      throw new Error(
+        "Cloudflare accountId 未配置。Account Owned API Token 必须走 /accounts/{account_id}/tokens endpoint；"
+        + "请配置 THEMIS_CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_ACCOUNT_ID，或在 Themis 密码本保存 secretRef=cloudflare-account-id。",
+      );
+    }
+
+    const permissionGroups = await this.fetchRequiredPermissionGroups(managementToken, accountId);
     const zones = await this.resolveZones(managementToken, domains);
     const tokenName = buildTokenName(secretRef, this.now());
 
@@ -208,6 +229,8 @@ export class CloudflareWorkerSecretProvisioner {
         envName,
         workerSecretStorePath: this.workerSecretStore.getFilePath(),
         themisSecretStorePath: this.themisSecretStore.getFilePath(),
+        cloudflareTokenEndpoint: "account",
+        accountIdConfigured: true,
         domains,
         zones,
         permissionGroups,
@@ -219,6 +242,7 @@ export class CloudflareWorkerSecretProvisioner {
 
     const createdToken = await this.createCloudflareToken({
       managementToken,
+      accountId,
       tokenName,
       zones,
       permissionGroups,
@@ -234,6 +258,8 @@ export class CloudflareWorkerSecretProvisioner {
       envName,
       workerSecretStorePath: this.workerSecretStore.getFilePath(),
       themisSecretStorePath: this.themisSecretStore.getFilePath(),
+      cloudflareTokenEndpoint: "account",
+      accountIdConfigured: true,
       domains,
       zones,
       permissionGroups,
@@ -291,12 +317,39 @@ export class CloudflareWorkerSecretProvisioner {
     return null;
   }
 
+  private resolveAccountId(inputAccountId?: string): string | null {
+    const explicit = normalizeOptionalText(inputAccountId);
+
+    if (explicit) {
+      return normalizeCloudflareAccountId(explicit);
+    }
+
+    for (const key of ACCOUNT_ID_ENV_KEYS) {
+      const value = normalizeOptionalText(this.env[key]);
+
+      if (value) {
+        return normalizeCloudflareAccountId(value);
+      }
+    }
+
+    for (const ref of ACCOUNT_ID_SECRET_REFS) {
+      const value = this.themisSecretStore.getSecret(ref);
+
+      if (value) {
+        return normalizeCloudflareAccountId(value);
+      }
+    }
+
+    return null;
+  }
+
   private async fetchRequiredPermissionGroups(
     managementToken: string,
+    accountId: string,
   ): Promise<CloudflareWorkerSecretProvisionPermissionGroup[]> {
     const envelope = await this.callCloudflare<CloudflarePermissionGroup[]>(
       managementToken,
-      "/user/tokens/permission_groups",
+      `/accounts/${encodeURIComponent(accountId)}/tokens/permission_groups`,
       { method: "GET" },
     );
     const groups = Array.isArray(envelope.result) ? envelope.result : [];
@@ -354,6 +407,7 @@ export class CloudflareWorkerSecretProvisioner {
 
   private async createCloudflareToken(input: {
     managementToken: string;
+    accountId: string;
     tokenName: string;
     zones: CloudflareWorkerSecretProvisionZone[];
     permissionGroups: CloudflareWorkerSecretProvisionPermissionGroup[];
@@ -381,7 +435,7 @@ export class CloudflareWorkerSecretProvisioner {
 
     const envelope = await this.callCloudflare<CloudflareCreatedToken>(
       input.managementToken,
-      "/user/tokens",
+      `/accounts/${encodeURIComponent(input.accountId)}/tokens`,
       {
         method: "POST",
         body: JSON.stringify(body),
@@ -462,6 +516,16 @@ function normalizeEnvName(value: string): string {
   }
 
   return normalized;
+}
+
+function normalizeCloudflareAccountId(value: string): string {
+  const normalized = normalizeOptionalText(value);
+
+  if (!normalized || !/^[a-fA-F0-9]{32}$/.test(normalized)) {
+    throw new Error("Cloudflare accountId 必须是 32 位十六进制字符串。");
+  }
+
+  return normalized.toLowerCase();
 }
 
 function normalizeDomains(values: string[]): string[] {

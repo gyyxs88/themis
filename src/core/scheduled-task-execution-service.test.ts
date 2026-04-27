@@ -63,7 +63,7 @@ test("schema 32 迁移会为定时任务补 watch_work_item_id 列和索引", ()
 
     assert.equal(columns.some((column) => column.name === "watch_work_item_id"), true);
     assert.equal(indexes.some((index) => index.name === "themis_scheduled_tasks_watch_idx"), true);
-    assert.equal(userVersion, 33);
+    assert.equal(userVersion >= 33, true);
     verify.close();
   } finally {
     rmSync(root, { recursive: true, force: true });

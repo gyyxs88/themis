@@ -195,6 +195,7 @@ interface DispatchWorkItemToolArgs {
 interface ProvisionCloudflareWorkerSecretToolArgs {
   secretRef?: string;
   envName?: string;
+  accountId?: string;
   domains?: string[];
   forceRefresh?: boolean;
   expiresOn?: string;
@@ -1317,6 +1318,10 @@ function buildToolDefinitions(): McpToolDefinition[] {
             pattern: SECRET_ENV_NAME_PATTERN,
             description: "可选。worker 子进程注入的环境变量名，默认 CLOUDFLARE_API_TOKEN。",
           },
+          accountId: {
+            type: "string",
+            description: "可选。Cloudflare account id；Account Owned API Token 会走 /accounts/{account_id}/tokens endpoint。日常优先通过密码本 cloudflare-account-id 或环境变量配置，不建议写入工单正文。",
+          },
           domains: {
             type: "array",
             description: "需要授权只读访问的 Cloudflare zone/domain。通过管理 token 创建新 token 时必填。",
@@ -1761,7 +1766,7 @@ function normalizeProvisionCloudflareWorkerSecretToolArgs(
 ): ProvisionCloudflareWorkerSecretToolArgs {
   assertOnlyKeys(
     value,
-    new Set(["secretRef", "envName", "domains", "forceRefresh", "expiresOn", "dryRun"]),
+    new Set(["secretRef", "envName", "accountId", "domains", "forceRefresh", "expiresOn", "dryRun"]),
     "provision_cloudflare_worker_secret arguments",
   );
   const domains = hasOwn(value, "domains")
@@ -1771,6 +1776,7 @@ function normalizeProvisionCloudflareWorkerSecretToolArgs(
   return {
     ...(normalizeText(value.secretRef) ? { secretRef: normalizeText(value.secretRef) as string } : {}),
     ...(normalizeText(value.envName) ? { envName: normalizeText(value.envName) as string } : {}),
+    ...(normalizeText(value.accountId) ? { accountId: normalizeText(value.accountId) as string } : {}),
     ...(domains ? { domains } : {}),
     ...(hasOwn(value, "forceRefresh")
       ? { forceRefresh: expectBoolean(value.forceRefresh, "forceRefresh must be a boolean.") }
@@ -2117,12 +2123,20 @@ function buildCloudflareWorkerSecretProvisionSummary(result: CloudflareWorkerSec
   const zoneLine = result.zones.length > 0
     ? `zones：${result.zones.map((zone) => zone.name).join(", ")}`
     : "zones：未解析";
+  const endpointLine = result.cloudflareTokenEndpoint === "account"
+    ? "Cloudflare token endpoint：account-scoped"
+    : null;
+  const accountLine = result.accountIdConfigured
+    ? "Cloudflare accountId：已配置，未回显"
+    : null;
 
   return [
     statusLabel,
     `secretRef：${result.secretRef}`,
     `envName：${result.envName}`,
     `来源：${sourceLabel}`,
+    ...(endpointLine ? [endpointLine] : []),
+    ...(accountLine ? [accountLine] : []),
     `写入：${result.written ? "是" : "否"}`,
     domainLine,
     zoneLine,

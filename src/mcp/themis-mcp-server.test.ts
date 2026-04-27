@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
@@ -269,6 +269,11 @@ test("Themis MCP server 密码本工具拒绝未知 token 参数", async () => {
 test("Themis MCP server 能用管理 token 准备 Cloudflare worker secret 且不回显 token", async () => {
   const workspace = createWorkspace("themis-mcp-cloudflare-secret");
   const workerSecretStoreFile = resolve(workspace, "infra/local/worker-secrets.json");
+  const themisSecretStoreFile = resolve(workspace, "infra/local/themis-secrets.json");
+  const accountId = "0123456789abcdef0123456789abcdef";
+  writeFileSync(themisSecretStoreFile, `${JSON.stringify({
+    "cloudflare-account-id": accountId,
+  }, null, 2)}\n`, "utf8");
   const calls: Array<{ url: string; method: string; body: string | null }> = [];
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = String(input);
@@ -276,7 +281,7 @@ test("Themis MCP server 能用管理 token 准备 Cloudflare worker secret 且�
     const body = typeof init?.body === "string" ? init.body : null;
     calls.push({ url, method, body });
 
-    if (url.endsWith("/user/tokens/permission_groups")) {
+    if (url.endsWith(`/accounts/${accountId}/tokens/permission_groups`)) {
       return jsonResponse({
         success: true,
         result: [
@@ -308,7 +313,7 @@ test("Themis MCP server 能用管理 token 准备 Cloudflare worker secret 且�
       });
     }
 
-    if (url.endsWith("/user/tokens") && method === "POST") {
+    if (url.endsWith(`/accounts/${accountId}/tokens`) && method === "POST") {
       assert.ok(body);
       const parsedBody = JSON.parse(body) as {
         name?: string;
@@ -348,6 +353,7 @@ test("Themis MCP server 能用管理 token 准备 Cloudflare worker secret 且�
     env: {
       ...process.env,
       THEMIS_CLOUDFLARE_MANAGEMENT_TOKEN: "management-token-secret",
+      THEMIS_SECRET_STORE_FILE: themisSecretStoreFile,
       THEMIS_MANAGED_AGENT_WORKER_SECRET_STORE_FILE: workerSecretStoreFile,
     },
     fetchImpl,
@@ -380,14 +386,67 @@ test("Themis MCP server 能用管理 token 准备 Cloudflare worker secret 且�
     assert.equal(payload.result?.structuredContent?.result?.secretRef, "cloudflare-readonly-token");
     assert.equal(payload.result?.structuredContent?.result?.envName, "CLOUDFLARE_API_TOKEN");
     assert.equal(payload.result?.structuredContent?.result?.written, true);
+    assert.equal(payload.result?.structuredContent?.result?.cloudflareTokenEndpoint, "account");
+    assert.equal(payload.result?.structuredContent?.result?.accountIdConfigured, true);
 
     const responseText = JSON.stringify(payload);
     assert.doesNotMatch(responseText, /generated-worker-token-secret/);
     assert.doesNotMatch(responseText, /management-token-secret/);
+    assert.doesNotMatch(responseText, new RegExp(accountId));
     assert.deepEqual(JSON.parse(readFileSync(workerSecretStoreFile, "utf8")), {
       "cloudflare-readonly-token": "generated-worker-token-secret",
     });
-    assert.equal(calls.some((call) => call.url.endsWith("/user/tokens") && call.method === "POST"), true);
+    assert.equal(calls.some((call) => call.url.endsWith(`/accounts/${accountId}/tokens`) && call.method === "POST"), true);
+    assert.equal(calls.some((call) => call.url.endsWith("/user/tokens") || call.url.endsWith("/user/tokens/permission_groups")), false);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("Themis MCP server 使用 Cloudflare 管理 token 时要求配置 accountId", async () => {
+  const workspace = createWorkspace("themis-mcp-cloudflare-secret-missing-account");
+  const workerSecretStoreFile = resolve(workspace, "infra/local/worker-secrets.json");
+  const calls: string[] = [];
+  const server = new ThemisMcpServer({
+    workingDirectory: workspace,
+    env: {
+      ...process.env,
+      THEMIS_CLOUDFLARE_MANAGEMENT_TOKEN: "management-token-secret",
+      THEMIS_SECRET_STORE_FILE: resolve(workspace, "infra/local/themis-secrets.json"),
+      THEMIS_MANAGED_AGENT_WORKER_SECRET_STORE_FILE: workerSecretStoreFile,
+      THEMIS_CLOUDFLARE_ACCOUNT_ID: undefined,
+      CLOUDFLARE_ACCOUNT_ID: undefined,
+    },
+    fetchImpl: async (input) => {
+      calls.push(String(input));
+      return jsonResponse({ success: true, result: [] });
+    },
+    identity: {
+      channel: "cli",
+      channelUserId: "tester",
+      displayName: "Tester",
+    },
+  });
+
+  try {
+    await initializeServer(server);
+    const response = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: {
+        name: "provision_cloudflare_worker_secret",
+        arguments: {
+          domains: ["novelrift.com"],
+        },
+      },
+    }));
+
+    assert.ok(response);
+    const payload = JSON.parse(response);
+    assert.equal(payload.result?.isError, true);
+    assert.match(payload.result?.content?.[0]?.text ?? "", /cloudflare-account-id/);
+    assert.deepEqual(calls, []);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
