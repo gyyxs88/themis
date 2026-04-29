@@ -240,7 +240,7 @@ export class FeishuTaskMessageBridge {
       return;
     }
 
-    await this.deliverTerminalText(text);
+    await this.deliverWaitingText(text);
   }
 
   private async deliverProgressText(text: string): Promise<void> {
@@ -290,6 +290,17 @@ export class FeishuTaskMessageBridge {
     }
 
     this.terminalDelivered = true;
+    this.clearVisibleProgress();
+    await this.commitCurrentPlaceholder(normalizedText);
+  }
+
+  private async deliverWaitingText(text: string): Promise<void> {
+    const normalizedText = normalizeText(text);
+
+    if (!normalizedText) {
+      return;
+    }
+
     this.clearVisibleProgress();
     await this.commitCurrentPlaceholder(normalizedText);
   }
