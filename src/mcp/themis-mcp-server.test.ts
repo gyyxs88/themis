@@ -1056,6 +1056,84 @@ test("Themis MCP server 支持员工治理工具闭环", async () => {
     assert.equal(dispatchPayload.result?.structuredContent?.targetAgent?.agentId, agentId);
     assert.equal(dispatchPayload.result?.structuredContent?.workItem?.targetAgentId, agentId);
 
+    const dispatchWithFactSourcesResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 12.25,
+      method: "tools/call",
+      params: {
+        name: "dispatch_work_item",
+        arguments: {
+          targetAgentId: agentId,
+          dispatchReason: "首轮只读巡检",
+          goal: "核对 Cloudflare/DNS 与运营中枢台账，只提出漂移建议，不修改任何外部系统。",
+          contextPacket: {
+            scope: "ops-weekly-inspection",
+          },
+          readOnlyFactSourcePacks: [
+            "cloudflare_readonly",
+            "operations_ledger_readonly",
+          ],
+        },
+      },
+    }));
+
+    assert.ok(dispatchWithFactSourcesResponse);
+    const dispatchWithFactSourcesPayload = JSON.parse(dispatchWithFactSourcesResponse);
+    assert.equal(dispatchWithFactSourcesPayload.result?.isError, false);
+    assert.deepEqual(
+      dispatchWithFactSourcesPayload.result?.structuredContent?.appliedReadOnlyFactSources?.map((
+        source: { id: string },
+      ) => source.id),
+      ["cloudflare_readonly", "operations_ledger_readonly"],
+    );
+    assert.equal(
+      dispatchWithFactSourcesPayload.result?.structuredContent?.workItem?.contextPacket?.safety,
+      "read_only_only_no_writes",
+    );
+    assert.deepEqual(
+      dispatchWithFactSourcesPayload.result?.structuredContent?.workItem?.contextPacket?.readOnlyFactSourcePackIds,
+      ["cloudflare_readonly", "operations_ledger_readonly"],
+    );
+    assert.equal(
+      dispatchWithFactSourcesPayload.result?.structuredContent?.workItem?.runtimeProfileSnapshot?.sandboxMode,
+      "read-only",
+    );
+    assert.equal(
+      dispatchWithFactSourcesPayload.result?.structuredContent?.workItem?.runtimeProfileSnapshot?.networkAccessEnabled,
+      true,
+    );
+    assert.deepEqual(
+      dispatchWithFactSourcesPayload.result?.structuredContent?.workItem?.runtimeProfileSnapshot?.secretEnvRefs,
+      [{
+        envName: "CLOUDFLARE_API_TOKEN",
+        secretRef: "cloudflare-readonly-token",
+        required: true,
+      }],
+    );
+
+    const dispatchWithUnsupportedFactSourceResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 12.35,
+      method: "tools/call",
+      params: {
+        name: "dispatch_work_item",
+        arguments: {
+          targetAgentId: agentId,
+          dispatchReason: "未知事实源",
+          goal: "验证未知 fact source pack 会报错。",
+          readOnlyFactSourcePacks: ["unknown_pack"],
+        },
+      },
+    }));
+
+    assert.ok(dispatchWithUnsupportedFactSourceResponse);
+    const dispatchWithUnsupportedFactSourcePayload = JSON.parse(dispatchWithUnsupportedFactSourceResponse);
+    assert.equal(dispatchWithUnsupportedFactSourcePayload.result?.isError, true);
+    assert.match(
+      dispatchWithUnsupportedFactSourcePayload.result?.content?.[0]?.text ?? "",
+      /Unsupported read-only fact source pack/,
+    );
+
     const dispatchWithSecretValueResponse = await server.handleMessage(JSON.stringify({
       jsonrpc: "2.0",
       id: 12.5,

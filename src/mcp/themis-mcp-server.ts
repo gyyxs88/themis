@@ -25,6 +25,12 @@ import {
 import {
   readManagedAgentPlatformGatewayConfig,
 } from "../core/managed-agent-platform-gateway-client.js";
+import {
+  applyManagedAgentReadOnlyFactSourcePacks,
+  MANAGED_AGENT_READ_ONLY_FACT_SOURCE_PACK_IDS,
+  normalizeManagedAgentReadOnlyFactSourcePackIds,
+  type ManagedAgentReadOnlyFactSourcePackId,
+} from "../core/managed-agent-fact-source-packs.js";
 import { ManagedAgentSchedulerService } from "../core/managed-agent-scheduler-service.js";
 import { ManagedAgentWorkerService } from "../core/managed-agent-worker-service.js";
 import { IdentityLinkService, type ChannelIdentityInput, type IdentityStatusSnapshot } from "../core/identity-link-service.js";
@@ -186,6 +192,7 @@ interface DispatchWorkItemToolArgs {
   dispatchReason: string;
   goal: string;
   contextPacket?: unknown;
+  readOnlyFactSourcePacks?: ManagedAgentReadOnlyFactSourcePackId[];
   priority?: DispatchWorkItemInput["priority"];
   workspacePolicySnapshot?: Record<string, unknown>;
   runtimeProfileSnapshot?: Record<string, unknown>;
@@ -680,6 +687,11 @@ export class ThemisMcpServer {
     const args = normalizeDispatchWorkItemToolArgs(argumentsRecord);
     const identity = this.ensureIdentity();
     const ownerPrincipalId = this.resolveManagedAgentOwnerPrincipalId(identity);
+    const dispatchFacts = applyManagedAgentReadOnlyFactSourcePacks({
+      ...(args.readOnlyFactSourcePacks ? { readOnlyFactSourcePacks: args.readOnlyFactSourcePacks } : {}),
+      ...(hasOwn(args, "contextPacket") ? { contextPacket: args.contextPacket } : {}),
+      ...(hasOwn(args, "runtimeProfileSnapshot") ? { runtimeProfileSnapshot: args.runtimeProfileSnapshot } : {}),
+    });
     const result = await this.managedAgentControlPlaneFacade.dispatchWorkItem({
       ownerPrincipalId,
       targetAgentId: args.targetAgentId,
@@ -689,22 +701,30 @@ export class ThemisMcpServer {
       ...(args.parentWorkItemId ? { parentWorkItemId: args.parentWorkItemId } : {}),
       dispatchReason: args.dispatchReason,
       goal: args.goal,
-      ...(hasOwn(args, "contextPacket") ? { contextPacket: args.contextPacket } : {}),
+      ...(hasOwn(dispatchFacts, "contextPacket") ? { contextPacket: dispatchFacts.contextPacket } : {}),
       ...(args.priority ? { priority: args.priority } : {}),
       ...(hasOwn(args, "workspacePolicySnapshot") ? { workspacePolicySnapshot: args.workspacePolicySnapshot } : {}),
-      ...(hasOwn(args, "runtimeProfileSnapshot") ? { runtimeProfileSnapshot: args.runtimeProfileSnapshot } : {}),
+      ...(hasOwn(dispatchFacts, "runtimeProfileSnapshot")
+        ? { runtimeProfileSnapshot: dispatchFacts.runtimeProfileSnapshot }
+        : {}),
       ...(args.scheduledAt ? { scheduledAt: args.scheduledAt } : {}),
     });
     const targetAgent = await this.resolveDispatchTargetAgent(ownerPrincipalId, args.targetAgentId, result.targetAgent);
+    const factSourceLabel = dispatchFacts.appliedFactSources.length > 0
+      ? `，已附加只读事实源 ${dispatchFacts.appliedFactSources.map((source) => source.id).join(", ")}`
+      : "";
 
     return createToolResult(
-      `已向员工 ${targetAgent?.displayName ?? args.targetAgentId}（${targetAgent?.agentId ?? args.targetAgentId}）派发工作项 ${result.workItem.workItemId}。`,
+      `已向员工 ${targetAgent?.displayName ?? args.targetAgentId}（${targetAgent?.agentId ?? args.targetAgentId}）派发工作项 ${result.workItem.workItemId}${factSourceLabel}。`,
       {
         identity,
         ownerPrincipalId,
         organization: result.organization,
         ...(targetAgent ? { targetAgent } : {}),
         workItem: result.workItem,
+        ...(dispatchFacts.appliedFactSources.length > 0
+          ? { appliedReadOnlyFactSources: dispatchFacts.appliedFactSources }
+          : {}),
         ...(result.dispatchMessage ? { dispatchMessage: result.dispatchMessage } : {}),
         ...(result.mailboxEntry ? { mailboxEntry: result.mailboxEntry } : {}),
       },
@@ -1241,6 +1261,17 @@ function buildToolDefinitions(): McpToolDefinition[] {
             type: "object",
             description: "可选。补充上下文对象。",
           },
+          readOnlyFactSourcePacks: {
+            type: "array",
+            description: [
+              "可选。标准只读事实源能力包，会自动补 contextPacket.readOnlyFactSources、只读安全标记、",
+              "runtimeProfileSnapshot.sandboxMode=read-only，并为需要外部 API 的包补 secretEnvRefs。",
+            ].join(""),
+            items: {
+              type: "string",
+              enum: [...MANAGED_AGENT_READ_ONLY_FACT_SOURCE_PACK_IDS],
+            },
+          },
           priority: {
             type: "string",
             enum: [...MANAGED_AGENT_PRIORITIES],
@@ -1753,6 +1784,14 @@ function normalizeDispatchWorkItemToolArgs(value: Record<string, unknown>): Disp
     dispatchReason: expectRequiredText(value.dispatchReason, "dispatchReason is required."),
     goal: expectRequiredText(value.goal, "goal is required."),
     ...(hasOwn(value, "contextPacket") ? { contextPacket: value.contextPacket } : {}),
+    ...(hasOwn(value, "readOnlyFactSourcePacks")
+      ? {
+          readOnlyFactSourcePacks: normalizeManagedAgentReadOnlyFactSourcePackIds(
+            value.readOnlyFactSourcePacks,
+            "readOnlyFactSourcePacks",
+          ),
+        }
+      : {}),
     ...(value.priority !== undefined
       ? { priority: expectEnumText(value.priority, MANAGED_AGENT_PRIORITIES, "Unsupported priority.") }
       : {}),
