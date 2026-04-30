@@ -15,6 +15,20 @@ interface KnownSecretAlias {
 
 const KNOWN_SECRET_ALIASES: KnownSecretAlias[] = [
   {
+    secretRef: "feishu-app-secret",
+    label: "飞书 App Secret",
+    match: (lowerText) =>
+      /(?:飞书|feishu|lark)/i.test(lowerText)
+      && /(?:feishu_app_secret|lark_app_secret|app[_\s-]*secret|client[_\s-]*secret|应用\s*(?:secret|密钥))/i.test(lowerText),
+  },
+  {
+    secretRef: "feishu-app-id",
+    label: "飞书 App ID",
+    match: (lowerText) =>
+      /(?:飞书|feishu|lark)/i.test(lowerText)
+      && /(?:feishu_app_id|lark_app_id|app[_\s-]*id|client[_\s-]*id|应用\s*id)/i.test(lowerText),
+  },
+  {
     secretRef: "cloudflare-management-token",
     label: "Cloudflare 管理 token",
     match: (lowerText) =>
@@ -24,7 +38,7 @@ const KNOWN_SECRET_ALIASES: KnownSecretAlias[] = [
 ];
 
 const SECRET_WORD_PATTERN =
-  /\b(?:token|secret|api[_\s-]*key|access[_\s-]*key|access[_\s-]*token|client[_\s-]*secret|private[_\s-]*key|key|credential|password|bearer)\b|令牌|密钥|凭据|密码/i;
+  /\b(?:token|secret|app[_\s-]*id|api[_\s-]*key|access[_\s-]*key|access[_\s-]*token|client[_\s-]*id|client[_\s-]*secret|private[_\s-]*key|key|credential|password|bearer)\b|应用\s*id|令牌|密钥|凭据|密码/i;
 const SECRET_INTAKE_INTENT_PATTERN =
   /(保存|存一下|记住|记一下|收好|给你|交给你|配置|写入|使用|用这个|这是|这个是|如下|is|=|：|:)/i;
 const SECRET_REF_PATTERN =

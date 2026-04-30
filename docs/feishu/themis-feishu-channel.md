@@ -370,7 +370,7 @@ infra/local/feishu-attachment-drafts.json
 
 规则：
 
-- 自然语言交付：例如“这个是 Cloudflare 管理 token，给你保存好：`<token>`”会保存为 `cloudflare-management-token`；任意平台可以说“把这个 token 保存为 `<secretRef>`：`<token>`”。这条链路只允许单聊，且在进入任务前完成。
+- 自然语言交付：例如“这个是 Cloudflare 管理 token，给你保存好：`<token>`”会保存为 `cloudflare-management-token`；“这个是飞书 App ID：`<cli_xxx>`”和“这个是飞书 App Secret：`<secret>`”会分别保存为 `feishu-app-id` / `feishu-app-secret`；任意平台可以说“把这个 token 保存为 `<secretRef>`：`<token>`”。这条链路只允许单聊，且在进入任务前完成。
 - Themis 密码本工具：普通对话里要求“查一下有没有某个 secretRef / 把某个 secretRef 改名 / 删除某个 secretRef / 记下这个平台 token”时，Themis 应调用 `manage_themis_secret` 判断和执行，不要求用户改发斜杠命令。
 - `/secrets`：查看 secret 命令树。
 - `/secrets worker` 或 `/secrets worker list`：列出当前 worker secret store 路径和已配置的 `secretRef`，不显示值。
@@ -379,6 +379,7 @@ infra/local/feishu-attachment-drafts.json
 - 默认写入路径是主 Themis 工作目录同级的 `../themis-worker-node/infra/local/worker-secrets.json`；如正式部署路径不同，可用 `THEMIS_MANAGED_AGENT_WORKER_SECRET_STORE_FILE` 覆盖。
 - 派工时仍然只传引用，例如 `runtimeProfileSnapshot.secretEnvRefs=[{ envName: "CLOUDFLARE_API_TOKEN", secretRef: "cloudflare-readonly-token", required: true }]`；平台透传引用，worker 在本机执行前解析并注入环境变量。
 - 如果 Cloudflare worker 报 `WORKER_NODE_SECRET_UNAVAILABLE`，普通对话任务应先调用 `provision_cloudflare_worker_secret` 并带上相关 domains；如果使用 Account Owned API Token，还必须让 Themis 从密码本 `cloudflare-account-id` 或环境变量取得 account id，再用同一个 `secretEnvRefs` 重新派工。只有当管理 token 未配置或用户明确选择兜底时，才提示 `/secrets worker set <secretRef> <secretValue>`。不要让用户 SSH 到主机写文件，也不要把 token 塞进工单正文。
+- 如果飞书 Base/多维表只读巡检缺少应用凭据，普通对话任务应让用户在单聊分别交付 Feishu App ID 和 App Secret，由 secret intake 保存为 `feishu-app-id` / `feishu-app-secret`；不要在聊天主链里启动 `lark-cli config init`，因为这类裸终端扫码/链接流程跨回合容易丢进程。
 
 ### `/link <绑定码>`
 
