@@ -60,9 +60,11 @@ import {
   SANDBOX_MODES,
   SCHEDULED_TASK_AUTOMATION_FAILURE_MODES,
   SCHEDULED_TASK_AUTOMATION_OUTPUT_MODES,
+  SCHEDULED_TASK_RECURRENCE_FREQUENCIES,
   SCHEDULED_TASK_STATUSES,
   TASK_ACCESS_MODES,
   WEB_SEARCH_MODES,
+  type ScheduledTaskRecurrenceOptions,
   type ScheduledTaskAutomationOptions,
   type ScheduledTaskRuntimeOptions,
   type ScheduledTaskWatchOptions,
@@ -139,6 +141,7 @@ interface CreateScheduledTaskToolArgs {
   channelSessionKey?: string;
   options?: ScheduledTaskRuntimeOptions;
   automation?: ScheduledTaskAutomationOptions;
+  recurrence?: ScheduledTaskRecurrenceOptions;
   watch?: ScheduledTaskWatchOptions;
 }
 
@@ -464,6 +467,7 @@ export class ThemisMcpServer {
       ...(args.inputText ? { inputText: args.inputText } : {}),
       ...(args.options ? { options: args.options } : {}),
       ...(args.automation ? { automation: args.automation } : {}),
+      ...(args.recurrence ? { recurrence: args.recurrence } : {}),
       ...(args.watch ? { watch: args.watch } : {}),
       timezone: args.timezone,
       scheduledAt: args.scheduledAt,
@@ -1042,6 +1046,23 @@ function buildToolDefinitions(): McpToolDefinition[] {
           },
           options: buildRuntimeOptionsSchema(),
           automation: buildAutomationOptionsSchema(),
+          recurrence: {
+            type: "object",
+            additionalProperties: false,
+            description: "可选。重复规则；支持 daily / weekly / monthly，以及 interval 倍数。人工取消会停止后续重复。",
+            properties: {
+              frequency: {
+                type: "string",
+                enum: [...SCHEDULED_TASK_RECURRENCE_FREQUENCIES],
+              },
+              interval: {
+                type: "integer",
+                minimum: 1,
+                maximum: 52,
+              },
+            },
+            required: ["frequency"],
+          },
           watch: {
             type: "object",
             additionalProperties: false,
@@ -1622,6 +1643,11 @@ function normalizeCreateScheduledTaskToolArgs(value: Record<string, unknown>): C
   const automation = value.automation === undefined
     ? undefined
     : expectRecord(value.automation, "automation must be an object.") as ScheduledTaskAutomationOptions;
+  const recurrence = value.recurrence === undefined
+    ? undefined
+    : normalizeScheduledTaskRecurrenceInput(
+      expectRecord(value.recurrence, "recurrence must be an object."),
+    );
   const watch = value.watch === undefined
     ? undefined
     : expectRecord(value.watch, "watch must be an object.");
@@ -1635,7 +1661,30 @@ function normalizeCreateScheduledTaskToolArgs(value: Record<string, unknown>): C
     ...(normalizeText(value.channelSessionKey) ? { channelSessionKey: normalizeText(value.channelSessionKey) as string } : {}),
     ...(options ? { options } : {}),
     ...(automation ? { automation } : {}),
+    ...(recurrence ? { recurrence } : {}),
     ...(watch ? { watch: { workItemId: expectRequiredText(watch.workItemId, "watch.workItemId is required.") } } : {}),
+  };
+}
+
+function normalizeScheduledTaskRecurrenceInput(value: Record<string, unknown>): ScheduledTaskRecurrenceOptions {
+  const frequency = expectEnumText(
+    value.frequency,
+    SCHEDULED_TASK_RECURRENCE_FREQUENCIES,
+    "Unsupported recurrence.frequency.",
+  );
+  const interval = value.interval === undefined ? undefined : value.interval;
+
+  if (interval !== undefined && (typeof interval !== "number" || !Number.isInteger(interval))) {
+    throw new JsonRpcProtocolError(JSON_RPC_INVALID_PARAMS, "recurrence.interval must be an integer.");
+  }
+
+  if (typeof interval === "number" && (interval < 1 || interval > 52)) {
+    throw new JsonRpcProtocolError(JSON_RPC_INVALID_PARAMS, "recurrence.interval must be between 1 and 52.");
+  }
+
+  return {
+    frequency,
+    ...(typeof interval === "number" && interval !== 1 ? { interval } : {}),
   };
 }
 

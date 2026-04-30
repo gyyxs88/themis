@@ -1033,6 +1033,7 @@ interface ScheduledTaskRow {
   input_text: string | null;
   options_json: string | null;
   automation_json: string | null;
+  recurrence_json: string | null;
   watch_work_item_id: string | null;
   timezone: string;
   scheduled_at: string;
@@ -4748,6 +4749,7 @@ export class SqliteCodexSessionRegistry {
             input_text,
             options_json,
             automation_json,
+            recurrence_json,
             watch_work_item_id,
             timezone,
             scheduled_at,
@@ -4789,6 +4791,7 @@ export class SqliteCodexSessionRegistry {
             input_text,
             options_json,
             automation_json,
+            recurrence_json,
             watch_work_item_id,
             timezone,
             scheduled_at,
@@ -4881,6 +4884,7 @@ export class SqliteCodexSessionRegistry {
             input_text,
             options_json,
             automation_json,
+            recurrence_json,
             watch_work_item_id,
             timezone,
             scheduled_at,
@@ -4903,6 +4907,7 @@ export class SqliteCodexSessionRegistry {
             @input_text,
             @options_json,
             @automation_json,
+            @recurrence_json,
             @watch_work_item_id,
             @timezone,
             @scheduled_at,
@@ -4924,6 +4929,7 @@ export class SqliteCodexSessionRegistry {
             input_text = excluded.input_text,
             options_json = excluded.options_json,
             automation_json = excluded.automation_json,
+            recurrence_json = excluded.recurrence_json,
             watch_work_item_id = excluded.watch_work_item_id,
             timezone = excluded.timezone,
             scheduled_at = excluded.scheduled_at,
@@ -4948,6 +4954,7 @@ export class SqliteCodexSessionRegistry {
         input_text: inputText ?? null,
         options_json: stringifyJson(record.options),
         automation_json: stringifyJson(record.automation),
+        recurrence_json: stringifyJson(record.recurrence),
         watch_work_item_id: watchWorkItemId ?? null,
         timezone,
         scheduled_at: scheduledAt,
@@ -4987,6 +4994,7 @@ export class SqliteCodexSessionRegistry {
             input_text,
             options_json,
             automation_json,
+            recurrence_json,
             watch_work_item_id,
             timezone,
             scheduled_at,
@@ -12728,6 +12736,7 @@ export class SqliteCodexSessionRegistry {
         input_text TEXT,
         options_json TEXT,
         automation_json TEXT,
+        recurrence_json TEXT,
         watch_work_item_id TEXT,
         timezone TEXT NOT NULL,
         scheduled_at TEXT NOT NULL,
@@ -13023,6 +13032,13 @@ export class SqliteCodexSessionRegistry {
       database.exec(`
         ALTER TABLE themis_scheduled_tasks
         ADD COLUMN watch_work_item_id TEXT;
+      `);
+    }
+
+    if (!scheduledTaskColumnNames.has("recurrence_json")) {
+      database.exec(`
+        ALTER TABLE themis_scheduled_tasks
+        ADD COLUMN recurrence_json TEXT;
       `);
     }
 
@@ -13801,6 +13817,7 @@ function mapAgentExecutionLeaseRow(row: AgentExecutionLeaseRow): StoredAgentExec
 function mapScheduledTaskRow(row: ScheduledTaskRow): StoredScheduledTaskRecord {
   const options = row.options_json ? safeParseJson(row.options_json) : null;
   const automation = row.automation_json ? safeParseJson(row.automation_json) : null;
+  const recurrence = row.recurrence_json ? safeParseJson(row.recurrence_json) : null;
 
   return {
     scheduledTaskId: row.scheduled_task_id,
@@ -13817,6 +13834,9 @@ function mapScheduledTaskRow(row: ScheduledTaskRow): StoredScheduledTaskRecord {
       : {}),
     ...(automation && typeof automation === "object"
       ? { automation: automation as NonNullable<StoredScheduledTaskRecord["automation"]> }
+      : {}),
+    ...(recurrence && typeof recurrence === "object"
+      ? { recurrence: recurrence as NonNullable<StoredScheduledTaskRecord["recurrence"]> }
       : {}),
     ...(row.watch_work_item_id ? { watch: { workItemId: row.watch_work_item_id } } : {}),
     timezone: row.timezone,

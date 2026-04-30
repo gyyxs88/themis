@@ -60,8 +60,8 @@ export function buildThemisScheduledTaskPromptSection(request: TaskRequest): str
 
   return [
     "Themis scheduled task tools are available in this session.",
-    "When the user asks you to create a reminder, scheduled follow-up, future check, or timed recurring-looking task that is actually a one-time run, use the scheduled task tools instead of saying you cannot do it.",
-    "Only create one-time scheduled tasks. If the user asks for recurring cron-like automation, explain that one-time scheduling is supported right now and ask whether they want a single scheduled run instead.",
+    "When the user asks you to create a reminder, scheduled follow-up, future check, or recurring daily/weekly/monthly task, use the scheduled task tools instead of saying you cannot do it.",
+    "For recurring daily/weekly/monthly automation, pass create_scheduled_task.recurrence with frequency and optional interval. If the user asks for more complex cron rules, explain the current daily/weekly/monthly boundary and ask for a supported recurrence.",
     "If the requested time or timezone is ambiguous, ask one concise follow-up question before creating the task.",
     "Use list_scheduled_tasks when the user asks what is already scheduled.",
     "Use cancel_scheduled_task when the user asks to cancel a previously scheduled task and you know which task it refers to.",

@@ -752,6 +752,10 @@ test("Themis MCP server 支持 create/list/cancel 定时任务闭环", async () 
           watch: {
             workItemId: "work-item-watch-1",
           },
+          recurrence: {
+            frequency: "weekly",
+            interval: 2,
+          },
         },
       },
     }));
@@ -763,6 +767,10 @@ test("Themis MCP server 支持 create/list/cancel 定时任务闭环", async () 
     assert.equal(typeof createdTaskId, "string");
     assert.equal(createPayload.result?.structuredContent?.task?.goal, "五分钟后检查 staging 日志");
     assert.equal(createPayload.result?.structuredContent?.task?.watch?.workItemId, "work-item-watch-1");
+    assert.deepEqual(createPayload.result?.structuredContent?.task?.recurrence, {
+      frequency: "weekly",
+      interval: 2,
+    });
 
     const listResponse = await server.handleMessage(JSON.stringify({
       jsonrpc: "2.0",
@@ -782,6 +790,10 @@ test("Themis MCP server 支持 create/list/cancel 定时任务闭环", async () 
     assert.equal(listPayload.result?.structuredContent?.tasks?.length, 1);
     assert.equal(listPayload.result?.structuredContent?.tasks?.[0]?.scheduledTaskId, createdTaskId);
     assert.equal(listPayload.result?.structuredContent?.tasks?.[0]?.watch?.workItemId, "work-item-watch-1");
+    assert.deepEqual(listPayload.result?.structuredContent?.tasks?.[0]?.recurrence, {
+      frequency: "weekly",
+      interval: 2,
+    });
 
     const cancelResponse = await server.handleMessage(JSON.stringify({
       jsonrpc: "2.0",

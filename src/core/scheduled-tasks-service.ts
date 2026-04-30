@@ -1,11 +1,13 @@
 import type { SqliteCodexSessionRegistry, StoredPrincipalRecord } from "../storage/index.js";
 import type {
   ScheduledTaskAutomationOptions,
+  ScheduledTaskRecurrenceOptions,
   ScheduledTaskRuntimeOptions,
   ScheduledTaskStatus,
   ScheduledTaskWatchOptions,
   StoredScheduledTaskRecord,
 } from "../types/index.js";
+import { SCHEDULED_TASK_RECURRENCE_FREQUENCIES } from "../types/index.js";
 
 export interface ScheduledTasksServiceOptions {
   registry: SqliteCodexSessionRegistry;
@@ -22,6 +24,7 @@ export interface CreateScheduledTaskInput {
   inputText?: string;
   options?: ScheduledTaskRuntimeOptions;
   automation?: ScheduledTaskAutomationOptions;
+  recurrence?: ScheduledTaskRecurrenceOptions;
   watch?: ScheduledTaskWatchOptions;
   timezone: string;
   scheduledAt: string;
@@ -53,6 +56,7 @@ export class ScheduledTasksService {
     const scheduledTaskId = normalizeOptionalText(input.scheduledTaskId) ?? createId("scheduled-task");
     const options = normalizeRecord(input.options);
     const automation = normalizeRecord(input.automation);
+    const recurrence = normalizeScheduledTaskRecurrence(input.recurrence);
     const watch = normalizeScheduledTaskWatch(input.watch);
     const displayName = normalizeOptionalText(input.displayName);
     const sessionId = normalizeOptionalText(input.sessionId);
@@ -70,6 +74,7 @@ export class ScheduledTasksService {
       ...(inputText ? { inputText } : {}),
       ...(options ? { options: options as ScheduledTaskRuntimeOptions } : {}),
       ...(automation ? { automation: automation as ScheduledTaskAutomationOptions } : {}),
+      ...(recurrence ? { recurrence } : {}),
       ...(watch ? { watch } : {}),
       timezone,
       scheduledAt,
@@ -199,6 +204,31 @@ function normalizeOptionalMultilineText(value: string | undefined): string | und
 
 function normalizeRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null ? value as Record<string, unknown> : undefined;
+}
+
+function normalizeScheduledTaskRecurrence(
+  value: ScheduledTaskRecurrenceOptions | undefined,
+): ScheduledTaskRecurrenceOptions | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const frequency = normalizeOptionalText(value.frequency);
+
+  if (!frequency || !SCHEDULED_TASK_RECURRENCE_FREQUENCIES.includes(frequency as ScheduledTaskRecurrenceOptions["frequency"])) {
+    throw new Error("重复规则 frequency 不合法。");
+  }
+
+  const interval = value.interval === undefined ? undefined : Number(value.interval);
+
+  if (interval !== undefined && (!Number.isInteger(interval) || interval < 1 || interval > 52)) {
+    throw new Error("重复规则 interval 必须是 1 到 52 的整数。");
+  }
+
+  return {
+    frequency: frequency as ScheduledTaskRecurrenceOptions["frequency"],
+    ...(interval !== undefined && interval !== 1 ? { interval } : {}),
+  };
 }
 
 function normalizeScheduledTaskWatch(value: ScheduledTaskWatchOptions | undefined): ScheduledTaskWatchOptions | undefined {

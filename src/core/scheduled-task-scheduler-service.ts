@@ -185,12 +185,15 @@ export class ScheduledTaskSchedulerService {
       updatedAt: completedAt,
     };
     this.registry.saveScheduledTaskRun(nextRun);
+    const nextTaskSchedule = buildNextTaskSchedule(task, null);
     this.registry.saveScheduledTask({
       ...task,
-      status: "completed",
+      status: nextTaskSchedule.status,
+      scheduledAt: nextTaskSchedule.scheduledAt,
       completedAt,
       updatedAt: completedAt,
       lastRunId: nextRun.runId,
+      ...(nextTaskSchedule.lastError ? { lastError: nextTaskSchedule.lastError } : {}),
     });
     return this.registry.getScheduledTaskRun(runId) ?? nextRun;
   }
@@ -226,13 +229,15 @@ export class ScheduledTaskSchedulerService {
       updatedAt: completedAt,
     };
     this.registry.saveScheduledTaskRun(nextRun);
+    const nextTaskSchedule = buildNextTaskSchedule(task, input.failureMessage);
     this.registry.saveScheduledTask({
       ...task,
-      status: "failed",
+      status: nextTaskSchedule.status,
+      scheduledAt: nextTaskSchedule.scheduledAt,
       completedAt,
       updatedAt: completedAt,
       lastRunId: nextRun.runId,
-      lastError: input.failureMessage,
+      ...(nextTaskSchedule.lastError ? { lastError: nextTaskSchedule.lastError } : {}),
     });
     return this.registry.getScheduledTaskRun(runId) ?? nextRun;
   }
@@ -301,6 +306,54 @@ export class ScheduledTaskSchedulerService {
 
 function computeLeaseExpiry(now: string, leaseTtlMs: number): string {
   return new Date(new Date(now).getTime() + leaseTtlMs).toISOString();
+}
+
+function buildNextTaskSchedule(task: StoredScheduledTaskRecord, failureMessage: string | null): {
+  status: ScheduledTaskStatus;
+  scheduledAt: string;
+  lastError?: string;
+} {
+  if (!task.recurrence) {
+    return {
+      status: failureMessage ? "failed" : "completed",
+      scheduledAt: task.scheduledAt,
+      ...(failureMessage ? { lastError: failureMessage } : {}),
+    };
+  }
+
+  return {
+    status: "scheduled",
+    scheduledAt: calculateNextRecurringScheduledAt(task.scheduledAt, task.recurrence),
+    ...(failureMessage ? { lastError: failureMessage } : {}),
+  };
+}
+
+function calculateNextRecurringScheduledAt(
+  scheduledAt: string,
+  recurrence: NonNullable<StoredScheduledTaskRecord["recurrence"]>,
+): string {
+  const base = new Date(scheduledAt);
+
+  if (Number.isNaN(base.getTime())) {
+    return scheduledAt;
+  }
+
+  const interval = recurrence.interval ?? 1;
+  const next = new Date(base.getTime());
+
+  switch (recurrence.frequency) {
+    case "daily":
+      next.setUTCDate(next.getUTCDate() + interval);
+      break;
+    case "weekly":
+      next.setUTCDate(next.getUTCDate() + 7 * interval);
+      break;
+    case "monthly":
+      next.setUTCMonth(next.getUTCMonth() + interval);
+      break;
+  }
+
+  return next.toISOString();
 }
 
 function normalizeNow(value: string | undefined): string {

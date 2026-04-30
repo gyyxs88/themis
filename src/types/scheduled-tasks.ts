@@ -37,11 +37,20 @@ export const SCHEDULED_TASK_AUTOMATION_FAILURE_MODES = ["report", "reject"] as c
 
 export type ScheduledTaskAutomationFailureMode = (typeof SCHEDULED_TASK_AUTOMATION_FAILURE_MODES)[number];
 
+export const SCHEDULED_TASK_RECURRENCE_FREQUENCIES = ["daily", "weekly", "monthly"] as const;
+
+export type ScheduledTaskRecurrenceFrequency = (typeof SCHEDULED_TASK_RECURRENCE_FREQUENCIES)[number];
+
 export interface ScheduledTaskAutomationOptions {
   outputMode?: ScheduledTaskAutomationOutputMode;
   jsonSchema?: Record<string, unknown>;
   onInvalidJson?: ScheduledTaskAutomationFailureMode;
   onSchemaMismatch?: ScheduledTaskAutomationFailureMode;
+}
+
+export interface ScheduledTaskRecurrenceOptions {
+  frequency: ScheduledTaskRecurrenceFrequency;
+  interval?: number;
 }
 
 export interface ScheduledTaskWatchOptions {
@@ -72,6 +81,7 @@ export interface StoredScheduledTaskRecord {
   inputText?: string;
   options?: ScheduledTaskRuntimeOptions;
   automation?: ScheduledTaskAutomationOptions;
+  recurrence?: ScheduledTaskRecurrenceOptions;
   watch?: ScheduledTaskWatchOptions;
   timezone: string;
   scheduledAt: string;

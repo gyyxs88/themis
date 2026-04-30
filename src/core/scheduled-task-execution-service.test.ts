@@ -10,7 +10,7 @@ import { ScheduledTasksService } from "./scheduled-tasks-service.js";
 import { SqliteCodexSessionRegistry } from "../storage/index.js";
 import type { TaskRequest, TaskResult } from "../types/index.js";
 
-test("schema 32 迁移会为定时任务补 watch_work_item_id 列和索引", () => {
+test("schema 32 迁移会为定时任务补 watch_work_item_id / recurrence_json 列和索引", () => {
   const root = mkdtempSync(join(tmpdir(), "themis-scheduled-task-schema-migration-"));
   const databaseFile = join(root, "infra/local/themis.db");
 
@@ -62,9 +62,80 @@ test("schema 32 迁移会为定时任务补 watch_work_item_id 列和索引", ()
     const userVersion = verify.pragma("user_version", { simple: true }) as number;
 
     assert.equal(columns.some((column) => column.name === "watch_work_item_id"), true);
+    assert.equal(columns.some((column) => column.name === "recurrence_json"), true);
     assert.equal(indexes.some((index) => index.name === "themis_scheduled_tasks_watch_idx"), true);
     assert.equal(userVersion >= 33, true);
     verify.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ScheduledTaskExecutionService 会在 recurring 任务完成后排下一次", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-scheduled-task-recurring-"));
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const runtime = new AppServerTaskRuntime({
+    workingDirectory: root,
+    runtimeStore,
+  });
+  const identity = runtime.getIdentityLinkService().ensureIdentity({
+    channel: "web",
+    channelUserId: "browser-user-recurring",
+    displayName: "owner",
+  });
+  const scheduledTasksService = new ScheduledTasksService({
+    registry: runtimeStore,
+  });
+  const fakeRuntime = {
+    runTaskAsPrincipal: async (request: TaskRequest): Promise<TaskResult> => ({
+      taskId: request.taskId ?? "scheduled-exec-recurring",
+      requestId: request.requestId,
+      status: "completed",
+      summary: "周检完成",
+      completedAt: "2026-05-01T01:05:00.000Z",
+    }),
+  } as unknown as AppServerTaskRuntime;
+  const executionService = new ScheduledTaskExecutionService({
+    registry: runtimeStore,
+    runtime: fakeRuntime,
+  });
+
+  try {
+    const created = scheduledTasksService.createTask({
+      principalId: identity.principalId,
+      sourceChannel: "web",
+      channelUserId: "browser-user-recurring",
+      displayName: "owner",
+      goal: "公司数字资产周检",
+      timezone: "Asia/Shanghai",
+      scheduledAt: "2026-05-01T01:00:00.000Z",
+      recurrence: {
+        frequency: "weekly",
+      },
+      now: "2026-05-01T00:00:00.000Z",
+    });
+
+    const result = await executionService.runNext({
+      now: "2026-05-01T01:01:00.000Z",
+    });
+
+    assert.equal(result.execution?.result, "completed");
+
+    const storedTask = runtimeStore.getScheduledTask(created.scheduledTaskId);
+    const storedRuns = runtimeStore.listScheduledTaskRunsByTask(created.scheduledTaskId);
+
+    assert.equal(storedTask?.status, "scheduled");
+    assert.equal(storedTask?.scheduledAt, "2026-05-08T01:00:00.000Z");
+    assert.deepEqual(storedTask?.recurrence, { frequency: "weekly" });
+    assert.equal(storedTask?.lastRunId, storedRuns[0]?.runId);
+    assert.equal(storedRuns[0]?.status, "completed");
+
+    const nextBeforeDue = await executionService.runNext({
+      now: "2026-05-02T01:01:00.000Z",
+    });
+    assert.equal(nextBeforeDue.claimed, null);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

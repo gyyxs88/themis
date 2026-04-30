@@ -2,9 +2,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RuntimeServiceHost } from "../core/runtime-service-host.js";
 import type {
   ScheduledTaskAutomationOptions,
+  ScheduledTaskRecurrenceOptions,
   ScheduledTaskRuntimeOptions,
   ScheduledTaskWatchOptions,
 } from "../types/index.js";
+import { SCHEDULED_TASK_RECURRENCE_FREQUENCIES } from "../types/index.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
 import { writeJson } from "./http-responses.js";
@@ -66,6 +68,7 @@ function normalizeScheduledTaskCreatePayload(value: unknown): {
   inputText?: string;
   options?: ScheduledTaskRuntimeOptions;
   automation?: ScheduledTaskAutomationOptions;
+  recurrence?: ScheduledTaskRecurrenceOptions;
   watch?: ScheduledTaskWatchOptions;
   timezone: string;
   scheduledAt: string;
@@ -79,6 +82,7 @@ function normalizeScheduledTaskCreatePayload(value: unknown): {
   const channelSessionKey = normalizeText(value.channelSessionKey);
   const options = isRecord(value.options) ? value.options as ScheduledTaskRuntimeOptions : undefined;
   const automation = isRecord(value.automation) ? value.automation as ScheduledTaskAutomationOptions : undefined;
+  const recurrence = normalizeScheduledTaskRecurrencePayload(value.recurrence);
   const watch = normalizeScheduledTaskWatchPayload(value.watch);
 
   return {
@@ -89,9 +93,37 @@ function normalizeScheduledTaskCreatePayload(value: unknown): {
     ...(normalizeText(value.inputText) ? { inputText: normalizeText(value.inputText) as string } : {}),
     ...(options ? { options } : {}),
     ...(automation ? { automation } : {}),
+    ...(recurrence ? { recurrence } : {}),
     ...(watch ? { watch } : {}),
     timezone: normalizeRequiredText(value.timezone, "时区不能为空。"),
     scheduledAt: normalizeRequiredText(value.scheduledAt, "执行时间不能为空。"),
+  };
+}
+
+function normalizeScheduledTaskRecurrencePayload(value: unknown): ScheduledTaskRecurrenceOptions | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (!isRecord(value)) {
+    throw new Error("recurrence 配置不合法。");
+  }
+
+  const frequency = normalizeText(value.frequency);
+
+  if (!frequency || !SCHEDULED_TASK_RECURRENCE_FREQUENCIES.includes(frequency as ScheduledTaskRecurrenceOptions["frequency"])) {
+    throw new Error("recurrence.frequency 不合法。");
+  }
+
+  const interval = value.interval === undefined ? undefined : Number(value.interval);
+
+  if (interval !== undefined && (!Number.isInteger(interval) || interval < 1 || interval > 52)) {
+    throw new Error("recurrence.interval 必须是 1 到 52 的整数。");
+  }
+
+  return {
+    frequency: frequency as ScheduledTaskRecurrenceOptions["frequency"],
+    ...(interval !== undefined && interval !== 1 ? { interval } : {}),
   };
 }
 
@@ -172,6 +204,7 @@ export async function handleScheduledTaskCreate(
       ...(payload.inputText ? { inputText: payload.inputText } : {}),
       ...(payload.options ? { options: payload.options } : {}),
       ...(payload.automation ? { automation: payload.automation } : {}),
+      ...(payload.recurrence ? { recurrence: payload.recurrence } : {}),
       ...(payload.watch ? { watch: payload.watch } : {}),
       timezone: payload.timezone,
       scheduledAt: payload.scheduledAt,
