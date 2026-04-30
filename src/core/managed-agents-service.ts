@@ -2194,6 +2194,8 @@ function applyManagedAgentCardPatch(
   patch: ManagedAgentCardInput,
   now: string,
 ): ManagedAgentCard {
+  assertSupportedManagedAgentCardPatch(patch);
+
   const base = current;
 
   if (!base) {
@@ -2279,6 +2281,30 @@ function applyManagedAgentCardPatch(
   }
 
   return next;
+}
+
+const SUPPORTED_MANAGED_AGENT_CARD_PATCH_FIELDS = new Set([
+  "employeeCode",
+  "title",
+  "domainTags",
+  "skillTags",
+  "responsibilitySummary",
+  "allowedScopes",
+  "forbiddenScopes",
+  "workStyle",
+  "collaborationNotes",
+  "representativeProjects",
+  "currentFocus",
+  "reviewSummary",
+  "lastReviewedAt",
+]);
+
+function assertSupportedManagedAgentCardPatch(patch: object): void {
+  const unsupportedFields = Object.keys(patch).filter((field) => !SUPPORTED_MANAGED_AGENT_CARD_PATCH_FIELDS.has(field));
+
+  if (unsupportedFields.length > 0) {
+    throw new Error(`Unsupported agent card field(s): ${unsupportedFields.join(", ")}.`);
+  }
 }
 
 function stableJson(value: unknown): string {

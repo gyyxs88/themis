@@ -949,6 +949,31 @@ test("Themis MCP server 支持员工治理工具闭环", async () => {
     assert.deepEqual(cardPayload.result?.structuredContent?.agent?.agentCard?.domainTags, ["官网", "品牌"]);
     assert.equal(cardPayload.result?.structuredContent?.agent?.agentCard?.currentFocus, "推进官网首页信息架构。");
 
+    const unsupportedCardResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 10.6,
+      method: "tools/call",
+      params: {
+        name: "update_managed_agent_card",
+        arguments: {
+          agentId,
+          card: {
+            reportLine: {
+              supervisorDisplayName: "Owner",
+            },
+          },
+        },
+      },
+    }));
+
+    assert.ok(unsupportedCardResponse);
+    const unsupportedCardPayload = JSON.parse(unsupportedCardResponse);
+    assert.equal(unsupportedCardPayload.result?.isError, true);
+    assert.match(
+      unsupportedCardPayload.result?.content?.[0]?.text ?? "",
+      /Unsupported agent card field\(s\): reportLine/,
+    );
+
     const agentWorkspace = resolve(workspace, "workspace/frontend");
     mkdirSync(agentWorkspace, { recursive: true });
     const boundaryResponse = await server.handleMessage(JSON.stringify({

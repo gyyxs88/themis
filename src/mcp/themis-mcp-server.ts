@@ -1848,6 +1848,8 @@ function normalizeManagedAgentWorkspacePolicyInput(
 }
 
 function normalizeManagedAgentCardInput(value: Record<string, unknown>): ManagedAgentCardInput {
+  assertSupportedManagedAgentCardInputFields(value);
+
   const card: ManagedAgentCardInput = {};
 
   if (hasOwn(value, "employeeCode")) {
@@ -1911,6 +1913,30 @@ function normalizeManagedAgentCardInput(value: Record<string, unknown>): Managed
   }
 
   return card;
+}
+
+const SUPPORTED_MANAGED_AGENT_CARD_INPUT_FIELDS = new Set([
+  "employeeCode",
+  "title",
+  "domainTags",
+  "skillTags",
+  "responsibilitySummary",
+  "allowedScopes",
+  "forbiddenScopes",
+  "workStyle",
+  "collaborationNotes",
+  "representativeProjects",
+  "currentFocus",
+  "reviewSummary",
+  "lastReviewedAt",
+]);
+
+function assertSupportedManagedAgentCardInputFields(value: Record<string, unknown>): void {
+  const unsupportedFields = Object.keys(value).filter((field) => !SUPPORTED_MANAGED_AGENT_CARD_INPUT_FIELDS.has(field));
+
+  if (unsupportedFields.length > 0) {
+    throw new Error(`Unsupported agent card field(s): ${unsupportedFields.join(", ")}.`);
+  }
 }
 
 function normalizeManagedAgentRuntimeProfileInput(
