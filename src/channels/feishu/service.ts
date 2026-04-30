@@ -39,6 +39,7 @@ import {
   type ApprovalPolicy,
   type SandboxMode,
   type TaskRequest,
+  type TaskResult,
   type TaskRuntimeFacade,
   type TaskRuntimeRegistry,
   resolvePublicTaskRuntime,
@@ -254,6 +255,16 @@ type ManagedAgentFollowupRunRecord = StoredAgentRunRecord & {
   nodeId?: string | null;
 };
 
+interface ManagedAgentFollowupLatestCompletion {
+  summary: string;
+  output?: unknown;
+  touchedFiles?: TaskResult["touchedFiles"];
+  structuredOutput?: Record<string, unknown> | null;
+  completedAt?: string;
+  detailLevel?: string;
+  interpretationHint?: string;
+}
+
 export class FeishuChannelService {
   private readonly runtime: RuntimeServiceHost;
   private readonly runtimeRegistry: TaskRuntimeRegistry;
@@ -422,11 +433,7 @@ export class FeishuChannelService {
     targetAgent?: StoredManagedAgentRecord | null;
     outcome: "completed" | "failed" | "cancelled";
     runs?: ManagedAgentFollowupRunRecord[];
-    latestCompletion?: {
-      summary: string;
-      output?: unknown;
-      completedAt?: string;
-    } | null;
+    latestCompletion?: ManagedAgentFollowupLatestCompletion | null;
   }): Promise<boolean> {
     const conversation = this.resolveScheduledTaskConversation(input.task);
 
@@ -1537,11 +1544,7 @@ export class FeishuChannelService {
       targetAgent?: StoredManagedAgentRecord | null;
       outcome: "completed" | "failed" | "cancelled";
       runs?: ManagedAgentFollowupRunRecord[];
-      latestCompletion?: {
-        summary: string;
-        output?: unknown;
-        completedAt?: string;
-      } | null;
+      latestCompletion?: ManagedAgentFollowupLatestCompletion | null;
     },
     conversation: FeishuConversationKey,
   ): Promise<void> {
@@ -6637,11 +6640,7 @@ function buildManagedAgentScheduledFollowupResolvedText(input: {
   targetAgent?: StoredManagedAgentRecord | null;
   outcome: "completed" | "failed" | "cancelled";
   runs?: ManagedAgentFollowupRunRecord[];
-  latestCompletion?: {
-    summary: string;
-    output?: unknown;
-    completedAt?: string;
-  } | null;
+  latestCompletion?: ManagedAgentFollowupLatestCompletion | null;
 }): string {
   const summary = normalizeText(input.latestCompletion?.summary);
   const targetAgentLabel = normalizeText(input.targetAgent?.displayName) ?? input.workItem.targetAgentId;
@@ -6655,6 +6654,7 @@ function buildManagedAgentScheduledFollowupResolvedText(input: {
   ];
 
   appendManagedAgentFollowupRunLines(lines, input.runs);
+  appendManagedAgentFollowupCompletionLines(lines, input.latestCompletion);
 
   if (summary) {
     lines.push(`结果摘要：${summary}`);
@@ -6663,17 +6663,82 @@ function buildManagedAgentScheduledFollowupResolvedText(input: {
   return lines.join("\n");
 }
 
+function appendManagedAgentFollowupCompletionLines(
+  lines: string[],
+  latestCompletion: ManagedAgentFollowupLatestCompletion | null | undefined,
+): void {
+  if (!latestCompletion) {
+    return;
+  }
+
+  const detailLevel = normalizeText(latestCompletion.detailLevel);
+  if (detailLevel) {
+    lines.push(`completion detailLevel：${detailLevel}`);
+  }
+
+  const interpretationHint = normalizeText(latestCompletion.interpretationHint);
+  if (interpretationHint) {
+    lines.push(`completion interpretationHint：${interpretationHint}`);
+  }
+
+  const output = formatManagedAgentCompletionValue(latestCompletion.output);
+  if (output && output !== latestCompletion.summary) {
+    lines.push(`completion output：${truncateText(output, 3000)}`);
+  }
+
+  const touchedFiles = Array.isArray(latestCompletion.touchedFiles)
+    ? latestCompletion.touchedFiles.filter((entry): entry is string => Boolean(normalizeText(entry)))
+    : [];
+  if (touchedFiles.length > 0) {
+    lines.push(`completion touchedFiles：${touchedFiles.slice(0, 20).join(", ")}`);
+  }
+
+  const structuredOutput = latestCompletion.structuredOutput;
+  const deliverable = isRecord(structuredOutput)
+    ? normalizeText(structuredOutput.deliverable)
+    : null;
+
+  if (deliverable) {
+    lines.push(`completion deliverable：${truncateText(deliverable, 1800)}`);
+  }
+
+  const artifactContents = isRecord(structuredOutput?.artifactContents)
+    ? structuredOutput.artifactContents
+    : null;
+  const artifactKeys = artifactContents ? Object.keys(artifactContents).filter(Boolean).slice(0, 12) : [];
+
+  if (artifactKeys.length > 0) {
+    lines.push(`completion artifactContents keys：${artifactKeys.join(", ")}`);
+  }
+
+  if (isRecord(structuredOutput)) {
+    lines.push(`completion structuredOutput(JSON)：${truncateText(JSON.stringify(structuredOutput), 3000)}`);
+  }
+}
+
+function formatManagedAgentCompletionValue(value: unknown): string | null {
+  if (typeof value === "string") {
+    return normalizeText(value);
+  }
+
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  try {
+    return normalizeText(JSON.stringify(value));
+  } catch {
+    return normalizeText(String(value));
+  }
+}
+
 function buildManagedAgentScheduledFollowupResolvedTaskPrompt(input: {
   task: StoredScheduledTaskRecord;
   workItem: StoredAgentWorkItemRecord;
   targetAgent?: StoredManagedAgentRecord | null;
   outcome: "completed" | "failed" | "cancelled";
   runs?: ManagedAgentFollowupRunRecord[];
-  latestCompletion?: {
-    summary: string;
-    output?: unknown;
-    completedAt?: string;
-  } | null;
+  latestCompletion?: ManagedAgentFollowupLatestCompletion | null;
 }): string {
   const summary = normalizeText(input.latestCompletion?.summary);
   const completedAt = normalizeText(input.latestCompletion?.completedAt);
@@ -6690,6 +6755,7 @@ function buildManagedAgentScheduledFollowupResolvedTaskPrompt(input: {
   ];
 
   appendManagedAgentFollowupRunLines(lines, input.runs);
+  appendManagedAgentFollowupCompletionLines(lines, input.latestCompletion);
 
   if (summary) {
     lines.push(`结果摘要：${summary}`);
@@ -6906,6 +6972,10 @@ function truncateText(text: string, maxLength: number): string {
   }
 
   return `${text.slice(0, Math.max(1, maxLength - 1))}…`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function redactSensitiveFeishuLogText(text: string): string {
