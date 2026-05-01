@@ -902,12 +902,8 @@ export class ThemisMcpServer {
     targetAgentId: string,
     targetAgent?: ManagedAgentDetailView["agent"],
   ): Promise<ManagedAgentDetailView["agent"] | null> {
-    if (targetAgent) {
-      return targetAgent;
-    }
-
     const detail = await this.managedAgentControlPlaneFacade.getManagedAgentDetailView(ownerPrincipalId, targetAgentId);
-    return detail?.agent ?? null;
+    return detail?.agent ?? targetAgent ?? null;
   }
 
   private async resolveCreateManagedAgentOrganizationId(

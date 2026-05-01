@@ -1300,6 +1300,135 @@ test("Themis MCP server 会兼容旧平台 dispatch 响应缺少 targetAgent", a
   }
 });
 
+test("Themis MCP server 会用 detail 归一化 dispatch 响应里的旧 targetAgent 快照", async () => {
+  const workspace = createWorkspace("themis-mcp-managed-agents-dispatch-normalize");
+  const registry = new SqliteCodexSessionRegistry({
+    databaseFile: resolve(workspace, "infra/local/themis.db"),
+  });
+  const managedAgentControlPlaneFacade = {
+    async dispatchWorkItem() {
+      return {
+        organization: {
+          organizationId: "org-alpha",
+          ownerPrincipalId: "owner-user-1",
+          displayName: "Alpha Org",
+          slug: "alpha-org",
+          createdAt: "2026-04-21T09:00:00.000Z",
+          updatedAt: "2026-04-21T09:00:00.000Z",
+        },
+        targetAgent: {
+          agentId: "agent-alpha",
+          principalId: "principal-agent-alpha",
+          organizationId: "org-alpha",
+          displayName: "旧员工名",
+          departmentRole: "旧部门",
+          status: "active",
+          createdByPrincipalId: "owner-user-1",
+          createdAt: "2026-04-21T09:00:00.000Z",
+          updatedAt: "2026-04-21T09:00:00.000Z",
+          agentCard: {
+            employeeCode: "OLD-001",
+            title: "旧岗位",
+            currentFocus: "旧 focus",
+            updatedAt: "2026-04-21T09:00:00.000Z",
+          },
+        },
+        workItem: {
+          workItemId: "work-item-alpha",
+          organizationId: "org-alpha",
+          targetAgentId: "agent-alpha",
+          sourceType: "human",
+          dispatchReason: "验证员工卡归一化",
+          goal: "使用 detail 当前视图覆盖旧派工快照。",
+          status: "queued",
+          priority: "normal",
+          createdAt: "2026-04-21T09:00:00.000Z",
+          updatedAt: "2026-04-21T09:00:00.000Z",
+        },
+      };
+    },
+    async getManagedAgentDetailView() {
+      return {
+        organization: {
+          organizationId: "org-alpha",
+          ownerPrincipalId: "owner-user-1",
+          displayName: "Alpha Org",
+          slug: "alpha-org",
+          createdAt: "2026-04-21T09:00:00.000Z",
+          updatedAt: "2026-04-21T09:00:00.000Z",
+        },
+        principal: {
+          principalId: "principal-agent-alpha",
+          organizationId: "org-alpha",
+          displayName: "新员工名",
+          kind: "managed_agent",
+          createdAt: "2026-04-21T09:00:00.000Z",
+          updatedAt: "2026-04-21T09:03:00.000Z",
+        },
+        agent: {
+          agentId: "agent-alpha",
+          principalId: "principal-agent-alpha",
+          organizationId: "org-alpha",
+          displayName: "新员工名",
+          departmentRole: "新部门",
+          status: "active",
+          createdByPrincipalId: "owner-user-1",
+          createdAt: "2026-04-21T09:00:00.000Z",
+          updatedAt: "2026-04-21T09:03:00.000Z",
+          agentCard: {
+            employeeCode: "NEW-001",
+            title: "新岗位",
+            currentFocus: "新 focus",
+            updatedAt: "2026-04-21T09:03:00.000Z",
+          },
+        },
+        workspacePolicy: null,
+        runtimeProfile: null,
+        authAccounts: [],
+        thirdPartyProviders: [],
+      };
+    },
+  } as unknown as NonNullable<ThemisMcpServerOptions["managedAgentControlPlaneFacade"]>;
+  const server = new ThemisMcpServer({
+    workingDirectory: workspace,
+    registry,
+    identity: {
+      channel: "web",
+      channelUserId: "owner-user-1",
+      displayName: "Owner",
+    },
+    managedAgentControlPlaneFacade,
+  });
+
+  try {
+    await initializeServer(server);
+    const dispatchResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 12.6,
+      method: "tools/call",
+      params: {
+        name: "dispatch_work_item",
+        arguments: {
+          targetAgentId: "agent-alpha",
+          dispatchReason: "验证员工卡归一化",
+          goal: "使用 detail 当前视图覆盖旧派工快照。",
+        },
+      },
+    }));
+
+    assert.ok(dispatchResponse);
+    const dispatchPayload = JSON.parse(dispatchResponse);
+    assert.equal(dispatchPayload.result?.isError, false);
+    assert.equal(dispatchPayload.result?.structuredContent?.targetAgent?.displayName, "新员工名");
+    assert.equal(dispatchPayload.result?.structuredContent?.targetAgent?.departmentRole, "新部门");
+    assert.equal(dispatchPayload.result?.structuredContent?.targetAgent?.agentCard?.title, "新岗位");
+    assert.equal(dispatchPayload.result?.structuredContent?.targetAgent?.agentCard?.currentFocus, "新 focus");
+    assert.match(dispatchPayload.result?.content?.[0]?.text ?? "", /新员工名/);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("Themis MCP server 会在唯一 organization 下自动带上 organizationId 创建员工", async () => {
   const workspace = createWorkspace("themis-mcp-create-agent-default-org");
   const registry = new SqliteCodexSessionRegistry({
