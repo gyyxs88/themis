@@ -8,6 +8,7 @@ export const THEMIS_SCHEDULED_TASK_MCP_SERVER_NAME = "themis_scheduled_tasks";
 const REPO_THEMIS_LAUNCHER_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../../themis");
 const THEMIS_SCHEDULED_TASK_AUTO_APPROVED_TOOL_NAME_SET = new Set<string>([
   "create_scheduled_task",
+  "list_scheduled_tasks",
 ]);
 
 export function buildThemisScheduledTaskMcpConfigOverrides(
