@@ -118,6 +118,25 @@ function normalizeMcpServerNamePayload(value: unknown, errorMessage: string): {
   };
 }
 
+function normalizeMcpOauthStatusPayload(value: unknown): {
+  channel: string;
+  channelUserId: string;
+  displayName?: string;
+  serverName: string;
+  refresh?: boolean;
+} {
+  if (!isRecord(value)) {
+    throw new Error("MCP OAuth 状态请求缺少必要字段。");
+  }
+
+  const payload = normalizeMcpServerNamePayload(value, "MCP OAuth 状态请求缺少必要字段。");
+
+  return {
+    ...payload,
+    ...(typeof value.refresh === "boolean" ? { refresh: value.refresh } : {}),
+  };
+}
+
 function normalizeEnvRecord(value: unknown): Record<string, string> | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -309,6 +328,39 @@ export async function handleMcpOauthLogin(
       {
         workingDirectory: runtime.getWorkingDirectory(),
         activeAuthAccount: authRuntime.getActiveAccount(),
+      },
+    );
+
+    writeJson(response, 200, {
+      identity,
+      result,
+    });
+  } catch (error) {
+    writeRuntimeError(response, error);
+  }
+}
+
+export async function handleMcpOauthStatus(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalMcpService" | "getWorkingDirectory">,
+  authRuntime: CodexAuthRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizeMcpOauthStatusPayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = await runtime.getPrincipalMcpService().getPrincipalMcpOauthStatus(
+      identity.principalId,
+      payload.serverName,
+      {
+        workingDirectory: runtime.getWorkingDirectory(),
+        activeAuthAccount: authRuntime.getActiveAccount(),
+        ...(typeof payload.refresh === "boolean" ? { refresh: payload.refresh } : {}),
       },
     );
 

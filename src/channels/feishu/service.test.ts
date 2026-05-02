@@ -2279,6 +2279,17 @@ test("/mcp oauth <name> 会返回授权链接", async () => {
         targetId: "acc-1",
       },
       authorizationUrl: "https://example.com/oauth/github",
+      attempt: {
+        attemptId: "attempt-1",
+        principalId: harness.getCurrentPrincipalId(),
+        serverName: "github",
+        targetKind: "auth-account",
+        targetId: "acc-1",
+        status: "waiting",
+        authorizationUrl: "https://example.com/oauth/github",
+        startedAt: "2026-04-11T00:00:00.000Z",
+        updatedAt: "2026-04-11T00:00:00.000Z",
+      },
       server: {
         principalId: harness.getCurrentPrincipalId(),
         serverName: "github",
@@ -2305,7 +2316,75 @@ test("/mcp oauth <name> 会返回授权链接", async () => {
     const message = harness.takeSingleMessage();
     assert.match(message, /已发起 MCP OAuth 登录：github/);
     assert.match(message, /授权链接：https:\/\/example\.com\/oauth\/github/);
-    assert.match(message, /完成授权后建议执行：\/mcp reload/);
+    assert.match(message, /查看状态：\/mcp oauth status github/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/mcp oauth status <name> 会返回最近一次授权状态", async () => {
+  const harness = createHarness();
+
+  try {
+    const service = harness.getPrincipalMcpService() as PrincipalMcpService & {
+      getPrincipalMcpOauthStatus: PrincipalMcpService["getPrincipalMcpOauthStatus"];
+    };
+
+    service.getPrincipalMcpOauthStatus = async () => ({
+      target: {
+        targetKind: "auth-account",
+        targetId: "acc-1",
+      },
+      status: "waiting",
+      refreshed: true,
+      nextStep: "请打开授权链接完成授权，然后执行 /mcp oauth status github 或 /mcp reload。",
+      attempt: {
+        attemptId: "attempt-1",
+        principalId: harness.getCurrentPrincipalId(),
+        serverName: "github",
+        targetKind: "auth-account",
+        targetId: "acc-1",
+        status: "waiting",
+        authorizationUrl: "https://example.com/oauth/github",
+        startedAt: "2026-04-11T00:00:00.000Z",
+        updatedAt: "2026-04-11T00:00:00.000Z",
+      },
+      materialization: {
+        principalId: harness.getCurrentPrincipalId(),
+        serverName: "github",
+        targetKind: "auth-account",
+        targetId: "acc-1",
+        state: "missing",
+        authState: "auth_required",
+      },
+      server: {
+        principalId: harness.getCurrentPrincipalId(),
+        serverName: "github",
+        transportType: "stdio",
+        command: "npx",
+        argsJson: "[]",
+        envJson: "{}",
+        enabled: true,
+        sourceType: "manual",
+        createdAt: "2026-04-11T00:00:00.000Z",
+        updatedAt: "2026-04-11T00:00:00.000Z",
+        materializations: [],
+        summary: {
+          totalTargets: 1,
+          readyCount: 0,
+          authRequiredCount: 1,
+          failedCount: 0,
+        },
+      },
+    });
+
+    await harness.handleCommand("mcp", ["oauth", "status", "github"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /MCP OAuth 状态：github/);
+    assert.match(message, /状态：waiting/);
+    assert.match(message, /槽位状态：missing\/auth_required/);
+    assert.match(message, /授权链接：https:\/\/example\.com\/oauth\/github/);
   } finally {
     harness.cleanup();
   }

@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   normalizePrincipalMcpAuthState,
   normalizePrincipalMcpMaterializationState,
+  normalizePrincipalMcpOauthAttemptStatus,
   normalizePrincipalMcpServerName,
   normalizePrincipalMcpServerRecordInput,
 } from "./principal-mcp.js";
@@ -23,6 +24,8 @@ test("normalizePrincipalMcpMaterializationState 和 authState 只接受允许值
   assert.equal(normalizePrincipalMcpMaterializationState("broken"), null);
   assert.equal(normalizePrincipalMcpAuthState("auth_required"), "auth_required");
   assert.equal(normalizePrincipalMcpAuthState("bad"), null);
+  assert.equal(normalizePrincipalMcpOauthAttemptStatus("waiting"), "waiting");
+  assert.equal(normalizePrincipalMcpOauthAttemptStatus("bad"), null);
 });
 
 test("normalizePrincipalMcpServerRecordInput 会清理空白并保留合法字段", () => {
@@ -94,6 +97,18 @@ test("registry 可以按 principal 读写 MCP 主记录和物化状态", () => {
       lastSyncedAt: "2026-04-11T00:00:01.000Z",
     });
 
+    registry.savePrincipalMcpOauthAttempt({
+      attemptId: "attempt-1",
+      principalId: "principal-local-owner",
+      serverName: "github",
+      targetKind: "auth-account",
+      targetId: "default",
+      status: "waiting",
+      authorizationUrl: "https://example.com/oauth/github",
+      startedAt: "2026-04-11T00:00:02.000Z",
+      updatedAt: "2026-04-11T00:00:02.000Z",
+    });
+
     assert.equal(registry.listPrincipalMcpServers("principal-local-owner").length, 1);
     assert.equal(
       registry.getPrincipalMcpServer("principal-local-owner", "github")?.command,
@@ -102,6 +117,10 @@ test("registry 可以按 principal 读写 MCP 主记录和物化状态", () => {
     assert.equal(
       registry.listPrincipalMcpMaterializations("principal-local-owner", "github")[0]?.authState,
       "authenticated",
+    );
+    assert.equal(
+      registry.getLatestPrincipalMcpOauthAttempt("principal-local-owner", "github")?.authorizationUrl,
+      "https://example.com/oauth/github",
     );
   } finally {
     rmSync(workingDirectory, { recursive: true, force: true });
@@ -146,10 +165,23 @@ test("resetPrincipalState 会清理 principal MCP 主记录和物化状态", () 
       lastSyncedAt: "2026-04-11T00:00:01.000Z",
     });
 
+    registry.savePrincipalMcpOauthAttempt({
+      attemptId: "attempt-1",
+      principalId: "principal-local-owner",
+      serverName: "github",
+      targetKind: "auth-account",
+      targetId: "default",
+      status: "waiting",
+      authorizationUrl: "https://example.com/oauth/github",
+      startedAt: "2026-04-11T00:00:01.000Z",
+      updatedAt: "2026-04-11T00:00:01.000Z",
+    });
+
     registry.resetPrincipalState("principal-local-owner", "2026-04-11T00:00:02.000Z");
 
     assert.equal(registry.listPrincipalMcpServers("principal-local-owner").length, 0);
     assert.equal(registry.listPrincipalMcpMaterializations("principal-local-owner").length, 0);
+    assert.equal(registry.getLatestPrincipalMcpOauthAttempt("principal-local-owner", "github"), null);
   } finally {
     rmSync(workingDirectory, { recursive: true, force: true });
   }

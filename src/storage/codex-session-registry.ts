@@ -10,10 +10,13 @@ import {
   normalizePrincipalMcpMaterializationRecordInput,
   normalizePrincipalMcpMaterializationState,
   normalizePrincipalMcpMaterializationTargetKind,
+  normalizePrincipalMcpOauthAttemptRecordInput,
+  normalizePrincipalMcpOauthAttemptStatus,
   normalizePrincipalMcpServerRecordInput,
   normalizePrincipalMcpSourceType,
   normalizePrincipalMcpTransportType,
   type StoredPrincipalMcpMaterializationRecord,
+  type StoredPrincipalMcpOauthAttemptRecord,
   type StoredPrincipalMcpServerRecord,
 } from "../core/principal-mcp.js";
 import {
@@ -172,7 +175,7 @@ import type {
   StoredScheduledTaskRunRecord,
 } from "../types/index.js";
 
-const DATABASE_SCHEMA_VERSION = 40;
+const DATABASE_SCHEMA_VERSION = 41;
 
 export interface StoredCodexSessionRecord {
   sessionId: string;
@@ -608,6 +611,20 @@ interface PrincipalMcpMaterializationRow {
   state: string;
   auth_state: string;
   last_synced_at: string | null;
+  last_error: string | null;
+}
+
+interface PrincipalMcpOauthAttemptRow {
+  attempt_id: string;
+  principal_id: string;
+  server_name: string;
+  target_kind: string;
+  target_id: string;
+  status: string;
+  authorization_url: string;
+  started_at: string;
+  updated_at: string;
+  completed_at: string | null;
   last_error: string | null;
 }
 
@@ -9400,6 +9417,150 @@ export class SqliteCodexSessionRegistry {
     return result.changes;
   }
 
+  savePrincipalMcpOauthAttempt(record: StoredPrincipalMcpOauthAttemptRecord): void {
+    const normalizedRecord = normalizePrincipalMcpOauthAttemptRecordInput(record);
+    const targetKind = normalizePrincipalMcpMaterializationTargetKind(normalizedRecord.targetKind);
+    const status = normalizePrincipalMcpOauthAttemptStatus(normalizedRecord.status);
+
+    if (
+      !normalizedRecord.attemptId ||
+      !normalizedRecord.principalId ||
+      !normalizedRecord.serverName ||
+      !targetKind ||
+      !normalizedRecord.targetId ||
+      !status ||
+      !normalizedRecord.authorizationUrl ||
+      !normalizedRecord.startedAt ||
+      !normalizedRecord.updatedAt
+    ) {
+      throw new Error("Principal MCP OAuth attempt record is incomplete.");
+    }
+
+    this.db
+      .prepare(
+        `
+          INSERT INTO themis_principal_mcp_oauth_attempts (
+            attempt_id,
+            principal_id,
+            server_name,
+            target_kind,
+            target_id,
+            status,
+            authorization_url,
+            started_at,
+            updated_at,
+            completed_at,
+            last_error
+          ) VALUES (
+            @attempt_id,
+            @principal_id,
+            @server_name,
+            @target_kind,
+            @target_id,
+            @status,
+            @authorization_url,
+            @started_at,
+            @updated_at,
+            @completed_at,
+            @last_error
+          )
+          ON CONFLICT(attempt_id) DO UPDATE SET
+            target_kind = excluded.target_kind,
+            target_id = excluded.target_id,
+            status = excluded.status,
+            authorization_url = excluded.authorization_url,
+            updated_at = excluded.updated_at,
+            completed_at = excluded.completed_at,
+            last_error = excluded.last_error
+        `,
+      )
+      .run({
+        attempt_id: normalizedRecord.attemptId,
+        principal_id: normalizedRecord.principalId,
+        server_name: normalizedRecord.serverName,
+        target_kind: targetKind,
+        target_id: normalizedRecord.targetId,
+        status,
+        authorization_url: normalizedRecord.authorizationUrl,
+        started_at: normalizedRecord.startedAt,
+        updated_at: normalizedRecord.updatedAt,
+        completed_at: normalizedRecord.completedAt ?? null,
+        last_error: normalizedRecord.lastError ?? null,
+      });
+  }
+
+  getLatestPrincipalMcpOauthAttempt(
+    principalId: string,
+    serverName: string,
+  ): StoredPrincipalMcpOauthAttemptRecord | null {
+    const normalizedPrincipalId = principalId.trim();
+    const normalizedServerName = serverName.trim();
+
+    if (!normalizedPrincipalId || !normalizedServerName) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            attempt_id,
+            principal_id,
+            server_name,
+            target_kind,
+            target_id,
+            status,
+            authorization_url,
+            started_at,
+            updated_at,
+            completed_at,
+            last_error
+          FROM themis_principal_mcp_oauth_attempts
+          WHERE principal_id = ?
+            AND server_name = ?
+          ORDER BY updated_at DESC, started_at DESC, attempt_id DESC
+          LIMIT 1
+        `,
+      )
+      .get(normalizedPrincipalId, normalizedServerName) as PrincipalMcpOauthAttemptRow | undefined;
+
+    return row ? mapPrincipalMcpOauthAttemptRow(row) : null;
+  }
+
+  deletePrincipalMcpOauthAttempts(principalId: string, serverName?: string): number {
+    const normalizedPrincipalId = principalId.trim();
+
+    if (!normalizedPrincipalId) {
+      return 0;
+    }
+
+    if (typeof serverName === "string" && serverName.trim()) {
+      const normalizedServerName = serverName.trim();
+      const result = this.db
+        .prepare(
+          `
+            DELETE FROM themis_principal_mcp_oauth_attempts
+            WHERE principal_id = ?
+              AND server_name = ?
+          `,
+        )
+        .run(normalizedPrincipalId, normalizedServerName);
+
+      return result.changes;
+    }
+
+    const result = this.db
+      .prepare(
+        `
+          DELETE FROM themis_principal_mcp_oauth_attempts
+          WHERE principal_id = ?
+        `,
+      )
+      .run(normalizedPrincipalId);
+
+    return result.changes;
+  }
+
   getPrincipalPersonaProfile(principalId: string): StoredPrincipalPersonaProfileRecord | null {
     const normalized = principalId.trim();
 
@@ -10093,6 +10254,15 @@ export class SqliteCodexSessionRegistry {
         .prepare(
           `
             DELETE FROM themis_principal_mcp_materializations
+            WHERE principal_id = ?
+          `,
+        )
+        .run(normalizedPrincipalId);
+
+      this.db
+        .prepare(
+          `
+            DELETE FROM themis_principal_mcp_oauth_attempts
             WHERE principal_id = ?
           `,
         )
@@ -11582,6 +11752,26 @@ export class SqliteCodexSessionRegistry {
           ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS themis_principal_mcp_oauth_attempts (
+        attempt_id TEXT PRIMARY KEY,
+        principal_id TEXT NOT NULL,
+        server_name TEXT NOT NULL,
+        target_kind TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        authorization_url TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        last_error TEXT,
+        FOREIGN KEY (principal_id, server_name)
+          REFERENCES themis_principal_mcp_servers(principal_id, server_name)
+          ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_principal_mcp_oauth_attempts_latest_idx
+      ON themis_principal_mcp_oauth_attempts(principal_id, server_name, updated_at DESC);
+
       CREATE TABLE IF NOT EXISTS themis_principal_plugins (
         principal_id TEXT NOT NULL,
         plugin_id TEXT NOT NULL,
@@ -12867,6 +13057,26 @@ export class SqliteCodexSessionRegistry {
           REFERENCES themis_principal_mcp_servers(principal_id, server_name)
           ON DELETE CASCADE
       );
+
+      CREATE TABLE IF NOT EXISTS themis_principal_mcp_oauth_attempts (
+        attempt_id TEXT PRIMARY KEY,
+        principal_id TEXT NOT NULL,
+        server_name TEXT NOT NULL,
+        target_kind TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        authorization_url TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        last_error TEXT,
+        FOREIGN KEY (principal_id, server_name)
+          REFERENCES themis_principal_mcp_servers(principal_id, server_name)
+          ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS themis_principal_mcp_oauth_attempts_latest_idx
+      ON themis_principal_mcp_oauth_attempts(principal_id, server_name, updated_at DESC);
 
       CREATE TABLE IF NOT EXISTS themis_principal_plugins (
         principal_id TEXT NOT NULL,
@@ -14229,6 +14439,22 @@ function mapPrincipalMcpMaterializationRow(
     state: row.state as StoredPrincipalMcpMaterializationRecord["state"],
     authState: row.auth_state as StoredPrincipalMcpMaterializationRecord["authState"],
     ...(row.last_synced_at ? { lastSyncedAt: row.last_synced_at } : {}),
+    ...(row.last_error ? { lastError: row.last_error } : {}),
+  };
+}
+
+function mapPrincipalMcpOauthAttemptRow(row: PrincipalMcpOauthAttemptRow): StoredPrincipalMcpOauthAttemptRecord {
+  return {
+    attemptId: row.attempt_id,
+    principalId: row.principal_id,
+    serverName: row.server_name,
+    targetKind: row.target_kind as StoredPrincipalMcpOauthAttemptRecord["targetKind"],
+    targetId: row.target_id,
+    status: row.status as StoredPrincipalMcpOauthAttemptRecord["status"],
+    authorizationUrl: row.authorization_url,
+    startedAt: row.started_at,
+    updatedAt: row.updated_at,
+    ...(row.completed_at ? { completedAt: row.completed_at } : {}),
     ...(row.last_error ? { lastError: row.last_error } : {}),
   };
 }

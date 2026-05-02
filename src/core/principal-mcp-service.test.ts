@@ -250,7 +250,7 @@ test("reloadPrincipalMcpServers 会用当前 auth 槽位 reload，并回写 runt
 });
 
 test("startPrincipalMcpOauthLogin 会发起 OAuth 登录并返回授权链接", async () => {
-  const { service, workingDirectory } = createService();
+  const { service, registry, workingDirectory } = createService();
   const sessionCalls: Array<{ method: string; params: unknown }> = [];
 
   try {
@@ -294,6 +294,88 @@ test("startPrincipalMcpOauthLogin 会发起 OAuth 登录并返回授权链接", 
     assert.equal(result.authorizationUrl, "https://example.com/oauth/github");
     assert.equal(result.target.targetId, "acc-1");
     assert.equal(result.server.materializations[0]?.authState, "auth_required");
+    assert.equal(result.attempt.status, "waiting");
+    assert.equal(result.attempt.authorizationUrl, "https://example.com/oauth/github");
+    assert.equal(
+      registry.getLatestPrincipalMcpOauthAttempt(PRINCIPAL_ID, "github")?.attemptId,
+      result.attempt.attemptId,
+    );
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test("getPrincipalMcpOauthStatus 会刷新 runtime 并收口最近一次授权尝试", async () => {
+  const { service, registry, workingDirectory } = createService();
+
+  try {
+    service.upsertPrincipalMcpServer({
+      principalId: PRINCIPAL_ID,
+      serverName: "github",
+      command: "npx",
+      enabled: true,
+    });
+
+    const login = await service.startPrincipalMcpOauthLogin(PRINCIPAL_ID, "github", {
+      workingDirectory,
+      activeAuthAccount: {
+        accountId: "acc-1",
+        codexHome: join(workingDirectory, "infra/local/codex-auth/acc-1"),
+      },
+      now: "2026-04-11T00:00:12.000Z",
+      createSession: async () => ({
+        async initialize() {},
+        async request(method: string) {
+          if (method === "mcpServer/oauth/login") {
+            return {
+              authorizationUrl: "https://example.com/oauth/github",
+            };
+          }
+
+          throw new Error(`unexpected method: ${method}`);
+        },
+        async close() {},
+      }),
+    });
+
+    const status = await service.getPrincipalMcpOauthStatus(PRINCIPAL_ID, "github", {
+      workingDirectory,
+      activeAuthAccount: {
+        accountId: "acc-1",
+        codexHome: join(workingDirectory, "infra/local/codex-auth/acc-1"),
+      },
+      now: "2026-04-11T00:00:13.000Z",
+      createSession: async () => ({
+        async initialize() {},
+        async request(method: string) {
+          if (method === "config/mcpServer/reload") {
+            return {};
+          }
+
+          if (method === "mcpServerStatus/list") {
+            return {
+              data: [{
+                id: "github",
+                name: "github",
+                status: "available",
+                command: "npx",
+                auth: "authenticated",
+              }],
+            };
+          }
+
+          throw new Error(`unexpected method: ${method}`);
+        },
+        async close() {},
+      }),
+    });
+
+    assert.equal(status.status, "completed");
+    assert.equal(status.attempt?.attemptId, login.attempt.attemptId);
+    assert.equal(status.attempt?.completedAt, "2026-04-11T00:00:13.000Z");
+    assert.equal(status.materialization?.state, "synced");
+    assert.equal(status.materialization?.authState, "authenticated");
+    assert.equal(registry.getLatestPrincipalMcpOauthAttempt(PRINCIPAL_ID, "github")?.status, "completed");
   } finally {
     rmSync(workingDirectory, { recursive: true, force: true });
   }

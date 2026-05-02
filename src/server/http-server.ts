@@ -96,6 +96,7 @@ import {
   handleMcpEnable,
   handleMcpList,
   handleMcpOauthLogin,
+  handleMcpOauthStatus,
   handleMcpRemove,
   handleMcpReload,
   handleMcpUpsert,
@@ -784,6 +785,10 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/mcp/oauth/login") {
         return handleMcpOauthLogin(request, response, runtime, authRuntime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/mcp/oauth/status") {
+        return handleMcpOauthStatus(request, response, runtime, authRuntime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/mcp/enable") {

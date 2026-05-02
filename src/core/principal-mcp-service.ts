@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { McpServerSummary } from "../mcp/mcp-inspector.js";
 import { normalizeMcpServerList } from "../mcp/mcp-inspector.js";
 import {
@@ -13,9 +14,11 @@ import {
   normalizePrincipalMcpServerName,
   type PrincipalMcpAuthState,
   type PrincipalMcpMaterializationState,
+  type PrincipalMcpOauthAttemptStatus,
   type PrincipalMcpTransportType,
   type PrincipalMcpSourceType,
   type StoredPrincipalMcpMaterializationRecord,
+  type StoredPrincipalMcpOauthAttemptRecord,
   type StoredPrincipalMcpServerRecord,
 } from "./principal-mcp.js";
 
@@ -59,6 +62,21 @@ export interface PrincipalMcpOauthLoginResult {
   target: PrincipalMcpRuntimeTarget;
   server: PrincipalMcpListItem;
   authorizationUrl: string;
+  attempt: StoredPrincipalMcpOauthAttemptRecord;
+}
+
+export interface PrincipalMcpOauthStatusResult {
+  target: PrincipalMcpRuntimeTarget;
+  server: PrincipalMcpListItem;
+  status: PrincipalMcpOauthAttemptStatus | "not_started";
+  attempt: StoredPrincipalMcpOauthAttemptRecord | null;
+  materialization?: StoredPrincipalMcpMaterializationRecord;
+  refreshed: boolean;
+  nextStep: string;
+}
+
+export interface PrincipalMcpOauthStatusOptions extends Partial<PrincipalMcpRuntimeOptions> {
+  refresh?: boolean;
 }
 
 export interface UpsertPrincipalMcpServerInput {
@@ -203,6 +221,10 @@ export class PrincipalMcpService {
       normalizedPrincipalId,
       normalizedServerName,
     );
+    this.registry.deletePrincipalMcpOauthAttempts(
+      normalizedPrincipalId,
+      normalizedServerName,
+    );
     const removedDefinition = this.registry.deletePrincipalMcpServer(
       normalizedPrincipalId,
       normalizedServerName,
@@ -319,6 +341,20 @@ export class PrincipalMcpService {
         throw new Error(`MCP server ${normalizedServerName} 没有返回可用的 OAuth 授权链接。`);
       }
 
+      const now = normalizeNow(options.now);
+      const attempt: StoredPrincipalMcpOauthAttemptRecord = {
+        attemptId: `mcp-oauth-${randomUUID()}`,
+        principalId: normalizedPrincipalId,
+        serverName: normalizedServerName,
+        targetKind: target.targetKind,
+        targetId: target.targetId,
+        status: "waiting",
+        authorizationUrl,
+        startedAt: now,
+        updatedAt: now,
+      };
+
+      this.registry.savePrincipalMcpOauthAttempt(attempt);
       this.savePrincipalMcpMaterialization({
         principalId: normalizedPrincipalId,
         serverName: normalizedServerName,
@@ -326,17 +362,89 @@ export class PrincipalMcpService {
         targetId: target.targetId,
         state: "missing",
         authState: "auth_required",
-        lastSyncedAt: normalizeNow(options.now),
+        lastSyncedAt: now,
       });
 
       return {
         target,
         server: this.getPrincipalMcpServer(normalizedPrincipalId, normalizedServerName)!,
         authorizationUrl,
+        attempt,
       };
     } finally {
       await session.close();
     }
+  }
+
+  async getPrincipalMcpOauthStatus(
+    principalId: string,
+    serverName: string,
+    options: PrincipalMcpOauthStatusOptions = {},
+  ): Promise<PrincipalMcpOauthStatusResult> {
+    const normalizedPrincipalId = normalizeRequiredText(principalId, "principalId 不能为空。");
+    const normalizedServerName = normalizeRequiredServerName(serverName);
+    const existing = this.getPrincipalMcpServer(normalizedPrincipalId, normalizedServerName);
+
+    if (!existing) {
+      throw new Error(`MCP server ${normalizedServerName} 不存在。`);
+    }
+
+    let latestAttempt = this.registry.getLatestPrincipalMcpOauthAttempt(
+      normalizedPrincipalId,
+      normalizedServerName,
+    );
+    let refreshed = false;
+    let target = this.resolveStatusTarget(options, latestAttempt);
+    let server = existing;
+
+    if (options.refresh !== false) {
+      const reloadOptions: PrincipalMcpRuntimeOptions = {
+        workingDirectory: normalizeRequiredText(options.workingDirectory, "workingDirectory 不能为空。"),
+      };
+
+      if (options.activeAuthAccount !== undefined) {
+        reloadOptions.activeAuthAccount = options.activeAuthAccount;
+      }
+
+      if (options.createSession !== undefined) {
+        reloadOptions.createSession = options.createSession;
+      }
+
+      if (options.now !== undefined) {
+        reloadOptions.now = options.now;
+      }
+
+      const result = await this.reloadPrincipalMcpServers(normalizedPrincipalId, reloadOptions);
+      refreshed = true;
+      target = result.target;
+      server = result.servers.find((item) => item.serverName === normalizedServerName)
+        ?? this.getPrincipalMcpServer(normalizedPrincipalId, normalizedServerName)!;
+    }
+
+    latestAttempt = this.registry.getLatestPrincipalMcpOauthAttempt(
+      normalizedPrincipalId,
+      normalizedServerName,
+    );
+    const targetMaterialization = findMaterializationForTarget(server.materializations, target);
+    const status = resolveOauthStatus(latestAttempt, targetMaterialization);
+    const now = normalizeNow(options.now);
+    const attempt = latestAttempt && status !== "not_started"
+      ? updateOauthAttemptStatus(latestAttempt, status, now, targetMaterialization)
+      : latestAttempt;
+
+    if (attempt && refreshed) {
+      this.registry.savePrincipalMcpOauthAttempt(attempt);
+    }
+
+    return {
+      target,
+      server: this.getPrincipalMcpServer(normalizedPrincipalId, normalizedServerName)!,
+      status,
+      attempt: attempt ?? null,
+      ...(targetMaterialization ? { materialization: targetMaterialization } : {}),
+      refreshed,
+      nextStep: describeOauthNextStep(normalizedServerName, status, attempt),
+    };
   }
 
   private buildRuntimeSessionFactory(
@@ -432,6 +540,33 @@ export class PrincipalMcpService {
       });
     }
   }
+
+  private resolveStatusTarget(
+    options: PrincipalMcpOauthStatusOptions,
+    latestAttempt?: StoredPrincipalMcpOauthAttemptRecord | null,
+  ): PrincipalMcpRuntimeTarget {
+    if (latestAttempt?.targetKind === "auth-account") {
+      return {
+        targetKind: latestAttempt.targetKind,
+        targetId: latestAttempt.targetId,
+      };
+    }
+
+    const fallbackActiveAccount = this.registry.getActiveAuthAccount();
+    const activeAuthAccount = options.activeAuthAccount ?? (
+      fallbackActiveAccount
+        ? {
+          accountId: fallbackActiveAccount.accountId,
+          codexHome: fallbackActiveAccount.codexHome,
+        }
+        : null
+    );
+
+    return {
+      targetKind: "auth-account",
+      targetId: normalizeOptionalText(activeAuthAccount?.accountId) ?? "default",
+    };
+  }
 }
 
 function summarizeMaterializations(
@@ -463,6 +598,79 @@ function summarizeMaterializations(
     authRequiredCount,
     failedCount,
   };
+}
+
+function findMaterializationForTarget(
+  materializations: StoredPrincipalMcpMaterializationRecord[],
+  target: PrincipalMcpRuntimeTarget,
+): StoredPrincipalMcpMaterializationRecord | undefined {
+  return materializations.find(
+    (materialization) => materialization.targetKind === target.targetKind
+      && materialization.targetId === target.targetId,
+  );
+}
+
+function resolveOauthStatus(
+  attempt: StoredPrincipalMcpOauthAttemptRecord | null,
+  materialization: StoredPrincipalMcpMaterializationRecord | undefined,
+): PrincipalMcpOauthAttemptStatus | "not_started" {
+  if (!attempt) {
+    return "not_started";
+  }
+
+  if (!materialization) {
+    return attempt.status === "completed" ? "completed" : "waiting";
+  }
+
+  if (materialization.state === "synced" && materialization.authState !== "auth_required") {
+    return "completed";
+  }
+
+  if (materialization.state === "failed" || materialization.authState === "unsupported") {
+    return "failed";
+  }
+
+  return "waiting";
+}
+
+function updateOauthAttemptStatus(
+  attempt: StoredPrincipalMcpOauthAttemptRecord,
+  status: PrincipalMcpOauthAttemptStatus,
+  now: string,
+  materialization: StoredPrincipalMcpMaterializationRecord | undefined,
+): StoredPrincipalMcpOauthAttemptRecord {
+  const baseAttempt: StoredPrincipalMcpOauthAttemptRecord = { ...attempt };
+
+  delete baseAttempt.completedAt;
+  delete baseAttempt.lastError;
+
+  return {
+    ...baseAttempt,
+    status,
+    updatedAt: now,
+    ...(status === "completed" ? { completedAt: attempt.completedAt ?? now } : {}),
+    ...(status === "failed" && materialization?.lastError ? { lastError: materialization.lastError } : {}),
+  };
+}
+
+function describeOauthNextStep(
+  serverName: string,
+  status: PrincipalMcpOauthAttemptStatus | "not_started",
+  attempt: StoredPrincipalMcpOauthAttemptRecord | null,
+): string {
+  if (status === "completed") {
+    return "当前槽位已就绪；后续任务可以直接使用这个 MCP server。";
+  }
+
+  if (status === "failed") {
+    return `当前槽位返回失败或不支持 OAuth；请检查 MCP server 配置，必要时重新执行 /mcp oauth ${serverName}。`;
+  }
+
+  if (status === "waiting" && attempt) {
+    return `请打开授权链接完成授权，然后执行 /mcp oauth status ${serverName} 或 /mcp reload。`;
+  }
+
+  return `尚未记录授权尝试；请执行 /mcp oauth ${serverName}。`;
 }
 
 function parseStringArray(value: string, serverName: string, fieldName: string): string[] {

@@ -3811,6 +3811,13 @@ export class FeishuChannelService {
   }
 
   private async handleMcpOauthCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const mode = normalizeText(args[0])?.toLowerCase() ?? "";
+
+    if (mode === "status") {
+      await this.handleMcpOauthStatusCommand(args.slice(1), context);
+      return;
+    }
+
     const serverName = normalizeText(args[0]);
 
     if (!serverName || args.length !== 1) {
@@ -3835,8 +3842,45 @@ export class FeishuChannelService {
         `已发起 MCP OAuth 登录：${result.server.serverName}`,
         `当前槽位：${result.target.targetId}`,
         `授权链接：${result.authorizationUrl}`,
-        "完成授权后建议执行：/mcp reload",
+        `查看状态：/mcp oauth status ${result.server.serverName}`,
       ].join("\n"),
+    );
+  }
+
+  private async handleMcpOauthStatusCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const serverName = normalizeText(args[0]);
+
+    if (!serverName || args.length !== 1) {
+      await this.sendMcpOauthStatusHelp(context.chatId, context, args.join(" ") || undefined);
+      return;
+    }
+
+    const principal = this.ensurePrincipalIdentity(context);
+    const result = await this.runtime.getPrincipalMcpService().getPrincipalMcpOauthStatus(
+      principal.principalId,
+      serverName,
+      {
+        workingDirectory: this.runtime.getWorkingDirectory(),
+        activeAuthAccount: this.authRuntime.getActiveAccount(),
+      },
+    );
+    const attempt = result.attempt;
+    const materialization = result.materialization;
+
+    await this.safeSendText(
+      context.chatId,
+      [
+        `当前 principal：${principal.principalId}`,
+        `MCP OAuth 状态：${result.server.serverName}`,
+        `当前槽位：${result.target.targetId}`,
+        `状态：${result.status}`,
+        materialization
+          ? `槽位状态：${materialization.state}/${materialization.authState}${materialization.lastError ? `：${materialization.lastError}` : ""}`
+          : "槽位状态：暂无记录",
+        attempt ? `最近发起：${attempt.startedAt}` : "最近发起：暂无",
+        attempt && result.status === "waiting" ? `授权链接：${attempt.authorizationUrl}` : null,
+        `下一步：${result.nextStep}`,
+      ].filter((line): line is string => line !== null).join("\n"),
     );
   }
 
@@ -4386,6 +4430,7 @@ export class FeishuChannelService {
       "/mcp disable <NAME> 停用 MCP server",
       "/mcp remove <NAME> 删除 MCP server",
       "/mcp oauth <NAME> 发起 MCP server OAuth 登录",
+      "/mcp oauth status <NAME> 查看 MCP server OAuth 状态",
       "",
       "如果想先看当前列表，请发送 /mcp list。",
     ].filter((line): line is string => line !== null);
@@ -4512,7 +4557,24 @@ export class FeishuChannelService {
       `当前 principal：${principal.principalId}`,
       invalidValue ? `缺少或无法识别 MCP server 名称：${invalidValue}` : null,
       "/mcp oauth <NAME> 发起 MCP server OAuth 登录",
-      "完成授权后建议执行 /mcp reload。",
+      "/mcp oauth status <NAME> 查看最近一次 OAuth 授权状态。",
+    ].filter((line): line is string => line !== null);
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendMcpOauthStatusHelp(
+    chatId: string,
+    context: FeishuIncomingContext,
+    invalidValue?: string,
+  ): Promise<void> {
+    const principal = this.ensurePrincipalIdentity(context);
+    const lines = [
+      "用法：/mcp oauth status <NAME>",
+      `当前 principal：${principal.principalId}`,
+      invalidValue ? `缺少或无法识别 MCP server 名称：${invalidValue}` : null,
+      "/mcp oauth status <NAME> 查看最近一次 OAuth 授权状态",
+      "如果还没有发起授权，请先发送 /mcp oauth <NAME>。",
     ].filter((line): line is string => line !== null);
 
     await this.safeSendText(chatId, lines.join("\n"));

@@ -36,6 +36,14 @@ export const PRINCIPAL_MCP_AUTH_STATES = [
 
 export type PrincipalMcpAuthState = (typeof PRINCIPAL_MCP_AUTH_STATES)[number];
 
+export const PRINCIPAL_MCP_OAUTH_ATTEMPT_STATUSES = [
+  "waiting",
+  "completed",
+  "failed",
+] as const;
+
+export type PrincipalMcpOauthAttemptStatus = (typeof PRINCIPAL_MCP_OAUTH_ATTEMPT_STATUSES)[number];
+
 export interface StoredPrincipalMcpServerRecord {
   principalId: string;
   serverName: string;
@@ -61,6 +69,20 @@ export interface StoredPrincipalMcpMaterializationRecord {
   lastError?: string;
 }
 
+export interface StoredPrincipalMcpOauthAttemptRecord {
+  attemptId: string;
+  principalId: string;
+  serverName: string;
+  targetKind: PrincipalMcpMaterializationTargetKind;
+  targetId: string;
+  status: PrincipalMcpOauthAttemptStatus;
+  authorizationUrl: string;
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  lastError?: string;
+}
+
 export function normalizePrincipalMcpTransportType(value: unknown): PrincipalMcpTransportType | null {
   return normalizeEnum(value, PRINCIPAL_MCP_TRANSPORT_TYPES);
 }
@@ -83,6 +105,12 @@ export function normalizePrincipalMcpMaterializationState(
 
 export function normalizePrincipalMcpAuthState(value: unknown): PrincipalMcpAuthState | null {
   return normalizeEnum(value, PRINCIPAL_MCP_AUTH_STATES);
+}
+
+export function normalizePrincipalMcpOauthAttemptStatus(
+  value: unknown,
+): PrincipalMcpOauthAttemptStatus | null {
+  return normalizeEnum(value, PRINCIPAL_MCP_OAUTH_ATTEMPT_STATUSES);
 }
 
 export function normalizePrincipalMcpServerName(value: unknown): string | null {
@@ -153,6 +181,40 @@ export function normalizePrincipalMcpMaterializationRecordInput(
     ...(state ? { state } : {}),
     ...(authState ? { authState } : {}),
     ...(lastSyncedAt ? { lastSyncedAt } : {}),
+    ...(lastError ? { lastError } : {}),
+  };
+}
+
+export function normalizePrincipalMcpOauthAttemptRecordInput(
+  value: unknown,
+): Partial<StoredPrincipalMcpOauthAttemptRecord> {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  const attemptId = normalizeText(value.attemptId);
+  const principalId = normalizeText(value.principalId);
+  const serverName = normalizePrincipalMcpServerName(value.serverName);
+  const targetKind = normalizePrincipalMcpMaterializationTargetKind(value.targetKind);
+  const targetId = normalizeText(value.targetId);
+  const status = normalizePrincipalMcpOauthAttemptStatus(value.status);
+  const authorizationUrl = normalizeText(value.authorizationUrl);
+  const startedAt = normalizeText(value.startedAt);
+  const updatedAt = normalizeText(value.updatedAt);
+  const completedAt = normalizeText(value.completedAt);
+  const lastError = normalizeText(value.lastError);
+
+  return {
+    ...(attemptId ? { attemptId } : {}),
+    ...(principalId ? { principalId } : {}),
+    ...(serverName ? { serverName } : {}),
+    ...(targetKind ? { targetKind } : {}),
+    ...(targetId ? { targetId } : {}),
+    ...(status ? { status } : {}),
+    ...(authorizationUrl ? { authorizationUrl } : {}),
+    ...(startedAt ? { startedAt } : {}),
+    ...(updatedAt ? { updatedAt } : {}),
+    ...(completedAt ? { completedAt } : {}),
     ...(lastError ? { lastError } : {}),
   };
 }

@@ -301,6 +301,17 @@ test("POST /api/mcp/oauth/login 会返回 OAuth 授权链接", async () => {
           targetId: "default",
         },
         authorizationUrl: "https://example.com/oauth/github",
+        attempt: {
+          attemptId: "attempt-1",
+          principalId,
+          serverName,
+          targetKind: "auth-account",
+          targetId: "default",
+          status: "waiting",
+          authorizationUrl: "https://example.com/oauth/github",
+          startedAt: "2026-04-11T00:00:00.000Z",
+          updatedAt: "2026-04-11T00:00:00.000Z",
+        },
         server: {
           principalId,
           serverName,
@@ -338,6 +349,78 @@ test("POST /api/mcp/oauth/login 会返回 OAuth 授权链接", async () => {
 
     assert.equal(payload.result?.authorizationUrl, "https://example.com/oauth/github");
     assert.equal(payload.result?.server?.serverName, "github");
+  });
+});
+
+test("POST /api/mcp/oauth/status 会返回 OAuth 授权状态", async () => {
+  await withMcpServer(async ({ baseUrl, runtime, authHeaders }) => {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(buildIdentityPayload());
+    const service = runtime.getPrincipalMcpService() as ReturnType<AppServerTaskRuntime["getPrincipalMcpService"]> & {
+      getPrincipalMcpOauthStatus?: ReturnType<AppServerTaskRuntime["getPrincipalMcpService"]>["getPrincipalMcpOauthStatus"];
+    };
+
+    service.getPrincipalMcpOauthStatus = async (principalId, serverName, options) => {
+      assert.equal(principalId, identity.principalId);
+      assert.equal(serverName, "github");
+      assert.equal(options?.refresh, false);
+
+      return {
+        target: {
+          targetKind: "auth-account",
+          targetId: "default",
+        },
+        status: "waiting",
+        refreshed: false,
+        nextStep: "请打开授权链接完成授权，然后执行 /mcp oauth status github 或 /mcp reload。",
+        attempt: {
+          attemptId: "attempt-1",
+          principalId,
+          serverName,
+          targetKind: "auth-account",
+          targetId: "default",
+          status: "waiting",
+          authorizationUrl: "https://example.com/oauth/github",
+          startedAt: "2026-04-11T00:00:00.000Z",
+          updatedAt: "2026-04-11T00:00:00.000Z",
+        },
+        server: {
+          principalId,
+          serverName,
+          transportType: "stdio",
+          command: "npx",
+          argsJson: "[]",
+          envJson: "{}",
+          enabled: true,
+          sourceType: "manual",
+          createdAt: "2026-04-11T00:00:00.000Z",
+          updatedAt: "2026-04-11T00:00:00.000Z",
+          materializations: [],
+          summary: {
+            totalTargets: 0,
+            readyCount: 0,
+            authRequiredCount: 0,
+            failedCount: 0,
+          },
+        },
+      };
+    };
+
+    const response = await postJson(baseUrl, "/api/mcp/oauth/status", {
+      ...buildIdentityPayload(),
+      serverName: "github",
+      refresh: false,
+    }, authHeaders);
+    assert.equal(response.status, 200);
+
+    const payload = await response.json() as {
+      result?: {
+        status?: string;
+        attempt?: { authorizationUrl?: string };
+      };
+    };
+
+    assert.equal(payload.result?.status, "waiting");
+    assert.equal(payload.result?.attempt?.authorizationUrl, "https://example.com/oauth/github");
   });
 });
 
