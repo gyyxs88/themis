@@ -57,7 +57,9 @@ function normalizeMcpUpsertPayload(value: unknown): {
   channelUserId: string;
   displayName?: string;
   serverName: string;
-  command: string;
+  transportType?: "stdio" | "streamable_http";
+  command?: string;
+  url?: string;
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
@@ -73,11 +75,24 @@ function normalizeMcpUpsertPayload(value: unknown): {
     : undefined;
   const cwd = normalizeText(value.cwd) ?? undefined;
   const env = normalizeEnvRecord(value.env);
+  const url = normalizeText(value.url) ?? undefined;
+  const command = normalizeText(value.command) ?? undefined;
+  const transportType = normalizeMcpTransportType(value.transportType) ?? (url ? "streamable_http" : "stdio");
+
+  if (transportType === "streamable_http" && !url && !command) {
+    throw new Error("MCP url 不能为空。");
+  }
+
+  if (transportType === "stdio" && !command) {
+    throw new Error("MCP command 不能为空。");
+  }
 
   return {
     ...identity,
     serverName: normalizeRequiredText(value.serverName, "MCP server 名称不能为空。"),
-    command: normalizeRequiredText(value.command, "MCP command 不能为空。"),
+    transportType,
+    ...(command ? { command } : {}),
+    ...(url ? { url } : {}),
     ...(args ? { args } : {}),
     ...(cwd ? { cwd } : {}),
     ...(env ? { env } : {}),
@@ -121,6 +136,16 @@ function normalizeEnvRecord(value: unknown): Record<string, string> | undefined 
   }
 
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeMcpTransportType(value: unknown): "stdio" | "streamable_http" | undefined {
+  const normalized = normalizeText(value);
+
+  if (normalized === "stdio" || normalized === "streamable_http") {
+    return normalized;
+  }
+
+  return undefined;
 }
 
 async function readAndNormalizePayload<T>(
@@ -211,7 +236,9 @@ export async function handleMcpUpsert(
     const server = runtime.getPrincipalMcpService().upsertPrincipalMcpServer({
       principalId: identity.principalId,
       serverName: payload.serverName,
-      command: payload.command,
+      ...(payload.transportType ? { transportType: payload.transportType } : {}),
+      ...(payload.command ? { command: payload.command } : {}),
+      ...(payload.url ? { url: payload.url } : {}),
       ...(payload.args ? { args: payload.args } : {}),
       ...(payload.cwd ? { cwd: payload.cwd } : {}),
       ...(payload.env ? { env: payload.env } : {}),

@@ -121,6 +121,13 @@ test("buildRuntimeConfigOverrides 只返回 enabled 的 MCP 配置", () => {
       args: ["demo"],
       enabled: false,
     });
+    service.upsertPrincipalMcpServer({
+      principalId: PRINCIPAL_ID,
+      serverName: "remote_docs",
+      transportType: "streamable_http",
+      url: "https://mcp.example.com/docs",
+      enabled: true,
+    });
 
     const overrides = service.buildRuntimeConfigOverrides(PRINCIPAL_ID);
 
@@ -130,6 +137,9 @@ test("buildRuntimeConfigOverrides 只返回 enabled 的 MCP 配置", () => {
         args: ["-y", "@modelcontextprotocol/server-github"],
         cwd: "/srv/github",
         env: { GITHUB_TOKEN: "secret" },
+      },
+      "mcp_servers.remote_docs": {
+        url: "https://mcp.example.com/docs",
       },
     });
   } finally {

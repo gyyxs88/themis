@@ -1,5 +1,6 @@
 export const PRINCIPAL_MCP_TRANSPORT_TYPES = [
   "stdio",
+  "streamable_http",
 ] as const;
 
 export type PrincipalMcpTransportType = (typeof PRINCIPAL_MCP_TRANSPORT_TYPES)[number];

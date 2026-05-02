@@ -131,6 +131,34 @@ test("POST /api/mcp/upsert 和 /api/mcp/list 会按当前浏览器身份返回 p
   });
 });
 
+test("POST /api/mcp/upsert 支持 streamable_http MCP server", async () => {
+  await withMcpServer(async ({ baseUrl, authHeaders }) => {
+    const upsertResponse = await postJson(baseUrl, "/api/mcp/upsert", {
+      ...buildIdentityPayload(),
+      serverName: "remote_docs",
+      transportType: "streamable_http",
+      url: "https://mcp.example.com/docs",
+    }, authHeaders);
+    assert.equal(upsertResponse.status, 200);
+
+    const payload = await upsertResponse.json() as {
+      server?: {
+        serverName?: string;
+        transportType?: string;
+        command?: string;
+        argsJson?: string;
+        envJson?: string;
+      };
+    };
+
+    assert.equal(payload.server?.serverName, "remote_docs");
+    assert.equal(payload.server?.transportType, "streamable_http");
+    assert.equal(payload.server?.command, "https://mcp.example.com/docs");
+    assert.equal(payload.server?.argsJson, JSON.stringify([]));
+    assert.equal(payload.server?.envJson, JSON.stringify({}));
+  });
+});
+
 test("POST /api/mcp/disable 和 /api/mcp/enable 会切换 principal MCP enabled 状态", async () => {
   await withMcpServer(async ({ baseUrl, runtime, runtimeStore, authHeaders }) => {
     const identity = runtime.getIdentityLinkService().ensureIdentity(buildIdentityPayload());

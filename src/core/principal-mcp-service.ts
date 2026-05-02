@@ -13,6 +13,7 @@ import {
   normalizePrincipalMcpServerName,
   type PrincipalMcpAuthState,
   type PrincipalMcpMaterializationState,
+  type PrincipalMcpTransportType,
   type PrincipalMcpSourceType,
   type StoredPrincipalMcpMaterializationRecord,
   type StoredPrincipalMcpServerRecord,
@@ -63,7 +64,9 @@ export interface PrincipalMcpOauthLoginResult {
 export interface UpsertPrincipalMcpServerInput {
   principalId: string;
   serverName: string;
-  command: string;
+  transportType?: PrincipalMcpTransportType;
+  command?: string;
+  url?: string;
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
@@ -140,16 +143,21 @@ export class PrincipalMcpService {
   upsertPrincipalMcpServer(input: UpsertPrincipalMcpServerInput): PrincipalMcpListItem {
     const principalId = normalizeRequiredText(input.principalId, "principalId 不能为空。");
     const serverName = normalizeRequiredServerName(input.serverName);
-    const command = normalizeRequiredText(input.command, "MCP command 不能为空。");
-    const args = normalizeArgs(input.args);
-    const cwd = normalizeOptionalText(input.cwd);
-    const env = normalizeEnv(input.env);
     const now = normalizeNow(input.now);
     const existing = this.registry.getPrincipalMcpServer(principalId, serverName);
+    const transportType = input.transportType ?? existing?.transportType ?? (
+      normalizeOptionalText(input.url) ? "streamable_http" : "stdio"
+    );
+    const command = transportType === "streamable_http"
+      ? normalizeRequiredText(input.url ?? input.command ?? existing?.command, "MCP url 不能为空。")
+      : normalizeRequiredText(input.command ?? existing?.command, "MCP command 不能为空。");
+    const args = transportType === "stdio" ? normalizeArgs(input.args) : [];
+    const cwd = transportType === "stdio" ? normalizeOptionalText(input.cwd) : undefined;
+    const env = transportType === "stdio" ? normalizeEnv(input.env) : {};
     const record: StoredPrincipalMcpServerRecord = {
       principalId,
       serverName,
-      transportType: "stdio",
+      transportType,
       command,
       argsJson: JSON.stringify(args),
       envJson: JSON.stringify(env),
@@ -228,6 +236,13 @@ export class PrincipalMcpService {
 
     for (const server of this.registry.listPrincipalMcpServers(normalizedPrincipalId)) {
       if (!server.enabled) {
+        continue;
+      }
+
+      if (server.transportType === "streamable_http") {
+        overrides[`mcp_servers.${server.serverName}`] = {
+          url: normalizeRequiredText(server.command, `MCP server ${server.serverName} 的 url 不能为空。`),
+        };
         continue;
       }
 
@@ -566,7 +581,7 @@ function normalizeRequiredServerName(value: string): string {
   return normalized;
 }
 
-function normalizeRequiredText(value: string, errorMessage: string): string {
+function normalizeRequiredText(value: unknown, errorMessage: string): string {
   const normalized = normalizeOptionalText(value);
 
   if (!normalized) {
