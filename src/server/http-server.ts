@@ -95,6 +95,7 @@ import {
   handleMcpDisable,
   handleMcpEnable,
   handleMcpList,
+  handleMcpOauthCallback,
   handleMcpOauthLogin,
   handleMcpOauthStatus,
   handleMcpRemove,
@@ -287,6 +288,10 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
         appDisplayName: surface.webAppDisplayName,
       })) {
         return;
+      }
+
+      if (url.pathname.startsWith("/api/mcp/oauth/callback/")) {
+        return handleMcpOauthCallback(request, response, url, runtime);
       }
 
       if (!requireWebAccess(request, response, webAccessService, {

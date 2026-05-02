@@ -301,6 +301,12 @@ test("POST /api/mcp/oauth/login 会返回 OAuth 授权链接", async () => {
           targetId: "default",
         },
         authorizationUrl: "https://example.com/oauth/github",
+        sessionRetained: true,
+        callbackBridge: {
+          bridgeId: "bridge-1",
+          publicCallbackUrl: "https://themis.example.com/api/mcp/oauth/callback/bridge-1",
+          localCallbackPort: 38123,
+        },
         attempt: {
           attemptId: "attempt-1",
           principalId,
@@ -371,6 +377,7 @@ test("POST /api/mcp/oauth/status 会返回 OAuth 授权状态", async () => {
         },
         status: "waiting",
         refreshed: false,
+        oauthSessionActive: true,
         nextStep: "请打开授权链接完成授权，然后执行 /mcp oauth status github 或 /mcp reload。",
         attempt: {
           attemptId: "attempt-1",
@@ -421,6 +428,30 @@ test("POST /api/mcp/oauth/status 会返回 OAuth 授权状态", async () => {
 
     assert.equal(payload.result?.status, "waiting");
     assert.equal(payload.result?.attempt?.authorizationUrl, "https://example.com/oauth/github");
+  });
+});
+
+test("GET /api/mcp/oauth/callback/:bridgeId 不需要 Web 登录并转交 MCP OAuth callback", async () => {
+  await withMcpServer(async ({ baseUrl, runtime }) => {
+    const service = runtime.getPrincipalMcpService() as ReturnType<AppServerTaskRuntime["getPrincipalMcpService"]> & {
+      handlePrincipalMcpOauthCallback?: ReturnType<AppServerTaskRuntime["getPrincipalMcpService"]>["handlePrincipalMcpOauthCallback"];
+    };
+
+    service.handlePrincipalMcpOauthCallback = async (bridgeId, search) => {
+      assert.equal(bridgeId, "bridge-1");
+      assert.equal(search, "?code=ok&state=demo");
+
+      return {
+        statusCode: 200,
+        contentType: "text/plain; charset=utf-8",
+        body: "Authentication complete. You may close this window.",
+      };
+    };
+
+    const response = await fetch(`${baseUrl}/api/mcp/oauth/callback/bridge-1?code=ok&state=demo`);
+
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /Authentication complete/);
   });
 });
 

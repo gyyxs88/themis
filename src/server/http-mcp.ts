@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
+import { resolvePrincipalMcpOauthCallbackBaseUrl } from "../core/principal-mcp-service.js";
 import type { RuntimeServiceHost } from "../core/runtime-service-host.js";
 import { createTaskError, resolveErrorStatusCode } from "./http-errors.js";
 import { readJsonBody } from "./http-request.js";
@@ -322,12 +323,14 @@ export async function handleMcpOauthLogin(
 
   try {
     const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const mcpOauthCallbackBaseUrl = resolvePrincipalMcpOauthCallbackBaseUrl();
     const result = await runtime.getPrincipalMcpService().startPrincipalMcpOauthLogin(
       identity.principalId,
       payload.serverName,
       {
         workingDirectory: runtime.getWorkingDirectory(),
         activeAuthAccount: authRuntime.getActiveAccount(),
+        ...(mcpOauthCallbackBaseUrl ? { mcpOauthCallbackBaseUrl } : {}),
       },
     );
 
@@ -338,6 +341,46 @@ export async function handleMcpOauthLogin(
   } catch (error) {
     writeRuntimeError(response, error);
   }
+}
+
+export async function handleMcpOauthCallback(
+  request: IncomingMessage,
+  response: ServerResponse,
+  url: URL,
+  runtime: Pick<RuntimeServiceHost, "getPrincipalMcpService">,
+): Promise<void> {
+  if (request.method !== "GET") {
+    writeJson(response, 405, {
+      error: {
+        code: "METHOD_NOT_ALLOWED",
+        message: "MCP OAuth callback only supports GET.",
+      },
+    });
+    return;
+  }
+
+  const bridgeId = url.pathname.slice("/api/mcp/oauth/callback/".length);
+  let decodedBridgeId: string;
+
+  try {
+    decodedBridgeId = decodeURIComponent(bridgeId);
+  } catch {
+    response.writeHead(400, {
+      "Content-Type": "text/plain; charset=utf-8",
+    });
+    response.end("Invalid OAuth callback.");
+    return;
+  }
+
+  const result = await runtime.getPrincipalMcpService().handlePrincipalMcpOauthCallback(
+    decodedBridgeId,
+    url.search,
+  );
+
+  response.writeHead(result.statusCode, {
+    "Content-Type": result.contentType,
+  });
+  response.end(result.body);
 }
 
 export async function handleMcpOauthStatus(

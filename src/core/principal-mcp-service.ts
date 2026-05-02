@@ -1,6 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import type { McpServerSummary } from "../mcp/mcp-inspector.js";
 import { normalizeMcpServerList } from "../mcp/mcp-inspector.js";
+import type { CodexAppServerNotification } from "./codex-app-server.js";
 import {
   buildCodexProcessEnv,
   createCodexAuthStorageConfigOverrides,
@@ -29,6 +30,7 @@ export interface PrincipalMcpServiceOptions {
 interface PrincipalMcpManagementSession {
   initialize(): Promise<void>;
   request(method: string, params: unknown): Promise<unknown>;
+  onNotification?(handler: (notification: CodexAppServerNotification) => void): () => void;
   close(): Promise<void>;
 }
 
@@ -50,6 +52,9 @@ export interface PrincipalMcpRuntimeOptions {
     input: PrincipalMcpCreateSessionInput,
   ) => Promise<PrincipalMcpManagementSession> | PrincipalMcpManagementSession;
   now?: string;
+  mcpOauthCallbackUrl?: string | null;
+  mcpOauthCallbackBaseUrl?: string | null;
+  mcpOauthCallbackPort?: number;
 }
 
 export interface PrincipalMcpReloadResult {
@@ -63,6 +68,14 @@ export interface PrincipalMcpOauthLoginResult {
   server: PrincipalMcpListItem;
   authorizationUrl: string;
   attempt: StoredPrincipalMcpOauthAttemptRecord;
+  sessionRetained: boolean;
+  callbackBridge?: PrincipalMcpOauthCallbackBridge;
+}
+
+export interface PrincipalMcpOauthCallbackBridge {
+  bridgeId: string;
+  publicCallbackUrl: string;
+  localCallbackPort: number;
 }
 
 export interface PrincipalMcpOauthStatusResult {
@@ -72,6 +85,7 @@ export interface PrincipalMcpOauthStatusResult {
   attempt: StoredPrincipalMcpOauthAttemptRecord | null;
   materialization?: StoredPrincipalMcpMaterializationRecord;
   refreshed: boolean;
+  oauthSessionActive: boolean;
   nextStep: string;
 }
 
@@ -111,8 +125,38 @@ export interface RemovePrincipalMcpServerResult {
   removedMaterializations: number;
 }
 
+export function resolvePrincipalMcpOauthCallbackBaseUrl(
+  env: Partial<Record<"THEMIS_MCP_OAUTH_CALLBACK_BASE_URL" | "THEMIS_BASE_URL", string | undefined>> = process.env,
+): string | undefined {
+  const explicit = normalizeMcpOauthCallbackBaseUrl(env.THEMIS_MCP_OAUTH_CALLBACK_BASE_URL);
+
+  if (explicit) {
+    return explicit;
+  }
+
+  const fallback = normalizeMcpOauthCallbackBaseUrl(env.THEMIS_BASE_URL);
+
+  if (!fallback || isLoopbackUrl(fallback)) {
+    return undefined;
+  }
+
+  return fallback;
+}
+
+interface ActivePrincipalMcpOauthSession {
+  attemptId: string;
+  principalId: string;
+  serverName: string;
+  target: PrincipalMcpRuntimeTarget;
+  session: PrincipalMcpManagementSession;
+  unsubscribe?: () => void;
+  cleanupTimer: ReturnType<typeof setTimeout>;
+  callbackBridge?: PrincipalMcpOauthCallbackBridge;
+}
+
 export class PrincipalMcpService {
   private readonly registry: SqliteCodexSessionRegistry;
+  private readonly activeOauthSessions = new Map<string, ActivePrincipalMcpOauthSession>();
 
   constructor(options: PrincipalMcpServiceOptions) {
     this.registry = options.registry;
@@ -323,11 +367,21 @@ export class PrincipalMcpService {
       throw new Error(`MCP server ${normalizedServerName} 不存在。`);
     }
 
-    const { target, createSession } = this.buildRuntimeSessionFactory(normalizedPrincipalId, options);
+    const callbackBridge = createOauthCallbackBridge(options.mcpOauthCallbackBaseUrl, options.mcpOauthCallbackPort);
+    const { target, createSession } = this.buildRuntimeSessionFactory(normalizedPrincipalId, {
+      ...options,
+      ...(callbackBridge ? {
+        mcpOauthCallbackUrl: callbackBridge.publicCallbackUrl,
+        mcpOauthCallbackPort: callbackBridge.localCallbackPort,
+      } : {}),
+    });
     const session = await createSession();
+    let closeSessionOnExit = true;
+    let unsubscribe: (() => void) | undefined;
 
     try {
       await session.initialize();
+      const supportsCompletionNotification = typeof session.onNotification === "function";
       const response = await session.request("mcpServer/oauth/login", {
         name: normalizedServerName,
         ...(Array.isArray(options.scopes) && options.scopes.length > 0 ? { scopes: options.scopes } : {}),
@@ -365,14 +419,49 @@ export class PrincipalMcpService {
         lastSyncedAt: now,
       });
 
+      if (supportsCompletionNotification && session.onNotification) {
+        this.closeActiveOauthSessionsForServer(
+          normalizedPrincipalId,
+          normalizedServerName,
+          "已发起新的 OAuth 授权，旧的等待会话已关闭。",
+        );
+        unsubscribe = session.onNotification((notification) => {
+          if (notification.method === "mcpServer/oauthLogin/completed") {
+            void this.finishActiveOauthSession(attempt.attemptId, "completed");
+          }
+        });
+        this.trackActiveOauthSession({
+          attemptId: attempt.attemptId,
+          principalId: normalizedPrincipalId,
+          serverName: normalizedServerName,
+          target,
+          session,
+          unsubscribe,
+          cleanupTimer: setTimeout(() => {
+            void this.finishActiveOauthSession(
+              attempt.attemptId,
+              "failed",
+              "OAuth callback 等待超时。",
+            );
+          }, resolveOauthSessionTimeoutMs(options.timeoutSecs)),
+          ...(callbackBridge ? { callbackBridge } : {}),
+        });
+        closeSessionOnExit = false;
+      }
+
       return {
         target,
         server: this.getPrincipalMcpServer(normalizedPrincipalId, normalizedServerName)!,
         authorizationUrl,
         attempt,
+        sessionRetained: !closeSessionOnExit,
+        ...(callbackBridge && !closeSessionOnExit ? { callbackBridge } : {}),
       };
     } finally {
-      await session.close();
+      if (closeSessionOnExit) {
+        unsubscribe?.();
+        await session.close();
+      }
     }
   }
 
@@ -443,8 +532,54 @@ export class PrincipalMcpService {
       attempt: attempt ?? null,
       ...(targetMaterialization ? { materialization: targetMaterialization } : {}),
       refreshed,
+      oauthSessionActive: Boolean(attempt && this.activeOauthSessions.has(attempt.attemptId)),
       nextStep: describeOauthNextStep(normalizedServerName, status, attempt),
     };
+  }
+
+  async handlePrincipalMcpOauthCallback(
+    bridgeId: string,
+    search: string,
+  ): Promise<{
+    statusCode: number;
+    contentType: string;
+    body: string;
+  }> {
+    const normalizedBridgeId = normalizeOptionalText(bridgeId);
+
+    if (!normalizedBridgeId) {
+      return createOauthCallbackBridgeResponse(400, "Invalid OAuth callback.");
+    }
+
+    const activeSession = Array.from(this.activeOauthSessions.values())
+      .find((entry) => entry.callbackBridge?.bridgeId === normalizedBridgeId);
+
+    if (!activeSession?.callbackBridge) {
+      return createOauthCallbackBridgeResponse(404, "OAuth callback has expired or is unknown.");
+    }
+
+    const callbackUrl = `http://127.0.0.1:${activeSession.callbackBridge.localCallbackPort}/callback${search}`;
+
+    try {
+      const response = await fetch(callbackUrl, {
+        method: "GET",
+        redirect: "manual",
+      });
+      const body = await response.text();
+
+      return {
+        statusCode: response.status,
+        contentType: response.headers.get("content-type") ?? "text/plain; charset=utf-8",
+        body,
+      };
+    } catch (error) {
+      await this.finishActiveOauthSession(
+        activeSession.attemptId,
+        "failed",
+        `OAuth callback bridge failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return createOauthCallbackBridgeResponse(502, "OAuth callback bridge failed.");
+    }
   }
 
   private buildRuntimeSessionFactory(
@@ -472,9 +607,11 @@ export class PrincipalMcpService {
     const accountOverrides = activeAuthAccount
       ? createCodexAuthStorageConfigOverrides()
       : {};
+    const oauthCallbackOverrides = buildMcpOauthCallbackConfigOverrides(options);
     const configOverrides: CodexCliConfigOverrides = {
       ...accountOverrides,
       ...principalOverrides,
+      ...oauthCallbackOverrides,
     };
     const env = activeAuthAccount
       ? buildManagedSessionEnv(workingDirectory, activeAuthAccount.codexHome)
@@ -538,6 +675,68 @@ export class PrincipalMcpService {
         lastSyncedAt: checkedAt,
         ...(materialization.lastError ? { lastError: materialization.lastError } : {}),
       });
+    }
+  }
+
+  private trackActiveOauthSession(session: ActivePrincipalMcpOauthSession): void {
+    this.activeOauthSessions.set(session.attemptId, session);
+  }
+
+  private closeActiveOauthSessionsForServer(principalId: string, serverName: string, lastError: string): void {
+    for (const session of this.activeOauthSessions.values()) {
+      if (session.principalId === principalId && session.serverName === serverName) {
+        void this.finishActiveOauthSession(session.attemptId, "failed", lastError);
+      }
+    }
+  }
+
+  private async finishActiveOauthSession(
+    attemptId: string,
+    status: PrincipalMcpOauthAttemptStatus,
+    lastError?: string,
+  ): Promise<void> {
+    const activeSession = this.activeOauthSessions.get(attemptId);
+
+    if (!activeSession) {
+      return;
+    }
+
+    this.activeOauthSessions.delete(attemptId);
+    clearTimeout(activeSession.cleanupTimer);
+    activeSession.unsubscribe?.();
+
+    const now = new Date().toISOString();
+    const latestAttempt = this.registry.getLatestPrincipalMcpOauthAttempt(
+      activeSession.principalId,
+      activeSession.serverName,
+    );
+
+    if (latestAttempt?.attemptId === attemptId) {
+      this.registry.savePrincipalMcpOauthAttempt({
+        ...latestAttempt,
+        status,
+        updatedAt: now,
+        ...(status === "completed" ? { completedAt: latestAttempt.completedAt ?? now } : {}),
+        ...(status === "failed" && lastError ? { lastError } : {}),
+      });
+    }
+
+    if (status === "completed") {
+      this.savePrincipalMcpMaterialization({
+        principalId: activeSession.principalId,
+        serverName: activeSession.serverName,
+        targetKind: activeSession.target.targetKind,
+        targetId: activeSession.target.targetId,
+        state: "synced",
+        authState: "authenticated",
+        lastSyncedAt: now,
+      });
+    }
+
+    try {
+      await activeSession.session.close();
+    } catch {
+      // The OAuth callback has already reached a terminal state; close failures are non-fatal.
     }
   }
 
@@ -671,6 +870,101 @@ function describeOauthNextStep(
   }
 
   return `尚未记录授权尝试；请执行 /mcp oauth ${serverName}。`;
+}
+
+function buildMcpOauthCallbackConfigOverrides(options: PrincipalMcpRuntimeOptions): CodexCliConfigOverrides {
+  const callbackUrl = normalizeOptionalText(options.mcpOauthCallbackUrl);
+  const callbackPort = normalizeMcpOauthCallbackPort(options.mcpOauthCallbackPort);
+
+  return {
+    ...(callbackUrl ? { mcp_oauth_callback_url: callbackUrl } : {}),
+    ...(typeof callbackPort === "number" ? { mcp_oauth_callback_port: callbackPort } : {}),
+  };
+}
+
+function createOauthCallbackBridge(
+  configuredBaseUrl: string | null | undefined,
+  configuredPort: number | undefined,
+): PrincipalMcpOauthCallbackBridge | undefined {
+  const baseUrl = normalizeMcpOauthCallbackBaseUrl(configuredBaseUrl);
+
+  if (!baseUrl) {
+    return undefined;
+  }
+
+  const bridgeId = randomUUID();
+  const localCallbackPort = normalizeMcpOauthCallbackPort(configuredPort) ?? randomInt(20000, 50000);
+  const publicCallbackUrl = new URL(`/api/mcp/oauth/callback/${bridgeId}`, `${baseUrl}/`).toString();
+
+  return {
+    bridgeId,
+    publicCallbackUrl,
+    localCallbackPort,
+  };
+}
+
+function normalizeMcpOauthCallbackBaseUrl(value: string | null | undefined): string | undefined {
+  const normalized = normalizeOptionalText(value);
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  try {
+    const parsed = new URL(normalized);
+
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+    parsed.search = "";
+    parsed.hash = "";
+
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeMcpOauthCallbackPort(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0 || value > 65535) {
+    return undefined;
+  }
+
+  return value;
+}
+
+function isLoopbackUrl(value: string): boolean {
+  try {
+    const hostname = new URL(value).hostname.toLowerCase();
+    return hostname === "localhost"
+      || hostname === "127.0.0.1"
+      || hostname === "::1"
+      || hostname.endsWith(".localhost");
+  } catch {
+    return true;
+  }
+}
+
+function resolveOauthSessionTimeoutMs(timeoutSecs: number | undefined): number {
+  const normalizedTimeoutSecs = typeof timeoutSecs === "number" && Number.isFinite(timeoutSecs) && timeoutSecs > 0
+    ? timeoutSecs
+    : 900;
+
+  return Math.min(Math.max(Math.ceil(normalizedTimeoutSecs + 5), 30), 3600) * 1000;
+}
+
+function createOauthCallbackBridgeResponse(statusCode: number, body: string): {
+  statusCode: number;
+  contentType: string;
+  body: string;
+} {
+  return {
+    statusCode,
+    contentType: "text/plain; charset=utf-8",
+    body,
+  };
 }
 
 function parseStringArray(value: string, serverName: string, fieldName: string): string[] {

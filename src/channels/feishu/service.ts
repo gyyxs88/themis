@@ -8,6 +8,7 @@ import { AppServerActionBridge } from "../../core/app-server-action-bridge.js";
 import { AppServerTaskRuntime } from "../../core/app-server-task-runtime.js";
 import type { CodexRuntimeCatalog } from "../../core/codex-app-server.js";
 import { CodexAuthRuntime } from "../../core/codex-auth.js";
+import { resolvePrincipalMcpOauthCallbackBaseUrl } from "../../core/principal-mcp-service.js";
 import type { RuntimeServiceHost } from "../../core/runtime-service-host.js";
 import { readSessionNativeThreadSummary } from "../../core/native-thread-summary.js";
 import { validateWorkspacePath } from "../../core/session-workspace.js";
@@ -3826,14 +3827,20 @@ export class FeishuChannelService {
     }
 
     const principal = this.ensurePrincipalIdentity(context);
+    const mcpOauthCallbackBaseUrl = resolvePrincipalMcpOauthCallbackBaseUrl();
     const result = await this.runtime.getPrincipalMcpService().startPrincipalMcpOauthLogin(
       principal.principalId,
       serverName,
       {
         workingDirectory: this.runtime.getWorkingDirectory(),
         activeAuthAccount: this.authRuntime.getActiveAccount(),
+        ...(mcpOauthCallbackBaseUrl ? { mcpOauthCallbackBaseUrl } : {}),
       },
     );
+
+    const callbackLine = result.callbackBridge
+      ? `外部 callback：已启用 ${result.callbackBridge.publicCallbackUrl}`
+      : "外部 callback：未配置公开地址，授权链接可能仍指向当前机器本地回调。";
 
     await this.safeSendText(
       context.chatId,
@@ -3842,6 +3849,8 @@ export class FeishuChannelService {
         `已发起 MCP OAuth 登录：${result.server.serverName}`,
         `当前槽位：${result.target.targetId}`,
         `授权链接：${result.authorizationUrl}`,
+        `等待会话：${result.sessionRetained ? "已保持" : "未保持"}`,
+        callbackLine,
         `查看状态：/mcp oauth status ${result.server.serverName}`,
       ].join("\n"),
     );
@@ -3874,6 +3883,7 @@ export class FeishuChannelService {
         `MCP OAuth 状态：${result.server.serverName}`,
         `当前槽位：${result.target.targetId}`,
         `状态：${result.status}`,
+        `等待会话：${result.oauthSessionActive ? "仍在保持" : "未保持或已结束"}`,
         materialization
           ? `槽位状态：${materialization.state}/${materialization.authState}${materialization.lastError ? `：${materialization.lastError}` : ""}`
           : "槽位状态：暂无记录",

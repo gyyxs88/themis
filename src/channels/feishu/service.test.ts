@@ -2279,6 +2279,12 @@ test("/mcp oauth <name> 会返回授权链接", async () => {
         targetId: "acc-1",
       },
       authorizationUrl: "https://example.com/oauth/github",
+      sessionRetained: true,
+      callbackBridge: {
+        bridgeId: "bridge-1",
+        publicCallbackUrl: "https://themis.example.com/api/mcp/oauth/callback/bridge-1",
+        localCallbackPort: 38123,
+      },
       attempt: {
         attemptId: "attempt-1",
         principalId: harness.getCurrentPrincipalId(),
@@ -2316,6 +2322,8 @@ test("/mcp oauth <name> 会返回授权链接", async () => {
     const message = harness.takeSingleMessage();
     assert.match(message, /已发起 MCP OAuth 登录：github/);
     assert.match(message, /授权链接：https:\/\/example\.com\/oauth\/github/);
+    assert.match(message, /等待会话：已保持/);
+    assert.match(message, /外部 callback：已启用 https:\/\/themis\.example\.com\/api\/mcp\/oauth\/callback\/bridge-1/);
     assert.match(message, /查看状态：\/mcp oauth status github/);
   } finally {
     harness.cleanup();
@@ -2337,6 +2345,7 @@ test("/mcp oauth status <name> 会返回最近一次授权状态", async () => {
       },
       status: "waiting",
       refreshed: true,
+      oauthSessionActive: true,
       nextStep: "请打开授权链接完成授权，然后执行 /mcp oauth status github 或 /mcp reload。",
       attempt: {
         attemptId: "attempt-1",
@@ -2383,6 +2392,7 @@ test("/mcp oauth status <name> 会返回最近一次授权状态", async () => {
     const message = harness.takeSingleMessage();
     assert.match(message, /MCP OAuth 状态：github/);
     assert.match(message, /状态：waiting/);
+    assert.match(message, /等待会话：仍在保持/);
     assert.match(message, /槽位状态：missing\/auth_required/);
     assert.match(message, /授权链接：https:\/\/example\.com\/oauth\/github/);
   } finally {
