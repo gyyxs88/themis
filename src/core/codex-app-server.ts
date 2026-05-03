@@ -77,6 +77,51 @@ export interface CodexRuntimeAccessMode {
   description: string;
 }
 
+export interface CodexRuntimeProviderCapabilities {
+  available: boolean;
+  namespaceTools: boolean | null;
+  imageGeneration: boolean | null;
+  webSearch: boolean | null;
+  readError: string | null;
+}
+
+export interface CodexRuntimeHookError {
+  path: string;
+  message: string;
+}
+
+export interface CodexRuntimeHookMetadata {
+  key: string;
+  eventName: string;
+  handlerType: string;
+  matcher: string | null;
+  command: string | null;
+  timeoutSec: number | null;
+  statusMessage: string | null;
+  sourcePath: string | null;
+  source: string | null;
+  pluginId: string | null;
+  displayOrder: number | null;
+  enabled: boolean;
+  isManaged: boolean;
+}
+
+export interface CodexRuntimeHooksEntry {
+  cwd: string;
+  hooks: CodexRuntimeHookMetadata[];
+  warnings: string[];
+  errors: CodexRuntimeHookError[];
+}
+
+export interface CodexRuntimeHooksSummary {
+  entries: CodexRuntimeHooksEntry[];
+  totalHookCount: number;
+  enabledHookCount: number;
+  warningCount: number;
+  errorCount: number;
+  readError: string | null;
+}
+
 export interface CodexRuntimeThirdPartyProvider {
   id: string;
   type: "openai-compatible";
@@ -98,6 +143,8 @@ export interface CodexRuntimeCatalog {
   accessModes: CodexRuntimeAccessMode[];
   thirdPartyProviders: CodexRuntimeThirdPartyProvider[];
   personas: CodexRuntimePersonaProfile[];
+  providerCapabilities?: CodexRuntimeProviderCapabilities;
+  runtimeHooks?: CodexRuntimeHooksSummary;
 }
 
 export interface CodexAuthAccount {
@@ -193,6 +240,16 @@ interface AppServerConfigReadResponse {
   config?: Record<string, unknown>;
 }
 
+interface AppServerModelProviderCapabilitiesReadResponse {
+  namespaceTools?: unknown;
+  imageGeneration?: unknown;
+  webSearch?: unknown;
+}
+
+interface AppServerHooksListResponse {
+  data?: unknown;
+}
+
 interface AppServerGetAuthStatusResponse {
   authMethod?: unknown;
   requiresOpenaiAuth?: unknown;
@@ -257,52 +314,62 @@ export async function readCodexRuntimeCatalog(cwd: string, options: CodexAppServ
 
   try {
     await session.initialize();
-
-    const [modelList, configRead] = await Promise.all([
-      session.request<AppServerModelListResponse>("model/list", {
-        limit: 100,
-        includeHidden: true,
-      }),
-      session.request<AppServerConfigReadResponse>("config/read", {
-        includeLayers: false,
-        cwd,
-      }),
-    ]);
-
-    const defaults = normalizeRuntimeDefaults(configRead);
-    const models = normalizeRuntimeModels(modelList, defaults);
-
-    return {
-      models,
-      defaults: {
-        profile: defaults.profile,
-        model: defaults.model ?? models.find((model) => model.isDefault)?.model ?? models[0]?.model ?? null,
-        reasoning: defaults.reasoning,
-        approvalPolicy: defaults.approvalPolicy,
-        sandboxMode: defaults.sandboxMode,
-        webSearchMode: defaults.webSearchMode,
-        networkAccessEnabled: defaults.networkAccessEnabled,
-      },
-      provider: {
-        type: "codex-default",
-        name: "Codex CLI",
-        baseUrl: null,
-        model: defaults.model ?? models.find((model) => model.isDefault)?.model ?? models[0]?.model ?? null,
-        lockedModel: false,
-      },
-      accessModes: [
-        {
-          id: "auth",
-          label: "认证",
-          description: "通过 Codex / ChatGPT 认证运行任务。",
-        },
-      ],
-      thirdPartyProviders: [],
-      personas: [],
-    };
+    return await readCodexRuntimeCatalogFromSession(session, cwd);
   } finally {
     await session.close();
   }
+}
+
+export async function readCodexRuntimeCatalogFromSession(
+  session: Pick<CodexAppServerSession, "request">,
+  cwd: string,
+): Promise<CodexRuntimeCatalog> {
+  const [modelList, configRead, providerCapabilities, runtimeHooks] = await Promise.all([
+    session.request<AppServerModelListResponse>("model/list", {
+      limit: 100,
+      includeHidden: true,
+    }),
+    session.request<AppServerConfigReadResponse>("config/read", {
+      includeLayers: false,
+      cwd,
+    }),
+    readCodexProviderCapabilities(session),
+    readCodexRuntimeHooks(session, cwd),
+  ]);
+
+  const defaults = normalizeRuntimeDefaults(configRead);
+  const models = normalizeRuntimeModels(modelList, defaults);
+
+  return {
+    models,
+    defaults: {
+      profile: defaults.profile,
+      model: defaults.model ?? models.find((model) => model.isDefault)?.model ?? models[0]?.model ?? null,
+      reasoning: defaults.reasoning,
+      approvalPolicy: defaults.approvalPolicy,
+      sandboxMode: defaults.sandboxMode,
+      webSearchMode: defaults.webSearchMode,
+      networkAccessEnabled: defaults.networkAccessEnabled,
+    },
+    provider: {
+      type: "codex-default",
+      name: "Codex CLI",
+      baseUrl: null,
+      model: defaults.model ?? models.find((model) => model.isDefault)?.model ?? models[0]?.model ?? null,
+      lockedModel: false,
+    },
+    accessModes: [
+      {
+        id: "auth",
+        label: "认证",
+        description: "通过 Codex / ChatGPT 认证运行任务。",
+      },
+    ],
+    thirdPartyProviders: [],
+    personas: [],
+    providerCapabilities,
+    runtimeHooks,
+  };
 }
 
 export async function readCodexAuthStatus(cwd: string, options: CodexAppServerSessionOptions = {}): Promise<CodexAuthStatus> {
@@ -750,6 +817,152 @@ function normalizeRuntimeDefaults(response: AppServerConfigReadResponse): CodexR
     networkAccessEnabled: normalizeBoolean(
       isRecord(config.sandbox_workspace_write) ? config.sandbox_workspace_write.network_access : null,
     ),
+  };
+}
+
+async function readCodexProviderCapabilities(
+  session: Pick<CodexAppServerSession, "request">,
+): Promise<CodexRuntimeProviderCapabilities> {
+  try {
+    const response = await session.request<AppServerModelProviderCapabilitiesReadResponse>(
+      "modelProvider/capabilities/read",
+      {},
+    );
+
+    return normalizeProviderCapabilities(response);
+  } catch (error) {
+    return createUnavailableProviderCapabilities(toErrorMessage(error));
+  }
+}
+
+async function readCodexRuntimeHooks(
+  session: Pick<CodexAppServerSession, "request">,
+  cwd: string,
+): Promise<CodexRuntimeHooksSummary> {
+  try {
+    const response = await session.request<AppServerHooksListResponse>("hooks/list", {
+      cwds: [cwd],
+    });
+
+    return normalizeRuntimeHooks(response);
+  } catch (error) {
+    return createRuntimeHooksSummary([], toErrorMessage(error));
+  }
+}
+
+function normalizeProviderCapabilities(
+  response: AppServerModelProviderCapabilitiesReadResponse,
+): CodexRuntimeProviderCapabilities {
+  return {
+    available: true,
+    namespaceTools: normalizeBoolean(response.namespaceTools),
+    imageGeneration: normalizeBoolean(response.imageGeneration),
+    webSearch: normalizeBoolean(response.webSearch),
+    readError: null,
+  };
+}
+
+function createUnavailableProviderCapabilities(readError: string): CodexRuntimeProviderCapabilities {
+  return {
+    available: false,
+    namespaceTools: null,
+    imageGeneration: null,
+    webSearch: null,
+    readError,
+  };
+}
+
+function normalizeRuntimeHooks(response: AppServerHooksListResponse): CodexRuntimeHooksSummary {
+  const entries = Array.isArray(response.data)
+    ? response.data.map(normalizeRuntimeHookEntry).filter((entry): entry is CodexRuntimeHooksEntry => entry !== null)
+    : [];
+
+  return createRuntimeHooksSummary(entries, null);
+}
+
+function createRuntimeHooksSummary(
+  entries: CodexRuntimeHooksEntry[],
+  readError: string | null,
+): CodexRuntimeHooksSummary {
+  return {
+    entries,
+    totalHookCount: entries.reduce((count, entry) => count + entry.hooks.length, 0),
+    enabledHookCount: entries.reduce(
+      (count, entry) => count + entry.hooks.filter((hook) => hook.enabled).length,
+      0,
+    ),
+    warningCount: entries.reduce((count, entry) => count + entry.warnings.length, 0),
+    errorCount: entries.reduce((count, entry) => count + entry.errors.length, 0),
+    readError,
+  };
+}
+
+function normalizeRuntimeHookEntry(value: unknown): CodexRuntimeHooksEntry | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const cwd = normalizeOptionalText(value.cwd);
+
+  if (!cwd) {
+    return null;
+  }
+
+  return {
+    cwd,
+    hooks: Array.isArray(value.hooks)
+      ? value.hooks.map(normalizeRuntimeHookMetadata).filter((hook): hook is CodexRuntimeHookMetadata => hook !== null)
+      : [],
+    warnings: normalizeStringArray(value.warnings),
+    errors: Array.isArray(value.errors)
+      ? value.errors.map(normalizeRuntimeHookError).filter((error): error is CodexRuntimeHookError => error !== null)
+      : [],
+  };
+}
+
+function normalizeRuntimeHookMetadata(value: unknown): CodexRuntimeHookMetadata | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const key = normalizeOptionalText(value.key);
+
+  if (!key) {
+    return null;
+  }
+
+  return {
+    key,
+    eventName: normalizeOptionalText(value.eventName) ?? "unknown",
+    handlerType: normalizeOptionalText(value.handlerType) ?? "unknown",
+    matcher: normalizeOptionalText(value.matcher),
+    command: normalizeOptionalText(value.command),
+    timeoutSec: normalizePositiveNumber(value.timeoutSec),
+    statusMessage: normalizeOptionalText(value.statusMessage),
+    sourcePath: normalizeOptionalText(value.sourcePath),
+    source: normalizeOptionalText(value.source),
+    pluginId: normalizeOptionalText(value.pluginId),
+    displayOrder: normalizePositiveNumber(value.displayOrder),
+    enabled: normalizeBoolean(value.enabled) ?? false,
+    isManaged: normalizeBoolean(value.isManaged) ?? false,
+  };
+}
+
+function normalizeRuntimeHookError(value: unknown): CodexRuntimeHookError | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const path = normalizeOptionalText(value.path);
+  const message = normalizeOptionalText(value.message);
+
+  if (!path || !message) {
+    return null;
+  }
+
+  return {
+    path,
+    message,
   };
 }
 
@@ -1244,6 +1457,10 @@ function normalizeOptionalTimestamp(value: unknown): string | null {
   }
 
   return normalizeOptionalText(value);
+}
+
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function normalizeOptionalText(value: unknown): string | null {

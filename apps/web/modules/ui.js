@@ -200,6 +200,7 @@ export function createRenderer(app) {
     renderNetworkAccessSelect(effectiveSettings);
     renderAssistantStyleNote(effectiveSettings);
     renderRuntimeConfigNote(settings, effectiveSettings);
+    renderRuntimeIntrospectionNotes();
     renderUpdateManagerState();
     renderIdentityState();
     renderMemoryCandidatesState();
@@ -1997,6 +1998,87 @@ export function createRenderer(app) {
     dom.runtimeConfigNote.textContent = parts.join(" ");
   }
 
+  function renderRuntimeIntrospectionNotes() {
+    const runtimeConfig = app.runtime.runtimeConfig;
+    renderProviderCapabilitiesNote(runtimeConfig);
+    renderRuntimeHooksNote(runtimeConfig);
+  }
+
+  function renderProviderCapabilitiesNote(runtimeConfig) {
+    if (!dom.runtimeProviderCapabilitiesNote) {
+      return;
+    }
+
+    if (runtimeConfig.status !== "ready") {
+      dom.runtimeProviderCapabilitiesNote.classList.add("hidden");
+      delete dom.runtimeProviderCapabilitiesNote.dataset.state;
+      return;
+    }
+
+    const capabilities = runtimeConfig.providerCapabilities;
+
+    if (!capabilities) {
+      dom.runtimeProviderCapabilitiesNote.classList.add("hidden");
+      delete dom.runtimeProviderCapabilitiesNote.dataset.state;
+      return;
+    }
+
+    dom.runtimeProviderCapabilitiesNote.classList.remove("hidden");
+
+    if (capabilities.readError) {
+      dom.runtimeProviderCapabilitiesNote.textContent = `Provider 能力读取失败：${capabilities.readError}`;
+      dom.runtimeProviderCapabilitiesNote.dataset.state = "error";
+      return;
+    }
+
+    dom.runtimeProviderCapabilitiesNote.textContent = [
+      "Provider 能力：",
+      `namespaceTools=${formatRuntimeBoolean(capabilities.namespaceTools)}`,
+      `imageGeneration=${formatRuntimeBoolean(capabilities.imageGeneration)}`,
+      `webSearch=${formatRuntimeBoolean(capabilities.webSearch)}`,
+    ].join(" ");
+    dom.runtimeProviderCapabilitiesNote.dataset.state = capabilities.available ? "supported" : "inconclusive";
+  }
+
+  function renderRuntimeHooksNote(runtimeConfig) {
+    if (!dom.runtimeHooksNote) {
+      return;
+    }
+
+    if (runtimeConfig.status !== "ready") {
+      dom.runtimeHooksNote.classList.add("hidden");
+      delete dom.runtimeHooksNote.dataset.state;
+      return;
+    }
+
+    const hooks = runtimeConfig.runtimeHooks;
+
+    if (!hooks) {
+      dom.runtimeHooksNote.classList.add("hidden");
+      delete dom.runtimeHooksNote.dataset.state;
+      return;
+    }
+
+    dom.runtimeHooksNote.classList.remove("hidden");
+
+    if (hooks.readError) {
+      dom.runtimeHooksNote.textContent = `Hooks 读取失败：${hooks.readError}`;
+      dom.runtimeHooksNote.dataset.state = "error";
+      return;
+    }
+
+    dom.runtimeHooksNote.textContent = [
+      `Hooks：${hooks.enabledHookCount}/${hooks.totalHookCount} enabled`,
+      `warnings=${hooks.warningCount}`,
+      `errors=${hooks.errorCount}`,
+    ].join(" · ");
+    dom.runtimeHooksNote.dataset.state = hooks.errorCount > 0
+      ? "error"
+      : hooks.warningCount > 0
+        ? "inconclusive"
+        : "supported";
+  }
+
   function renderUpdateManagerState() {
     const updateState = app.runtime.updateManager;
     const check = updateState.check;
@@ -3640,6 +3722,14 @@ function resolveModelFallbackLabel(runtimeConfig) {
   }
 
   return "正在读取 Codex 模型...";
+}
+
+function formatRuntimeBoolean(value) {
+  if (typeof value !== "boolean") {
+    return "unknown";
+  }
+
+  return value ? "yes" : "no";
 }
 
 function renderOperationsCenterCard(card, escapeHtml) {

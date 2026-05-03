@@ -29,6 +29,27 @@ function createDefaultRuntimeProvider() {
   };
 }
 
+function createDefaultProviderCapabilities() {
+  return {
+    available: false,
+    namespaceTools: null,
+    imageGeneration: null,
+    webSearch: null,
+    readError: "",
+  };
+}
+
+function createDefaultRuntimeHooks() {
+  return {
+    entries: [],
+    totalHookCount: 0,
+    enabledHookCount: 0,
+    warningCount: 0,
+    errorCount: 0,
+    readError: "",
+  };
+}
+
 function createDefaultAccessMode(id = "") {
   return {
     id,
@@ -73,6 +94,8 @@ export function createDefaultRuntimeConfigState() {
     models: [],
     defaults: createDefaultRuntimeDefaults(),
     provider: createDefaultRuntimeProvider(),
+    providerCapabilities: createDefaultProviderCapabilities(),
+    runtimeHooks: createDefaultRuntimeHooks(),
     accessModes: [createDefaultAccessMode("auth")],
     thirdPartyProviders: [],
     personas: [],
@@ -144,6 +167,8 @@ function normalizeRuntimeConfigState(payload) {
       networkAccessEnabled: normalizeOptionalBoolean(defaults.networkAccessEnabled),
     },
     provider: normalizeProvider(payload?.provider),
+    providerCapabilities: normalizeProviderCapabilities(payload?.providerCapabilities),
+    runtimeHooks: normalizeRuntimeHooks(payload?.runtimeHooks),
     accessModes: normalizeAccessModes(payload?.accessModes, thirdPartyProviders),
     thirdPartyProviders,
     personas,
@@ -283,6 +308,104 @@ function normalizeProvider(value) {
     model: normalizeOptionalText(value.model),
     lockedModel: Boolean(value.lockedModel),
   };
+}
+
+function normalizeProviderCapabilities(value) {
+  if (!isRecord(value)) {
+    return createDefaultProviderCapabilities();
+  }
+
+  return {
+    available: Boolean(value.available),
+    namespaceTools: normalizeOptionalBoolean(value.namespaceTools),
+    imageGeneration: normalizeOptionalBoolean(value.imageGeneration),
+    webSearch: normalizeOptionalBoolean(value.webSearch),
+    readError: normalizeOptionalText(value.readError),
+  };
+}
+
+function normalizeRuntimeHooks(value) {
+  if (!isRecord(value)) {
+    return createDefaultRuntimeHooks();
+  }
+
+  return {
+    entries: Array.isArray(value.entries) ? value.entries.map(normalizeRuntimeHookEntry).filter(Boolean) : [],
+    totalHookCount: normalizeCount(value.totalHookCount),
+    enabledHookCount: normalizeCount(value.enabledHookCount),
+    warningCount: normalizeCount(value.warningCount),
+    errorCount: normalizeCount(value.errorCount),
+    readError: normalizeOptionalText(value.readError),
+  };
+}
+
+function normalizeRuntimeHookEntry(value) {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const cwd = normalizeOptionalText(value.cwd);
+
+  if (!cwd) {
+    return null;
+  }
+
+  return {
+    cwd,
+    hooks: Array.isArray(value.hooks) ? value.hooks.map(normalizeRuntimeHook).filter(Boolean) : [],
+    warnings: normalizeTextArray(value.warnings),
+    errors: Array.isArray(value.errors) ? value.errors.map(normalizeRuntimeHookError).filter(Boolean) : [],
+  };
+}
+
+function normalizeRuntimeHook(value) {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const key = normalizeOptionalText(value.key);
+
+  if (!key) {
+    return null;
+  }
+
+  return {
+    key,
+    eventName: normalizeOptionalText(value.eventName),
+    handlerType: normalizeOptionalText(value.handlerType),
+    matcher: normalizeOptionalText(value.matcher),
+    command: normalizeOptionalText(value.command),
+    timeoutSec: normalizeOptionalNumber(value.timeoutSec),
+    statusMessage: normalizeOptionalText(value.statusMessage),
+    sourcePath: normalizeOptionalText(value.sourcePath),
+    source: normalizeOptionalText(value.source),
+    pluginId: normalizeOptionalText(value.pluginId),
+    displayOrder: normalizeOptionalNumber(value.displayOrder),
+    enabled: Boolean(value.enabled),
+    isManaged: Boolean(value.isManaged),
+  };
+}
+
+function normalizeRuntimeHookError(value) {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const path = normalizeOptionalText(value.path);
+  const message = normalizeOptionalText(value.message);
+
+  if (!path || !message) {
+    return null;
+  }
+
+  return {
+    path,
+    message,
+  };
+}
+
+function normalizeCount(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
 function normalizeAccessModes(value, thirdPartyProviders) {

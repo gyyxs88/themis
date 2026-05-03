@@ -789,6 +789,36 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
       console.log("Themis 诊断 - service");
       console.log(`sqlite.path：${summary.service.sqlite.path}`);
       console.log(`sqlite.status：${summary.service.sqlite.exists ? "ok" : "missing"}`);
+      console.log(`runtimeCatalog.status：${summary.service.runtimeCatalog.available ? "ok" : "unavailable"}`);
+      console.log(`runtimeCatalog.modelCount：${summary.service.runtimeCatalog.modelCount}`);
+      console.log(`runtimeCatalog.defaultModel：${summary.service.runtimeCatalog.defaultModel ?? "<none>"}`);
+      if (summary.service.runtimeCatalog.readError) {
+        console.log(`runtimeCatalog.readError：${summary.service.runtimeCatalog.readError}`);
+      }
+      const providerCapabilities = summary.service.runtimeCatalog.providerCapabilities;
+      if (providerCapabilities) {
+        console.log(`providerCapabilities.status：${providerCapabilities.available ? "ok" : "unavailable"}`);
+        console.log(`providerCapabilities.namespaceTools：${formatNullableBooleanFlag(providerCapabilities.namespaceTools)}`);
+        console.log(`providerCapabilities.imageGeneration：${formatNullableBooleanFlag(providerCapabilities.imageGeneration)}`);
+        console.log(`providerCapabilities.webSearch：${formatNullableBooleanFlag(providerCapabilities.webSearch)}`);
+        if (providerCapabilities.readError) {
+          console.log(`providerCapabilities.readError：${providerCapabilities.readError}`);
+        }
+      } else {
+        console.log("providerCapabilities：<none>");
+      }
+      const runtimeHooks = summary.service.runtimeCatalog.runtimeHooks;
+      if (runtimeHooks) {
+        console.log(`runtimeHooks.total：${runtimeHooks.totalHookCount}`);
+        console.log(`runtimeHooks.enabled：${runtimeHooks.enabledHookCount}`);
+        console.log(`runtimeHooks.warningCount：${runtimeHooks.warningCount}`);
+        console.log(`runtimeHooks.errorCount：${runtimeHooks.errorCount}`);
+        if (runtimeHooks.readError) {
+          console.log(`runtimeHooks.readError：${runtimeHooks.readError}`);
+        }
+      } else {
+        console.log("runtimeHooks：<none>");
+      }
       console.log(`multimodal.status：${summary.service.multimodal.available ? "ok" : "unavailable"}`);
       console.log(`multimodal.recentTurnInputCount：${summary.service.multimodal.recentTurnInputCount}/${summary.service.multimodal.sampleWindowSize}`);
       console.log(
@@ -951,17 +981,20 @@ async function handleDoctor(subcommand: string | undefined, args: string[]): Pro
 function getDoctorRuntimeDiagnosticsOptions(selectedSection: string | undefined): {
   includeFeishu: boolean;
   includeMcp: boolean;
+  includeRuntimeCatalog: boolean;
 } {
   if (!selectedSection || selectedSection === "release") {
     return {
       includeFeishu: true,
       includeMcp: true,
+      includeRuntimeCatalog: false,
     };
   }
 
   return {
     includeFeishu: selectedSection === "feishu",
     includeMcp: selectedSection === "mcp",
+    includeRuntimeCatalog: selectedSection === "service",
   };
 }
 

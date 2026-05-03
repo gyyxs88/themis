@@ -2,6 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveCodexAuthFilePath, resolveDefaultCodexHome } from "../core/auth-accounts.js";
 import type { CodexAuthRuntime } from "../core/codex-auth.js";
+import {
+  readCodexRuntimeCatalog,
+  type CodexRuntimeCatalog,
+} from "../core/codex-app-server.js";
 import { readOpenAICompatibleProviderConfigs } from "../core/openai-compatible-provider.js";
 import { McpInspector, type McpInspectorListResult, type McpServerSummary } from "../mcp/mcp-inspector.js";
 import type { SqliteCodexSessionRegistry, StoredTurnInputCompileCapabilityMatrix } from "../storage/index.js";
@@ -102,6 +106,15 @@ export interface RuntimeMultimodalDiagnosticsSummary {
   lastBlockedTurn: RuntimeMultimodalLastTurnSummary | null;
 }
 
+export interface RuntimeCatalogDiagnosticsSummary {
+  available: boolean;
+  modelCount: number;
+  defaultModel: string | null;
+  providerCapabilities: CodexRuntimeCatalog["providerCapabilities"] | null;
+  runtimeHooks: CodexRuntimeCatalog["runtimeHooks"] | null;
+  readError?: string;
+}
+
 export interface RuntimeDiagnosticsSummary {
   generatedAt: string;
   workingDirectory: string;
@@ -132,6 +145,7 @@ export interface RuntimeDiagnosticsSummary {
       exists: boolean;
     };
     multimodal: RuntimeMultimodalDiagnosticsSummary;
+    runtimeCatalog: RuntimeCatalogDiagnosticsSummary;
   };
   mcp: McpInspectorListResult & {
     readError?: string;
@@ -145,11 +159,13 @@ export interface RuntimeDiagnosticsServiceOptions {
   authRuntime?: CodexAuthRuntime | null;
   sqliteFilePath?: string;
   mcpInspector?: Pick<McpInspector, "list" | "probe" | "reload"> | null;
+  runtimeCatalogReader?: (() => Promise<CodexRuntimeCatalog>) | null;
 }
 
 export interface RuntimeDiagnosticsReadSummaryOptions {
   includeFeishu?: boolean;
   includeMcp?: boolean;
+  includeRuntimeCatalog?: boolean;
 }
 
 const BASE_CONTEXT_FILES = [
@@ -181,6 +197,7 @@ export class RuntimeDiagnosticsService {
   private readonly authRuntime: CodexAuthRuntime | null;
   private readonly sqliteFilePath: string;
   private readonly mcpInspector: Pick<McpInspector, "list" | "probe" | "reload"> | null;
+  private readonly runtimeCatalogReader: (() => Promise<CodexRuntimeCatalog>) | null;
 
   constructor(options: RuntimeDiagnosticsServiceOptions) {
     this.workingDirectory = options.workingDirectory;
@@ -190,11 +207,13 @@ export class RuntimeDiagnosticsService {
     this.mcpInspector = options.mcpInspector ?? new McpInspector({
       workingDirectory: this.workingDirectory,
     });
+    this.runtimeCatalogReader = options.runtimeCatalogReader ?? null;
   }
 
   async readSummary(options: RuntimeDiagnosticsReadSummaryOptions = {}): Promise<RuntimeDiagnosticsSummary> {
     const includeFeishu = options.includeFeishu ?? true;
     const includeMcp = options.includeMcp ?? true;
+    const includeRuntimeCatalog = options.includeRuntimeCatalog ?? false;
     const defaultCodexHome = resolveDefaultCodexHome();
     const authFilePath = resolveCodexAuthFilePath(defaultCodexHome);
     const authFileExists = existsSync(authFilePath);
@@ -233,12 +252,16 @@ export class RuntimeDiagnosticsService {
     const contextFiles = getContextDiagnosticFiles(this.workingDirectory).map((path) => readPathStatus(this.workingDirectory, path));
     const memoryFiles = getMemoryDiagnosticFiles(this.workingDirectory).map((path) => readPathStatus(this.workingDirectory, path));
     const multimodal = summarizeRecentTurnInputDiagnostics(this.runtimeStore);
+    const runtimeCatalog = includeRuntimeCatalog
+      ? await this.readRuntimeCatalogSummary()
+      : createSkippedRuntimeCatalogSummary();
     const service = {
       sqlite: {
         path: this.sqliteFilePath,
         exists: existsSync(this.sqliteFilePath),
       },
       multimodal,
+      runtimeCatalog,
     };
     const provider = {
       activeMode: this.authRuntime
@@ -314,6 +337,41 @@ export class RuntimeDiagnosticsService {
       };
     }
   }
+
+  private async readRuntimeCatalogSummary(): Promise<RuntimeCatalogDiagnosticsSummary> {
+    try {
+      const catalog = this.runtimeCatalogReader
+        ? await this.runtimeCatalogReader()
+        : await readCodexRuntimeCatalog(this.workingDirectory);
+
+      return {
+        available: true,
+        modelCount: catalog.models.length,
+        defaultModel: catalog.defaults.model,
+        providerCapabilities: catalog.providerCapabilities ?? null,
+        runtimeHooks: catalog.runtimeHooks ?? null,
+      };
+    } catch (error) {
+      return {
+        available: false,
+        modelCount: 0,
+        defaultModel: null,
+        providerCapabilities: null,
+        runtimeHooks: null,
+        readError: toErrorMessage(error),
+      };
+    }
+  }
+}
+
+function createSkippedRuntimeCatalogSummary(): RuntimeCatalogDiagnosticsSummary {
+  return {
+    available: false,
+    modelCount: 0,
+    defaultModel: null,
+    providerCapabilities: null,
+    runtimeHooks: null,
+  };
 }
 
 function createSkippedMcpSummary(): RuntimeDiagnosticsSummary["mcp"] {

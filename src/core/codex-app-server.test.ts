@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CodexAppServerSession } from "./codex-app-server.js";
+import {
+  CodexAppServerSession,
+  readCodexRuntimeCatalogFromSession,
+} from "./codex-app-server.js";
 
 function createSessionStub(): { session: any; writes: string[] } {
   const writes: string[] = [];
@@ -239,6 +242,140 @@ test("initialize 会声明 experimentalApi capability，允许后续线程启用
       },
     },
   ]);
+});
+
+test("readCodexRuntimeCatalogFromSession 会读取 provider capabilities 与 hooks 摘要", async () => {
+  const calls: Array<{ method: string; params: unknown }> = [];
+  const session = {
+    request: async <TResult>(method: string, params: unknown): Promise<TResult> => {
+      calls.push({ method, params });
+
+      if (method === "model/list") {
+        return {
+          data: [{
+            model: "gpt-5.5",
+            displayName: "GPT-5.5",
+            isDefault: true,
+          }],
+        } as TResult;
+      }
+
+      if (method === "config/read") {
+        return {
+          config: {
+            model: "gpt-5.5",
+            model_reasoning_effort: "xhigh",
+          },
+        } as TResult;
+      }
+
+      if (method === "modelProvider/capabilities/read") {
+        return {
+          namespaceTools: true,
+          imageGeneration: true,
+          webSearch: true,
+        } as TResult;
+      }
+
+      if (method === "hooks/list") {
+        return {
+          data: [{
+            cwd: "/workspace/demo",
+            hooks: [{
+              key: "project:userPromptSubmit:1",
+              eventName: "userPromptSubmit",
+              handlerType: "command",
+              matcher: null,
+              command: "node hook.js",
+              timeoutSec: 10,
+              statusMessage: "运行 prompt hook",
+              sourcePath: "/workspace/demo/AGENTS.md",
+              source: "project",
+              pluginId: null,
+              displayOrder: 1,
+              enabled: true,
+              isManaged: false,
+            }],
+            warnings: ["hook warning"],
+            errors: [{
+              path: "/workspace/demo/bad-hook.toml",
+              message: "bad hook",
+            }],
+          }],
+        } as TResult;
+      }
+
+      throw new Error(`unexpected method ${method}`);
+    },
+  };
+
+  const catalog = await readCodexRuntimeCatalogFromSession(session, "/workspace/demo");
+
+  assert.deepEqual(calls.map((call) => call.method), [
+    "model/list",
+    "config/read",
+    "modelProvider/capabilities/read",
+    "hooks/list",
+  ]);
+  assert.deepEqual(calls.find((call) => call.method === "hooks/list")?.params, {
+    cwds: ["/workspace/demo"],
+  });
+  assert.deepEqual(catalog.providerCapabilities, {
+    available: true,
+    namespaceTools: true,
+    imageGeneration: true,
+    webSearch: true,
+    readError: null,
+  });
+  assert.equal(catalog.runtimeHooks?.totalHookCount, 1);
+  assert.equal(catalog.runtimeHooks?.enabledHookCount, 1);
+  assert.equal(catalog.runtimeHooks?.warningCount, 1);
+  assert.equal(catalog.runtimeHooks?.errorCount, 1);
+  assert.equal(catalog.runtimeHooks?.entries[0]?.hooks[0]?.command, "node hook.js");
+});
+
+test("readCodexRuntimeCatalogFromSession 会把只读探测失败降级为 catalog 诊断字段", async () => {
+  const session = {
+    request: async <TResult>(method: string): Promise<TResult> => {
+      if (method === "model/list") {
+        return {
+          data: [{
+            model: "gpt-5.5",
+            isDefault: true,
+          }],
+        } as TResult;
+      }
+
+      if (method === "config/read") {
+        return {
+          config: {
+            model: "gpt-5.5",
+          },
+        } as TResult;
+      }
+
+      throw new Error(`${method} unavailable`);
+    },
+  };
+
+  const catalog = await readCodexRuntimeCatalogFromSession(session, "/workspace/demo");
+
+  assert.equal(catalog.models[0]?.model, "gpt-5.5");
+  assert.deepEqual(catalog.providerCapabilities, {
+    available: false,
+    namespaceTools: null,
+    imageGeneration: null,
+    webSearch: null,
+    readError: "modelProvider/capabilities/read unavailable",
+  });
+  assert.deepEqual(catalog.runtimeHooks, {
+    entries: [],
+    totalHookCount: 0,
+    enabledHookCount: 0,
+    warningCount: 0,
+    errorCount: 0,
+    readError: "hooks/list unavailable",
+  });
 });
 
 test("startThread 和 resumeThread 会补齐持久化扩展历史所需参数", async () => {

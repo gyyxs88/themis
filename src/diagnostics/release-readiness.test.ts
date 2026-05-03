@@ -73,6 +73,13 @@ function createDiagnosticsSummary(errorHotspots: Array<{ title: string; nextStep
         lastTurn: null,
         lastBlockedTurn: null,
       },
+      runtimeCatalog: {
+        available: false,
+        modelCount: 0,
+        defaultModel: null,
+        providerCapabilities: null,
+        runtimeHooks: null,
+      },
     },
     mcp: {
       servers: [],

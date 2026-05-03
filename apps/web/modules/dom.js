@@ -68,6 +68,8 @@ export function createDom() {
     sessionWorkspaceApplyButton: document.getElementById("session-workspace-apply-button"),
     settingsNote: document.getElementById("settings-note"),
     runtimeConfigNote: document.getElementById("runtime-config-note"),
+    runtimeProviderCapabilitiesNote: document.getElementById("runtime-provider-capabilities-note"),
+    runtimeHooksNote: document.getElementById("runtime-hooks-note"),
     updateManagerNote: document.getElementById("update-manager-note"),
     updateManagerCurrent: document.getElementById("update-manager-current"),
     updateManagerTarget: document.getElementById("update-manager-target"),

@@ -51,6 +51,96 @@ test("RuntimeDiagnosticsService.readSummary 返回 auth/provider/context/memory/
   }
 });
 
+test("RuntimeDiagnosticsService.readSummary 可按需输出 Codex runtime catalog 只读能力摘要", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-runtime-diagnostics-catalog-"));
+
+  try {
+    const runtimeStore = new SqliteCodexSessionRegistry({
+      databaseFile: join(root, "infra/local/themis.db"),
+    });
+    const service = new RuntimeDiagnosticsService({
+      workingDirectory: root,
+      runtimeStore,
+      mcpInspector: {
+        list: async () => ({ servers: [] }),
+      } as never,
+      runtimeCatalogReader: async () => ({
+        models: [{
+          id: "gpt-5.5",
+          model: "gpt-5.5",
+          displayName: "GPT-5.5",
+          description: "",
+          hidden: false,
+          supportedReasoningEfforts: [],
+          defaultReasoningEffort: "xhigh",
+          contextWindow: null,
+          capabilities: {
+            textInput: true,
+            imageInput: true,
+            nativeTextInput: true,
+            nativeImageInput: true,
+            nativeDocumentInput: false,
+            supportedDocumentMimeTypes: [],
+            supportsPdfTextExtraction: false,
+            supportsDocumentPageRasterization: false,
+            supportsCodexTasks: true,
+            supportsReasoningSummaries: false,
+            supportsVerbosity: false,
+            supportsParallelToolCalls: false,
+            supportsSearchTool: true,
+            supportsImageDetailOriginal: false,
+          },
+          supportsPersonality: false,
+          supportsCodexTasks: true,
+          isDefault: true,
+        }],
+        defaults: {
+          profile: null,
+          model: "gpt-5.5",
+          reasoning: "xhigh",
+          approvalPolicy: "never",
+          sandboxMode: "workspace-write",
+          webSearchMode: "live",
+          networkAccessEnabled: true,
+        },
+        provider: null,
+        accessModes: [],
+        thirdPartyProviders: [],
+        personas: [],
+        providerCapabilities: {
+          available: true,
+          namespaceTools: true,
+          imageGeneration: true,
+          webSearch: true,
+          readError: null,
+        },
+        runtimeHooks: {
+          entries: [],
+          totalHookCount: 0,
+          enabledHookCount: 0,
+          warningCount: 0,
+          errorCount: 0,
+          readError: null,
+        },
+      }),
+    });
+
+    const skipped = await service.readSummary({ includeRuntimeCatalog: false });
+    assert.equal(skipped.service.runtimeCatalog.available, false);
+    assert.equal(skipped.service.runtimeCatalog.modelCount, 0);
+
+    const summary = await service.readSummary({ includeRuntimeCatalog: true });
+
+    assert.equal(summary.service.runtimeCatalog.available, true);
+    assert.equal(summary.service.runtimeCatalog.modelCount, 1);
+    assert.equal(summary.service.runtimeCatalog.defaultModel, "gpt-5.5");
+    assert.equal(summary.service.runtimeCatalog.providerCapabilities?.namespaceTools, true);
+    assert.equal(summary.service.runtimeCatalog.runtimeHooks?.totalHookCount, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("RuntimeDiagnosticsService.readSummary 在公开仓运行形态不要求开发仓记忆文件", async () => {
   const root = mkdtempSync(join(tmpdir(), "themis-runtime-diagnostics-public-"));
 
