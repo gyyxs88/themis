@@ -689,15 +689,20 @@ export class WebAccessService {
       remoteIp?: string;
     } = {},
   ): void {
+    const tokenId = context.tokenId?.trim();
+    const sessionId = context.sessionId?.trim();
+    const safeTokenId = tokenId && this.registry.getWebAccessTokenById(tokenId) ? tokenId : undefined;
+    const safeSessionId = sessionId && this.registry.getWebSession(sessionId) ? sessionId : undefined;
+
     this.registry.appendWebAuditEvent({
       eventId: randomUUID(),
       eventType,
       createdAt: this.now(),
       summary,
       ...(context.remoteIp ? { remoteIp: context.remoteIp } : {}),
-      ...(context.tokenId ? { tokenId: context.tokenId } : {}),
+      ...(safeTokenId ? { tokenId: safeTokenId } : {}),
       ...(context.tokenLabel ? { tokenLabel: context.tokenLabel } : {}),
-      ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+      ...(safeSessionId ? { sessionId: safeSessionId } : {}),
       payloadJson: JSON.stringify(payload),
     });
   }

@@ -555,6 +555,29 @@ export class PrincipalMcpService {
       .find((entry) => entry.callbackBridge?.bridgeId === normalizedBridgeId);
 
     if (!activeSession?.callbackBridge) {
+      const knownAttempt = this.registry.getPrincipalMcpOauthAttemptByCallbackBridgeId(normalizedBridgeId);
+
+      if (knownAttempt?.status === "completed") {
+        return createOauthCallbackBridgeResponse(
+          200,
+          "OAuth authorization has already completed. You can close this window and return to Themis.",
+        );
+      }
+
+      if (knownAttempt?.status === "failed") {
+        return createOauthCallbackBridgeResponse(
+          410,
+          `OAuth authorization did not complete.${knownAttempt.lastError ? ` ${knownAttempt.lastError}` : ""}`,
+        );
+      }
+
+      if (knownAttempt) {
+        return createOauthCallbackBridgeResponse(
+          410,
+          "OAuth callback session has expired. Return to Themis and check the OAuth status, or start a new OAuth login if needed.",
+        );
+      }
+
       return createOauthCallbackBridgeResponse(404, "OAuth callback has expired or is unknown.");
     }
 

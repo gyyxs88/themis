@@ -9527,6 +9527,41 @@ export class SqliteCodexSessionRegistry {
     return row ? mapPrincipalMcpOauthAttemptRow(row) : null;
   }
 
+  getPrincipalMcpOauthAttemptByCallbackBridgeId(
+    bridgeId: string,
+  ): StoredPrincipalMcpOauthAttemptRecord | null {
+    const normalizedBridgeId = bridgeId.trim();
+
+    if (!normalizedBridgeId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+          SELECT
+            attempt_id,
+            principal_id,
+            server_name,
+            target_kind,
+            target_id,
+            status,
+            authorization_url,
+            started_at,
+            updated_at,
+            completed_at,
+            last_error
+          FROM themis_principal_mcp_oauth_attempts
+          WHERE instr(authorization_url, ?) > 0
+          ORDER BY updated_at DESC, started_at DESC, attempt_id DESC
+          LIMIT 1
+        `,
+      )
+      .get(normalizedBridgeId) as PrincipalMcpOauthAttemptRow | undefined;
+
+    return row ? mapPrincipalMcpOauthAttemptRow(row) : null;
+  }
+
   deletePrincipalMcpOauthAttempts(principalId: string, serverName?: string): number {
     const normalizedPrincipalId = principalId.trim();
 

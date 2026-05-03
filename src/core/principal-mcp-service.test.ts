@@ -462,6 +462,44 @@ test("handlePrincipalMcpOauthCallback 会把公开 callback 桥接到本地 Code
   }
 });
 
+test("handlePrincipalMcpOauthCallback 对已完成但桥已清理的 callback 返回完成提示", async () => {
+  const { service, registry, workingDirectory } = createService();
+  const bridgeId = "b320f487-28fa-4a1f-bc09-d101b447f589";
+
+  try {
+    service.upsertPrincipalMcpServer({
+      principalId: PRINCIPAL_ID,
+      serverName: "todoist",
+      transportType: "streamable_http",
+      url: "https://mcp.todoist.com/mcp",
+      enabled: true,
+    });
+
+    registry.savePrincipalMcpOauthAttempt({
+      attemptId: "attempt-completed",
+      principalId: PRINCIPAL_ID,
+      serverName: "todoist",
+      targetKind: "auth-account",
+      targetId: "owner@example.com",
+      status: "completed",
+      authorizationUrl: `https://todoist.com/oauth/authorize?redirect_uri=https%3A%2F%2Fthemis.example.com%2Fapi%2Fmcp%2Foauth%2Fcallback%2F${bridgeId}`,
+      startedAt: "2026-05-03T00:28:55.454Z",
+      updatedAt: "2026-05-03T00:33:55.459Z",
+      completedAt: "2026-05-03T00:33:55.459Z",
+    });
+
+    const callbackResult = await service.handlePrincipalMcpOauthCallback(
+      bridgeId,
+      "?code=already-used",
+    );
+
+    assert.equal(callbackResult.statusCode, 200);
+    assert.match(callbackResult.body, /already completed/);
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
 test("getPrincipalMcpOauthStatus 会刷新 runtime 并收口最近一次授权尝试", async () => {
   const { service, registry, workingDirectory } = createService();
 

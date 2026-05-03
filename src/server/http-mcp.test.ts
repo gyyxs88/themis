@@ -431,6 +431,25 @@ test("POST /api/mcp/oauth/status 会返回 OAuth 授权状态", async () => {
   });
 });
 
+test("POST /api/mcp/oauth/status 遇到旧 Web session cookie 返回 401 而不是审计外键 500", async () => {
+  await withMcpServer(async ({ baseUrl }) => {
+    const response = await postJson(baseUrl, "/api/mcp/oauth/status", {
+      ...buildIdentityPayload(),
+      serverName: "github",
+    }, {
+      Cookie: "themis_web_session=stale-session-id",
+    });
+
+    assert.equal(response.status, 401);
+    assert.deepEqual(await response.json(), {
+      error: {
+        code: "WEB_ACCESS_REQUIRED",
+        message: "请先登录 Themis Web。",
+      },
+    });
+  });
+});
+
 test("GET /api/mcp/oauth/callback/:bridgeId 不需要 Web 登录并转交 MCP OAuth callback", async () => {
   await withMcpServer(async ({ baseUrl, runtime }) => {
     const service = runtime.getPrincipalMcpService() as ReturnType<AppServerTaskRuntime["getPrincipalMcpService"]> & {

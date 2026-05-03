@@ -340,6 +340,41 @@ test("recordDeniedAccess 会写被拒绝访问审计", () => {
   }
 });
 
+test("recordDeniedAccess 遇到旧 session cookie 不会触发审计外键错误", () => {
+  const { workingDirectory, registry, service } = createService(() => NOW);
+
+  try {
+    service.createToken({
+      label: "owner",
+      secret: "correct horse battery staple",
+    });
+
+    assert.doesNotThrow(() => {
+      service.recordDeniedAccess({
+        reason: "MISSING_SESSION",
+        sessionId: "stale-session-id",
+        remoteIp: "192.168.1.17",
+      });
+    });
+
+    const deniedAudit = registry
+      .listWebAuditEvents()
+      .find((event) => event.eventType === "web_access.access_denied");
+
+    assert.ok(deniedAudit);
+    assert.equal(deniedAudit?.remoteIp, "192.168.1.17");
+    assert.equal(deniedAudit?.sessionId, undefined);
+    const payload = JSON.parse(deniedAudit?.payloadJson ?? "{}") as {
+      reason?: string;
+      sessionId?: string;
+    };
+    assert.equal(payload.reason, "MISSING_SESSION");
+    assert.equal(payload.sessionId, "stale-session-id");
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
 test("吊销后可用同名 label 重建新 token", () => {
   const { workingDirectory, registry, service } = createService(() => NOW);
 
