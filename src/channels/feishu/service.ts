@@ -3675,6 +3675,9 @@ export class FeishuChannelService {
       case "sync":
         await this.handlePluginsSyncCommand(args.slice(1), context);
         return;
+      case "upgrade":
+        await this.handlePluginsUpgradeCommand(args.slice(1), context);
+        return;
       case "uninstall":
       case "remove":
         await this.handlePluginsUninstallCommand(args.slice(1), context);
@@ -4005,6 +4008,41 @@ export class FeishuChannelService {
         failedPlugins.length > 0 ? `同步失败：${failedPlugins.join(", ")}` : null,
         "查看：/plugins list",
       ].filter((line): line is string => line !== null).join("\n"),
+    );
+  }
+
+  private async handlePluginsUpgradeCommand(args: string[], context: FeishuIncomingContext): Promise<void> {
+    const marketplaceName = normalizeText(args[0]);
+
+    if (args.length > 1) {
+      await this.sendPluginsUpgradeHelp(context.chatId, context, args.join(" ") || undefined);
+      return;
+    }
+
+    const principal = this.ensurePrincipalIdentity(context);
+    const result = await this.runtime.getPrincipalPluginsService().upgradePluginMarketplaces(
+      principal.principalId,
+      {
+        ...(marketplaceName ? { marketplaceName } : {}),
+      },
+      this.buildPluginRuntimeOptions(context),
+    );
+    const failedMarketplaces = result.errors
+      .map((item) => item.marketplaceName || "unknown")
+      .filter((item) => item.length > 0);
+
+    await this.safeSendText(
+      context.chatId,
+      [
+        "Plugin marketplace 升级完成：",
+        `当前 principal：${principal.principalId}`,
+        `当前槽位：${result.target.targetId}`,
+        marketplaceName ? `范围：${marketplaceName}` : "范围：当前 Codex 选中的 marketplaces",
+        `选中 marketplace：${result.selectedMarketplaces.length > 0 ? result.selectedMarketplaces.join(", ") : "无"}`,
+        `更新根目录：${result.upgradedRoots.length > 0 ? result.upgradedRoots.join(", ") : "无"}`,
+        result.errors.length > 0 ? `失败：${failedMarketplaces.join(", ")}` : "失败：无",
+        "查看：/plugins list",
+      ].join("\n"),
     );
   }
 
@@ -4606,6 +4644,7 @@ export class FeishuChannelService {
       "/plugins read <MARKETPLACE> <PLUGIN_NAME> 查看 plugin 详情",
       "/plugins install <MARKETPLACE> <PLUGIN_NAME> 纳入当前 principal，并尝试物化到当前 runtime",
       "/plugins sync [remote] 把当前 principal 已拥有 plugins 重同步到当前 runtime",
+      "/plugins upgrade [MARKETPLACE_NAME] 升级 Codex marketplace 本地副本",
       "/plugins uninstall <PLUGIN_ID> 从当前 principal 移除 plugin",
       "",
       "第一版支持用 marketplace 名称或 marketplacePath 指向 marketplace。",
@@ -4758,6 +4797,25 @@ export class FeishuChannelService {
       "/plugins sync 把当前 principal 已拥有 plugins 对齐到当前 runtime / 工作区",
       "/plugins sync remote 会先远程刷新 marketplace，再执行同步",
       "如果想先看当前列表，请发送 /plugins list。",
+    ].filter((line): line is string => line !== null);
+
+    await this.safeSendText(chatId, lines.join("\n"));
+  }
+
+  private async sendPluginsUpgradeHelp(
+    chatId: string,
+    context: FeishuIncomingContext,
+    invalidValue?: string,
+  ): Promise<void> {
+    const { principal, result } = await this.readPrincipalPluginsState(context);
+    const lines = [
+      "用法：/plugins upgrade [MARKETPLACE_NAME]",
+      `当前 principal：${principal.principalId}`,
+      `当前槽位：${result.target.targetId}`,
+      invalidValue ? `参数不完整或格式不正确：${invalidValue}` : null,
+      "/plugins upgrade 升级当前 Codex 选中的 marketplaces",
+      "/plugins upgrade openai-curated 只升级指定 marketplace 名称",
+      "升级完成后可发送 /plugins list 查看最新发现结果。",
     ].filter((line): line is string => line !== null);
 
     await this.safeSendText(chatId, lines.join("\n"));

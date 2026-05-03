@@ -115,6 +115,28 @@ function normalizePluginUninstallPayload(value: unknown, errorMessage: string): 
   };
 }
 
+function normalizePluginUpgradePayload(value: unknown): {
+  channel: string;
+  channelUserId: string;
+  displayName?: string;
+  cwd?: string;
+  marketplaceName?: string;
+} {
+  if (!isRecord(value)) {
+    throw new Error("plugin marketplace 升级请求缺少必要字段。");
+  }
+
+  const identity = normalizeIdentityPayload(value);
+  const cwd = normalizeText(value.cwd) ?? undefined;
+  const marketplaceName = normalizeText(value.marketplaceName) ?? undefined;
+
+  return {
+    ...identity,
+    ...(cwd ? { cwd } : {}),
+    ...(marketplaceName ? { marketplaceName } : {}),
+  };
+}
+
 async function readAndNormalizePayload<T>(
   request: IncomingMessage,
   response: ServerResponse,
@@ -134,6 +156,36 @@ function writeRuntimeError(response: ServerResponse, error: unknown): void {
   writeJson(response, resolveErrorStatusCode(error, true), {
     error: createTaskError(error, true),
   });
+}
+
+export async function handlePluginsUpgrade(
+  request: IncomingMessage,
+  response: ServerResponse,
+  runtime: Pick<RuntimeServiceHost, "getIdentityLinkService" | "getPrincipalPluginsService">,
+  authRuntime: CodexAuthRuntime,
+): Promise<void> {
+  const payload = await readAndNormalizePayload(request, response, normalizePluginUpgradePayload);
+
+  if (!payload) {
+    return;
+  }
+
+  try {
+    const identity = runtime.getIdentityLinkService().ensureIdentity(payload);
+    const result = await runtime.getPrincipalPluginsService().upgradePluginMarketplaces(identity.principalId, {
+      ...(payload.marketplaceName ? { marketplaceName: payload.marketplaceName } : {}),
+    }, {
+      ...(payload.cwd ? { cwd: payload.cwd } : {}),
+      activeAuthAccount: authRuntime.getActiveAccount(),
+    });
+
+    writeJson(response, 200, {
+      identity,
+      result,
+    });
+  } catch (error) {
+    writeRuntimeError(response, error);
+  }
 }
 
 export async function handlePluginsList(

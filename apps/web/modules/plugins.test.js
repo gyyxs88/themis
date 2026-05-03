@@ -436,6 +436,60 @@ test("syncPlugins 会调用同步接口并刷新列表", async () => {
   }
 });
 
+test("upgradeMarketplaces 会调用升级接口并刷新列表", async () => {
+  const state = createDefaultPluginsState();
+  const app = createAppStub(state, {
+    workspacePath: "/srv/repos/demo",
+  });
+  const controller = createPluginsController(app);
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+
+  try {
+    globalThis.fetch = async (url, init = {}) => {
+      calls.push({
+        url,
+        body: init.body ? JSON.parse(init.body) : null,
+      });
+
+      if (url === "/api/plugins/upgrade") {
+        return jsonResponse({
+          result: {
+            selectedMarketplaces: ["openai-curated"],
+            upgradedRoots: ["/tmp/openai-curated"],
+            errors: [],
+          },
+        });
+      }
+
+      if (url === "/api/plugins/list") {
+        return jsonResponse({
+          result: {
+            principalPlugins: [],
+            marketplaces: [],
+            marketplaceLoadErrors: [],
+            remoteSyncError: null,
+            featuredPluginIds: [],
+          },
+        });
+      }
+
+      throw new Error(`unexpected fetch ${url}`);
+    };
+
+    const result = await controller.upgradeMarketplaces();
+
+    assert.deepEqual(result.selectedMarketplaces, ["openai-curated"]);
+    assert.equal(calls[0].url, "/api/plugins/upgrade");
+    assert.equal(calls[0].body.channelUserId, "browser-123");
+    assert.equal(calls[0].body.cwd, "/srv/repos/demo");
+    assert.equal(calls[1].url, "/api/plugins/list");
+    assert.equal(app.runtime.plugins.noticeMessage, "marketplace 升级完成，选中 1 个，更新根目录 1 个，失败 0 个");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 function createAppStub(pluginsState, options = {}) {
   return {
     runtime: {

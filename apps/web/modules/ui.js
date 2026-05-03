@@ -1720,6 +1720,7 @@ export function createRenderer(app) {
 
     dom.pluginsRefreshButton.disabled = busy;
     dom.pluginsRemoteSyncButton.disabled = busy;
+    dom.pluginsUpgradeButton.disabled = busy;
 
     const renderOptions = {
       busy,
@@ -2774,6 +2775,7 @@ export function createRenderer(app) {
     const pluginsBusy = controlsBusy || app.runtime.plugins.loading || app.runtime.plugins.mutating;
     dom.pluginsRefreshButton.disabled = pluginsBusy;
     dom.pluginsRemoteSyncButton.disabled = pluginsBusy;
+    dom.pluginsUpgradeButton.disabled = pluginsBusy;
     dom.pluginsPanelActions?.querySelectorAll("[data-plugin-action]").forEach((button) => {
       button.disabled = pluginsBusy;
     });

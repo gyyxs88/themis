@@ -1853,6 +1853,7 @@ test("/plugins foo 会回退到 /plugins 自己的帮助", async () => {
     assert.match(message, /当前 principal：/);
     assert.match(message, /\/plugins read <MARKETPLACE> <PLUGIN_NAME>/);
     assert.match(message, /\/plugins sync \[remote\]/);
+    assert.match(message, /\/plugins upgrade \[MARKETPLACE_NAME\]/);
     assert.match(message, /\/plugins uninstall <PLUGIN_ID>/);
   } finally {
     harness.cleanup();
@@ -1912,6 +1913,9 @@ test("/plugins list 会优先按当前会话工作区发现 marketplace", async 
       },
       syncPrincipalPlugins: async () => {
         throw new Error("unexpected syncPrincipalPlugins");
+      },
+      upgradePluginMarketplaces: async () => {
+        throw new Error("unexpected upgradePluginMarketplaces");
       },
     },
   });
@@ -2013,6 +2017,9 @@ test("/plugins list 会展示来源边界和建议动作", async () => {
       syncPrincipalPlugins: async () => {
         throw new Error("unexpected syncPrincipalPlugins");
       },
+      upgradePluginMarketplaces: async () => {
+        throw new Error("unexpected upgradePluginMarketplaces");
+      },
     },
   });
 
@@ -2110,6 +2117,37 @@ test("/plugins sync 会调用 principal 同步，并沿用当前会话工作区"
       method: "syncPrincipalPlugins",
       principalId: harness.getCurrentPrincipalId(),
       forceRemoteSync: true,
+      cwd: "/srv/repos/demo",
+    }]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("/plugins upgrade 会调用 marketplace 升级，并沿用当前会话工作区", async () => {
+  const harness = createHarness();
+
+  try {
+    const sessionId = "session-plugins-upgrade";
+    harness.setCurrentSession(sessionId);
+    harness.writeSessionSettings(sessionId, {
+      workspacePath: "/srv/repos/demo",
+    });
+
+    await harness.handleCommand("plugins", ["upgrade", "openai-curated"]);
+
+    const message = harness.takeSingleMessage();
+    assert.match(message, /Plugin marketplace 升级完成：/);
+    assert.match(message, /当前 principal：/);
+    assert.match(message, /范围：openai-curated/);
+    assert.match(message, /选中 marketplace：openai-curated/);
+    assert.match(message, /更新根目录：\/tmp\/openai-curated/);
+    assert.match(message, /查看：\/plugins list/);
+
+    assert.deepEqual(harness.getPluginWriteCalls(), [{
+      method: "upgradePluginMarketplaces",
+      principalId: harness.getCurrentPrincipalId(),
+      marketplaceName: "openai-curated",
       cwd: "/srv/repos/demo",
     }]);
   } finally {
@@ -8249,6 +8287,16 @@ type FeishuHarnessPluginService = {
       lastError: string | null;
     }>;
   }>;
+  upgradePluginMarketplaces: (
+    principalId: string,
+    input?: { marketplaceName?: string | null },
+    options?: FeishuHarnessPluginRuntimeOptions,
+  ) => Promise<{
+    target: { targetKind: "auth-account"; targetId: string };
+    selectedMarketplaces: string[];
+    upgradedRoots: string[];
+    errors: Array<{ marketplaceName: string | null; message: string }>;
+  }>;
 };
 
 type FeishuHarnessConfig = {
@@ -8340,6 +8388,12 @@ type FeishuHarnessPluginCall =
     principalId: string;
     forceRemoteSync?: boolean;
     cwd?: string;
+  }
+  | {
+    method: "upgradePluginMarketplaces";
+    principalId: string;
+    marketplaceName?: string | null;
+    cwd?: string;
   };
 
 type FeishuTaskRuntimeDouble = TaskRuntimeFacade & {
@@ -8406,6 +8460,9 @@ function createTaskRuntimeDouble(input: {
       throw new Error("plugin service not configured");
     },
     syncPrincipalPlugins: async () => {
+      throw new Error("plugin service not configured");
+    },
+    upgradePluginMarketplaces: async () => {
       throw new Error("plugin service not configured");
     },
   };
@@ -9068,6 +9125,21 @@ function createHarness(
         missingCount: 0,
         failedCount: 0,
         plugins,
+      };
+    },
+    upgradePluginMarketplaces: async (principalId, input, options) => {
+      pluginState.writeCalls.push({
+        method: "upgradePluginMarketplaces",
+        principalId,
+        ...(typeof input?.marketplaceName === "string" ? { marketplaceName: input.marketplaceName } : {}),
+        ...(typeof options?.cwd === "string" ? { cwd: options.cwd } : {}),
+      });
+
+      return {
+        target: buildPluginTarget(),
+        selectedMarketplaces: input?.marketplaceName ? [input.marketplaceName] : ["openai-curated"],
+        upgradedRoots: ["/tmp/openai-curated"],
+        errors: [],
       };
     },
   };

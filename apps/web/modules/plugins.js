@@ -48,6 +48,10 @@ export function createPluginsController(app) {
       void runSafely(() => syncPlugins({ forceRemoteSync: true }));
     });
 
+    dom?.pluginsUpgradeButton?.addEventListener("click", () => {
+      void runSafely(() => upgradeMarketplaces());
+    });
+
     dom?.pluginsPanelActions?.addEventListener("click", (event) => {
       const actionButton = event.target.closest("[data-plugin-action]");
 
@@ -444,6 +448,18 @@ export function createPluginsController(app) {
     );
   }
 
+  async function upgradeMarketplaces(options = {}) {
+    return await runMutation(
+      "/api/plugins/upgrade",
+      buildPluginsPayload({
+        ...(options.marketplaceName ? { marketplaceName: options.marketplaceName } : {}),
+      }),
+      "正在升级当前 Codex marketplace",
+      (result) => summarizePluginMarketplaceUpgradeResult(result),
+      options,
+    );
+  }
+
   return {
     bindControls,
     load,
@@ -452,6 +468,7 @@ export function createPluginsController(app) {
     installPlugin,
     uninstallPlugin,
     syncPlugins,
+    upgradeMarketplaces,
     normalizePluginsList,
     normalizePluginDetail,
   };
@@ -580,6 +597,50 @@ function summarizePluginSyncResult(value) {
     `缺失 ${missingCount}`,
     `失败 ${failedCount}`,
   ].join("，");
+}
+
+function summarizePluginMarketplaceUpgradeResult(value) {
+  const selectedMarketplaces = normalizeStringList(value?.selectedMarketplaces);
+  const upgradedRoots = normalizeStringList(value?.upgradedRoots);
+  const errors = normalizePluginMarketplaceUpgradeErrors(value?.errors);
+
+  if (selectedMarketplaces.length === 0 && upgradedRoots.length === 0 && errors.length === 0) {
+    return "marketplace 已检查，无需升级。";
+  }
+
+  return [
+    `marketplace 升级完成`,
+    `选中 ${selectedMarketplaces.length} 个`,
+    `更新根目录 ${upgradedRoots.length} 个`,
+    errors.length > 0 ? `失败 ${errors.length} 个：${errors.map((item) => item.marketplaceName || "unknown").join(", ")}` : "失败 0 个",
+  ].join("，");
+}
+
+function normalizePluginMarketplaceUpgradeErrors(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      const message = normalizeText(item?.message);
+
+      if (!message) {
+        return null;
+      }
+
+      return {
+        marketplaceName: normalizeText(item?.marketplaceName) || "",
+        message,
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeStringList(value) {
+  return Array.isArray(value)
+    ? value.filter((item) => typeof item === "string" && item.trim()).map((item) => item.trim())
+    : [];
 }
 
 function normalizeCount(value) {

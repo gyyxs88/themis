@@ -108,6 +108,7 @@ import {
   handlePluginsRead,
   handlePluginsSync,
   handlePluginsUninstall,
+  handlePluginsUpgrade,
 } from "./http-plugins.js";
 import {
   handlePlatformAgentCardUpdate,
@@ -822,6 +823,10 @@ export function createThemisHttpServer(options: ThemisHttpServerOptions = {}): S
 
       if (request.method === "POST" && url.pathname === "/api/plugins/sync") {
         return handlePluginsSync(request, response, runtime, authRuntime);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/plugins/upgrade") {
+        return handlePluginsUpgrade(request, response, runtime, authRuntime);
       }
 
       if (request.method === "POST" && url.pathname === "/api/scheduled-tasks/create") {

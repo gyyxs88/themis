@@ -392,6 +392,7 @@ export function createDom() {
     pluginsStatusNote: document.getElementById("plugins-status-note"),
     pluginsRefreshButton: document.getElementById("plugins-refresh-button"),
     pluginsRemoteSyncButton: document.getElementById("plugins-remote-sync-button"),
+    pluginsUpgradeButton: document.getElementById("plugins-upgrade-button"),
     pluginsList: document.getElementById("plugins-list"),
     pluginsListEmpty: document.getElementById("plugins-list-empty"),
     thirdPartyAddProviderButton: document.getElementById("third-party-add-provider-button"),

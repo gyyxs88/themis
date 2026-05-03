@@ -88,6 +88,11 @@ export interface PluginMarketplaceLoadError {
   message: string;
 }
 
+export interface PluginMarketplaceUpgradeError {
+  marketplaceName: string | null;
+  message: string;
+}
+
 export interface PluginSkillSummary {
   name: string;
   description: string;
@@ -141,6 +146,13 @@ export interface PluginUninstallResult {
   pluginId: string;
 }
 
+export interface PluginMarketplaceUpgradeResult {
+  target: PluginRuntimeTarget;
+  selectedMarketplaces: string[];
+  upgradedRoots: string[];
+  errors: PluginMarketplaceUpgradeError[];
+}
+
 export interface PluginReadInput {
   marketplacePath: string;
   pluginName: string;
@@ -153,6 +165,10 @@ export interface PluginInstallInput extends PluginReadInput {
 export interface PluginUninstallInput {
   pluginId: string;
   forceRemoteSync?: boolean;
+}
+
+export interface PluginMarketplaceUpgradeInput {
+  marketplaceName?: string | null;
 }
 
 export class PluginService {
@@ -269,6 +285,31 @@ export class PluginService {
       return {
         target,
         pluginId,
+      };
+    } finally {
+      await session.close();
+    }
+  }
+
+  async upgradeMarketplaces(
+    input: PluginMarketplaceUpgradeInput = {},
+    options: PluginRuntimeOptions = {},
+  ): Promise<PluginMarketplaceUpgradeResult> {
+    const marketplaceName = normalizeOptionalText(input.marketplaceName ?? undefined);
+    const { target, createSession } = this.buildRuntimeSessionFactory(options);
+    const session = await createSession();
+
+    try {
+      await session.initialize();
+      const response = await session.request("marketplace/upgrade", {
+        ...(marketplaceName ? { marketplaceName } : {}),
+      });
+
+      return {
+        target,
+        selectedMarketplaces: normalizeStringArray(readObjectValue(response, "selectedMarketplaces")),
+        upgradedRoots: normalizeStringArray(readObjectValue(response, "upgradedRoots")),
+        errors: normalizeMarketplaceUpgradeErrors(readObjectValue(response, "errors")),
       };
     } finally {
       await session.close();
@@ -441,6 +482,28 @@ function normalizeMarketplaceLoadErrors(value: unknown): PluginMarketplaceLoadEr
       };
     })
     .filter((item): item is PluginMarketplaceLoadError => item !== null);
+}
+
+function normalizeMarketplaceUpgradeErrors(value: unknown): PluginMarketplaceUpgradeError[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((item) => item && typeof item === "object")
+    .map((item) => {
+      const message = normalizeOptionalText(readObjectValue(item, "message"));
+
+      if (!message) {
+        return null;
+      }
+
+      return {
+        marketplaceName: normalizeOptionalText(readObjectValue(item, "marketplaceName")) ?? null,
+        message,
+      };
+    })
+    .filter((item): item is PluginMarketplaceUpgradeError => item !== null);
 }
 
 function normalizePluginDetail(

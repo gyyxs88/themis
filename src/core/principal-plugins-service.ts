@@ -4,6 +4,8 @@ import {
   PluginService,
   type PluginDetail,
   type PluginMarketplace,
+  type PluginMarketplaceUpgradeInput,
+  type PluginMarketplaceUpgradeResult,
   type PluginReadInput,
   type PluginRuntimeOptions,
   type PluginRuntimeTarget,
@@ -147,6 +149,8 @@ export interface PrincipalPluginSyncResult {
   failedCount: number;
   plugins: PrincipalPluginSyncItem[];
 }
+
+export type PrincipalPluginMarketplaceUpgradeResult = PluginMarketplaceUpgradeResult;
 
 export class PrincipalPluginsService {
   private readonly workingDirectory: string;
@@ -514,6 +518,15 @@ export class PrincipalPluginsService {
       failedCount: countSyncActions(plugins, "failed"),
       plugins,
     };
+  }
+
+  async upgradePluginMarketplaces(
+    principalId: string,
+    input: PluginMarketplaceUpgradeInput = {},
+    options: PrincipalPluginsRuntimeOptions = {},
+  ): Promise<PrincipalPluginMarketplaceUpgradeResult> {
+    normalizeRequiredText(principalId, "principalId 不能为空。");
+    return await this.runtimePluginService.upgradeMarketplaces(input, options);
   }
 
   private buildPrincipalPluginListItem(

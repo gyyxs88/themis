@@ -247,3 +247,46 @@ test("uninstallPlugin 会透传 pluginId", async () => {
     rmSync(workingDirectory, { recursive: true, force: true });
   }
 });
+
+test("upgradeMarketplaces 会调用 marketplace/upgrade 并返回升级结果", async () => {
+  const { service, workingDirectory } = createService();
+  const calls: Array<{ method: string; params: unknown }> = [];
+
+  try {
+    const result = await service.upgradeMarketplaces({
+      marketplaceName: "openai-curated",
+    }, {
+      createSession: async () => ({
+        async initialize() {},
+        async request(method: string, params: unknown) {
+          calls.push({ method, params });
+          return {
+            selectedMarketplaces: ["openai-curated"],
+            upgradedRoots: ["/tmp/openai-curated"],
+            errors: [{
+              marketplaceName: "custom",
+              message: "upgrade failed",
+            }],
+          };
+        },
+        async close() {},
+      }),
+    });
+
+    assert.deepEqual(calls, [{
+      method: "marketplace/upgrade",
+      params: {
+        marketplaceName: "openai-curated",
+      },
+    }]);
+    assert.equal(result.target.targetId, "default");
+    assert.deepEqual(result.selectedMarketplaces, ["openai-curated"]);
+    assert.deepEqual(result.upgradedRoots, ["/tmp/openai-curated"]);
+    assert.deepEqual(result.errors, [{
+      marketplaceName: "custom",
+      message: "upgrade failed",
+    }]);
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
