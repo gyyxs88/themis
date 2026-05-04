@@ -137,6 +137,13 @@ export const PROJECT_CONFIG_DEFINITIONS: ProjectConfigDefinition[] = [
     defaultValue: "themis-prod.service",
   },
   {
+    key: "THEMIS_SOURCE_EDIT_POLICY",
+    section: "版本更新",
+    description: "正式服务 checkout 的源码修改保护策略。",
+    defaultValue: "auto",
+    note: "`todoist-task` 表示普通 Web / 飞书任务需要改仓库文件时先创建 Todoist 开发任务；`off` 可显式关闭。未配置时正式目录或 themis-prod.service 自动启用。",
+  },
+  {
     key: "THEMIS_GITHUB_TOKEN",
     section: "版本更新",
     description: "可选。用于提高 GitHub 更新检查配额或访问受限更新源。",

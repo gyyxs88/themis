@@ -82,6 +82,7 @@ import { PrincipalDecisionsService } from "./principal-decisions-service.js";
 import { PrincipalRisksService } from "./principal-risks-service.js";
 import { PrincipalSkillsService } from "./principal-skills-service.js";
 import { PluginService } from "./plugin-service.js";
+import { buildFormalSourceEditGuardPromptSectionIfNeeded } from "./formal-source-edit-guard.js";
 import { buildBootstrapPrompt, buildTaskPrompt } from "./prompt.js";
 import { ScheduledTasksService } from "./scheduled-tasks-service.js";
 import {
@@ -934,6 +935,9 @@ export class AppServerTaskRuntime {
 
       const promptRequest = compiledInput ? withoutTaskAttachments(request) : request;
       const personalizedProfileContext = this.principalPersonaService.buildPromptContext(principalId);
+      const formalSourceEditGuardPromptSection = buildFormalSourceEditGuardPromptSectionIfNeeded(
+        this.workingDirectory,
+      );
       const prompt = onboardingIntercept
         ? buildBootstrapPrompt(promptRequest, onboardingIntercept, {
           personalizedProfileContext,
@@ -943,6 +947,7 @@ export class AppServerTaskRuntime {
             buildThemisScheduledTaskPromptSection(request),
             buildThemisManagedAgentPromptSection(request),
             buildThemisOperationsPromptSection(request),
+            ...(formalSourceEditGuardPromptSection ? [formalSourceEditGuardPromptSection] : []),
           ],
         })
         : buildTaskPrompt(promptRequest, {
@@ -953,6 +958,7 @@ export class AppServerTaskRuntime {
             buildThemisScheduledTaskPromptSection(request),
             buildThemisManagedAgentPromptSection(request),
             buildThemisOperationsPromptSection(request),
+            ...(formalSourceEditGuardPromptSection ? [formalSourceEditGuardPromptSection] : []),
           ],
         });
       const turnInput = compiledInput?.nativeInputParts.length

@@ -504,6 +504,42 @@ test("AppServerTaskRuntime 会按真实 Web channelSessionKey 解析 conversatio
   }
 });
 
+test("AppServerTaskRuntime 会在正式服务 checkout 注入源码修改转 Todoist 提示", async () => {
+  const root = mkdtempSync(join(tmpdir(), "themis-app-server-prod-guard-"));
+  const workingDirectory = join(root, "services", "themis-prod");
+  mkdirSync(workingDirectory, { recursive: true });
+  const runtimeStore = new SqliteCodexSessionRegistry({
+    databaseFile: join(root, "infra/local/themis.db"),
+  });
+  const sessionFixture = createSessionFactory({
+    startThreadId: "thread-app-prod-guard",
+  });
+  const runtime = new AppServerTaskRuntime({
+    workingDirectory,
+    runtimeStore,
+    ...(sessionFixture.sessionFactory ? { sessionFactory: sessionFixture.sessionFactory } : {}),
+  });
+
+  try {
+    await runtime.runTask({
+      requestId: "req-app-prod-guard-1",
+      taskId: "task-app-prod-guard-1",
+      sourceChannel: "web",
+      user: { userId: "webui" },
+      goal: "如果需要改源码就继续处理",
+      channelContext: { channelSessionKey: "web-session-prod-guard-1" },
+      createdAt: "2026-05-04T15:45:00.000Z",
+    });
+
+    const prompt = sessionFixture.state.turns[0]?.prompt ?? "";
+    assert.match(prompt, /Formal production source modification guard/);
+    assert.match(prompt, /create a Todoist task instead of applying the patch/);
+    assert.match(prompt, /User phrases such as 'continue'/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("AppServerTaskRuntime 会把 assistant style 写进 structuredOutput.session", async () => {
   const { sessionFactory } = createSessionFactory({
     startThreadId: "thread-app-structured-style-1",

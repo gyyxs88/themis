@@ -87,9 +87,12 @@ THEMIS_BASE_URL=http://127.0.0.1:3100
 ```bash
 THEMIS_UPDATE_CHANNEL=release
 THEMIS_UPDATE_SYSTEMD_SERVICE=themis-prod.service
+THEMIS_SOURCE_EDIT_POLICY=todoist-task
 ```
 
 这样正式实例会跟随 GitHub 最新正式 release，而不是默认分支头提交；升级成功后，CLI 也会直接重启这条 `systemd --user` 服务。如果你的正式服务名不是 `themis-prod.service`，就在这里改成真实名字。
+
+`THEMIS_SOURCE_EDIT_POLICY=todoist-task` 用来保护正式服务 checkout：普通 Web / 飞书任务如果判断需要修改 `src/`、`apps/`、`docs/`、`memory/` 等仓库文件，应先创建 Todoist 开发任务并停止在正式机直接打补丁。未显式配置时，目录是 `~/services/themis-prod` 或服务名是 `themis-prod.service` 的实例也会自动启用这条提示保护。
 
 飞书 `/ops restart confirm` 和后台升级 / 回滚后的重启请求会写 `infra/local/themis-restart-request.json`。默认会等待 `systemctl --user restart` 最多 15 秒来捕获非 0 退出码；如果 marker 超过 120 秒仍未被新进程确认，`/ops status` 会把它收口成 failed。需要调整时可设置 `THEMIS_UPDATE_RESTART_EXIT_WAIT_MS` 和 `THEMIS_RESTART_CONFIRM_TIMEOUT_MS`。
 
