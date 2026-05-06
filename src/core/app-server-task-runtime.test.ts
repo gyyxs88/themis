@@ -1430,6 +1430,13 @@ test("AppServerTaskRuntime 会把当前 principal 已启用的 MCP 注入 sessio
       GITHUB_TOKEN: "secret",
     },
   });
+  fixture.runtime.getPrincipalMcpService().upsertPrincipalMcpServer({
+    principalId,
+    serverName: "todoist",
+    transportType: "streamable_http",
+    url: "https://ai.todoist.net/mcp",
+    bearerTokenEnvVar: "TODOIST_API_TOKEN",
+  });
 
   try {
     await fixture.runtime.runTaskAsPrincipal({
@@ -1466,6 +1473,13 @@ test("AppServerTaskRuntime 会把当前 principal 已启用的 MCP 注入 sessio
     assert.deepEqual(principalMcpConfig?.env, {
       GITHUB_TOKEN: "secret",
     });
+    const todoistMcpConfig = factoryOptionsHistory[0]?.configOverrides?.["mcp_servers.todoist"] as {
+      url?: string;
+      bearer_token_env_var?: string;
+    } | undefined;
+
+    assert.equal(todoistMcpConfig?.url, "https://ai.todoist.net/mcp");
+    assert.equal(todoistMcpConfig?.bearer_token_env_var, "TODOIST_API_TOKEN");
   } finally {
     fixture.cleanup();
   }

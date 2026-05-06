@@ -138,6 +138,7 @@ test("POST /api/mcp/upsert 支持 streamable_http MCP server", async () => {
       serverName: "remote_docs",
       transportType: "streamable_http",
       url: "https://mcp.example.com/docs",
+      bearerTokenEnvVar: "REMOTE_DOCS_TOKEN",
     }, authHeaders);
     assert.equal(upsertResponse.status, 200);
 
@@ -155,7 +156,7 @@ test("POST /api/mcp/upsert 支持 streamable_http MCP server", async () => {
     assert.equal(payload.server?.transportType, "streamable_http");
     assert.equal(payload.server?.command, "https://mcp.example.com/docs");
     assert.equal(payload.server?.argsJson, JSON.stringify([]));
-    assert.equal(payload.server?.envJson, JSON.stringify({}));
+    assert.equal(payload.server?.envJson, JSON.stringify({ bearerTokenEnvVar: "REMOTE_DOCS_TOKEN" }));
   });
 });
 

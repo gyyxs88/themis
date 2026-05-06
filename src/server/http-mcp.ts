@@ -64,6 +64,7 @@ function normalizeMcpUpsertPayload(value: unknown): {
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
+  bearerTokenEnvVar?: string;
   enabled?: boolean;
 } {
   if (!isRecord(value)) {
@@ -76,6 +77,7 @@ function normalizeMcpUpsertPayload(value: unknown): {
     : undefined;
   const cwd = normalizeText(value.cwd) ?? undefined;
   const env = normalizeEnvRecord(value.env);
+  const bearerTokenEnvVar = normalizeText(value.bearerTokenEnvVar) ?? undefined;
   const url = normalizeText(value.url) ?? undefined;
   const command = normalizeText(value.command) ?? undefined;
   const transportType = normalizeMcpTransportType(value.transportType) ?? (url ? "streamable_http" : "stdio");
@@ -97,6 +99,7 @@ function normalizeMcpUpsertPayload(value: unknown): {
     ...(args ? { args } : {}),
     ...(cwd ? { cwd } : {}),
     ...(env ? { env } : {}),
+    ...(bearerTokenEnvVar ? { bearerTokenEnvVar } : {}),
     ...(typeof value.enabled === "boolean" ? { enabled: value.enabled } : {}),
   };
 }
@@ -262,6 +265,7 @@ export async function handleMcpUpsert(
       ...(payload.args ? { args: payload.args } : {}),
       ...(payload.cwd ? { cwd: payload.cwd } : {}),
       ...(payload.env ? { env: payload.env } : {}),
+      ...(payload.bearerTokenEnvVar ? { bearerTokenEnvVar: payload.bearerTokenEnvVar } : {}),
       ...(typeof payload.enabled === "boolean" ? { enabled: payload.enabled } : {}),
     });
 

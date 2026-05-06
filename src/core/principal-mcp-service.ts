@@ -102,6 +102,7 @@ export interface UpsertPrincipalMcpServerInput {
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
+  bearerTokenEnvVar?: string;
   enabled?: boolean;
   sourceType?: PrincipalMcpSourceType;
   now?: string;
@@ -215,7 +216,9 @@ export class PrincipalMcpService {
       : normalizeRequiredText(input.command ?? existing?.command, "MCP command 不能为空。");
     const args = transportType === "stdio" ? normalizeArgs(input.args) : [];
     const cwd = transportType === "stdio" ? normalizeOptionalText(input.cwd) : undefined;
-    const env = transportType === "stdio" ? normalizeEnv(input.env) : {};
+    const env = transportType === "stdio"
+      ? normalizeEnv(input.env)
+      : normalizeStreamableHttpConfig(input, existing);
     const record: StoredPrincipalMcpServerRecord = {
       principalId,
       serverName,
@@ -306,8 +309,12 @@ export class PrincipalMcpService {
       }
 
       if (server.transportType === "streamable_http") {
+        const streamableConfig = parseStreamableHttpConfig(server.envJson, server.serverName);
         overrides[`mcp_servers.${server.serverName}`] = {
           url: normalizeRequiredText(server.command, `MCP server ${server.serverName} 的 url 不能为空。`),
+          ...(streamableConfig.bearerTokenEnvVar
+            ? { bearer_token_env_var: streamableConfig.bearerTokenEnvVar }
+            : {}),
         };
         continue;
       }
@@ -1094,6 +1101,41 @@ function normalizeEnv(value: Record<string, string> | undefined): Record<string,
       .filter(([key, entry]) => key.trim().length > 0 && typeof entry === "string")
       .map(([key, entry]) => [key.trim(), entry]),
   );
+}
+
+function normalizeStreamableHttpConfig(
+  input: Pick<UpsertPrincipalMcpServerInput, "bearerTokenEnvVar">,
+  existing: StoredPrincipalMcpServerRecord | null | undefined,
+): Record<string, string> {
+  const existingConfig = existing?.transportType === "streamable_http"
+    ? parseStreamableHttpConfig(existing.envJson, existing.serverName)
+    : {};
+  const bearerTokenEnvVar = normalizeEnvVarName(input.bearerTokenEnvVar)
+    ?? existingConfig.bearerTokenEnvVar;
+
+  return {
+    ...(bearerTokenEnvVar ? { bearerTokenEnvVar } : {}),
+  };
+}
+
+function parseStreamableHttpConfig(value: string, serverName: string): { bearerTokenEnvVar?: string } {
+  const parsed = parseStringRecord(value, serverName, "env_json");
+  const bearerTokenEnvVar = normalizeEnvVarName(parsed.bearerTokenEnvVar)
+    ?? normalizeEnvVarName(parsed.bearer_token_env_var);
+
+  return {
+    ...(bearerTokenEnvVar ? { bearerTokenEnvVar } : {}),
+  };
+}
+
+function normalizeEnvVarName(value: unknown): string | undefined {
+  const normalized = normalizeOptionalText(value);
+
+  if (!normalized || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(normalized)) {
+    return undefined;
+  }
+
+  return normalized;
 }
 
 function normalizeRequiredServerName(value: string): string {

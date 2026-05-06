@@ -128,6 +128,7 @@ test("buildRuntimeConfigOverrides 只返回 enabled 的 MCP 配置", () => {
       serverName: "remote_docs",
       transportType: "streamable_http",
       url: "https://mcp.example.com/docs",
+      bearerTokenEnvVar: "REMOTE_DOCS_TOKEN",
       enabled: true,
     });
 
@@ -142,6 +143,7 @@ test("buildRuntimeConfigOverrides 只返回 enabled 的 MCP 配置", () => {
       },
       "mcp_servers.remote_docs": {
         url: "https://mcp.example.com/docs",
+        bearer_token_env_var: "REMOTE_DOCS_TOKEN",
       },
     });
   } finally {
