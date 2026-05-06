@@ -58,10 +58,15 @@ const OPENAI_COMPAT_ENV_KEYS = [
   "THEMIS_OPENAI_COMPAT_MODEL_CATALOG_JSON",
 ] as const;
 
-function withClearedOpenAICompatEnv<T>(fn: () => T): T {
+const THIRD_PARTY_PROVIDER_TEST_ENV_KEYS = [
+  ...OPENAI_COMPAT_ENV_KEYS,
+  "CODEX_HOME",
+] as const;
+
+function withClearedThirdPartyProviderEnv<T>(fn: () => T): T {
   const savedEnv = new Map<string, string | undefined>();
 
-  for (const key of OPENAI_COMPAT_ENV_KEYS) {
+  for (const key of THIRD_PARTY_PROVIDER_TEST_ENV_KEYS) {
     savedEnv.set(key, process.env[key]);
     delete process.env[key];
   }
@@ -1613,7 +1618,7 @@ test("AppServerTaskRuntime 会在 prompt 里明确注入运营中枢机器协议
 });
 
 test("AppServerTaskRuntime 在 third-party 模式下会把 provider 隔离配置传给 sessionFactory", async () => {
-  await withClearedOpenAICompatEnv(async () => {
+  await withClearedThirdPartyProviderEnv(async () => {
     const { state, sessionFactory: baseSessionFactory } = createSessionFactory({
       startThreadId: "thread-app-provider-boundary-1",
     });
@@ -1838,7 +1843,7 @@ test("AppServerTaskRuntime 会把内部显式 managed_agent principal 从错误�
 });
 
 test("AppServerTaskRuntime 在 managed agent 的 third-party 模式下也会使用 agent 独立 CODEX_HOME", async () => {
-  await withClearedOpenAICompatEnv(async () => {
+  await withClearedThirdPartyProviderEnv(async () => {
     const { state, sessionFactory: baseSessionFactory } = createSessionFactory({
       startThreadId: "thread-app-managed-provider-1",
     });
