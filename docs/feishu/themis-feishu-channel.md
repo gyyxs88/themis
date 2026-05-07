@@ -27,7 +27,7 @@ Themis 已接入飞书长连接渠道，特点如下：
 - 飞书已补 `/update` 和 `/ops` 运维入口：`/update` 可查看当前实例更新状态，`/update apply confirm` / `/update rollback confirm` 可在单聊里触发后台升级或回滚；`/ops status` 可查看当前服务状态和最近一次重启确认，`/ops restart confirm` 可在单聊里请求受控重启当前服务；高风险动作默认要求显式 `confirm`
 - 飞书单聊已支持自然语言 secret intake：用户可以直接把平台 token 交给 Themis；入口会在普通任务前截获、写入 Themis 密码本，并对日志脱敏，值不会进入 Codex 对话、工单正文、`contextPacket` 或员工报告。Cloudflare 管理 token 会归一为 `cloudflare-management-token`；其他平台可以用“保存为 `<secretRef>`”指定引用名。
 - Themis 已有 MCP 密码本工具 `manage_themis_secret`：Themis 可根据用户自然语言意图自行 `list/get/set/rename/remove` secretRef，工具结果只返回引用和存在状态，不回显 secret 值；正常 secret 管理不要求人类使用斜杠命令。
-- 飞书仍保留 `/secrets worker` 受控 secret 兜底入口：用于把 worker 本机可解析的 secretRef 写入本地 secret store；值不会进入 Codex 对话、工单正文、`contextPacket`、员工报告或命令日志，写入/删除只允许在单聊执行。Cloudflare 场景主路径是 Themis MCP 工具 `provision_cloudflare_worker_secret` 使用本地管理 token 和 `cloudflare-account-id` 生成或注入 worker 只读 token；Account Owned API Token 会走 `/accounts/{account_id}/tokens`。
+- 飞书仍保留 `/secrets worker` 受控 secret 兜底入口：用于把 worker 本机可解析的 secretRef 写入本地 secret store；值不会进入 Codex 对话、工单正文、`contextPacket`、员工报告或命令日志，写入/删除只允许在单聊执行。worker secret 主路径是 Themis MCP 工具 `provision_worker_secret`：默认 `mode=themis_secret`，可通用下发任意 Themis 密码本 secretRef；Cloudflare 只读 token 需要由本地管理 token 和 `cloudflare-account-id` 派生时使用 `mode=cloudflare_readonly`，Account Owned API Token 会走 `/accounts/{account_id}/tokens`。
 - 飞书发任务前会读取当前 principal 保存的 Themis 默认任务配置，并带上对应 `options`
 - 飞书支持会话级工作区：`/workspace`（别名 `/ws`）会写当前激活会话的 `workspacePath`，不改 principal 默认配置
 - 如果当前 principal 还没有长期协作档案，首次普通消息会先进入一次性人格 bootstrap
@@ -366,7 +366,7 @@ infra/local/feishu-attachment-drafts.json
 
 ### `/secrets`
 
-查看和维护 worker 本机 secret 引用。这个入口用于兜底补齐 `runtimeProfileSnapshot.secretEnvRefs` 的本地值来源，不用于把 secret 传给 Codex 正文，也不为每个平台新增命令面。用户把平台管理 token 交给 Themis 时，应优先走飞书单聊自然语言 secret intake；后续查询、改名、删除、补录由 Themis 自己调用 `manage_themis_secret` 密码本工具完成。Cloudflare 缺少 `cloudflare-readonly-token` 时，普通对话主路径应先调用 MCP 工具 `provision_cloudflare_worker_secret`，由 Themis 本地 `THEMIS_CLOUDFLARE_MANAGEMENT_TOKEN` 或 `cloudflare-management-token` 加 `cloudflare-account-id` 生成或注入 worker token。
+查看和维护 worker 本机 secret 引用。这个入口用于兜底补齐 `runtimeProfileSnapshot.secretEnvRefs` 的本地值来源，不用于把 secret 传给 Codex 正文，也不为每个平台新增命令面。用户把平台管理 token 交给 Themis 时，应优先走飞书单聊自然语言 secret intake；后续查询、改名、删除、补录由 Themis 自己调用 `manage_themis_secret` 密码本工具完成。worker 缺少某个 secretRef 时，普通对话主路径应先调用 MCP 工具 `provision_worker_secret`：已有 secret 走 `mode=themis_secret`；Cloudflare 缺少 `cloudflare-readonly-token` 且需要派生时，使用 `mode=cloudflare_readonly`，由 Themis 本地 `THEMIS_CLOUDFLARE_MANAGEMENT_TOKEN` 或 `cloudflare-management-token` 加 `cloudflare-account-id` 生成或注入 worker token。
 
 规则：
 
@@ -378,7 +378,7 @@ infra/local/feishu-attachment-drafts.json
 - `/secrets worker remove <secretRef> confirm`：删除 worker 本地 secret。该命令只允许在和 Themis 的单聊里执行，并要求显式 `confirm`。
 - 默认写入路径是主 Themis 工作目录同级的 `../themis-worker-node/infra/local/worker-secrets.json`；如正式部署路径不同，可用 `THEMIS_MANAGED_AGENT_WORKER_SECRET_STORE_FILE` 覆盖。
 - 派工时仍然只传引用，例如 `runtimeProfileSnapshot.secretEnvRefs=[{ envName: "CLOUDFLARE_API_TOKEN", secretRef: "cloudflare-readonly-token", required: true }]`；平台透传引用，worker 在本机执行前解析并注入环境变量。
-- 如果 Cloudflare worker 报 `WORKER_NODE_SECRET_UNAVAILABLE`，普通对话任务应先调用 `provision_cloudflare_worker_secret` 并带上相关 domains；如果使用 Account Owned API Token，还必须让 Themis 从密码本 `cloudflare-account-id` 或环境变量取得 account id，再用同一个 `secretEnvRefs` 重新派工。只有当管理 token 未配置或用户明确选择兜底时，才提示 `/secrets worker set <secretRef> <secretValue>`。不要让用户 SSH 到主机写文件，也不要把 token 塞进工单正文。
+- 如果 worker 报 `WORKER_NODE_SECRET_UNAVAILABLE`，普通对话任务应先调用 `provision_worker_secret`。已有 Discord/GitHub/Feishu 等 secretRef 走 `mode=themis_secret` 并带 `sourceSecretRef/secretRef/targetNodeIds`；Cloudflare 只读 token 派生才带 `mode=cloudflare_readonly` 和相关 domains。如果使用 Account Owned API Token，还必须让 Themis 从密码本 `cloudflare-account-id` 或环境变量取得 account id，再用同一个 `secretEnvRefs` 重新派工。只有当 Themis 密码本/管理 token 未配置或用户明确选择兜底时，才提示 `/secrets worker set <secretRef> <secretValue>`。不要让用户 SSH 到主机写文件，也不要把 token 塞进工单正文。
 - 如果飞书 Base/多维表只读巡检缺少应用凭据，普通对话任务应让用户在单聊分别交付 Feishu App ID 和 App Secret，由 secret intake 保存为 `feishu-app-id` / `feishu-app-secret`；不要在聊天主链里启动 `lark-cli config init`，因为这类裸终端扫码/链接流程跨回合容易丢进程。
 
 ### `/link <绑定码>`

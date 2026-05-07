@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import {
   ManagedAgentCoordinationService,
   type DispatchWorkItemInput,
+  type ManagedAgentWorkItemDetailView,
 } from "../core/managed-agent-coordination-service.js";
 import {
   type ManagedAgentControlPlaneFacadeLike,
@@ -40,6 +41,10 @@ import {
   CloudflareWorkerSecretProvisioner,
   type CloudflareWorkerSecretProvisionResult,
 } from "../core/cloudflare-worker-secret-provisioner.js";
+import {
+  WorkerSecretProvisioner,
+  type WorkerSecretProvisionResult,
+} from "../core/worker-secret-provisioner.js";
 import { ThemisSecretStore } from "../core/themis-secret-store.js";
 import {
   buildThemisOperationsToolDefinitions,
@@ -202,7 +207,13 @@ interface DispatchWorkItemToolArgs {
   scheduledAt?: string;
 }
 
-interface ProvisionCloudflareWorkerSecretToolArgs {
+interface GetWorkItemDetailToolArgs {
+  workItemId: string;
+}
+
+interface ProvisionWorkerSecretToolArgs {
+  mode?: "themis_secret" | "cloudflare_readonly";
+  sourceSecretRef?: string;
   secretRef?: string;
   envName?: string;
   accountId?: string;
@@ -232,6 +243,7 @@ export class ThemisMcpServer {
   private readonly scheduledTasksService: ScheduledTasksService;
   private readonly operationsMcpTools: ThemisOperationsMcpTools;
   private readonly themisSecretStore: ThemisSecretStore;
+  private readonly workerSecretProvisioner: WorkerSecretProvisioner;
   private readonly cloudflareWorkerSecretProvisioner: CloudflareWorkerSecretProvisioner;
   private readonly managedAgentControlPlaneFacade: ManagedAgentControlPlaneFacadeLike;
   private readonly managedAgentOwnerPrincipalId: string | null;
@@ -260,6 +272,11 @@ export class ThemisMcpServer {
     this.themisSecretStore = new ThemisSecretStore({
       cwd: workingDirectory,
       ...(options.env ? { env: options.env } : {}),
+    });
+    this.workerSecretProvisioner = new WorkerSecretProvisioner({
+      cwd: workingDirectory,
+      ...(options.env ? { env: options.env } : {}),
+      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     });
     this.cloudflareWorkerSecretProvisioner = new CloudflareWorkerSecretProvisioner({
       cwd: workingDirectory,
@@ -409,6 +426,8 @@ export class ThemisMcpServer {
         return this.runToolSafely(() => this.listManagedAgents(argumentsRecord));
       case "get_managed_agent_detail":
         return this.runToolSafely(() => this.getManagedAgentDetail(argumentsRecord));
+      case "get_work_item_detail":
+        return this.runToolSafely(() => this.getWorkItemDetail(argumentsRecord));
       case "create_managed_agent":
         return this.runToolSafely(() => this.createManagedAgent(argumentsRecord));
       case "update_managed_agent_card":
@@ -419,8 +438,8 @@ export class ThemisMcpServer {
         return this.runToolSafely(() => this.dispatchWorkItem(argumentsRecord));
       case "manage_themis_secret":
         return this.runToolSafely(() => this.manageThemisSecret(argumentsRecord));
-      case "provision_cloudflare_worker_secret":
-        return this.runToolSafely(() => this.provisionCloudflareWorkerSecret(argumentsRecord));
+      case "provision_worker_secret":
+        return this.runToolSafely(() => this.provisionWorkerSecret(argumentsRecord));
       case "update_managed_agent_lifecycle":
         return this.runToolSafely(() => this.updateManagedAgentLifecycle(argumentsRecord));
       default:
@@ -579,6 +598,34 @@ export class ThemisMcpServer {
         runtimeProfile: detail.runtimeProfile,
         authAccounts: detail.authAccounts,
         thirdPartyProviders: detail.thirdPartyProviders,
+      },
+    );
+  }
+
+  private async getWorkItemDetail(argumentsRecord: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const args = normalizeGetWorkItemDetailToolArgs(argumentsRecord);
+    const identity = this.ensureIdentity();
+    const ownerPrincipalId = this.resolveManagedAgentOwnerPrincipalId(identity);
+    const detail = await this.managedAgentControlPlaneFacade.getWorkItemDetailView(ownerPrincipalId, args.workItemId);
+
+    if (!detail) {
+      throw new Error("Managed agent work item does not exist.");
+    }
+
+    return createToolResult(
+      buildWorkItemDetailSummary(detail),
+      {
+        identity,
+        ownerPrincipalId,
+        organization: detail.organization,
+        workItem: detail.workItem,
+        targetAgent: detail.targetAgent,
+        sourceAgent: detail.sourceAgent,
+        sourcePrincipal: detail.sourcePrincipal,
+        runs: detail.runs ?? [],
+        messages: detail.messages,
+        collaboration: detail.collaboration,
+        ...(detail.latestCompletion !== undefined ? { latestCompletion: detail.latestCompletion } : {}),
       },
     );
   }
@@ -842,15 +889,42 @@ export class ThemisMcpServer {
     }
   }
 
-  private async provisionCloudflareWorkerSecret(
+  private async provisionWorkerSecret(
     argumentsRecord: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    const args = normalizeProvisionCloudflareWorkerSecretToolArgs(argumentsRecord);
-    const result = await this.cloudflareWorkerSecretProvisioner.provisionWorkerSecret(args);
+    const args = normalizeProvisionWorkerSecretToolArgs(argumentsRecord);
+
+    if ((args.mode ?? "themis_secret") === "cloudflare_readonly") {
+      const result = await this.cloudflareWorkerSecretProvisioner.provisionWorkerSecret(args);
+
+      return createToolResult(
+        buildCloudflareWorkerSecretProvisionSummary(result),
+        {
+          mode: "cloudflare_readonly",
+          result,
+        },
+      );
+    }
+
+    const sourceSecretRef = args.sourceSecretRef ?? args.secretRef;
+
+    if (!sourceSecretRef) {
+      throw new Error("provision_worker_secret 使用 themis_secret 模式时必须传 sourceSecretRef 或 secretRef。");
+    }
+
+    const result = await this.workerSecretProvisioner.provisionWorkerSecret({
+      sourceSecretRef,
+      ...(args.secretRef ? { secretRef: args.secretRef } : {}),
+      ...(args.envName ? { envName: args.envName } : {}),
+      ...(args.forceRefresh !== undefined ? { forceRefresh: args.forceRefresh } : {}),
+      ...(args.dryRun !== undefined ? { dryRun: args.dryRun } : {}),
+      ...(args.targetNodeIds ? { targetNodeIds: args.targetNodeIds } : {}),
+    });
 
     return createToolResult(
-      buildCloudflareWorkerSecretProvisionSummary(result),
+      buildWorkerSecretProvisionSummary(result),
       {
+        mode: "themis_secret",
         result,
       },
     );
@@ -1160,6 +1234,22 @@ function buildToolDefinitions(): McpToolDefinition[] {
       },
     },
     {
+      name: "get_work_item_detail",
+      title: "Get Work Item Detail",
+      description: "读取数字员工工单详情，包括当前状态、runs、latestCompletion、消息和父子协作摘要。",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          workItemId: {
+            type: "string",
+            description: "要查询的 work item id，例如 work-item-platform-68。",
+          },
+        },
+        required: ["workItemId"],
+      },
+    },
+    {
       name: "create_managed_agent",
       title: "Create Managed Agent",
       description: "创建一名新的 Themis 员工。",
@@ -1347,33 +1437,43 @@ function buildToolDefinitions(): McpToolDefinition[] {
       },
     },
     {
-      name: "provision_cloudflare_worker_secret",
-      title: "Provision Cloudflare Worker Secret",
+      name: "provision_worker_secret",
+      title: "Provision Worker Secret",
       description: [
-        "使用 Themis 本地持有的 Cloudflare 管理 token，为 worker 创建或注入只读 Cloudflare token。",
-        "本工具不接受 token 明文参数，不回显 token 值；可写入本地 worker secret store，也可通过平台下发到指定 targetNodeIds。",
-        "派工仍只传 secretEnvRefs 引用。当某个 worker node 缺少 cloudflare-readonly-token 时，先带 targetNodeIds 调用本工具再重新派工。",
+        "把 Themis 密码本里的任意 secretRef 通用下发到 worker secret store，必要时再通过平台推送到指定 targetNodeIds。",
+        "本工具不接受 token 明文参数，不回显 secret 值；派工仍只传 secretEnvRefs 引用。",
+        "默认 mode=themis_secret，适用于 Discord、GitHub、Feishu、Cloudflare 已有 token 等任意平台凭据。",
+        "Cloudflare 只读 token 需要由管理 token 派生时，使用 mode=cloudflare_readonly；这是 Cloudflare 的准备子模式，不是通用下发器的唯一平台。",
       ].join(" "),
       inputSchema: {
         type: "object",
         additionalProperties: false,
         properties: {
+          mode: {
+            type: "string",
+            enum: ["themis_secret", "cloudflare_readonly"],
+            description: "可选。默认 themis_secret；cloudflare_readonly 会用 Themis 持有的 Cloudflare 管理 token 派生只读 token。",
+          },
+          sourceSecretRef: {
+            type: "string",
+            description: "mode=themis_secret 时使用。Themis 密码本中的来源 secretRef；未传时默认等于 secretRef。",
+          },
           secretRef: {
             type: "string",
-            description: "可选。写入 worker secret store 的引用名，默认 cloudflare-readonly-token。",
+            description: "写入 worker secret store 的目标引用名。mode=themis_secret 时默认等于 sourceSecretRef；mode=cloudflare_readonly 时默认 cloudflare-readonly-token。",
           },
           envName: {
             type: "string",
             pattern: SECRET_ENV_NAME_PATTERN,
-            description: "可选。worker 子进程注入的环境变量名，默认 CLOUDFLARE_API_TOKEN。",
+            description: "可选。提示后续派工应使用的环境变量名；Cloudflare 只读模式默认 CLOUDFLARE_API_TOKEN。",
           },
           accountId: {
             type: "string",
-            description: "可选。Cloudflare account id；Account Owned API Token 会走 /accounts/{account_id}/tokens endpoint。日常优先通过密码本 cloudflare-account-id 或环境变量配置，不建议写入工单正文。",
+            description: "仅 mode=cloudflare_readonly 时使用。Cloudflare account id；日常优先通过密码本 cloudflare-account-id 或环境变量配置。",
           },
           domains: {
             type: "array",
-            description: "需要授权只读访问的 Cloudflare zone/domain。通过管理 token 创建新 token 时必填。",
+            description: "仅 mode=cloudflare_readonly 时使用。需要授权只读访问的 Cloudflare zone/domain；通过管理 token 创建新 token 时必填。",
             items: {
               type: "string",
             },
@@ -1759,6 +1859,13 @@ function normalizeGetManagedAgentDetailToolArgs(value: Record<string, unknown>):
   };
 }
 
+function normalizeGetWorkItemDetailToolArgs(value: Record<string, unknown>): GetWorkItemDetailToolArgs {
+  assertOnlyKeys(value, new Set(["workItemId"]), "get_work_item_detail arguments");
+  return {
+    workItemId: expectRequiredText(value.workItemId, "workItemId is required."),
+  };
+}
+
 function normalizeCreateManagedAgentToolArgs(value: Record<string, unknown>): CreateManagedAgentToolArgs {
   return {
     departmentRole: expectRequiredText(value.departmentRole, "departmentRole is required."),
@@ -1853,13 +1960,24 @@ function normalizeDispatchWorkItemToolArgs(value: Record<string, unknown>): Disp
   };
 }
 
-function normalizeProvisionCloudflareWorkerSecretToolArgs(
+function normalizeProvisionWorkerSecretToolArgs(
   value: Record<string, unknown>,
-): ProvisionCloudflareWorkerSecretToolArgs {
+): ProvisionWorkerSecretToolArgs {
   assertOnlyKeys(
     value,
-    new Set(["secretRef", "envName", "accountId", "domains", "forceRefresh", "expiresOn", "dryRun", "targetNodeIds"]),
-    "provision_cloudflare_worker_secret arguments",
+    new Set([
+      "mode",
+      "sourceSecretRef",
+      "secretRef",
+      "envName",
+      "accountId",
+      "domains",
+      "forceRefresh",
+      "expiresOn",
+      "dryRun",
+      "targetNodeIds",
+    ]),
+    "provision_worker_secret arguments",
   );
   const domains = hasOwn(value, "domains")
     ? normalizeStringArray(value.domains, "domains must be an array of strings.")
@@ -1867,10 +1985,22 @@ function normalizeProvisionCloudflareWorkerSecretToolArgs(
   const targetNodeIds = hasOwn(value, "targetNodeIds")
     ? normalizeStringArray(value.targetNodeIds, "targetNodeIds must be an array of strings.")
     : undefined;
+  const envName = normalizeText(value.envName);
+
+  if (envName && !new RegExp(SECRET_ENV_NAME_PATTERN).test(envName)) {
+    throw new JsonRpcProtocolError(
+      JSON_RPC_INVALID_PARAMS,
+      `envName must match ${SECRET_ENV_NAME_PATTERN}.`,
+    );
+  }
 
   return {
+    ...(value.mode !== undefined
+      ? { mode: expectEnumText(value.mode, ["themis_secret", "cloudflare_readonly"] as const, "Unsupported mode.") }
+      : {}),
+    ...(normalizeText(value.sourceSecretRef) ? { sourceSecretRef: normalizeText(value.sourceSecretRef) as string } : {}),
     ...(normalizeText(value.secretRef) ? { secretRef: normalizeText(value.secretRef) as string } : {}),
-    ...(normalizeText(value.envName) ? { envName: normalizeText(value.envName) as string } : {}),
+    ...(envName ? { envName } : {}),
     ...(normalizeText(value.accountId) ? { accountId: normalizeText(value.accountId) as string } : {}),
     ...(domains ? { domains } : {}),
     ...(hasOwn(value, "forceRefresh")
@@ -2219,6 +2349,31 @@ function buildManagedAgentDetailSummary(detail: ManagedAgentDetailView): string 
   ].join("\n");
 }
 
+function buildWorkItemDetailSummary(detail: ManagedAgentWorkItemDetailView): string {
+  const workItem = detail.workItem;
+  const runs = detail.runs ?? [];
+  const latestRun = runs.length > 0
+    ? [...runs].sort((left, right) => compareIsoDesc(left.updatedAt, right.updatedAt))[0]
+    : undefined;
+  const targetAgent = detail.targetAgent
+    ? `${detail.targetAgent.displayName}（${detail.targetAgent.agentId}）`
+    : workItem.targetAgentId;
+  const runLine = latestRun
+    ? `runs：${runs.length}，最近 ${latestRun.runId} / ${latestRun.status}`
+    : "runs：0，尚未生成 run";
+  const completionLine = detail.latestCompletion
+    ? `completion：${detail.latestCompletion.detailLevel ?? "unknown"}`
+    : "completion：无";
+
+  return [
+    `工单 ${workItem.workItemId} 当前状态 ${workItem.status}。`,
+    `目标员工：${targetAgent}`,
+    runLine,
+    completionLine,
+    `子工单：${detail.collaboration.childSummary.totalCount} 总数，${detail.collaboration.childSummary.openCount} open，${detail.collaboration.childSummary.waitingCount} waiting。`,
+  ].join("\n");
+}
+
 function buildManagedAgentExecutionBoundarySummary(result: ManagedAgentExecutionBoundaryView): string {
   const workspacePath = result.workspacePolicy.workspacePath;
   const model = result.runtimeProfile.model ?? "<default>";
@@ -2227,6 +2382,39 @@ function buildManagedAgentExecutionBoundarySummary(result: ManagedAgentExecution
     `已更新员工 ${result.agent.displayName}（${result.agent.agentId}）的执行边界。`,
     `workspace：${workspacePath}`,
     `model：${model}`,
+  ].join("\n");
+}
+
+function buildWorkerSecretProvisionSummary(result: WorkerSecretProvisionResult): string {
+  const statusLabel = result.status === "already_configured"
+    ? "worker secret 已存在"
+    : result.status === "dry_run_ready"
+      ? "worker secret 下发预检通过"
+      : "worker secret 已准备";
+  const sourceLabel = result.source === "themis_secret"
+    ? "Themis 密码本"
+    : "worker secret store";
+  const envLine = result.envName ? `envName：${result.envName}` : null;
+  const targetNodeLine = result.targetNodeIds && result.targetNodeIds.length > 0
+    ? `目标 worker node：${result.targetNodeIds.join(", ")}`
+    : null;
+  const deliveryLine = result.deliveries && result.deliveries.length > 0
+    ? `平台下发：已创建 ${result.deliveries.length} 条 pending delivery`
+    : result.targetNodeIds && result.targetNodeIds.length > 0
+      ? "平台下发：未执行"
+      : null;
+
+  return [
+    statusLabel,
+    `source：${sourceLabel}`,
+    `sourceSecretRef：${result.sourceSecretRef}`,
+    `secretRef：${result.secretRef}`,
+    ...(envLine ? [envLine] : []),
+    ...(targetNodeLine ? [targetNodeLine] : []),
+    ...(deliveryLine ? [deliveryLine] : []),
+    `written：${result.written ? "yes" : "no"}`,
+    `worker secret store：${result.workerSecretStorePath}`,
+    "未回显任何 secret 值。",
   ].join("\n");
 }
 
@@ -2275,6 +2463,17 @@ function buildCloudflareWorkerSecretProvisionSummary(result: CloudflareWorkerSec
     `worker secret store：${result.workerSecretStorePath}`,
     "未回显任何 token 值。",
   ].join("\n");
+}
+
+function compareIsoDesc(left: string, right: string): number {
+  const leftTime = Date.parse(left);
+  const rightTime = Date.parse(right);
+
+  if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+    return rightTime - leftTime;
+  }
+
+  return right.localeCompare(left);
 }
 
 function expectRecord(value: unknown, message: string): Record<string, unknown> {

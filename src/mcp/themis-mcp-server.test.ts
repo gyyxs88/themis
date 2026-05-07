@@ -83,12 +83,13 @@ test("Themis MCP server 会暴露定时任务和员工治理工具列表", async
         "cancel_scheduled_task",
         "list_managed_agents",
         "get_managed_agent_detail",
+        "get_work_item_detail",
         "create_managed_agent",
         "update_managed_agent_card",
         "update_managed_agent_execution_boundary",
         "dispatch_work_item",
         "manage_themis_secret",
-        "provision_cloudflare_worker_secret",
+        "provision_worker_secret",
         "update_managed_agent_lifecycle",
         "list_operation_objects",
         "create_operation_object",
@@ -266,6 +267,108 @@ test("Themis MCP server 密码本工具拒绝未知 token 参数", async () => {
   }
 });
 
+test("Themis MCP server 通用下发密码本 secret 到 worker 且不回显 secret", async () => {
+  const workspace = createWorkspace("themis-mcp-worker-secret-generic");
+  const workerSecretStoreFile = resolve(workspace, "infra/local/worker-secrets.json");
+  const themisSecretStoreFile = resolve(workspace, "infra/local/themis-secrets.json");
+  const secretValue = "discord-bot-token-secret";
+  writeFileSync(themisSecretStoreFile, `${JSON.stringify({
+    "discord-novelbike-bot-token": secretValue,
+  }, null, 2)}\n`, "utf8");
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    const body = typeof init?.body === "string" ? init.body : null;
+
+    if (url === "https://platform.example.com/api/platform/worker/secrets/push" && method === "POST") {
+      assert.ok(body);
+      const parsedBody = JSON.parse(body) as {
+        ownerPrincipalId?: string;
+        delivery?: {
+          nodeId?: string;
+          secretRef?: string;
+          value?: string;
+        };
+      };
+      assert.equal(parsedBody.ownerPrincipalId, "principal-platform-owner");
+      assert.deepEqual(parsedBody.delivery, {
+        nodeId: "node-discord",
+        secretRef: "discord-novelbike-bot-token",
+        value: secretValue,
+      });
+      return jsonResponse({
+        delivery: {
+          deliveryId: "delivery-discord-1",
+          nodeId: "node-discord",
+          secretRef: "discord-novelbike-bot-token",
+          status: "pending",
+          createdAt: "2026-05-07T12:00:00.000Z",
+          updatedAt: "2026-05-07T12:00:00.000Z",
+        },
+      });
+    }
+
+    return jsonResponse({ error: `unexpected ${method} ${url}` }, 404);
+  };
+  const server = new ThemisMcpServer({
+    workingDirectory: workspace,
+    env: {
+      ...process.env,
+      THEMIS_SECRET_STORE_FILE: themisSecretStoreFile,
+      THEMIS_MANAGED_AGENT_WORKER_SECRET_STORE_FILE: workerSecretStoreFile,
+      THEMIS_PLATFORM_BASE_URL: "https://platform.example.com",
+      THEMIS_PLATFORM_OWNER_PRINCIPAL_ID: "principal-platform-owner",
+      THEMIS_PLATFORM_WEB_ACCESS_TOKEN: "platform-gateway-token",
+    },
+    fetchImpl,
+    identity: {
+      channel: "cli",
+      channelUserId: "tester",
+      displayName: "Tester",
+    },
+  });
+
+  try {
+    await initializeServer(server);
+    const response = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 36,
+      method: "tools/call",
+      params: {
+        name: "provision_worker_secret",
+        arguments: {
+          sourceSecretRef: "discord-novelbike-bot-token",
+          secretRef: "discord-novelbike-bot-token",
+          envName: "DISCORD_BOT_TOKEN",
+          targetNodeIds: ["node-discord"],
+        },
+      },
+    }));
+
+    assert.ok(response);
+    const payload = JSON.parse(response);
+    assert.equal(payload.result?.isError, false);
+    assert.equal(payload.result?.structuredContent?.mode, "themis_secret");
+    assert.equal(payload.result?.structuredContent?.result?.source, "themis_secret");
+    assert.equal(payload.result?.structuredContent?.result?.secretRef, "discord-novelbike-bot-token");
+    assert.equal(payload.result?.structuredContent?.result?.envName, "DISCORD_BOT_TOKEN");
+    assert.deepEqual(payload.result?.structuredContent?.result?.deliveries, [{
+      nodeId: "node-discord",
+      secretRef: "discord-novelbike-bot-token",
+      deliveryId: "delivery-discord-1",
+      status: "pending",
+    }]);
+    assert.deepEqual(JSON.parse(readFileSync(workerSecretStoreFile, "utf8")), {
+      "discord-novelbike-bot-token": secretValue,
+    });
+    const responseText = JSON.stringify(payload);
+    assert.doesNotMatch(responseText, new RegExp(secretValue));
+    assert.doesNotMatch(responseText, /platform-gateway-token/);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("Themis MCP server 能用管理 token 准备 Cloudflare worker secret 且不回显 token", async () => {
   const workspace = createWorkspace("themis-mcp-cloudflare-secret");
   const workerSecretStoreFile = resolve(workspace, "infra/local/worker-secrets.json");
@@ -402,8 +505,9 @@ test("Themis MCP server 能用管理 token 准备 Cloudflare worker secret 且�
       id: 3,
       method: "tools/call",
       params: {
-        name: "provision_cloudflare_worker_secret",
+        name: "provision_worker_secret",
         arguments: {
+          mode: "cloudflare_readonly",
           domains: ["novelrift.com"],
           targetNodeIds: ["node-4pjylh69"],
         },
@@ -475,8 +579,9 @@ test("Themis MCP server 使用 Cloudflare 管理 token 时要求配置 accountId
       id: 3,
       method: "tools/call",
       params: {
-        name: "provision_cloudflare_worker_secret",
+        name: "provision_worker_secret",
         arguments: {
+          mode: "cloudflare_readonly",
           domains: ["novelrift.com"],
         },
       },
@@ -510,8 +615,9 @@ test("Themis MCP server 拒绝在 Cloudflare secret provision 参数中夹带 to
       id: 4,
       method: "tools/call",
       params: {
-        name: "provision_cloudflare_worker_secret",
+        name: "provision_worker_secret",
         arguments: {
+          mode: "cloudflare_readonly",
           domains: ["novelrift.com"],
           token: "should-not-be-accepted",
         },
@@ -1067,6 +1173,29 @@ test("Themis MCP server 支持员工治理工具闭环", async () => {
     assert.equal(dispatchPayload.result?.isError, false);
     assert.equal(dispatchPayload.result?.structuredContent?.targetAgent?.agentId, agentId);
     assert.equal(dispatchPayload.result?.structuredContent?.workItem?.targetAgentId, agentId);
+
+    const workItemDetailResponse = await server.handleMessage(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 12.1,
+      method: "tools/call",
+      params: {
+        name: "get_work_item_detail",
+        arguments: {
+          workItemId: dispatchPayload.result?.structuredContent?.workItem?.workItemId,
+        },
+      },
+    }));
+
+    assert.ok(workItemDetailResponse);
+    const workItemDetailPayload = JSON.parse(workItemDetailResponse);
+    assert.equal(workItemDetailPayload.result?.isError, false);
+    assert.equal(
+      workItemDetailPayload.result?.structuredContent?.workItem?.workItemId,
+      dispatchPayload.result?.structuredContent?.workItem?.workItemId,
+    );
+    assert.equal(workItemDetailPayload.result?.structuredContent?.workItem?.status, "queued");
+    assert.deepEqual(workItemDetailPayload.result?.structuredContent?.runs, []);
+    assert.match(workItemDetailPayload.result?.content?.[0]?.text ?? "", /runs：0/);
 
     const dispatchWithFactSourcesResponse = await server.handleMessage(JSON.stringify({
       jsonrpc: "2.0",

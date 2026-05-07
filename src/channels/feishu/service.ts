@@ -3180,7 +3180,7 @@ export class FeishuChannelService {
         "/secrets worker set <secretRef> <secretValue> 兜底写入或覆盖 worker secret",
         "/secrets worker remove <secretRef> confirm 删除 worker secret",
         "",
-        "Cloudflare worker token 默认由 Themis 调用 provision_cloudflare_worker_secret 准备，不需要在这里手工发送 worker token。",
+        "worker token 默认由 Themis 调用通用 provision_worker_secret 准备和下发；Cloudflare 只读 token 派生时使用 mode=cloudflare_readonly，不需要在这里手工发送 worker token。",
         "secret 值只由命令处理器写入本地 secret store，不会进入 Codex 对话、工单正文、contextPacket 或员工报告。",
         "请只在和 Themis 的单聊里执行写入或删除。",
       ].join("\n"),

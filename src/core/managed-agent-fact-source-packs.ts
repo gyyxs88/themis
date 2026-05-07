@@ -54,7 +54,7 @@ const READ_ONLY_FACT_SOURCE_PACKS: Record<ManagedAgentReadOnlyFactSourcePackId, 
     }],
     instructions: [
       "只读取 Cloudflare zone、DNS 记录、代理状态和相关只读配置，不创建、不修改、不删除。",
-      "如果 worker 缺少 cloudflare-readonly-token，报告缺失 secretRef，并让 Themis 先调用 provision_cloudflare_worker_secret。",
+      "如果 worker 缺少 cloudflare-readonly-token，报告缺失 secretRef，并让 Themis 先调用 provision_worker_secret。Cloudflare 只读 token 需要派生时使用 mode=cloudflare_readonly。",
       "优先产出已一致、漂移、待确认三类结论，并附可复核证据。",
     ],
   },
