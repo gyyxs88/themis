@@ -72,9 +72,19 @@ import {
   type FeishuApprovalCardStatus,
 } from "./approval-card-renderer.js";
 import {
+  buildFeishuActiveTaskChoiceInteractiveCard,
+  renderFeishuActiveTaskChoiceCard,
+  type FeishuActiveTaskChoiceDecision,
+  type FeishuActiveTaskChoiceStatus,
+} from "./active-task-choice-card-renderer.js";
+import {
   FeishuApprovalCardStateStore,
   type FeishuApprovalCardRecord,
 } from "./approval-card-state-store.js";
+import {
+  FeishuActiveTaskChoiceCardStateStore,
+  type FeishuActiveTaskChoiceCardRecord,
+} from "./active-task-choice-card-state-store.js";
 import { renderFeishuAssistantMessage, type FeishuRenderedMessageDraft } from "./message-renderer.js";
 import {
   extractFeishuPostContentItems,
@@ -215,6 +225,7 @@ export interface FeishuChannelServiceOptions {
   diagnosticsStateStore?: FeishuDiagnosticsStateStore;
   chatSettingsStore?: FeishuChatSettingsStore;
   approvalCardStore?: FeishuApprovalCardStateStore;
+  activeTaskChoiceCardStore?: FeishuActiveTaskChoiceCardStateStore;
   updateService?: ThemisUpdateService;
   workerSecretStore?: WorkerSecretStore;
   themisSecretStore?: ThemisSecretStore;
@@ -283,6 +294,7 @@ export class FeishuChannelService {
   private readonly attachmentDraftStore: FeishuAttachmentDraftStore;
   private readonly chatSettingsStore: FeishuChatSettingsStore;
   private readonly approvalCardStore: FeishuApprovalCardStateStore;
+  private readonly activeTaskChoiceCardStore: FeishuActiveTaskChoiceCardStateStore;
   private readonly updateService: ThemisUpdateService;
   private readonly workerSecretStore: WorkerSecretStore;
   private readonly themisSecretStore: ThemisSecretStore;
@@ -335,6 +347,9 @@ export class FeishuChannelService {
     });
     this.approvalCardStore = options.approvalCardStore ?? new FeishuApprovalCardStateStore({
       filePath: join(this.runtime.getWorkingDirectory(), "infra/local/feishu-approval-cards.json"),
+    });
+    this.activeTaskChoiceCardStore = options.activeTaskChoiceCardStore ?? new FeishuActiveTaskChoiceCardStateStore({
+      filePath: join(this.runtime.getWorkingDirectory(), "infra/local/feishu-active-task-choice-cards.json"),
     });
     this.attachmentDraftStore = new FeishuAttachmentDraftStore({
       filePath: join(this.runtime.getWorkingDirectory(), "infra/local/feishu-attachment-drafts.json"),
@@ -508,6 +523,12 @@ export class FeishuChannelService {
 
   private async handleCardActionEvent(event: unknown): Promise<InteractiveCard> {
     const cardEvent = normalizeFeishuCardActionEvent(event);
+    const actionKind = normalizeText(cardEvent?.action.value.actionKind);
+
+    if (actionKind === "active_task_choice") {
+      return await this.handleActiveTaskChoiceCardAction(cardEvent);
+    }
+
     const currentUserId = normalizeText(cardEvent?.user_id) ?? normalizeText(cardEvent?.open_id);
     const cardKey = normalizeText(cardEvent?.action.value.cardKey);
     const decision = normalizeApprovalDecision(cardEvent?.action.value.decision);
@@ -630,6 +651,115 @@ export class FeishuChannelService {
     return this.renderApprovalCardSnapshot(updatedCard, nextStatus, outcome.message);
   }
 
+  private async handleActiveTaskChoiceCardAction(
+    cardEvent: InteractiveCardActionEvent | null,
+  ): Promise<InteractiveCard> {
+    const currentUserId = normalizeText(cardEvent?.user_id) ?? normalizeText(cardEvent?.open_id);
+    const cardKey = normalizeText(cardEvent?.action.value.cardKey);
+    const decision = normalizeActiveTaskChoiceDecision(cardEvent?.action.value.decision);
+
+    if (!cardEvent || !cardKey || !decision) {
+      return buildFeishuActiveTaskChoiceInteractiveCard({
+        cardKey: cardKey ?? createId("feishu-active-task-choice-card-invalid"),
+        incomingText: "选择卡参数缺失",
+        status: "failed",
+        message: "运行中任务选择卡回调参数不完整，请重新发送消息。",
+      });
+    }
+
+    const storedCard = this.activeTaskChoiceCardStore.get(cardKey);
+
+    if (!storedCard) {
+      return buildFeishuActiveTaskChoiceInteractiveCard({
+        cardKey,
+        incomingText: "选择卡状态已丢失",
+        status: "failed",
+        message: "未找到对应选择卡状态，请重新发送消息。",
+      });
+    }
+
+    if (storedCard.status !== "pending") {
+      return this.renderActiveTaskChoiceCardSnapshot(
+        storedCard,
+        storedCard.status,
+        resolveActiveTaskChoiceCardTerminalMessage(storedCard),
+      );
+    }
+
+    if (!currentUserId) {
+      return this.renderActiveTaskChoiceCardSnapshot(
+        storedCard,
+        "pending",
+        "选择卡缺少触发用户信息，请切回原账号重试。",
+      );
+    }
+
+    if (storedCard.userId !== currentUserId) {
+      return this.renderActiveTaskChoiceCardSnapshot(
+        storedCard,
+        "pending",
+        "只有发送这条新消息的人可以处理这张选择卡。",
+      );
+    }
+
+    const now = new Date().toISOString();
+
+    if (decision === "cancel") {
+      const updatedCard = this.activeTaskChoiceCardStore.save({
+        ...storedCard,
+        status: "cancelled",
+        callbackToken: cardEvent.token,
+        openMessageId: cardEvent.open_message_id,
+        actorUserId: currentUserId,
+        updatedAt: now,
+        resolvedAt: now,
+      });
+      return this.renderActiveTaskChoiceCardSnapshot(updatedCard, "cancelled");
+    }
+
+    const nextStatus: FeishuActiveTaskChoiceStatus = decision === "interrupt" ? "interrupted" : "queued";
+    const updatedCard = this.activeTaskChoiceCardStore.save({
+      ...storedCard,
+      status: nextStatus,
+      callbackToken: cardEvent.token,
+      openMessageId: cardEvent.open_message_id,
+      actorUserId: currentUserId,
+      updatedAt: now,
+      resolvedAt: now,
+    });
+    const callbackOpenId = normalizeText(cardEvent.open_id);
+    const callbackTenantKey = normalizeText(cardEvent.tenant_key);
+    const queuedContext: Extract<FeishuIncomingContext, { kind: "text" }> = {
+      kind: "text",
+      chatId: updatedCard.chatId,
+      messageId: updatedCard.originalMessageId,
+      userId: updatedCard.userId,
+      text: updatedCard.text,
+      ...(callbackOpenId ? { openId: callbackOpenId } : {}),
+      ...(callbackTenantKey ? { tenantKey: callbackTenantKey } : {}),
+      ...(updatedCard.attachments?.length ? { attachments: updatedCard.attachments } : {}),
+      ...(updatedCard.postContentItems?.length ? { postContentItems: updatedCard.postContentItems } : {}),
+    };
+
+    void this.handleTaskMessage(queuedContext, {
+      ...(decision === "queue" ? { leaseOptions: { interruptActiveTask: false } } : {}),
+    }).catch(async (error) => {
+      const message = toErrorMessage(error);
+      const failedAt = new Date().toISOString();
+      const failedCard = this.activeTaskChoiceCardStore.save({
+        ...updatedCard,
+        status: "failed",
+        lastError: message,
+        updatedAt: failedAt,
+        resolvedAt: failedAt,
+      });
+      await this.tryUpdateActiveTaskChoiceCardMessage(failedCard, "failed", message);
+      await this.safeSendTaggedText(failedCard.chatId, message, "运行中消息处理失败");
+    });
+
+    return this.renderActiveTaskChoiceCardSnapshot(updatedCard, nextStatus);
+  }
+
   private async acceptMessageReceiveEvent(event: FeishuMessageReceiveEvent): Promise<void> {
     const context = normalizeIncomingContext(event);
 
@@ -733,12 +863,67 @@ export class FeishuChannelService {
         return;
       }
 
+      if (await this.tryOfferActiveTaskChoice(context)) {
+        return;
+      }
+
       await this.handleTaskMessage(context);
     } catch (error) {
       const message = toErrorMessage(error);
       this.logger.error(`[themis/feishu] 处理消息失败：${message}`);
       await this.safeSendTaggedText(context.chatId, message, "执行异常");
     }
+  }
+
+  private async tryOfferActiveTaskChoice(
+    context: Extract<FeishuIncomingContext, { kind: "text" }>,
+  ): Promise<boolean> {
+    const conversationKey = this.resolveConversationKey(context);
+    const sessionId = this.sessionStore.ensureActiveSessionId(conversationKey);
+
+    if (!this.activeSessionTasks.has(sessionId)) {
+      return false;
+    }
+
+    const now = new Date().toISOString();
+    const cardKey = createId("feishu-active-task-choice-card");
+    const draft = renderFeishuActiveTaskChoiceCard({
+      cardKey,
+      incomingText: context.text,
+      status: "pending",
+    });
+
+    try {
+      const response = await this.createMessage(context.chatId, draft);
+      const storedMessageId = normalizeText(response.data?.message_id) ?? cardKey;
+
+      this.activeTaskChoiceCardStore.save({
+        cardKey,
+        chatId: context.chatId,
+        messageId: storedMessageId,
+        sessionId,
+        originalMessageId: context.messageId,
+        userId: context.userId,
+        text: context.text,
+        ...(context.attachments?.length ? { attachments: context.attachments } : {}),
+        ...(context.postContentItems?.length ? { postContentItems: context.postContentItems } : {}),
+        status: "pending",
+        createdAt: now,
+        updatedAt: now,
+      });
+    } catch (error) {
+      const message = toErrorMessage(error);
+      this.logger.error(
+        `[themis/feishu] 运行中任务选择卡发送失败：session=${sessionId} message=${context.messageId} error=${message}`,
+      );
+      await this.safeSendTaggedText(
+        context.chatId,
+        "当前会话已有任务正在运行，但选择卡发送失败。这条新消息没有打断当前任务，请稍后重发。",
+        "运行中任务选择卡失败",
+      );
+    }
+
+    return true;
   }
 
   private async handleAttachmentMessage(
@@ -1421,11 +1606,16 @@ export class FeishuChannelService {
     }
   }
 
-  private async handleTaskMessage(context: Extract<FeishuIncomingContext, { kind: "text" }>): Promise<void> {
+  private async handleTaskMessage(
+    context: Extract<FeishuIncomingContext, { kind: "text" }>,
+    options: {
+      leaseOptions?: FeishuSessionTaskLeaseOptions;
+    } = {},
+  ): Promise<void> {
     const conversationKey = this.resolveConversationKey(context);
     const sessionId = this.sessionStore.ensureActiveSessionId(conversationKey);
     const draftKey = createAttachmentDraftKey(conversationKey, sessionId);
-    const taskLease = await this.acquireSessionTaskLease(sessionId);
+    const taskLease = await this.acquireSessionTaskLease(sessionId, options.leaseOptions);
     const inlineAssets = await this.downloadInlineAttachments(context, sessionId);
     const reservedDraft = this.attachmentDraftStore.consume(draftKey);
     const inputEnvelope = buildFeishuInputEnvelope(context, sessionId, reservedDraft, inlineAssets);
@@ -1938,6 +2128,37 @@ export class FeishuChannelService {
       status,
       ...(normalizedMessage ? { message: normalizedMessage } : {}),
     });
+  }
+
+  private renderActiveTaskChoiceCardSnapshot(
+    record: Pick<FeishuActiveTaskChoiceCardRecord, "cardKey" | "text">,
+    status: FeishuActiveTaskChoiceStatus,
+    message?: string | null,
+  ): InteractiveCard {
+    const normalizedMessage = normalizeText(message ?? undefined);
+    return buildFeishuActiveTaskChoiceInteractiveCard({
+      cardKey: record.cardKey,
+      incomingText: record.text,
+      status,
+      ...(normalizedMessage ? { message: normalizedMessage } : {}),
+    });
+  }
+
+  private async tryUpdateActiveTaskChoiceCardMessage(
+    record: Pick<FeishuActiveTaskChoiceCardRecord, "cardKey" | "messageId" | "text">,
+    status: FeishuActiveTaskChoiceStatus,
+    message?: string | null,
+  ): Promise<void> {
+    try {
+      await this.updateMessage(record.messageId, renderFeishuActiveTaskChoiceCard({
+        cardKey: record.cardKey,
+        incomingText: record.text,
+        status,
+        ...(message ? { message } : {}),
+      }));
+    } catch (error) {
+      this.logger.warn(`[themis/feishu] 更新运行中任务选择卡失败：message=${record.messageId} error=${toErrorMessage(error)}`);
+    }
   }
 
   private async readFeishuMobileSessionState(sessionId: string): Promise<{
@@ -3136,7 +3357,7 @@ export class FeishuChannelService {
       "发送 /settings 查看下一层配置项。",
       "Web 和飞书默认共享同一套会话列表与 principal 默认配置；切到同一个 conversationId 后，会继续复用后端已有上下文。",
       "直接发送普通文本即可继续当前会话。",
-      "如果当前会话还有任务在运行，新消息会先打断旧任务，再自动开始新的请求。",
+      "如果当前会话还有任务在运行，新消息会先弹出选择卡，可选择打断、排队或取消。",
       currentSessionId ? `当前会话：${currentSessionId}` : "当前还没有激活会话，直接发消息时会自动创建。",
     ].join("\n");
 
@@ -8042,6 +8263,10 @@ function normalizeApprovalDecision(value: unknown): "approve" | "deny" | null {
   return value === "approve" || value === "deny" ? value : null;
 }
 
+function normalizeActiveTaskChoiceDecision(value: unknown): FeishuActiveTaskChoiceDecision | null {
+  return value === "interrupt" || value === "queue" || value === "cancel" ? value : null;
+}
+
 function normalizeFeishuCardActionEvent(value: unknown): InteractiveCardActionEvent | null {
   const topLevel = asRecord(value);
   const event = asRecord(topLevel?.event);
@@ -8070,6 +8295,26 @@ function normalizeFeishuCardActionEvent(value: unknown): InteractiveCardActionEv
       ...(normalizeText(action?.timezone) ? { timezone: normalizeText(action?.timezone) ?? "" } : {}),
     },
   };
+}
+
+function resolveActiveTaskChoiceCardTerminalMessage(record: FeishuActiveTaskChoiceCardRecord): string {
+  if (record.lastError) {
+    return record.lastError;
+  }
+
+  switch (record.status) {
+    case "interrupted":
+      return "已经选择打断当前任务并处理这条新消息。";
+    case "queued":
+      return "已经选择排队处理这条新消息。";
+    case "cancelled":
+      return "这条新消息已经取消处理。";
+    case "failed":
+      return "选择卡处理失败，请重新发送消息。";
+    case "pending":
+    default:
+      return "仍在等待选择处理方式。";
+  }
 }
 
 function resolveApprovalCardTerminalMessage(record: FeishuApprovalCardRecord): string {

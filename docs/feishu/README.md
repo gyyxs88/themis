@@ -1,6 +1,6 @@
 # 飞书 Bot 调研与接入建议
 
-更新日期：2026-04-24
+更新日期：2026-05-09
 
 相关实现文档：
 
@@ -42,7 +42,7 @@
 - 当当前 `sessionId + principalId` 作用域里仍有 `approval` pending action 时，普通文本不会被当成补充输入自动接管，而是继续走现有普通任务链；审批仍建议显式 `/approve` / `/deny`。
 - `/reply <actionId> <内容>` 的优先级已经降到兜底路径，主要用于显式指定 actionId 或处理多条 `user-input` 并存的歧义。
 - 普通任务回复会优先转换成飞书 `post` 富文本，渲染列表、加粗、代码块和外链；本地文件链接会降级成普通文本显示。
-- Web 与飞书当前都统一采用“新消息默认打断旧任务”的跟进行为。
+- 飞书普通新消息遇到当前会话任务仍在运行时，不再默认打断旧任务；机器人会先发 interactive 选择卡，由用户选择“打断并处理 / 排队处理 / 取消新消息”。Web 仍保持原有跟进行为。
 - 飞书与 Web 现在默认共享同一套 conversation 视图；飞书 `/sessions` 可看到 Web 创建的会话，切到同一个 `conversationId` 后会继续复用后端已有上下文。
 - 当前激活会话不会跨端自动同步；Web 和飞书各自保留“当前正在聊哪一条”的本地状态，需要手动切到目标 `conversationId`。
 - 飞书与 Web 现在共用同一份 principal 级 Themis 默认任务配置；`sandbox / search / network / approval / account` 都不再是会话配置，而是会同时影响两个渠道后续新任务的长期默认值。
@@ -105,7 +105,7 @@
 - 原因很直接：当前仓库本身就是 Node/TypeScript，且本地开发并没有稳定公网回调地址；长连接模式更适合先把闭环跑通。
 - 飞书官方旧仓库 `larksuite/oapi-sdk-nodejs` 已经废弃并归档；当前应以 npm 包 `@larksuiteoapi/node-sdk` 和新仓库 `larksuite/node-sdk` 为准。
 - 已用当前提供的应用凭证实际调用过 `tenant_access_token/internal`，2026-03-18 验证通过，返回 `code=0`、`expire=7200`。为了避免后续误提交，`app_secret` 没有写入仓库文档。
-- 在当前 runtime 结构下，飞书第一阶段以“长连接 + 文本/富文本消息 + 会话命令 + 默认打断旧任务”为宜，不继续追桌面版的 guide 模式。
+- 在当前 runtime 结构下，飞书主链路仍以“长连接 + 文本/富文本消息 + 会话命令”为主；运行中任务遇到新消息时已改为先给选择卡，不再默认自动打断旧任务。
 
 ## 飞书 Bot 最小闭环
 
